@@ -4,10 +4,22 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { signalExitCode } from "../../scripts/lib/managed-child-process.mjs";
+import {
+  createManagedCommandSpawnSpec,
+  runManagedCommand,
+  signalExitCode,
+} from "../../scripts/lib/managed-child-process.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const posixIt = process.platform === "win32" ? it.skip : it;
+
+function expectProcessPid(pid: number | undefined): number {
+  if (pid == null) {
+    throw new Error("Expected spawned process to expose a pid");
+  }
+  return pid;
+}
 
 describe("managed-child-process", () => {
   it("maps forwarded signals to shell-compatible exit codes", () => {
@@ -16,7 +28,94 @@ describe("managed-child-process", () => {
     expect(signalExitCode("SIGTERM")).toBe(143);
   });
 
-  it("kills the managed child process group when the runner is terminated", async () => {
+  it("wraps Windows shell argv through cmd.exe without Node shell mode", () => {
+    expect(
+      createManagedCommandSpawnSpec({
+        args: ["lint:scripts", "--", "scripts"],
+        bin: "pnpm.cmd",
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        platform: "win32",
+        shell: true,
+      }),
+    ).toEqual({
+      args: ["/d", "/s", "/c", "pnpm.cmd lint:scripts -- scripts"],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      options: {
+        cwd: undefined,
+        detached: false,
+        env: {},
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: true,
+      },
+    });
+  });
+
+  it("preserves explicit non-shell Windows subprocesses", () => {
+    expect(
+      createManagedCommandSpawnSpec({
+        args: ["--version"],
+        bin: "node.exe",
+        platform: "win32",
+        shell: false,
+      }),
+    ).toEqual({
+      args: ["--version"],
+      command: "node.exe",
+      options: {
+        cwd: undefined,
+        detached: false,
+        env: undefined,
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: undefined,
+      },
+    });
+  });
+
+  it("rejects unsafe Windows shell argv instead of passing them to Node shell mode", () => {
+    expect(() =>
+      createManagedCommandSpawnSpec({
+        args: ["build && pnpm test"],
+        bin: "pnpm.cmd",
+        platform: "win32",
+        shell: true,
+      }),
+    ).toThrow("unsafe Windows cmd.exe argument detected");
+  });
+
+  it("shares process signal listeners across parallel managed commands", async () => {
+    const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+    const baseline = new Map(signals.map((signal) => [signal, process.listenerCount(signal)]));
+    let readyCount = 0;
+    const commands = Array.from({ length: 12 }, () =>
+      runManagedCommand({
+        args: ["-e", "setTimeout(() => {}, 500)"],
+        bin: process.execPath,
+        shell: false,
+        stdio: "ignore",
+        onReady: () => {
+          readyCount += 1;
+        },
+      }),
+    );
+
+    try {
+      await waitFor(() => readyCount === commands.length);
+      for (const signal of signals) {
+        expect(process.listenerCount(signal)).toBe((baseline.get(signal) ?? 0) + 1);
+      }
+    } finally {
+      await Promise.all(commands);
+    }
+
+    for (const signal of signals) {
+      expect(process.listenerCount(signal)).toBe(baseline.get(signal) ?? 0);
+    }
+  });
+
+  posixIt("kills the managed child process group when the runner is terminated", async () => {
     const dir = createTempDir("openclaw-managed-child-");
     const childPath = path.join(dir, "child.mjs");
     const runnerPath = path.join(dir, "runner.mjs");
@@ -56,6 +155,7 @@ process.exitCode = await runManagedCommand({
     const runner = spawn(process.execPath, [runnerPath], {
       stdio: "ignore",
     });
+    const runnerPid = expectProcessPid(runner.pid);
     let childPid = 0;
 
     try {
@@ -65,14 +165,14 @@ process.exitCode = await runManagedCommand({
       expect(Number.isInteger(childPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
 
-      process.kill(runner.pid!, "SIGTERM");
+      process.kill(runnerPid, "SIGTERM");
       const result = await waitForClose(runner);
 
       expect(result).toEqual({ code: 143, signal: null });
-      await waitFor(() => !isProcessAlive(childPid), 10_000);
+      await waitFor(() => !isProcessAlive(childPid), 1_500);
     } finally {
-      if (runner.pid && isProcessAlive(runner.pid)) {
-        process.kill(runner.pid, "SIGKILL");
+      if (isProcessAlive(runnerPid)) {
+        process.kill(runnerPid, "SIGKILL");
       }
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");

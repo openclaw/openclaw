@@ -1,17 +1,21 @@
-import { completeSimple, getModel, streamSimple } from "@mariozechner/pi-ai";
+import { completeSimple, type Model, streamSimple } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+} from "./embedded-agent-helpers/failover-matches.js";
+import { applyExtraParamsToAgent } from "./embedded-agent-runner.js";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
-import { isBillingErrorMessage } from "./pi-embedded-helpers/failover-matches.js";
-import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 import { createWebSearchTool } from "./tools/web-search.js";
 
 const XAI_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["XAI_LIVE_TEST"]);
+const XAI_COMPLETE_LIVE_TIMEOUT_MS = 90_000;
 const XAI_WEB_SEARCH_LIVE_TIMEOUT_SECONDS = 60;
 
 const describeLive = LIVE && XAI_KEY ? describe : describe.skip;
@@ -27,8 +31,30 @@ type AssistantLikeMessage = {
   }>;
 };
 
+function getToolFunction(tool: Record<string, unknown>): Record<string, unknown> | undefined {
+  const nested = tool.function;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return nested as Record<string, unknown>;
+  }
+  if (tool.type === "function" && typeof tool.name === "string") {
+    return tool;
+  }
+  return undefined;
+}
+
 function resolveLiveXaiModel() {
-  return getModel("xai", "grok-4.3" as never) ?? getModel("xai", "grok-4");
+  return {
+    id: "grok-4.3",
+    name: "Grok 4.3",
+    api: "openai-responses",
+    provider: "xai",
+    baseUrl: "https://api.x.ai/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 64_000,
+  } satisfies Model<"openai-responses">;
 }
 
 function requireLiveValue<T>(value: T | null | undefined, label: string): T {
@@ -45,6 +71,10 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
     const message = error instanceof Error ? error.message : String(error);
     if (isBillingErrorMessage(message)) {
       console.warn(`[xai:live] skip ${label}: billing drift: ${message}`);
+      return;
+    }
+    if (isOverloadedErrorMessage(message)) {
+      console.warn(`[xai:live] skip ${label}: temporary provider capacity: ${message}`);
       return;
     }
     if (message.includes("web_search is disabled or no provider is available")) {
@@ -68,23 +98,27 @@ async function collectDoneMessage(
 }
 
 describeLive("xai live", () => {
-  it("returns assistant text for Grok 4.3", async () => {
-    await runXaiLiveCase("complete", async () => {
-      const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
-      const res = await completeSimple(
-        model,
-        {
-          messages: createSingleUserPromptMessage(),
-        },
-        {
-          apiKey: XAI_KEY,
-          maxTokens: 64,
-        },
-      );
+  it(
+    "returns assistant text for Grok 4.3",
+    async () => {
+      await runXaiLiveCase("complete", async () => {
+        const model = requireLiveValue(resolveLiveXaiModel(), "xAI model");
+        const res = await completeSimple(
+          model,
+          {
+            messages: createSingleUserPromptMessage(),
+          },
+          {
+            apiKey: XAI_KEY,
+            maxTokens: 64,
+          },
+        );
 
-      expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
-    });
-  }, 30_000);
+        expect(extractNonEmptyAssistantText(res.content).length).toBeGreaterThan(0);
+      });
+    },
+    XAI_COMPLETE_LIVE_TIMEOUT_MS,
+  );
 
   it("sends wrapped xAI tool payloads live", async () => {
     await runXaiLiveCase("tool-call", async () => {
@@ -129,9 +163,13 @@ describeLive("xai live", () => {
         ? (payload.tools as Array<Record<string, unknown>>)
         : [];
       expect(payloadTools.length).toBeGreaterThan(0);
-      const firstFunction = payloadTools[0]?.function;
-      expect(firstFunction).toEqual(expect.any(Object));
-      expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
+      const firstFunction = requireLiveValue(
+        payloadTools[0] ? getToolFunction(payloadTools[0]) : undefined,
+        "first xAI tool function",
+      );
+      expect(typeof firstFunction).toBe("object");
+      expect(Array.isArray(firstFunction)).toBe(false);
+      expect([undefined, false]).toContain(firstFunction.strict);
     });
   }, 90_000);
 
@@ -168,7 +206,10 @@ describeLive("xai live", () => {
         message?: string;
       };
 
-      const errorMessage = [details.error, details.message].filter(Boolean).join(" ");
+      const errorMessage =
+        details.error && details.message
+          ? `${details.error} ${details.message}`
+          : details.error || details.message || "";
       if (isBillingErrorMessage(errorMessage)) {
         console.warn(`[xai:live] skip web-search: billing drift: ${errorMessage}`);
         return;

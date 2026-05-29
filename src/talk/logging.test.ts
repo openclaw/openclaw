@@ -16,6 +16,42 @@ function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+type ObservedDiagnostic = { event: DiagnosticEventPayload; trusted: boolean };
+
+function stableDiagnosticPayload<TEvent extends DiagnosticEventPayload>(
+  event: TEvent,
+): Omit<TEvent, "seq" | "trace" | "ts"> {
+  expect(event.seq).toBeGreaterThan(0);
+  expect(event.ts).toBeGreaterThan(0);
+  const { seq: _seq, ts: _ts, trace, ...stable } = event;
+  expect(trace).toBeUndefined();
+  return stable;
+}
+
+function stableLogRecordPayload(event: Extract<DiagnosticEventPayload, { type: "log.record" }>) {
+  const { code, loggerParents, ...stable } = stableDiagnosticPayload(event);
+  expect(loggerParents).toStrictEqual(["openclaw"]);
+  expect(code?.functionName).toMatch(/^[A-Za-z0-9_.:-]+$/u);
+  expect(code?.line).toBeGreaterThan(0);
+  return stable;
+}
+
+function requireObservedDiagnostic<TType extends DiagnosticEventPayload["type"]>(
+  observed: readonly ObservedDiagnostic[],
+  type: TType,
+): { event: Extract<DiagnosticEventPayload, { type: TType }>; trusted: boolean } {
+  const event = observed.find(
+    (
+      entry,
+    ): entry is { event: Extract<DiagnosticEventPayload, { type: TType }>; trusted: boolean } =>
+      entry.event.type === type,
+  );
+  if (!event) {
+    throw new Error(`Expected ${type} diagnostic event`);
+  }
+  return event;
+}
+
 describe("talk logging", () => {
   let tmpDir: string;
   let logFile: string;
@@ -81,7 +117,7 @@ describe("talk logging", () => {
     unsubscribe();
 
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toMatchObject({
+    expect(stableLogRecordPayload(logs[0])).toStrictEqual({
       type: "log.record",
       level: "INFO",
       message: "talk event output.text.done",
@@ -104,8 +140,9 @@ describe("talk logging", () => {
     expect(serialized).not.toContain("item-1");
 
     const fileLog = fs.readFileSync(logFile, "utf8");
-    expect(fileLog).toContain("talk event output.text.done");
-    expect(fileLog).toContain('"session_id":"talk-session"');
+    const fileLogRecord = JSON.parse(fileLog.trim()) as Record<string, unknown>;
+    expect(fileLogRecord.message).toBe("talk event output.text.done");
+    expect(fileLogRecord.session_id).toBe("talk-session");
     expect(fileLog).not.toContain("private transcript");
     expect(fileLog).not.toContain("turn-1");
     expect(fileLog).not.toContain("call-1");
@@ -148,7 +185,7 @@ describe("talk logging", () => {
   });
 
   it("records diagnostics and logs through the combined observability hook", async () => {
-    const observed: Array<{ event: DiagnosticEventPayload; trusted: boolean }> = [];
+    const observed: ObservedDiagnostic[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event, metadata) => {
       observed.push({ event, trusted: metadata.trusted });
     });
@@ -170,26 +207,40 @@ describe("talk logging", () => {
     await flushDiagnosticEvents();
     unsubscribe();
 
-    expect(observed).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          trusted: true,
-          event: expect.objectContaining({
-            type: "talk.event",
-            talkEventType: "session.error",
-            sessionId: "talk-session",
-          }),
-        }),
-        expect.objectContaining({
-          trusted: false,
-          event: expect.objectContaining({
-            type: "log.record",
-            level: "WARN",
-            message: "talk event session.error",
-          }),
-        }),
-      ]),
-    );
+    expect(observed).toHaveLength(2);
+    const talkEvent = requireObservedDiagnostic(observed, "talk.event");
+    const logRecord = requireObservedDiagnostic(observed, "log.record");
+    expect(talkEvent.trusted).toBe(true);
+    expect(stableDiagnosticPayload(talkEvent.event)).toStrictEqual({
+      type: "talk.event",
+      sessionId: "talk-session",
+      turnId: undefined,
+      captureId: undefined,
+      talkEventType: "session.error",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      final: true,
+      durationMs: undefined,
+      byteLength: undefined,
+    });
+    expect(logRecord.trusted).toBe(false);
+    expect(stableLogRecordPayload(logRecord.event)).toStrictEqual({
+      type: "log.record",
+      level: "WARN",
+      message: "talk event session.error",
+      attributes: {
+        subsystem: "talk",
+        sessionId: "talk-session",
+        talkEventType: "session.error",
+        talkMode: "realtime",
+        talkTransport: "gateway-relay",
+        talkBrain: "agent-consult",
+        talkProvider: "openai",
+        talkFinal: true,
+      },
+    });
     expect(JSON.stringify(observed)).not.toContain("private detail");
   });
 });

@@ -5,7 +5,7 @@ import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/p
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DevicePairApiModule = typeof import("./api.js");
 type NotifyModule = typeof import("./notify.js");
@@ -672,8 +672,11 @@ export default definePluginEntry({
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
           : undefined;
-        const { buildMissingPairingScopeReply, resolvePairingCommandAuthState } =
-          await loadPairCommandAuthModule();
+        const {
+          buildMissingPairingScopeReply,
+          buildMissingSetupHandoffScopeReply,
+          resolvePairingCommandAuthState,
+        } = await loadPairCommandAuthModule();
         const authState = resolvePairingCommandAuthState({
           channel: ctx.channel,
           gatewayClientScopes,
@@ -740,6 +743,10 @@ export default definePluginEntry({
                 ? `Invalidated ${cleared.removed} unused setup code${cleared.removed === 1 ? "" : "s"}.`
                 : "No unused setup codes were active.",
           };
+        }
+
+        if (authState.isMissingSetupHandoffPrivilege) {
+          return buildMissingSetupHandoffScopeReply();
         }
 
         const authLabelResult = resolveAuthLabel(api.config);

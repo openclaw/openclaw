@@ -43,7 +43,7 @@ describe("message action media helpers", () => {
           media: "https://example.com/photo.png",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(resolveChannelMessageToolMediaSourceParamKeysMock).not.toHaveBeenCalled();
   });
 
@@ -68,7 +68,6 @@ describe("message action media helpers", () => {
       sessionId: undefined,
       agentId: undefined,
       requesterSenderId: undefined,
-      senderIsOwner: undefined,
     });
   });
 
@@ -148,10 +147,8 @@ describe("message action media helpers", () => {
         },
       });
 
-      expect(args).toMatchObject({
-        mediaUrl: path.join(sandboxRoot, "assets", "photo.png"),
-        fileUrl: path.join(sandboxRoot, "docs", "report.pdf"),
-      });
+      expect(args.mediaUrl).toBe(path.join(sandboxRoot, "assets", "photo.png"));
+      expect(args.fileUrl).toBe(path.join(sandboxRoot, "docs", "report.pdf"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -172,9 +169,7 @@ describe("message action media helpers", () => {
         },
       });
 
-      expect(args).toMatchObject({
-        image: path.join(sandboxRoot, "assets", "event-cover.png"),
-      });
+      expect(args.image).toBe(path.join(sandboxRoot, "assets", "event-cover.png"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -197,10 +192,34 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatarPath: path.join(sandboxRoot, "avatars", "profile.png"),
-        avatarUrl: path.join(sandboxRoot, "avatars", "remote-avatar.jpg"),
+      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "profile.png"));
+      expect(args.avatarUrl).toBe(path.join(sandboxRoot, "avatars", "remote-avatar.jpg"));
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("normalizes the selected structured attachment sandbox source", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-attachment-"));
+    try {
+      const attachment: Record<string, unknown> = {
+        path: "/workspace/replies/photo.png",
+        mimeType: "image/png",
+        name: "photo.png",
+      };
+      const args: Record<string, unknown> = {
+        attachments: [attachment],
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
       });
+
+      expect(attachment.path).toBe(path.join(sandboxRoot, "replies", "photo.png"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -227,6 +246,73 @@ describe("message action media helpers", () => {
     ]);
   });
 
+  it("collects the selected structured attachment source for host media access", () => {
+    expect(
+      collectActionMediaSourceHints({
+        attachments: [
+          {
+            path: " /workspace/uploads/photo.png ",
+            mimeType: "image/png",
+            name: "photo.png",
+          },
+        ],
+      }),
+    ).toEqual([" /workspace/uploads/photo.png "]);
+  });
+
+  it("does not collect ignored structured attachments when top-level media wins", () => {
+    expect(
+      collectActionMediaSourceHints({
+        media: "https://example.com/top-level.png",
+        attachments: [
+          {
+            path: "/workspace/uploads/ignored.png",
+            mimeType: "image/png",
+            name: "ignored.png",
+          },
+        ],
+      }),
+    ).toEqual(["https://example.com/top-level.png"]);
+  });
+
+  it("does not collect ignored structured attachments when plugin media params win", () => {
+    expect(
+      collectActionMediaSourceHints(
+        {
+          avatarPath: "/workspace/avatars/profile.png",
+          attachments: [
+            {
+              path: "/workspace/uploads/ignored.png",
+              mimeType: "image/png",
+              name: "ignored.png",
+            },
+          ],
+        },
+        matrixMediaSourceParamKeys,
+      ),
+    ).toEqual(["/workspace/avatars/profile.png"]);
+  });
+
+  it("collects every structured attachment source when the send path uses all attachments", () => {
+    expect(
+      collectActionMediaSourceHints(
+        {
+          media: "https://example.com/top-level.png",
+          attachments: [
+            { path: "/workspace/uploads/one.png" },
+            { fileUrl: "/workspace/uploads/two.png" },
+          ],
+        },
+        undefined,
+        { structuredAttachments: "all" },
+      ),
+    ).toEqual([
+      "https://example.com/top-level.png",
+      "/workspace/uploads/one.png",
+      "/workspace/uploads/two.png",
+    ]);
+  });
+
   maybeIt("normalizes extension snake_case avatar_path and avatar_url aliases", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-snake-"));
     try {
@@ -244,10 +330,8 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatar_path: path.join(sandboxRoot, "avatars", "profile.png"),
-        avatar_url: path.join(sandboxRoot, "avatars", "remote-avatar.jpg"),
-      });
+      expect(args.avatar_path).toBe(path.join(sandboxRoot, "avatars", "profile.png"));
+      expect(args.avatar_url).toBe(path.join(sandboxRoot, "avatars", "remote-avatar.jpg"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -272,12 +356,10 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatarUrl: "https://example.com/avatars/profile.png",
-        avatarPath: path.join(sandboxRoot, "avatars", "profile.png"),
-        avatar_url: "data:text/plain;base64,QQ==",
-        avatar_path: "data:text/plain;base64,QQ==",
-      });
+      expect(args.avatarUrl).toBe("https://example.com/avatars/profile.png");
+      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "profile.png"));
+      expect(args.avatar_url).toBe("data:text/plain;base64,QQ==");
+      expect(args.avatar_path).toBe("data:text/plain;base64,QQ==");
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -300,10 +382,8 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatarUrl: "https://example.com/avatars/profile.png",
-        avatarPath: path.join(sandboxRoot, "avatars", "local.png"),
-      });
+      expect(args.avatarUrl).toBe("https://example.com/avatars/profile.png");
+      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "local.png"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -326,10 +406,8 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatarUrl: "mxc://matrix.org/abc123def456",
-        avatarPath: path.join(sandboxRoot, "avatars", "local.png"),
-      });
+      expect(args.avatarUrl).toBe("mxc://matrix.org/abc123def456");
+      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "local.png"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -353,10 +431,8 @@ describe("message action media helpers", () => {
           },
         });
 
-        expect(args).toMatchObject({
-          mediaUrl: "https://example.com/assets/photo.png?sig=1",
-          fileUrl: "https://example.com/docs/report.pdf?sig=2",
-        });
+        expect(args.mediaUrl).toBe("https://example.com/assets/photo.png?sig=1");
+        expect(args.fileUrl).toBe("https://example.com/docs/report.pdf?sig=2");
       } finally {
         await fs.rm(sandboxRoot, { recursive: true, force: true });
       }
@@ -391,6 +467,23 @@ describe("message action media helpers", () => {
     expect(fileArgs.filename).toBe("report.pdf");
   });
 
+  it("uses only the leaf filename from Windows-style attachment hints", async () => {
+    const args: Record<string, unknown> = {
+      fileUrl: String.raw`C:\Users\Ada\Downloads\report.pdf`,
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "workspace",
+      args,
+      action: "sendAttachment",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("report.pdf");
+  });
+
   it("falls back to extension-based attachment names for remote-host file URLs", async () => {
     const args: Record<string, unknown> = {
       media: "file://attacker/share/photo.png",
@@ -406,6 +499,100 @@ describe("message action media helpers", () => {
     });
 
     expect(args.filename).toBe("attachment");
+  });
+
+  it("hydrates reply attachments through the resolver so threaded sends don't bypass mediaLocalRoots", async () => {
+    // Locks in coverage for the reply-with-attachment path: when an agent
+    // calls message(action: "reply") with a `path`/`media`/etc., the
+    // resolver — not the channel runtime — must run. Pre-PR this was
+    // gated only on sendAttachment/setGroupIcon/upload-file, letting
+    // imessage reply forward an arbitrary host path to imsg.
+    const args: Record<string, unknown> = {
+      mediaUrl: "https://example.com/cute.png",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("cute.png");
+  });
+
+  it("hydrates reply attachments from the first structured attachment source", async () => {
+    const args: Record<string, unknown> = {
+      attachments: [
+        {
+          url: "https://example.com/cute.png",
+          mimeType: "image/png",
+          name: "cute.png",
+        },
+      ],
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("cute.png");
+    expect(args.contentType).toBe("image/png");
+  });
+
+  it("does not hydrate ignored structured attachments when plugin media params win", async () => {
+    const args: Record<string, unknown> = {
+      avatarPath: "/workspace/avatars/profile.png",
+      attachments: [
+        {
+          url: "https://example.com/ignored.png",
+          mimeType: "image/png",
+          name: "ignored.png",
+        },
+      ],
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+      extraParamKeys: matrixMediaSourceParamKeys,
+    });
+
+    expect(args.filename).toBe("attachment");
+    expect(args.contentType).toBeUndefined();
+  });
+
+  it("does not fall back caption->message on reply (reply has its own text field)", async () => {
+    // sendAttachment uses caption as the body text and falls back from
+    // message -> caption when the agent only supplied `message`. Reply has
+    // its own `text`/`message` field, so caption fallback would invent a
+    // bogus caption param on the reply payload.
+    const args: Record<string, unknown> = {
+      mediaUrl: "https://example.com/cute.png",
+      message: "🦞",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.caption).toBeUndefined();
   });
 });
 

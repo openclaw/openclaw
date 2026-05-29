@@ -2,10 +2,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -13,6 +16,7 @@ export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
 const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+const SKILL_CARD_MAX_BYTES = 256 * 1024;
 
 export type ClawHubPackageFamily = "skill" | "code-plugin" | "bundle-plugin";
 export type ClawHubPackageChannel = "official" | "community" | "private";
@@ -301,6 +305,55 @@ export type ClawHubSkillDetail = {
   } | null;
 };
 
+export type ClawHubSkillVerificationDecision = "pass" | "fail" | (string & {});
+
+export type ClawHubSkillVerificationResponse = {
+  schema: "clawhub.skill.verify.v1";
+  ok: boolean;
+  decision: ClawHubSkillVerificationDecision;
+  reasons: string[];
+  skill: unknown;
+  publisher: unknown;
+  version: unknown;
+  card: unknown;
+  artifact: unknown;
+  provenance: unknown;
+  security: unknown;
+  signature: unknown;
+};
+
+export type ClawHubSkillSecurityVerdictRequestItem = {
+  slug: string;
+  version: string;
+};
+
+export type ClawHubSkillSecurityVerdictItem = {
+  ok: boolean;
+  decision: ClawHubSkillVerificationDecision;
+  reasons: string[];
+  requestedSlug: string;
+  requestedVersion: string;
+  slug?: string | null;
+  version?: string | null;
+  displayName?: string | null;
+  publisherHandle?: string | null;
+  publisherDisplayName?: string | null;
+  createdAt?: number | null;
+  checkedAt?: number | null;
+  skillUrl?: string | null;
+  securityAuditUrl?: string | null;
+  security?: unknown;
+  error?: {
+    code?: string;
+    message?: string;
+  };
+};
+
+export type ClawHubSkillSecurityVerdictsResponse = {
+  schema: "clawhub.skill.security-verdicts.v1";
+  items: ClawHubSkillSecurityVerdictItem[];
+};
+
 export type ClawHubSkillListResponse = {
   items: Array<{
     slug: string;
@@ -339,11 +392,15 @@ type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<
 
 type ClawHubRequestParams = {
   baseUrl?: string;
-  path: string;
+  path?: string;
+  url?: string;
+  method?: "GET" | "POST";
+  json?: unknown;
   token?: string;
   timeoutMs?: number;
   search?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
+  skipAuth?: boolean;
 };
 
 type ClawHubConfigLike = {
@@ -484,6 +541,22 @@ function matchWildcardComparator(token: string): "any" | "none" | null {
   return operator === ">" || operator === "<" ? "none" : "any";
 }
 
+function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
+  return Boolean(
+    parseComparableSemver(normalizePartialComparableVersion(target).version)?.prerelease?.length,
+  );
+}
+
+function normalizePluginApiVersionForComparator(version: string, target: string): string {
+  const normalizedCorrection = normalizeCalVerNumericCorrectionForPluginApi(version);
+  if (normalizedCorrection) {
+    return normalizedCorrection;
+  }
+  return shouldPreservePluginApiPrereleaseFloor(target)
+    ? version
+    : normalizeCalVerCorrectionForPluginApi(version);
+}
+
 function satisfiesComparator(version: string, token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed) {
@@ -496,8 +569,9 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (trimmed.startsWith("^")) {
     const base = trimmed.slice(1).trim();
     const upperBound = upperBoundForCaret(base);
-    const lowerCmp = compareSemver(version, base);
-    const upperCmp = upperBound ? compareSemver(version, upperBound) : null;
+    const comparableVersion = normalizePluginApiVersionForComparator(version, base);
+    const lowerCmp = compareSemver(comparableVersion, base);
+    const upperCmp = upperBound ? compareSemver(comparableVersion, upperBound) : null;
     return lowerCmp != null && upperCmp != null && lowerCmp >= 0 && upperCmp < 0;
   }
 
@@ -510,8 +584,9 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (!target) {
     return false;
   }
+  const comparableVersion = normalizePluginApiVersionForComparator(version, target);
   const normalizedTarget = normalizePartialComparableVersion(target);
-  const cmp = compareSemver(version, normalizedTarget.version);
+  const cmp = compareSemver(comparableVersion, normalizedTarget.version);
   if (cmp == null) {
     return false;
   }
@@ -531,26 +606,46 @@ function satisfiesComparator(version: string, token: string): boolean {
 }
 
 function satisfiesSemverRange(version: string, range: string): boolean {
-  const tokens = range
-    .trim()
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter(Boolean);
+  const tokens = normalizeStringEntries(range.trim().split(/\s+/));
   if (tokens.length === 0) {
     return false;
   }
   return tokens.every((token) => satisfiesComparator(version, token));
 }
 
-const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN =
+  /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
+const OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+
+function normalizeCalVerNumericCorrectionForPluginApi(
+  pluginApiVersion: string,
+): string | undefined {
+  return OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
+}
 
 function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string {
   const match = OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN.exec(pluginApiVersion.trim());
   return match?.[1] ?? pluginApiVersion;
 }
 
-function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search">): URL {
-  const url = new URL(params.path, `${normalizeBaseUrl(params.baseUrl)}/`);
+function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search" | "url">): URL {
+  if (params.url) {
+    const url = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
+    for (const [key, value] of Object.entries(params.search ?? {})) {
+      if (!value) {
+        continue;
+      }
+      url.searchParams.set(key, value);
+    }
+    return url;
+  }
+  if (!params.path) {
+    throw new Error("ClawHub request path is required");
+  }
+  const url = new URL(`${normalizeBaseUrl(params.baseUrl)}/`);
+  const basePath = url.pathname.replace(/\/+$/, "");
+  const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
+  url.pathname = `${basePath}${requestPath}`;
   for (const [key, value] of Object.entries(params.search ?? {})) {
     if (!value) {
       continue;
@@ -564,7 +659,9 @@ async function clawhubRequest(
   params: ClawHubRequestParams,
 ): Promise<{ response: Response; url: URL; hasToken: boolean }> {
   const url = buildUrl(params);
-  const token = normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
+  const token = params.skipAuth
+    ? undefined
+    : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
@@ -576,10 +673,21 @@ async function clawhubRequest(
     params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
   );
   try {
-    const response = await (params.fetchImpl ?? fetch)(url, {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      signal: controller.signal,
-    });
+    const headers = {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(params.json === undefined ? {} : { "Content-Type": "application/json" }),
+    };
+    const init: RequestInit = { signal: controller.signal };
+    if (params.method) {
+      init.method = params.method;
+    }
+    if (Object.keys(headers).length > 0) {
+      init.headers = headers;
+    }
+    if (params.json !== undefined) {
+      init.body = JSON.stringify(params.json);
+    }
+    const response = await (params.fetchImpl ?? fetch)(url, init);
     return { response, url, hasToken: Boolean(token) };
   } finally {
     clearTimeout(timeout);
@@ -633,11 +741,45 @@ async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);
   }
-  return (await response.json()) as T;
+  try {
+    return (await response.json()) as T;
+  } catch (cause) {
+    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
+  }
+}
+
+async function readClawHubResponseBytes(params: {
+  response: Response;
+  maxBytes?: number;
+  timeoutMs?: number;
+  resourceLabel: string;
+}): Promise<Uint8Array> {
+  const timeoutMs = params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  return await readResponseWithLimit(params.response, params.maxBytes ?? Number.MAX_SAFE_INTEGER, {
+    chunkTimeoutMs: timeoutMs,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `ClawHub ${params.resourceLabel} exceeded ${maxBytes} bytes (${size} bytes received)`,
+      ),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`ClawHub ${params.resourceLabel} body stalled after ${chunkTimeoutMs}ms`),
+  });
 }
 
 export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
+}
+
+function buildVersionOrTagSearch(params: {
+  version?: string;
+  tag?: string;
+}): { version?: string; tag?: string } | undefined {
+  const version = normalizeOptionalString(params.version);
+  if (version) {
+    return { version };
+  }
+  const tag = normalizeOptionalString(params.tag);
+  return tag ? { tag } : undefined;
 }
 
 function formatSha256Integrity(bytes: Uint8Array): string {
@@ -857,6 +999,88 @@ export async function fetchClawHubSkillDetail(params: {
   });
 }
 
+export async function fetchClawHubSkillVerification(params: {
+  slug: string;
+  version?: string;
+  tag?: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubSkillVerificationResponse> {
+  return await fetchJson<ClawHubSkillVerificationResponse>({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/skills/${encodeURIComponent(params.slug)}/verify`,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    search: buildVersionOrTagSearch(params),
+  });
+}
+
+export async function fetchClawHubSkillSecurityVerdicts(params: {
+  items: ClawHubSkillSecurityVerdictRequestItem[];
+  baseUrl?: string;
+  token?: string;
+  skipAuth?: boolean;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubSkillSecurityVerdictsResponse> {
+  return await fetchJson<ClawHubSkillSecurityVerdictsResponse>({
+    baseUrl: params.baseUrl,
+    path: "/api/v1/skills/-/security-verdicts",
+    method: "POST",
+    json: { items: params.items },
+    token: params.token,
+    skipAuth: params.skipAuth,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+}
+
+export async function fetchClawHubSkillCard(params: {
+  slug?: string;
+  url?: string;
+  version?: string;
+  tag?: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<string> {
+  const cardUrl = normalizeOptionalString(params.url);
+  const slug = normalizeOptionalString(params.slug);
+  if (!cardUrl && !slug) {
+    throw new Error("ClawHub skill card fetch requires a slug or card URL");
+  }
+  const explicitToken = normalizeOptionalString(params.token);
+  const skipAuth =
+    cardUrl != null &&
+    explicitToken == null &&
+    new URL(cardUrl, `${normalizeBaseUrl(params.baseUrl)}/`).origin !==
+      new URL(`${normalizeBaseUrl(params.baseUrl)}/`).origin;
+  const { response, url, hasToken } = await clawhubRequest({
+    baseUrl: params.baseUrl,
+    url: cardUrl,
+    path: slug ? `/api/v1/skills/${encodeURIComponent(slug)}/card` : undefined,
+    token: explicitToken,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+    search: cardUrl ? undefined : buildVersionOrTagSearch(params),
+    skipAuth,
+  });
+  if (!response.ok) {
+    throw await buildClawHubError(response, url, hasToken);
+  }
+  const bytes = await readClawHubResponseBytes({
+    response,
+    maxBytes: SKILL_CARD_MAX_BYTES,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
+  });
+  return new TextDecoder().decode(bytes);
+}
+
 export async function listClawHubSkills(params: {
   baseUrl?: string;
   token?: string;
@@ -902,7 +1126,11 @@ export async function downloadClawHubPackageArchive(params: {
     if (!response.ok) {
       throw await buildClawHubError(response, url, hasToken);
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = await readClawHubResponseBytes({
+      response,
+      timeoutMs: params.timeoutMs,
+      resourceLabel: `ClawPack download for ${params.name}@${params.version}`,
+    });
     const sha256Hex = formatSha256Hex(bytes);
     const npmIntegrity = formatSha512Integrity(bytes);
     const npmShasum = formatSha1Hex(bytes);
@@ -939,7 +1167,7 @@ export async function downloadClawHubPackageArchive(params: {
       normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Tarball-Name")) ??
       safePackageTarballName(params.name, params.version);
     const rawSpecVersion = response.headers.get("X-ClawHub-ClawPack-Spec-Version");
-    const specVersion = rawSpecVersion ? Number.parseInt(rawSpecVersion, 10) : undefined;
+    const specVersion = parseStrictPositiveInteger(rawSpecVersion);
     const target = await createTempDownloadTarget({
       prefix: "openclaw-clawhub-clawpack",
       fileName: npmTarballName,
@@ -977,7 +1205,11 @@ export async function downloadClawHubPackageArchive(params: {
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readClawHubResponseBytes({
+    response,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: `package archive download for ${params.name}`,
+  });
   const sha256Hex = formatSha256Hex(bytes);
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-package",
@@ -1018,7 +1250,11 @@ export async function downloadClawHubSkillArchive(params: {
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readClawHubResponseBytes({
+    response,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: `skill archive download for ${params.slug}`,
+  });
   const sha256Hex = formatSha256Hex(bytes);
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-skill",
@@ -1053,10 +1289,7 @@ export function satisfiesPluginApiRange(
   if (!pluginApiRange) {
     return true;
   }
-  return satisfiesSemverRange(
-    normalizeCalVerCorrectionForPluginApi(pluginApiVersion),
-    pluginApiRange,
-  );
+  return satisfiesSemverRange(pluginApiVersion, pluginApiRange);
 }
 
 export function satisfiesGatewayMinimum(

@@ -16,6 +16,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeOptionalString as normalizeString } from "../shared/string-coerce.js";
+import { normalizeStringEntriesLower } from "../shared/string-normalization.js";
 import { note } from "../terminal/note.js";
 
 type DoctorPrompterLike = {
@@ -31,16 +33,12 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function normalizeIdSet(values: readonly string[] | undefined): Set<string> {
   return new Set((values ?? []).map((value) => normalizeProviderId(value)));
 }
 
 function normalizePrefixList(values: readonly string[] | undefined): string[] {
-  return (values ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean);
+  return normalizeStringEntriesLower(values);
 }
 
 function ownsPrefixedValue(prefixes: readonly string[], value: unknown): boolean {
@@ -77,6 +75,7 @@ export function resolveConfiguredDoctorSessionStateRoute(params: {
     resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
   for (const fallback of fallbacks) {
     const parsed = parseModelRef(fallback, primary.provider, {
+      allowManifestNormalization: false,
       allowPluginNormalization: false,
     });
     if (parsed) {
@@ -114,6 +113,7 @@ function entryMayContainPluginSessionRouteState(entry: SessionEntry): boolean {
     normalizeString(record.modelProvider) !== undefined ||
     normalizeString(record.model) !== undefined ||
     normalizeString(record.agentHarnessId) !== undefined ||
+    normalizeString(record.agentRuntimeOverride) !== undefined ||
     record.cliSessionBindings !== undefined ||
     record.cliSessionIds !== undefined ||
     normalizeString(record.authProfileOverride) !== undefined ||
@@ -138,6 +138,7 @@ export type DoctorSessionRouteStateRepair = {
   ownerId: string;
   ownerLabel: string;
   reasons: string[];
+  pinnedRuntimeKeys: string[];
   cliSessionKeys: string[];
 };
 
@@ -165,7 +166,7 @@ function resolvePersistedOverrideModelRef(params: {
   return parseModelRef(
     overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel,
     params.defaultProvider,
-    { allowPluginNormalization: false },
+    { allowManifestNormalization: false, allowPluginNormalization: false },
   );
 }
 
@@ -232,7 +233,11 @@ function scanEntryForOwner(params: {
   const cliSessionKeys = [...normalizeIdSet(params.owner.cliSessionKeys)];
   const authProfilePrefixes = normalizePrefixList(params.owner.authProfilePrefixes);
   const routeAllowsOwner = routeAllowsOwnerState({ owner: params.owner, route: params.route });
+  const routeRuntime = normalizeString(params.route?.runtime);
+  const routeAllowsOwnerRuntime =
+    routeRuntime !== undefined && runtimeIds.has(normalizeProviderId(routeRuntime));
   const reasons: string[] = [];
+  const pinnedRuntimeKeys: string[] = [];
   const directOverride = resolvePersistedOverrideModelRef({
     defaultProvider: params.route?.defaultProvider ?? "",
     overrideProvider: params.entry.providerOverride,
@@ -274,19 +279,28 @@ function scanEntryForOwner(params: {
 
   const explicitOwnedOverride =
     directOverrideIsOwned && directOverrideSource !== undefined && directOverrideSource !== "auto";
+  if (!routeAllowsOwnerRuntime && !explicitOwnedOverride) {
+    const harnessId = normalizeString(params.entry.agentHarnessId);
+    if (harnessId && runtimeIds.has(normalizeProviderId(harnessId))) {
+      addReason(reasons, "pinned runtime");
+      pinnedRuntimeKeys.push("agentHarnessId");
+    }
+    const runtimeOverride = normalizeString(params.entry.agentRuntimeOverride);
+    if (runtimeOverride && runtimeIds.has(normalizeProviderId(runtimeOverride))) {
+      addReason(reasons, "pinned runtime");
+      pinnedRuntimeKeys.push("agentRuntimeOverride");
+    }
+  }
   if (!routeAllowsOwner && !explicitOwnedOverride) {
     const runtimeModel = normalizeString(params.entry.model);
     const runtimeRef = runtimeModel
       ? parseModelRef(runtimeModel, normalizeString(params.entry.modelProvider) ?? "", {
+          allowManifestNormalization: false,
           allowPluginNormalization: false,
         })
       : null;
     if (runtimeRef && providerIds.has(normalizeProviderId(runtimeRef.provider))) {
       addReason(reasons, "runtime model state");
-    }
-    const harnessId = normalizeString(params.entry.agentHarnessId);
-    if (harnessId && runtimeIds.has(normalizeProviderId(harnessId))) {
-      addReason(reasons, "pinned runtime");
     }
     if (hasOwnedCliSession({ entry: params.entry, cliSessionKeys })) {
       addReason(reasons, "CLI session binding");
@@ -308,6 +322,7 @@ function scanEntryForOwner(params: {
       ownerId: params.owner.id,
       ownerLabel: params.owner.label,
       reasons,
+      pinnedRuntimeKeys,
       cliSessionKeys,
     },
   };
@@ -396,7 +411,9 @@ export function applySessionRouteStateRepair(params: {
     clear("fallbackNoticeReason");
   }
   if (params.repair.reasons.includes("pinned runtime")) {
-    clear("agentHarnessId");
+    for (const key of params.repair.pinnedRuntimeKeys) {
+      clear(key);
+    }
   }
   if (params.repair.reasons.includes("CLI session binding")) {
     changed =
@@ -442,14 +459,42 @@ export async function runPluginSessionStateDoctorRepairs(params: {
   if (owners.length === 0) {
     return;
   }
-  const routes = Object.fromEntries(
-    Object.keys(params.store).map((sessionKey) => [
-      sessionKey,
-      resolveConfiguredDoctorSessionStateRoute({ cfg: params.cfg, sessionKey, env: params.env }),
-    ]),
-  );
-  const store = params.store as unknown as Record<string, Record<string, unknown>>;
-  const scan = scanSessionRouteStateOwners({ owners, store, routes });
+  // Only entries that may carry plugin session route state can produce repairs
+  // or manual-review findings (see scanEntryForOwner — every code path reads at
+  // least one of the fields checked by entryMayContainPluginSessionRouteState).
+  // Skipping the rest avoids resolving routes for trivially-empty session rows.
+  //
+  // Within that filtered set, resolveConfiguredDoctorSessionStateRoute is a
+  // pure function of agentId (sessionKey is only used to derive agentId), so we
+  // memoize by agentId to avoid recomputing the same route for every session
+  // belonging to the same agent.
+  const scanStore: Record<string, Record<string, unknown>> = {};
+  const routes: Record<string, DoctorSessionRouteState> = {};
+  const routeByAgentId = new Map<string, DoctorSessionRouteState>();
+  for (const [sessionKey, entry] of Object.entries(params.store)) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if (!entryMayContainPluginSessionRouteState(entry)) {
+      continue;
+    }
+    scanStore[sessionKey] = entry as unknown as Record<string, unknown>;
+    const agentId = resolveSessionAgentId(params.cfg, sessionKey);
+    let route = routeByAgentId.get(agentId);
+    if (!route) {
+      route = resolveConfiguredDoctorSessionStateRoute({
+        cfg: params.cfg,
+        sessionKey,
+        env: params.env,
+      });
+      routeByAgentId.set(agentId, route);
+    }
+    routes[sessionKey] = route;
+  }
+  if (Object.keys(scanStore).length === 0) {
+    return;
+  }
+  const scan = scanSessionRouteStateOwners({ owners, store: scanStore, routes });
   if (scan.repairs.length > 0) {
     for (const [ownerLabel, repairs] of groupRepairsByOwner(scan.repairs)) {
       const staleCount = countSessionLabel(repairs.length);

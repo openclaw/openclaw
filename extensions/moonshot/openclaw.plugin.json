@@ -4,8 +4,12 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["moonshot"],
+  "providerAuthAliases": {
+    "moonshotai": "moonshot",
+    "moonshot-ai": "moonshot"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "moonshot-native",
@@ -33,6 +37,14 @@
     }
   },
   "modelCatalog": {
+    "aliases": {
+      "moonshotai": {
+        "provider": "moonshot"
+      },
+      "moonshot-ai": {
+        "provider": "moonshot"
+      }
+    },
     "providers": {
       "moonshot": {
         "baseUrl": "https://api.moonshot.ai/v1",
@@ -112,8 +124,13 @@
       "moonshot": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "moonshot": ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "moonshot",
+        "envVars": ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -1,4 +1,4 @@
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionManager } from "./sessions/index.js";
 
 const RAW_APPEND_MESSAGE = Symbol("openclaw.session.rawAppendMessage");
 

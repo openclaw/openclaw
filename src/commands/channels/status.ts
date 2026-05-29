@@ -1,6 +1,8 @@
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { withProgress } from "../../cli/progress.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
@@ -24,6 +26,7 @@ import {
 import { formatConfigChannelsStatusLines } from "./status-config-format.js";
 
 export type ChannelsStatusOptions = {
+  channel?: string;
   json?: boolean;
   probe?: boolean;
   timeout?: string;
@@ -101,11 +104,19 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         typeof account.lastOutboundAt === "number" && Number.isFinite(account.lastOutboundAt)
           ? account.lastOutboundAt
           : null;
+      const transportAt =
+        typeof account.lastTransportActivityAt === "number" &&
+        Number.isFinite(account.lastTransportActivityAt)
+          ? account.lastTransportActivityAt
+          : null;
       if (inboundAt) {
         bits.push(`in:${formatTimeAgo(Date.now() - inboundAt)}`);
       }
       if (outboundAt) {
         bits.push(`out:${formatTimeAgo(Date.now() - outboundAt)}`);
+      }
+      if (transportAt) {
+        bits.push(`transport:${formatTimeAgo(Date.now() - transportAt)}`);
       }
       appendModeBit(bits, account);
       const botUsername = (() => {
@@ -204,7 +215,8 @@ export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const timeoutMs = Number(opts.timeout ?? (opts.probe ? 30_000 : 10_000));
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, opts.probe ? 30_000 : 10_000);
+  const requestedChannel = opts.channel ? normalizeChannelId(opts.channel) : null;
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {
@@ -217,12 +229,20 @@ export async function channelsStatusCommand(
         indeterminate: true,
         enabled: opts.json !== true,
       },
-      async () =>
-        await callGateway({
-          method: "channels.status",
-          params: { probe: Boolean(opts.probe), timeoutMs },
+      async () => {
+        const params: { channel?: string; probe: boolean; timeoutMs: number } = {
+          probe: Boolean(opts.probe),
           timeoutMs,
-        }),
+        };
+        if (opts.channel) {
+          params.channel = opts.channel;
+        }
+        return await callGateway({
+          method: "channels.status",
+          params,
+          timeoutMs,
+        });
+      },
     );
     if (opts.json) {
       writeRuntimeJson(runtime, payload);
@@ -259,7 +279,7 @@ export async function channelsStatusCommand(
           activationSourceConfig: cfg,
           env: process.env,
           includePersistedAuthState: false,
-        }),
+        }).filter((channelId) => !requestedChannel || channelId === requestedChannel),
       });
       return;
     }
@@ -271,7 +291,7 @@ export async function channelsStatusCommand(
             path: snapshot.path,
             mode,
           },
-          { sourceConfig: cfg },
+          { sourceConfig: cfg, channel: opts.channel },
         )
       ).join("\n"),
     );

@@ -20,7 +20,11 @@ const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./app-server/shared-client.js", () => sharedClientMocks);
+vi.mock("./app-server/shared-client.js", () => ({
+  ...sharedClientMocks,
+  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
+}));
 
 describe("codex conversation controls", () => {
   beforeEach(async () => {
@@ -53,16 +57,16 @@ describe("codex conversation controls", () => {
       "Codex permissions set to default.",
     );
 
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-1",
-      serviceTier: "priority",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-1");
+    expect(binding?.serviceTier).toBe("priority");
+    expect(binding?.approvalPolicy).toBe("on-request");
+    expect(binding?.sandbox).toBe("workspace-write");
   });
 
   it("does not persist public OpenAI provider after model changes on native auth bindings", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-a", "agent");
     upsertAuthProfile({
       profileId: "work",
       credential: {
@@ -88,18 +92,18 @@ describe("codex conversation controls", () => {
       })),
     });
 
-    await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
-      "Codex model set to gpt-5.5.",
-    );
+    await expect(
+      setCodexConversationModel({ sessionFile, agentDir, model: "gpt-5.5" }),
+    ).resolves.toBe("Codex model set to gpt-5.5.");
 
     const raw = await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8");
     const binding = await readCodexAppServerBinding(sessionFile);
+    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    expect(sharedClientParams?.agentDir).toBe(agentDir);
     expect(raw).not.toContain('"modelProvider": "openai"');
-    expect(binding).toMatchObject({
-      threadId: "thread-1",
-      authProfileId: "work",
-      model: "gpt-5.5",
-    });
+    expect(binding?.threadId).toBe("thread-1");
+    expect(binding?.authProfileId).toBe("work");
+    expect(binding?.model).toBe("gpt-5.5");
     expect(binding?.modelProvider).toBeUndefined();
   });
 

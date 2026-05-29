@@ -1,4 +1,6 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createMSTeamsHttpError } from "./http-error.js";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_DEFAULT_TOKEN_FETCH_TIMEOUT_MS,
@@ -62,10 +64,12 @@ async function fetchMSTeamsTokens(params: {
 
   try {
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`MSTeams ${params.failureLabel} failed (${response.status}): ${errorText}`);
+      throw await createMSTeamsHttpError(response, `MSTeams ${params.failureLabel} failed`);
     }
-    return (await response.json()) as MSTeamsTokenResponse;
+    return await readProviderJsonResponse<MSTeamsTokenResponse>(
+      response,
+      `MSTeams ${params.failureLabel} failed`,
+    );
   } finally {
     await release();
   }

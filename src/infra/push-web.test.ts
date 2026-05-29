@@ -37,10 +37,10 @@ vi.mock("web-push", () => ({
 function expectLoadedSubscription(
   loaded: Awaited<ReturnType<typeof loadWebPushSubscription>>,
 ): WebPushSubscription {
-  expect(loaded).toEqual(expect.objectContaining({ endpoint: expect.any(String) }));
   if (loaded === null) {
     throw new Error("Expected loaded web push subscription");
   }
+  expect(loaded.endpoint).not.toBe("");
   return loaded;
 }
 
@@ -58,7 +58,11 @@ describe("resolveVapidKeys", () => {
     const keys = await resolveVapidKeys(tmpDir);
     expect(keys.publicKey).toBe("test-public-key-base64url");
     expect(keys.privateKey).toBe("test-private-key-base64url");
-    expect(keys.subject).toMatch(/^mailto:/);
+    expect(keys.subject).toBe("https://openclaw.ai");
+    const persistedKeys = JSON.parse(
+      await fs.readFile(path.join(tmpDir, "push", "vapid-keys.json"), "utf8"),
+    ) as { subject?: string };
+    expect(persistedKeys.subject).toBe("https://openclaw.ai");
 
     // Second call returns same keys.
     const keys2 = await resolveVapidKeys(tmpDir);
@@ -211,7 +215,7 @@ describe("sending", () => {
     expect(result.ok).toBe(true);
     expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledWith(
-      "mailto:openclaw@localhost",
+      "https://openclaw.ai",
       "test-public-key-base64url",
       "test-private-key-base64url",
     );
@@ -233,7 +237,7 @@ describe("sending", () => {
     const results = await broadcastWebPush({ title: "Broadcast" }, tmpDir);
 
     expect(results).toHaveLength(2);
-    expect(results.filter((result) => !result.ok)).toEqual([]);
+    expect(results.every((result) => result.ok)).toBe(true);
     expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(2);
   });

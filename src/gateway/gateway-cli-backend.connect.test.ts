@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 const GATEWAY_CONNECT_TIMEOUT_MS = 5_000;
 const tempRoots: string[] = [];
@@ -136,9 +136,7 @@ describe("gateway cli backend connect", () => {
         const health = await client.request("health", undefined, {
           timeoutMs: 1_000,
         });
-        expect(health).toMatchObject({
-          ok: true,
-        });
+        expect(health.ok).toBe(true);
         expect(server.requests).toEqual(["connect", "health"]);
       } finally {
         await client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});

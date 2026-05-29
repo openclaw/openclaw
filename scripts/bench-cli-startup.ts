@@ -1,17 +1,24 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type CommandCase = {
   id: string;
   name: string;
   args: string[];
   presets: readonly string[];
+  expectedExitCodes?: readonly number[];
+  expectedNonzeroOutputIncludes?: readonly string[];
+  firstOutputBudgetMs?: number;
+  exitBudgetMs?: number;
 };
 
 type Sample = {
   ms: number;
+  firstOutputMs: number | null;
   maxRssMb: number | null;
   exitCode: number | null;
   signal: string | null;
@@ -30,6 +37,7 @@ type SummaryStats = {
 type CaseSummary = {
   sampleCount: number;
   durationMs: SummaryStats;
+  firstOutputMs: SummaryStats | null;
   maxRssMb: SummaryStats | null;
   exitSummary: string;
 };
@@ -40,6 +48,12 @@ type SuiteResult = {
     id: string;
     name: string;
     args: string[];
+    expectedExitCodes?: number[];
+    expectedNonzeroOutputIncludes?: string[];
+    contract: {
+      firstOutputBudgetMs: number | null;
+      exitBudgetMs: number | null;
+    } | null;
     samples: Sample[];
     summary: CaseSummary;
   }>;
@@ -65,10 +79,254 @@ const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 
 const COMMAND_CASES: readonly CommandCase[] = [
-  { id: "version", name: "--version", args: ["--version"], presets: ["startup"] },
-  { id: "help", name: "--help", args: ["--help"], presets: ["startup"] },
-  { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
-  { id: "healthJson", name: "health --json", args: ["health", "--json"], presets: ["startup"] },
+  {
+    id: "version",
+    name: "--version",
+    args: ["--version"],
+    presets: ["startup", "response"],
+    firstOutputBudgetMs: 1_000,
+    exitBudgetMs: 2_000,
+  },
+  {
+    id: "help",
+    name: "--help",
+    args: ["--help"],
+    presets: ["startup", "response"],
+    firstOutputBudgetMs: 1_000,
+    exitBudgetMs: 2_000,
+  },
+  {
+    id: "onboardHelp",
+    name: "onboard --help",
+    args: ["onboard", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "setupHelp",
+    name: "setup --help",
+    args: ["setup", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "configureHelp",
+    name: "configure --help",
+    args: ["configure", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "channelsAddHelp",
+    name: "channels add --help",
+    args: ["channels", "add", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "channelsParent",
+    name: "channels",
+    args: ["channels"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "doctorHelp",
+    name: "doctor --help",
+    args: ["doctor", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "modelsHelp",
+    name: "models --help",
+    args: ["models", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "pluginsHelp",
+    name: "plugins --help",
+    args: ["plugins", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "pluginsParent",
+    name: "plugins",
+    args: ["plugins"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "pluginsListJson",
+    name: "plugins list --json",
+    args: ["plugins", "list", "--json"],
+    presets: ["response", "real"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "gatewayHelp",
+    name: "gateway --help",
+    args: ["gateway", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "agentsHelp",
+    name: "agents --help",
+    args: ["agents", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 3_500,
+    exitBudgetMs: 8_000,
+  },
+  {
+    id: "sessionsHelp",
+    name: "sessions --help",
+    args: ["sessions", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "tasksHelp",
+    name: "tasks --help",
+    args: ["tasks", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "messageHelp",
+    name: "message --help",
+    args: ["message", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "pairingHelp",
+    name: "pairing --help",
+    args: ["pairing", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "authHelp",
+    name: "auth --help",
+    args: ["auth", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "configHelp",
+    name: "config --help",
+    args: ["config", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "secretsHelp",
+    name: "secrets --help",
+    args: ["secrets", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "skillsHelp",
+    name: "skills --help",
+    args: ["skills", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "nodesHelp",
+    name: "nodes --help",
+    args: ["nodes", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 3_500,
+    exitBudgetMs: 8_000,
+  },
+  {
+    id: "directoryHelp",
+    name: "directory --help",
+    args: ["directory", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "sandboxHelp",
+    name: "sandbox --help",
+    args: ["sandbox", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "devicesParent",
+    name: "devices",
+    args: ["devices"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "mcpParent",
+    name: "mcp",
+    args: ["mcp"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "browserHelp",
+    name: "browser --help",
+    args: ["browser", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 1_500,
+    exitBudgetMs: 3_000,
+  },
+  {
+    id: "webhooksHelp",
+    name: "webhooks --help",
+    args: ["webhooks", "--help"],
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+  },
+  {
+    id: "health",
+    name: "health",
+    args: ["health"],
+    presets: ["startup", "real"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ["Gateway target:"],
+  },
+  {
+    id: "healthJson",
+    name: "health --json",
+    args: ["health", "--json"],
+    presets: ["startup"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
+  },
   {
     id: "statusJson",
     name: "status --json",
@@ -124,12 +382,16 @@ const COMMAND_CASES: readonly CommandCase[] = [
     name: "gateway health --json",
     args: ["gateway", "health", "--json"],
     presets: ["real"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
   {
     id: "configGetGatewayPort",
     name: "config get gateway.port",
     args: ["config", "get", "gateway.port"],
     presets: ["real"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ["Config path not found: gateway.port"],
   },
 ] as const;
 
@@ -138,7 +400,11 @@ function parseFlagValue(flag: string): string | undefined {
   if (idx === -1) {
     return undefined;
   }
-  return process.argv[idx + 1];
+  const value = process.argv[idx + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
 }
 
 function hasFlag(flag: string): boolean {
@@ -155,15 +421,32 @@ function parseRepeatableFlag(flag: string): string[] {
   return values;
 }
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (!raw) {
-    return fallback;
+function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
+  return parseStrictIntegerOption({ fallback, label, min: 1, raw });
+}
+
+function parseNonNegativeInt(raw: string | undefined, fallback: number, label = "value"): number {
+  return parseStrictIntegerOption({ fallback, label, min: 0, raw });
+}
+
+function parseGatewayPortEnv(raw: string | undefined): number {
+  const value = raw?.trim();
+  if (!value) {
+    return 32123;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return fallback;
+  const bracketHostMatch = /^\[[^\]]+\]:(\d+)$/u.exec(value);
+  if (bracketHostMatch) {
+    return parsePositiveInt(bracketHostMatch[1], 32123, "OPENCLAW_GATEWAY_PORT");
   }
-  return parsed;
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return 32123;
+  }
+  const colonCount = value.split(":").length - 1;
+  if (colonCount > 1) {
+    return 32123;
+  }
+  const portRaw = colonCount === 1 ? value.split(":")[1] : value;
+  return parsePositiveInt(portRaw, 32123, "OPENCLAW_GATEWAY_PORT");
 }
 
 function parsePresets(raw: string | undefined): string[] {
@@ -175,7 +458,7 @@ function parsePresets(raw: string | undefined): string[] {
     .map((value) => value.trim())
     .filter(Boolean);
   if (values.includes("all")) {
-    return ["startup", "real"];
+    return ["startup", "real", "response"];
   }
   return values.length > 0 ? values : ["startup"];
 }
@@ -233,12 +516,16 @@ function summarizeNumbers(values: number[]): SummaryStats {
 
 function summarizeSamples(samples: Sample[]): CaseSummary {
   const durations = summarizeNumbers(samples.map((sample) => sample.ms));
+  const firstOutputValues = samples
+    .map((sample) => sample.firstOutputMs)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const rssValues = samples
     .map((sample) => sample.maxRssMb)
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   return {
     sampleCount: samples.length,
     durationMs: durations,
+    firstOutputMs: firstOutputValues.length > 0 ? summarizeNumbers(firstOutputValues) : null,
     maxRssMb: rssValues.length > 0 ? summarizeNumbers(rssValues) : null,
     exitSummary: collectExitSummary(samples),
   };
@@ -262,6 +549,21 @@ function collectExitSummary(samples: Sample[]): string {
     buckets.set(key, (buckets.get(key) ?? 0) + 1);
   }
   return [...buckets.entries()].map(([key, count]) => `${key}x${count}`).join(", ");
+}
+
+function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
+  if (commandCase.id !== "configGetGatewayPort" && commandCase.id !== "gatewayHealthJson") {
+    return null;
+  }
+  const port = parseGatewayPortEnv(process.env.OPENCLAW_GATEWAY_PORT);
+  return {
+    gateway: {
+      auth: { mode: "none" },
+      bind: "loopback",
+      mode: "local",
+      port,
+    },
+  };
 }
 
 function buildRssHook(tmpDir: string): string {
@@ -300,7 +602,140 @@ function buildCpuOrHeapFlags(options: { cpuProfDir?: string; heapProfDir?: strin
   return flags;
 }
 
-function runCase(params: {
+function appendLimited(current: string, chunk: Buffer | string, maxLength: number): string {
+  const next = current + String(chunk);
+  return next.length > maxLength ? next.slice(next.length - maxLength) : next;
+}
+
+async function runSample(params: {
+  entry: string;
+  commandCase: CommandCase;
+  timeoutMs: number;
+  cpuProfDir?: string;
+  heapProfDir?: string;
+  rssHookPath: string;
+}): Promise<Sample> {
+  const runRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
+  const stateDir = path.join(runRoot, ".openclaw");
+  const configPath = path.join(stateDir, "openclaw.json");
+  const configFixture = buildConfigFixture(params.commandCase);
+  if (configFixture) {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(configPath, `${JSON.stringify(configFixture, null, 2)}\n`, "utf8");
+  }
+  const nodeArgs = [
+    "--import",
+    params.rssHookPath,
+    ...buildCpuOrHeapFlags({
+      cpuProfDir: params.cpuProfDir,
+      heapProfDir: params.heapProfDir,
+    }),
+    params.entry,
+    ...params.commandCase.args,
+  ];
+  const started = process.hrtime.bigint();
+  let firstOutputMs: number | null = null;
+  let stdout = "";
+  let stderr = "";
+  let settled = false;
+  const maxOutputLength = 32 * 1024 * 1024;
+
+  try {
+    return await new Promise<Sample>((resolve) => {
+      const proc = spawn(process.execPath, nodeArgs, {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          HOME: runRoot,
+          USERPROFILE: runRoot,
+          OPENCLAW_HOME: runRoot,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_HIDE_BANNER: "1",
+          NO_COLOR: "1",
+          FORCE_COLOR: "0",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      const finish = (sample: Omit<Sample, "ms" | "firstOutputMs" | "maxRssMb">) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        const ms = Number(process.hrtime.bigint() - started) / 1e6;
+        resolve({
+          ms,
+          firstOutputMs,
+          maxRssMb: parseMaxRssMb(stderr),
+          ...sample,
+        });
+      };
+
+      const markFirstOutput = () => {
+        if (firstOutputMs == null) {
+          firstOutputMs = Number(process.hrtime.bigint() - started) / 1e6;
+        }
+      };
+
+      const timeout = setTimeout(() => {
+        try {
+          proc.kill("SIGTERM");
+        } catch {
+          // Best-effort timeout cleanup.
+        }
+        setTimeout(() => {
+          try {
+            proc.kill("SIGKILL");
+          } catch {
+            // Best-effort timeout cleanup.
+          }
+        }, 1_000).unref?.();
+      }, params.timeoutMs);
+      timeout.unref?.();
+
+      proc.stdout?.on("data", (chunk) => {
+        markFirstOutput();
+        stdout = appendLimited(stdout, chunk, maxOutputLength);
+      });
+      proc.stderr?.on("data", (chunk) => {
+        markFirstOutput();
+        stderr = appendLimited(stderr, chunk, maxOutputLength);
+      });
+      proc.once("error", (error) => {
+        clearTimeout(timeout);
+        stderr = appendLimited(
+          stderr,
+          error instanceof Error ? error.message : String(error),
+          maxOutputLength,
+        );
+        finish({
+          exitCode: null,
+          signal: null,
+          stdoutTail: tailLines(stdout, 20),
+          stderrTail: tailLines(stderr, 20),
+        });
+      });
+      proc.once("close", (code, signal) => {
+        clearTimeout(timeout);
+        finish({
+          exitCode: code,
+          signal,
+          ...(code === 0 && signal == null
+            ? {}
+            : {
+                stdoutTail: tailLines(stdout, 20),
+                stderrTail: tailLines(stderr, 20),
+              }),
+        });
+      });
+    });
+  } finally {
+    rmSync(runRoot, { recursive: true, force: true });
+  }
+}
+
+async function runCase(params: {
   entry: string;
   commandCase: CommandCase;
   runs: number;
@@ -309,48 +744,15 @@ function runCase(params: {
   cpuProfDir?: string;
   heapProfDir?: string;
   rssHookPath: string;
-}): Sample[] {
+}): Promise<Sample[]> {
   const samples: Sample[] = [];
   const totalRuns = params.warmup + params.runs;
   for (let i = 0; i < totalRuns; i += 1) {
-    const nodeArgs = [
-      "--import",
-      params.rssHookPath,
-      ...buildCpuOrHeapFlags({
-        cpuProfDir: params.cpuProfDir,
-        heapProfDir: params.heapProfDir,
-      }),
-      params.entry,
-      ...params.commandCase.args,
-    ];
-    const started = process.hrtime.bigint();
-    const proc = spawnSync(process.execPath, nodeArgs, {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        OPENCLAW_HIDE_BANNER: "1",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      encoding: "utf8",
-      timeout: params.timeoutMs,
-      maxBuffer: 32 * 1024 * 1024,
-    });
-    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+    const sample = await runSample(params);
     if (i < params.warmup) {
       continue;
     }
-    samples.push({
-      ms,
-      maxRssMb: parseMaxRssMb(proc.stderr ?? ""),
-      exitCode: proc.status,
-      signal: proc.signal,
-      ...(proc.status === 0
-        ? {}
-        : {
-            stdoutTail: tailLines(proc.stdout ?? "", 20),
-            stderrTail: tailLines(proc.stderr ?? "", 20),
-          }),
-    });
+    samples.push(sample);
   }
   return samples;
 }
@@ -362,17 +764,23 @@ function tailLines(value: string, maxLines: number): string {
 function printSuite(result: SuiteResult): void {
   console.log(`Entry: ${result.entry}`);
   for (const commandCase of result.cases) {
-    const { durationMs, maxRssMb, exitSummary } = commandCase.summary;
+    const { durationMs, firstOutputMs, maxRssMb, exitSummary } = commandCase.summary;
     const rssSummary =
       maxRssMb == null
         ? "rss=n/a"
         : `rss(avg=${formatMb(maxRssMb.avg)} p50=${formatMb(maxRssMb.p50)} p95=${formatMb(maxRssMb.p95)})`;
+    const firstOutputSummary =
+      firstOutputMs == null
+        ? "first-output=n/a"
+        : `first-output(avg=${formatMs(firstOutputMs.avg)} p50=${formatMs(
+            firstOutputMs.p50,
+          )} p95=${formatMs(firstOutputMs.p95)})`;
     console.log(
       `${commandCase.name.padEnd(24)} avg=${formatMs(durationMs.avg)} p50=${formatMs(
         durationMs.p50,
       )} p95=${formatMs(durationMs.p95)} min=${formatMs(durationMs.min)} max=${formatMs(
         durationMs.max,
-      )} ${rssSummary} exits=[${exitSummary}]`,
+      )} ${firstOutputSummary} ${rssSummary} exits=[${exitSummary}]`,
     );
   }
   console.log("");
@@ -404,13 +812,46 @@ function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
   }
 }
 
-function buildSuiteResult(params: {
+export function collectFailedSamples(result: SuiteResult): string[] {
+  const failures: string[] = [];
+  for (const commandCase of result.cases) {
+    if (commandCase.samples.length === 0) {
+      failures.push(`${result.entry} ${commandCase.id}: no measured samples`);
+      continue;
+    }
+    for (const [sampleIndex, sample] of commandCase.samples.entries()) {
+      const label = `${result.entry} ${commandCase.id} sample ${sampleIndex + 1}`;
+      const expectedExitCodes = new Set(commandCase.expectedExitCodes ?? [0]);
+      if (sample.signal !== null) {
+        failures.push(`${label}: exited via signal ${sample.signal}`);
+      } else if (!expectedExitCodes.has(sample.exitCode ?? -1)) {
+        failures.push(`${label}: exited with code ${String(sample.exitCode)}`);
+      } else if (sample.exitCode !== 0) {
+        const output = `${sample.stdoutTail ?? ""}\n${sample.stderrTail ?? ""}`;
+        const missing = (commandCase.expectedNonzeroOutputIncludes ?? []).filter(
+          (snippet) => !output.includes(snippet),
+        );
+        if (missing.length > 0) {
+          failures.push(
+            `${label}: exited with expected code ${String(
+              sample.exitCode,
+            )} but output did not match expected clean-state markers (${missing.join(", ")})`,
+          );
+        }
+      }
+    }
+  }
+  return failures;
+}
+
+async function buildSuiteResult(params: {
   entry: string;
   options: CliOptions;
   rssHookPath: string;
-}): SuiteResult {
-  const cases = params.options.cases.map((commandCase) => {
-    const samples = runCase({
+}): Promise<SuiteResult> {
+  const cases = [];
+  for (const commandCase of params.options.cases) {
+    const samples = await runCase({
       entry: params.entry,
       commandCase,
       runs: params.options.runs,
@@ -420,14 +861,27 @@ function buildSuiteResult(params: {
       heapProfDir: params.options.heapProfDir,
       rssHookPath: params.rssHookPath,
     });
-    return {
+    cases.push({
       id: commandCase.id,
       name: commandCase.name,
       args: commandCase.args,
+      ...(commandCase.expectedExitCodes && commandCase.expectedExitCodes.some((code) => code !== 0)
+        ? { expectedExitCodes: [...commandCase.expectedExitCodes] }
+        : {}),
+      ...(commandCase.expectedNonzeroOutputIncludes
+        ? { expectedNonzeroOutputIncludes: [...commandCase.expectedNonzeroOutputIncludes] }
+        : {}),
+      contract:
+        commandCase.firstOutputBudgetMs != null || commandCase.exitBudgetMs != null
+          ? {
+              firstOutputBudgetMs: commandCase.firstOutputBudgetMs ?? null,
+              exitBudgetMs: commandCase.exitBudgetMs ?? null,
+            }
+          : null,
       samples,
       summary: summarizeSamples(samples),
-    };
-  });
+    });
+  }
   return {
     entry: params.entry,
     cases,
@@ -444,9 +898,9 @@ function parseOptions(): CliOptions {
     cases,
     entryPrimary: parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY,
     entrySecondary: parseFlagValue("--entry-secondary"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS),
-    warmup: parsePositiveInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS),
+    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
+    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
     json: hasFlag("--json"),
     output: parseFlagValue("--output"),
     cpuProfDir: parseFlagValue("--cpu-prof-dir"),
@@ -461,7 +915,8 @@ Usage:
   pnpm tsx scripts/bench-cli-startup.ts [options]
 
 Options:
-  --preset <startup|real|all>  Command preset to run (default: startup)
+  --preset <startup|real|response|all>
+                               Command preset to run (default: startup)
   --case <id>                  Specific case id to run; repeatable
   --entry <path>               Primary entry file (default: openclaw.mjs)
   --entry-secondary <path>     Secondary entry file for avg delta comparison
@@ -489,13 +944,13 @@ async function main(): Promise<void> {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-"));
   const rssHookPath = buildRssHook(tmpDir);
   try {
-    const primary = buildSuiteResult({
+    const primary = await buildSuiteResult({
       entry: options.entryPrimary,
       options,
       rssHookPath,
     });
     const secondary = options.entrySecondary
-      ? buildSuiteResult({
+      ? await buildSuiteResult({
           entry: options.entrySecondary,
           options,
           rssHookPath,
@@ -512,6 +967,10 @@ async function main(): Promise<void> {
       primary,
       secondary: secondary ?? null,
     };
+    const failures = [
+      ...collectFailedSamples(primary),
+      ...(secondary ? collectFailedSamples(secondary) : []),
+    ];
 
     if (options.output) {
       mkdirSync(path.dirname(options.output), { recursive: true });
@@ -520,6 +979,12 @@ async function main(): Promise<void> {
 
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
+      if (failures.length > 0) {
+        process.exitCode = 1;
+        for (const failure of failures) {
+          console.error(`[startup-bench] ${failure}`);
+        }
+      }
       return;
     }
 
@@ -542,9 +1007,30 @@ async function main(): Promise<void> {
       printSuite(secondary);
       printDelta(primary, secondary);
     }
+
+    if (failures.length > 0) {
+      process.exitCode = 1;
+      console.error("\nFailed startup benchmark samples:");
+      for (const failure of failures) {
+        console.error(`- ${failure}`);
+      }
+    }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
-await main();
+export const testing = {
+  buildConfigFixture,
+  collectFailedSamples,
+  parseGatewayPortEnv,
+  parseNonNegativeInt,
+  parsePositiveInt,
+};
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exit(1);
+  });
+}

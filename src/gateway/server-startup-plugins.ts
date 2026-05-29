@@ -4,8 +4,10 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 
@@ -41,6 +43,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
   loadRuntimePlugins?: boolean;
+  loadSetupRuntimePlugins?: boolean;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
@@ -85,6 +88,7 @@ export async function prepareGatewayPluginBootstrap(params: {
           ...(params.pluginMetadataSnapshot?.manifestRegistry
             ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
             : {}),
+          discovery: params.pluginMetadataSnapshot?.discovery,
         }).config,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
@@ -106,12 +110,15 @@ export async function prepareGatewayPluginBootstrap(params: {
   const startupPluginIds = [...(pluginLookUpTable?.startup.pluginIds ?? [])];
 
   const baseMethods = listGatewayMethods();
+  const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const emptyPluginRegistry = createEmptyPluginRegistry();
   let pluginRegistry = emptyPluginRegistry;
   let baseGatewayMethods = baseMethods;
   const shouldLoadRuntimePlugins = params.loadRuntimePlugins !== false;
+  const shouldLoadSetupRuntimePlugins =
+    params.loadSetupRuntimePlugins === true && deferredConfiguredChannelPluginIds.length > 0;
 
-  if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
+  if (!params.minimalTestGateway && shouldLoadSetupRuntimePlugins) {
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
       {
         cfg: gatewayPluginConfig,
@@ -119,10 +126,26 @@ export async function prepareGatewayPluginBootstrap(params: {
         workspaceDir: defaultWorkspaceDir,
         log: params.log,
         baseMethods,
+        coreGatewayMethodNames,
+        startupPluginIds: deferredConfiguredChannelPluginIds,
+        pluginLookUpTable,
+        preferSetupRuntimeForChannelPlugins: true,
+        suppressPluginInfoLogs: true,
+      },
+    ));
+  } else if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
+    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
+      {
+        cfg: gatewayPluginConfig,
+        activationSourceConfig,
+        workspaceDir: defaultWorkspaceDir,
+        log: params.log,
+        baseMethods,
+        coreGatewayMethodNames,
         startupPluginIds,
         pluginLookUpTable,
-        preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
-        suppressPluginInfoLogs: deferredConfiguredChannelPluginIds.length > 0,
+        preferSetupRuntimeForChannelPlugins: false,
+        suppressPluginInfoLogs: false,
       },
     ));
   } else {
@@ -141,7 +164,8 @@ export async function prepareGatewayPluginBootstrap(params: {
     baseMethods,
     pluginRegistry,
     baseGatewayMethods,
-    runtimePluginsLoaded: !params.minimalTestGateway && shouldLoadRuntimePlugins,
+    runtimePluginsLoaded:
+      !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins,
   };
 }
 
@@ -151,6 +175,8 @@ export async function loadGatewayStartupPluginRuntime(params: {
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
+  coreGatewayMethodNames?: readonly string[];
+  hostServices?: PluginRegistryParams["hostServices"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   preferSetupRuntimeForChannelPlugins?: boolean;
@@ -163,8 +189,11 @@ export async function loadGatewayStartupPluginRuntime(params: {
     activationSourceConfig: params.activationSourceConfig,
     workspaceDir: params.workspaceDir,
     log: params.log,
-    coreGatewayMethodNames: params.baseMethods,
+    coreGatewayMethodNames: params.coreGatewayMethodNames ?? params.baseMethods,
     baseMethods: params.baseMethods,
+    ...(params.hostServices !== undefined && {
+      hostServices: params.hostServices,
+    }),
     pluginIds: params.startupPluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,

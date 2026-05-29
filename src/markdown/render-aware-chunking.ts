@@ -1,3 +1,4 @@
+import { resolveIntegerOption } from "../shared/number-coercion.js";
 import {
   chunkMarkdownIR,
   sliceMarkdownIR,
@@ -30,7 +31,7 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
     return [];
   }
 
-  const normalizedLimit = Math.max(1, Math.floor(options.limit));
+  const normalizedLimit = resolveIntegerOption(options.limit, 1, { min: 1 });
   const pending = chunkMarkdownIR(options.ir, normalizedLimit);
   const finalized: MarkdownIR[] = [];
 
@@ -196,7 +197,7 @@ function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): Markd
     return [];
   }
 
-  const normalizedLimit = Math.max(1, Math.floor(limit));
+  const normalizedLimit = resolveIntegerOption(limit, 1, { min: 1 });
   if (normalizedLimit <= 0 || ir.text.length <= normalizedLimit) {
     return [ir];
   }
@@ -215,7 +216,12 @@ function mergeAdjacentStyleSpans(styles: MarkdownStyleSpan[]): MarkdownStyleSpan
   const merged: MarkdownStyleSpan[] = [];
   for (const span of styles) {
     const last = merged.at(-1);
-    if (last && last.style === span.style && span.start <= last.end) {
+    if (
+      last &&
+      last.style === span.style &&
+      last.language === span.language &&
+      span.start <= last.end
+    ) {
       last.end = Math.max(last.end, span.end);
       continue;
     }

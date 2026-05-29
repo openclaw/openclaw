@@ -78,8 +78,30 @@ describe("CronToolSchema", () => {
     const jobStagger = propertyAt(schemaRecord, "job.schedule.staggerMs");
     const patchStagger = propertyAt(schemaRecord, "patch.schedule.staggerMs");
 
-    expect(jobStagger?.description).toBe("Random jitter in ms (kind=cron)");
-    expect(patchStagger?.description).toBe("Random jitter in ms (kind=cron)");
+    expect(jobStagger?.description).toBe("Jitter ms (kind=cron)");
+    expect(patchStagger?.description).toBe("Jitter ms (kind=cron)");
+  });
+
+  it("advertises numeric cron params with runtime bounds", () => {
+    for (const path of ["job.schedule.everyMs", "patch.schedule.everyMs"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 1 });
+    }
+    for (const path of [
+      "job.schedule.anchorMs",
+      "job.schedule.staggerMs",
+      "patch.schedule.anchorMs",
+      "patch.schedule.staggerMs",
+      "job.failureAlert.cooldownMs",
+      "patch.failureAlert.cooldownMs",
+    ]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 0 });
+    }
+    for (const path of ["job.failureAlert.after", "patch.failureAlert.after"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 1 });
+    }
+    for (const path of ["job.payload.timeoutSeconds", "patch.payload.timeoutSeconds"]) {
+      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "number", minimum: 0 });
+    }
   });
 
   it("describes cron expressions as local wall-clock time in the supplied timezone", () => {

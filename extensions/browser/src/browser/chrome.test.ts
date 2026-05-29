@@ -36,6 +36,25 @@ import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
 
 type StopChromeTarget = Parameters<typeof stopOpenClawChrome>[0];
+type ChromeCdpDiagnostic = Awaited<ReturnType<typeof diagnoseChromeCdp>>;
+
+function expectFailedChromeCdpDiagnostic(
+  diagnostic: ChromeCdpDiagnostic,
+): Extract<ChromeCdpDiagnostic, { ok: false }> {
+  if (diagnostic.ok) {
+    throw new Error("Expected failed Chrome CDP diagnostic");
+  }
+  return diagnostic;
+}
+
+function expectReadyChromeCdpDiagnostic(
+  diagnostic: ChromeCdpDiagnostic,
+): Extract<ChromeCdpDiagnostic, { ok: true }> {
+  if (!diagnostic.ok) {
+    throw new Error("Expected ready Chrome CDP diagnostic");
+  }
+  return diagnostic;
+}
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
   const raw = await fsp.readFile(filePath, "utf-8");
@@ -366,6 +385,21 @@ describe("browser chrome helpers", () => {
     }
   });
 
+  it("finds Playwright-managed Linux Chromium", () => {
+    const browserPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ms-playwright-"));
+    const executablePath = path.join(browserPath, "chromium-1217", "chrome-linux64", "chrome");
+    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", browserPath);
+    fs.mkdirSync(path.dirname(executablePath), { recursive: true });
+    const exists = mockExistsSync((pathValue) => pathValue === executablePath);
+
+    try {
+      expect(findChromeExecutableLinux()).toEqual({ kind: "chromium", path: executablePath });
+    } finally {
+      exists.mockRestore();
+      fs.rmSync(browserPath, { recursive: true, force: true });
+    }
+  });
+
   it("returns null when no Chrome candidate exists on Linux", () => {
     const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     expect(findChromeExecutableLinux()).toBeNull();
@@ -455,11 +489,11 @@ describe("browser chrome helpers", () => {
       } as unknown as Response),
     );
 
-    await expect(diagnoseChromeCdp("http://127.0.0.1:12345", 50, 50)).resolves.toMatchObject({
-      ok: false,
-      code: "missing_websocket_debugger_url",
-      cdpUrl: "http://127.0.0.1:12345",
-    });
+    const diagnostic = expectFailedChromeCdpDiagnostic(
+      await diagnoseChromeCdp("http://127.0.0.1:12345", 50, 50),
+    );
+    expect(diagnostic.code).toBe("missing_websocket_debugger_url");
+    expect(diagnostic.cdpUrl).toBe("http://127.0.0.1:12345");
   });
 
   it("allows loopback CDP probes while still blocking non-loopback private targets in strict SSRF mode", async () => {
@@ -572,11 +606,10 @@ describe("browser chrome helpers", () => {
       wsPath: "/devtools/browser/stale-diagnostic",
       onConnection: (wss) => wss.on("connection", (_ws) => {}),
       run: async (baseUrl) => {
-        const diagnostic = await diagnoseChromeCdp(baseUrl, 300, 50);
-        expect(diagnostic).toMatchObject({
-          ok: false,
-          code: "websocket_health_command_timeout",
-        });
+        const diagnostic = expectFailedChromeCdpDiagnostic(
+          await diagnoseChromeCdp(baseUrl, 300, 50),
+        );
+        expect(diagnostic.code).toBe("websocket_health_command_timeout");
         expect(diagnostic.wsUrl).toMatch(/\/devtools\/browser\/stale-diagnostic$/);
       },
     });
@@ -598,6 +631,19 @@ describe("browser chrome helpers", () => {
     expect(formatted).not.toContain("user");
     expect(formatted).not.toContain("pass");
     expect(formatted).not.toContain("supersecret123");
+  });
+
+  it("adds a WSL2 portproxy hint for empty HTTP CDP replies", () => {
+    const formatted = formatChromeCdpDiagnostic({
+      ok: false,
+      code: "http_unreachable",
+      cdpUrl: "http://172.30.144.1:9222",
+      message: "fetch failed: other side closed",
+      elapsedMs: 12,
+    });
+
+    expect(formatted).toContain("svchost/iphlpsvc owns the CDP port");
+    expect(formatted).toContain("127.0.0.1:9222 -> 127.0.0.1:9222");
   });
 
   it("probes direct ws:// CDP URLs (with /devtools/ path) via handshake instead of HTTP", async () => {
@@ -653,11 +699,10 @@ describe("browser chrome helpers", () => {
         const url = new URL(baseUrl);
         const wsOnlyBase = `ws://${url.host}?token=abc`;
         await expect(isChromeCdpReady(wsOnlyBase, 300, 400)).resolves.toBe(true);
-        const diagnostic = await diagnoseChromeCdp(wsOnlyBase, 300, 400);
-        expect(diagnostic).toMatchObject({
-          ok: true,
-          wsUrl: `ws://${url.host}/devtools/browser/READY?token=abc`,
-        });
+        const diagnostic = expectReadyChromeCdpDiagnostic(
+          await diagnoseChromeCdp(wsOnlyBase, 300, 400),
+        );
+        expect(diagnostic.wsUrl).toBe(`ws://${url.host}/devtools/browser/READY?token=abc`);
       },
     });
   });
@@ -704,11 +749,11 @@ describe("browser chrome helpers", () => {
       const addr = server.address() as AddressInfo;
       const wsOnlyBase = `ws://127.0.0.1:${addr.port}?token=abc`;
       await expect(isChromeCdpReady(wsOnlyBase, 300, 400)).resolves.toBe(true);
-      await expect(diagnoseChromeCdp(wsOnlyBase, 300, 400)).resolves.toMatchObject({
-        ok: true,
-        wsUrl: wsOnlyBase,
-        browser: "Browserless/Mock",
-      });
+      const diagnostic = expectReadyChromeCdpDiagnostic(
+        await diagnoseChromeCdp(wsOnlyBase, 300, 400),
+      );
+      expect(diagnostic.wsUrl).toBe(wsOnlyBase);
+      expect(diagnostic.browser).toBe("Browserless/Mock");
     } finally {
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -770,10 +815,10 @@ describe("browser chrome helpers", () => {
     const port = (wss.address() as AddressInfo).port;
     try {
       await expect(isChromeCdpReady(`ws://127.0.0.1:${port}`, 500, 500)).resolves.toBe(true);
-      await expect(diagnoseChromeCdp(`ws://127.0.0.1:${port}`, 500, 500)).resolves.toMatchObject({
-        ok: true,
-        wsUrl: `ws://127.0.0.1:${port}`,
-      });
+      const diagnostic = expectReadyChromeCdpDiagnostic(
+        await diagnoseChromeCdp(`ws://127.0.0.1:${port}`, 500, 500),
+      );
+      expect(diagnostic.wsUrl).toBe(`ws://127.0.0.1:${port}`);
     } finally {
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     }
@@ -819,6 +864,56 @@ describe("browser chrome helpers", () => {
     await stopChromeWithProc(proc, 1);
     expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+  });
+
+  it("stopOpenClawChrome releases the managed-proxy CDP bypass exactly once on a double stop", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const proc = makeChromeTestProc();
+    const release = vi.fn();
+    const running = {
+      proc,
+      cdpPort: 12345,
+      releaseCdpProxyBypass: release,
+    } as unknown as StopChromeTarget;
+    await stopOpenClawChrome(running, 10);
+    await stopOpenClawChrome(running, 10);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("stopOpenClawChrome still releases the bypass when the SIGKILL fallback fires", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
+      } as unknown as Response),
+    );
+    const proc = makeChromeTestProc();
+    const release = vi.fn();
+    const running = {
+      proc,
+      cdpPort: 12345,
+      releaseCdpProxyBypass: release,
+    } as unknown as StopChromeTarget;
+    await stopOpenClawChrome(running, 1);
+    expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+    expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("stopOpenClawChrome swallows a throw from the bypass release callback", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const proc = makeChromeTestProc();
+    const release = vi.fn(() => {
+      throw new Error("release blew up");
+    });
+    const running = {
+      proc,
+      cdpPort: 12345,
+      releaseCdpProxyBypass: release,
+    } as unknown as StopChromeTarget;
+    await expect(stopOpenClawChrome(running, 10)).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
   });
 });
 

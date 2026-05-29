@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   getProviderEnvVars,
   listKnownProviderAuthEnvVarNames,
   listKnownSecretEnvVarNames,
@@ -8,6 +8,7 @@ import {
   PROVIDER_ENV_VARS,
   resolveProviderAuthEnvVarCandidates,
   resolveProviderAuthEvidence,
+  resolveProviderAuthLookupMaps,
 } from "./provider-env-vars.js";
 
 type MockManifestRegistry = {
@@ -63,6 +64,15 @@ const pluginRegistryMocks = vi.hoisted(() => {
   };
 });
 
+function requireLastMetadataSnapshotCall(): unknown[] {
+  const calls = pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected plugin metadata snapshot call");
+  }
+  return call;
+}
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: pluginRegistryMocks.getCurrentPluginMetadataSnapshot,
 }));
@@ -94,7 +104,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReset();
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
-    __testing.resetProviderEnvVarCachesForTests();
+    testing.resetProviderEnvVarCachesForTests();
   });
 
   it("includes later-installed plugin env vars without a bundled generated map", () => {
@@ -118,6 +128,13 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(getProviderEnvVars("fireworks-plan")).toEqual(["FIREWORKS_ALT_API_KEY"]);
     expect(listKnownProviderAuthEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
     expect(listKnownSecretEnvVarNames()).toContain("FIREWORKS_ALT_API_KEY");
+  });
+
+  it("lets openai-codex bootstrap from Codex app-server API-key env", () => {
+    expect(resolveProviderAuthEnvVarCandidates()["openai-codex"]).toEqual([
+      "CODEX_API_KEY",
+      "OPENAI_API_KEY",
+    ]);
   });
 
   it("includes setup provider env vars without loading setup runtime", () => {
@@ -180,9 +197,8 @@ describe("provider env vars dynamic manifest metadata", () => {
         source: "external cloud credentials",
       },
     ]);
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({
-      preferPersisted: false,
-    });
+    const [snapshotOptions] = requireLastMetadataSnapshotCall() as [{ preferPersisted?: boolean }];
+    expect(snapshotOptions.preferPersisted).toBe(false);
   });
 
   it("reuses the current compatible metadata snapshot for workspace auth evidence", () => {
@@ -474,13 +490,13 @@ describe("provider env vars dynamic manifest metadata", () => {
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       mod.getProviderEnvVars("workspace-setup", {
         config: { plugins: {} },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       mod.listKnownProviderAuthEnvVarNames({
         config: { plugins: {} },
@@ -550,7 +566,7 @@ describe("provider env vars dynamic manifest metadata", () => {
         },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps selected workspace context engine env vars when requested", async () => {
@@ -582,5 +598,115 @@ describe("provider env vars dynamic manifest metadata", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toEqual(["WHISPERX_API_KEY"]);
+  });
+
+  it("only loads plugin metadata snapshot once when resolving env var candidates, avoiding duplicate snapshot loads", () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "external-fireworks",
+          origin: "global",
+          providerAuthEnvVars: {
+            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          },
+          providerAuthAliases: {
+            "fireworks-plan": "fireworks",
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
+
+    resolveProviderAuthEnvVarCandidates({ config: {} });
+
+    // Verify it was only called once, proving alias resolution reused the snapshot and did not perform a second cold load!
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves alias, env, and evidence lookup maps from one metadata snapshot", () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "external-fireworks",
+          origin: "global",
+          providerAuthEnvVars: {
+            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          },
+          providerAuthAliases: {
+            "fireworks-plan": "fireworks",
+          },
+          setup: {
+            providers: [
+              {
+                id: "fireworks",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "FIREWORKS_CREDENTIALS",
+                    credentialMarker: "fireworks-local-credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+
+    expect(lookupMaps.aliasMap["fireworks-plan"]).toBe("fireworks");
+    expect(lookupMaps.envCandidateMap["fireworks-plan"]).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(lookupMaps.authEvidenceMap["fireworks-plan"]).toEqual([
+      {
+        type: "local-file-with-env",
+        fileEnvVar: "FIREWORKS_CREDENTIALS",
+        credentialMarker: "fireworks-local-credentials",
+      },
+    ]);
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a load-path current snapshot for default provider env lookups without parameters", () => {
+    const staleSnapshot = {
+      index: {
+        plugins: [
+          {
+            pluginId: "load-path-provider",
+            origin: "global",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "load-path-provider",
+          origin: "global",
+          providerAuthEnvVars: {
+            "load-path-provider": ["LOAD_PATH_PROVIDER_API_KEY"],
+          },
+        },
+      ],
+    };
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
+      (params: { config?: unknown; requireDefaultDiscoveryContext?: boolean }) => {
+        if (params.config || params.requireDefaultDiscoveryContext) {
+          return undefined;
+        }
+        return staleSnapshot;
+      },
+    );
+
+    expect(resolveProviderAuthEnvVarCandidates()["load-path-provider"]).toBeUndefined();
+    expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+      env: process.env,
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
   });
 });

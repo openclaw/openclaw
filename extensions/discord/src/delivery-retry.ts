@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveRetryConfig,
   retryAsync,
@@ -37,7 +37,11 @@ function getDiscordDeliveryRetryAfterMs(err: unknown): number | undefined {
   if (!retryAfterRaw) {
     return undefined;
   }
-  const retryAfterMs = Number(retryAfterRaw) * 1000;
+  const trimmedRetryAfter = retryAfterRaw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmedRetryAfter)) {
+    return undefined;
+  }
+  const retryAfterMs = Number(trimmedRetryAfter) * 1000;
   return Number.isFinite(retryAfterMs) ? retryAfterMs : undefined;
 }
 

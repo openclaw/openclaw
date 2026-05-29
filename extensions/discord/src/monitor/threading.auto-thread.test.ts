@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
@@ -46,6 +46,37 @@ function createBaseParams(
 async function flushAsyncWork() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[argIndex];
+}
+
+function expectRestBodyField(mock: unknown, field: string, expected: unknown) {
+  expect(callArg(mock, 0, 0, "rest path")).toBeTypeOf("string");
+  const options = requireRecord(callArg(mock, 0, 1, "rest options"), "rest options");
+  const body = requireRecord(options.body, "rest body");
+  expect(body[field]).toBe(expected);
+}
+
+function expectGeneratedTitleField(field: string, expected: unknown) {
+  const params = requireRecord(
+    callArg(generateThreadTitleMock, 0, 0, "thread title params"),
+    "thread title params",
+  );
+  expect(params[field]).toBe(expected);
 }
 
 beforeAll(async () => {
@@ -108,10 +139,7 @@ describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
         channelConfig: { allowed: true, autoThread: true, autoArchiveDuration: "10080" },
       }),
     );
-    expect(postMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ body: expect.objectContaining({ auto_archive_duration: 10080 }) }),
-    );
+    expectRestBodyField(postMock, "auto_archive_duration", 10080);
   });
 
   it("accepts numeric autoArchiveDuration", async () => {
@@ -121,19 +149,13 @@ describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
         channelConfig: { allowed: true, autoThread: true, autoArchiveDuration: 4320 },
       }),
     );
-    expect(postMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ body: expect.objectContaining({ auto_archive_duration: 4320 }) }),
-    );
+    expectRestBodyField(postMock, "auto_archive_duration", 4320);
   });
 
   it("defaults to 60 when autoArchiveDuration not set", async () => {
     postMock.mockResolvedValueOnce({ id: "thread1" });
     await maybeCreateDiscordAutoThread(createBaseParams());
-    expect(postMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({ body: expect.objectContaining({ auto_archive_duration: 60 }) }),
-    );
+    expectRestBodyField(postMock, "auto_archive_duration", 60);
   });
 });
 
@@ -156,27 +178,16 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
       }),
     );
     expect(result).toBe("thread1");
-    expect(postMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        body: expect.objectContaining({ name: "Need help with deploy rollout" }),
-      }),
-    );
+    expectRestBodyField(postMock, "name", "Need help with deploy rollout");
     await flushAsyncWork();
-    expect(generateThreadTitleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        messageText: "Need help with deploy rollout",
-        channelName: "openclaw",
-        channelDescription: "OpenClaw development coordination and release planning",
-      }),
+    expectGeneratedTitleField("agentId", "main");
+    expectGeneratedTitleField("messageText", "Need help with deploy rollout");
+    expectGeneratedTitleField("channelName", "openclaw");
+    expectGeneratedTitleField(
+      "channelDescription",
+      "OpenClaw development coordination and release planning",
     );
-    expect(patchMock).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        body: expect.objectContaining({ name: "Deploy rollout summary" }),
-      }),
-    );
+    expectRestBodyField(patchMock, "name", "Deploy rollout summary");
   });
 
   it("does not block thread creation while title summary is pending", async () => {
@@ -231,11 +242,7 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     );
 
     await flushAsyncWork();
-    expect(generateThreadTitleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelRef: "openai/gpt-4.1-mini",
-      }),
-    );
+    expectGeneratedTitleField("modelRef", "openai/gpt-4.1-mini");
   });
 
   it("falls back to parent channel override for generated title model", async () => {
@@ -264,11 +271,7 @@ describe("maybeCreateDiscordAutoThread autoThreadName", () => {
     );
 
     await flushAsyncWork();
-    expect(generateThreadTitleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelRef: "openai/gpt-4.1-mini",
-      }),
-    );
+    expectGeneratedTitleField("modelRef", "openai/gpt-4.1-mini");
   });
 
   it("skips summarization when cfg or agentId is missing", async () => {

@@ -7,23 +7,30 @@ const hostMockState = vi.hoisted(() => ({
 
 vi.mock("@microsoft/teams.apps", () => ({
   App: class {
-    protected async getBotToken() {
-      if (hostMockState.tokenError) {
-        throw hostMockState.tokenError;
-      }
-      return { value: "token" };
-    }
-    protected async getAppGraphToken() {
-      if (hostMockState.tokenError) {
-        throw hostMockState.tokenError;
-      }
-      return { value: "token" };
-    }
+    tokenManager = {
+      getBotToken: async () => {
+        if (hostMockState.tokenError) {
+          throw hostMockState.tokenError;
+        }
+        return { toString: () => "token" };
+      },
+      getGraphToken: async () => {
+        if (hostMockState.tokenError) {
+          throw hostMockState.tokenError;
+        }
+        return { toString: () => "token" };
+      },
+    };
   },
+  ExpressAdapter: vi.fn(),
 }));
 
 vi.mock("@microsoft/teams.api", () => ({
   Client: function Client() {},
+  cloudFromName: () => ({
+    botScope: "https://api.botframework.com/.default",
+    graphScope: "https://graph.microsoft.com/.default",
+  }),
 }));
 
 import { probeMSTeams } from "./probe.js";
@@ -42,8 +49,9 @@ describe("msteams probe", () => {
 
   it("returns an error when credentials are missing", async () => {
     const cfg = { enabled: true } as unknown as MSTeamsConfig;
-    await expect(probeMSTeams(cfg)).resolves.toMatchObject({
+    await expect(probeMSTeams(cfg)).resolves.toEqual({
       ok: false,
+      error: "missing credentials (appId, appPassword, tenantId)",
     });
   });
 
@@ -54,9 +62,10 @@ describe("msteams probe", () => {
       appPassword: "pw",
       tenantId: "tenant",
     } as unknown as MSTeamsConfig;
-    await expect(probeMSTeams(cfg)).resolves.toMatchObject({
+    await expect(probeMSTeams(cfg)).resolves.toEqual({
       ok: true,
       appId: "app",
+      graph: { ok: true, roles: undefined, scopes: undefined },
     });
   });
 
@@ -68,7 +77,7 @@ describe("msteams probe", () => {
       appPassword: "pw",
       tenantId: "tenant",
     } as unknown as MSTeamsConfig;
-    await expect(probeMSTeams(cfg)).resolves.toMatchObject({
+    await expect(probeMSTeams(cfg)).resolves.toEqual({
       ok: false,
       appId: "app",
       error: "bad creds",

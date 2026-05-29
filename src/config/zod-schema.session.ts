@@ -59,12 +59,14 @@ export const SessionSchema = z
     writeLock: z
       .object({
         acquireTimeoutMs: z.number().int().positive().optional(),
+        staleMs: z.number().int().positive().optional(),
+        maxHoldMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
     agentToAgent: z
       .object({
-        maxPingPongTurns: z.number().int().min(0).max(5).optional(),
+        maxPingPongTurns: z.number().int().min(0).max(20).optional(),
       })
       .strict()
       .optional(),
@@ -172,6 +174,9 @@ export const MessagesSchema = z
             tool: z.string().optional(),
             coding: z.string().optional(),
             web: z.string().optional(),
+            deploy: z.string().optional(),
+            build: z.string().optional(),
+            concierge: z.string().optional(),
             done: z.string().optional(),
             error: z.string().optional(),
             stallSoft: z.string().optional(),

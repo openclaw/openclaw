@@ -1,3 +1,7 @@
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/version.js";
 import { createArgReader, createGatewayWsClient, resolveGatewayUrl } from "./gateway-ws-client.ts";
 
 function writeStdoutLine(message: string): void {
@@ -36,8 +40,8 @@ async function main() {
 
   // Match iOS "operator" session defaults: token auth, no device identity.
   const connectRes = await request("connect", {
-    minProtocol: 3,
-    maxProtocol: 3,
+    minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
     client: {
       id: "openclaw-ios",
       displayName: "openclaw gateway smoke test",

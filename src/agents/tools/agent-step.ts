@@ -2,8 +2,8 @@ import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
-import { retireSessionMcpRuntimeForSessionKey } from "../pi-bundle-mcp-tools.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
 
 export { readLatestAssistantReply } from "../run-wait.js";
@@ -74,7 +74,6 @@ export async function runAgentStep(params: {
       runId: stepIdem,
       extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance,
-      senderIsOwner: false,
       allowModelOverride: false,
     });
     await retireSessionMcpRuntimeForSessionKey({
@@ -117,7 +116,7 @@ export async function runAgentStep(params: {
   return result.replyText;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       agentCommandFromIngress: AgentCommandRunner;
@@ -132,3 +131,4 @@ export const __testing = {
       : defaultAgentStepDeps;
   },
 };
+export { testing as __testing };

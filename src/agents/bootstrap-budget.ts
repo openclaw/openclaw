@@ -1,6 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
@@ -66,6 +66,10 @@ function normalizePositiveLimit(value: number): number {
 
 function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
+}
+
+function isAgentsBootstrapName(name: string | undefined): boolean {
+  return name?.toLowerCase() === "agents.md";
 }
 
 function normalizeSeenSignatures(signatures?: string[]): string[] {
@@ -292,6 +296,9 @@ export function formatBootstrapTruncationWarningLines(params: {
     lines.push(
       `+${params.analysis.truncatedFiles.length - topFiles.length} more truncated file(s).`,
     );
+  }
+  if (params.analysis.truncatedFiles.some((file) => isAgentsBootstrapName(file.name))) {
+    lines.push("AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.");
   }
   lines.push(
     "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",

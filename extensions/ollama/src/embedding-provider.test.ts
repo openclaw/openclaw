@@ -1,20 +1,27 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(async ({ init, url }: { init?: RequestInit; url: string }) => ({
-    response: await fetch(url, init),
-    release: async () => {},
-  })),
+const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchConfiguredLocalOriginWithSsrFGuardMock: vi.fn(
+    async ({ init, url }: { init?: RequestInit; url: string }) => ({
+      response: await fetch(url, init),
+      release: async () => {},
+    }),
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  fetchWithSsrFGuard: vi.fn(),
   formatErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => {
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin: (baseUrl: string) => {
     const parsed = new URL(baseUrl);
-    return { allowedHostnames: [parsed.hostname] };
+    return { allowedOrigins: [parsed.origin] };
   },
+}));
+
+// Import-resolution gating for this private helper is covered in sdk-alias.test.ts.
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+  fetchConfiguredLocalOriginWithSsrFGuard: fetchConfiguredLocalOriginWithSsrFGuardMock,
 }));
 
 let createOllamaEmbeddingProvider: typeof import("./embedding-provider.js").createOllamaEmbeddingProvider;
@@ -26,7 +33,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  fetchWithSsrFGuardMock.mockClear();
+  fetchConfiguredLocalOriginWithSsrFGuardMock.mockClear();
 });
 
 afterEach(() => {
@@ -46,6 +53,14 @@ function mockEmbeddingFetch(embedding: number[]) {
   return fetchMock;
 }
 
+function firstFetchInit(fetchMock: ReturnType<typeof mockEmbeddingFetch>): RequestInit | undefined {
+  const call = fetchMock.mock.calls[0] as unknown[] | undefined;
+  if (!call) {
+    throw new Error("expected embedding fetch call");
+  }
+  return call[1] as RequestInit | undefined;
+}
+
 function readEmbeddingRequestBody(init: RequestInit | undefined): { input?: unknown } {
   if (typeof init?.body !== "string") {
     throw new Error("expected JSON string request body");
@@ -54,9 +69,36 @@ function readEmbeddingRequestBody(init: RequestInit | undefined): { input?: unkn
 }
 
 function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch>): unknown {
-  const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [string, RequestInit | undefined];
+  const init = firstFetchInit(fetchMock);
   const body = readEmbeddingRequestBody(init);
   return body.input;
+}
+
+function firstGuardedFetchCall(): Record<string, unknown> {
+  const call = fetchConfiguredLocalOriginWithSsrFGuardMock.mock.calls[0]?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error("expected guarded fetch call");
+  }
+  return call as Record<string, unknown>;
+}
+
+function expectEmbeddingFetch(
+  fetchMock: ReturnType<typeof mockEmbeddingFetch>,
+  url: string,
+  params: {
+    model?: string;
+    input?: unknown;
+    headers?: Record<string, string>;
+  } = {},
+) {
+  expect(fetchMock).toHaveBeenCalledWith(url, {
+    method: "POST",
+    headers: params.headers ?? { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: params.model ?? "nomic-embed-text",
+      input: params.input ?? "hello",
+    }),
+  });
 }
 
 describe("ollama embedding provider", () => {
@@ -74,15 +116,56 @@ describe("ollama embedding provider", () => {
     const vector = await provider.embedQuery("hi");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/embed",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ model: "unknown-embedder", input: "hi" }),
-      }),
-    );
+    expectEmbeddingFetch(fetchMock, "http://127.0.0.1:11434/api/embed", {
+      model: "unknown-embedder",
+      input: "hi",
+    });
     expect(vector[0]).toBeCloseTo(0.6, 5);
     expect(vector[1]).toBeCloseTo(0.8, 5);
+  });
+
+  it("marks the configured Ollama origin for managed-proxy direct routing", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434/v1" },
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "http://127.0.0.1:11434/api/embed",
+      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+      auditContext: "ollama-memory-embedding",
+    });
+  });
+
+  it("passes cloud Ollama origins through the guarded fetch contract", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "https://ollama.com" },
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "https://ollama.com/api/embed",
+      policy: { allowedOrigins: ["https://ollama.com"] },
+      configuredLocalOriginBaseUrl: "https://ollama.com",
+      auditContext: "ollama-memory-embedding",
+    });
   });
 
   it("resolves configured base URL and headers without sending local marker auth", async () => {
@@ -109,22 +192,13 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/embed",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({
-          "Content-Type": "application/json",
-          "X-Provider-Header": "provider",
-        }),
-      }),
-    );
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
-    const headers = init?.headers as Record<string, string> | undefined;
-    expect(headers?.Authorization).toBeUndefined();
+    expectEmbeddingFetch(fetchMock, "http://127.0.0.1:11434/api/embed", {
+      input: "search_query: hello",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Provider-Header": "provider",
+      },
+    });
   });
 
   it("resolves configured baseURL alias", async () => {
@@ -148,10 +222,10 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://remote-ollama:11434/api/embed",
-      expect.objectContaining({ method: "POST" }),
-    );
+    expectEmbeddingFetch(fetchMock, "http://remote-ollama:11434/api/embed", {
+      model: "nomic-embed-text",
+      input: "search_query: hello",
+    });
   });
 
   it("fails fast when memory-search remote apiKey is an unresolved SecretRef", async () => {
@@ -192,14 +266,13 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:11434/api/embed",
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer ollama-env",
-        }),
-      }),
-    );
+    expectEmbeddingFetch(fetchMock, "http://127.0.0.1:11434/api/embed", {
+      input: "search_query: hello",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer ollama-env",
+      },
+    });
   });
 
   it("sends batch embeddings in one Ollama request", async () => {
@@ -235,6 +308,62 @@ describe("ollama embedding provider", () => {
     await expect(provider.embedBatch(["a", "bb", "ccc"])).resolves.toHaveLength(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(inputs).toEqual([["a", "bb", "ccc"]]);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "http://127.0.0.1:11434/api/embed",
+      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+      auditContext: "ollama-memory-embedding",
+    });
+  });
+
+  it("reports malformed embed JSON with a provider-owned error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("{not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response returned malformed JSON",
+    );
+  });
+
+  it("rejects non-number embedding values instead of zeroing them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ embeddings: [["0.1", 0.2]] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response contains a non-number embedding value",
+    );
   });
 
   it("uses a retrieval query prefix for qwen3 embedding queries", async () => {
@@ -347,15 +476,16 @@ describe("ollama embedding provider", () => {
     await provider.embedQuery("hello");
 
     expect(provider.model).toBe("qwen3-embedding:4b");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://spark.local:11434/api/embed",
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer spark-key",
-          "X-Custom-Ollama": "spark",
-        }),
-      }),
-    );
+    expectEmbeddingFetch(fetchMock, "http://spark.local:11434/api/embed", {
+      model: "qwen3-embedding:4b",
+      input:
+        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:hello",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Custom-Ollama": "spark",
+        Authorization: "Bearer spark-key",
+      },
+    });
   });
 
   it("does not attach pure env OLLAMA_API_KEY to a local host", async () => {
@@ -372,10 +502,7 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
+    const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
   });
@@ -394,14 +521,13 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://ollama.com/api/embed",
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer ollama-cloud-key",
-        }),
-      }),
-    );
+    expectEmbeddingFetch(fetchMock, "https://ollama.com/api/embed", {
+      input: "search_query: hello",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer ollama-cloud-key",
+      },
+    });
   });
 
   it("does not attach provider apiKey to a different remote embedding host", async () => {
@@ -427,10 +553,7 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
+    const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
   });
@@ -448,14 +571,13 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://memory.example.com/api/embed",
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: "Bearer remote-host-key",
-        }),
-      }),
-    );
+    expectEmbeddingFetch(fetchMock, "https://memory.example.com/api/embed", {
+      input: "search_query: hello",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer remote-host-key",
+      },
+    });
   });
 
   it("honors remote local marker as an explicit no-auth opt-out", async () => {
@@ -481,10 +603,7 @@ describe("ollama embedding provider", () => {
 
     await provider.embedQuery("hello");
 
-    const [, init] = (fetchMock.mock.calls[0] ?? []) as unknown as [
-      string,
-      RequestInit | undefined,
-    ];
+    const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
   });

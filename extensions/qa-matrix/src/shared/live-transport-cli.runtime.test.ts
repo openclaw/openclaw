@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { startLiveTransportQaOutputTee } from "openclaw/plugin-sdk/qa-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { startLiveTransportQaOutputTee } from "./live-transport-cli.runtime.js";
 
 const tmpDirs: string[] = [];
 
@@ -56,7 +56,14 @@ describe("live transport CLI runtime", () => {
         outputDir,
       });
       process.stdout.write("stdout marker\n");
-      await expect(tee.stop()).rejects.toMatchObject({ code: "EISDIR" });
+      let stopError: unknown;
+      try {
+        await tee.stop();
+      } catch (caught) {
+        stopError = caught;
+      }
+      expect(stopError).toBeInstanceOf(Error);
+      expect((stopError as NodeJS.ErrnoException).code).toBe("EISDIR");
 
       expect(process.stdout.write).toBe(mutedStdoutWrite);
       expect(process.stderr.write).toBe(mutedStderrWrite);

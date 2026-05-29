@@ -99,6 +99,7 @@ export function resolveExternalCliAuthScopeFromConfig(
   addProviderScopeFromModelConfig(providerIds, defaults?.imageGenerationModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.videoGenerationModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.musicGenerationModel);
+  addProviderScopeFromModelConfig(providerIds, defaults?.voiceModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.pdfModel);
   addExternalCliRuntimeScopeFromModelMap(providerIds, defaults?.models);
   for (const provider of Object.values(cfg.models?.providers ?? {})) {
@@ -108,7 +109,8 @@ export function resolveExternalCliAuthScopeFromConfig(
     }
   }
 
-  for (const agent of cfg.agents?.list ?? []) {
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
     addProviderScopeFromModelConfig(providerIds, agent.model);
     addProviderScopeFromModelConfig(providerIds, agent.subagents?.model);
     addExternalCliRuntimeScopeFromModelMap(providerIds, agent.models);

@@ -38,6 +38,10 @@ import {
   resolveInboundReplyDispatchCounts,
 } from "./inbound-reply-dispatch.js";
 
+function readFirstMockArg(fn: unknown): unknown {
+  return (fn as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0];
+}
+
 describe("recordInboundSessionAndDispatchReply", () => {
   beforeEach(() => {
     deliverInboundReplyWithMessageSendContext.mockReset();
@@ -86,12 +90,11 @@ describe("recordInboundSessionAndDispatchReply", () => {
     });
 
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:test:peer",
-        ctx: ctxPayload,
-      }),
-    );
+    const recordParams = readFirstMockArg(recordInboundSession) as
+      | { ctx?: unknown; sessionKey?: string }
+      | undefined;
+    expect(recordParams?.sessionKey).toBe("agent:main:test:peer");
+    expect(recordParams?.ctx).toBe(ctxPayload);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith({
       text: "hello",
@@ -198,17 +201,77 @@ describe("recordInboundSessionAndDispatchReply", () => {
       onDispatchError: vi.fn(),
     });
 
-    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        accountId: "default",
-        agentId: "main",
-        ctxPayload,
-        payload: expect.objectContaining({ text: "hello durable" }),
-        info: { kind: "final" },
-        replyToMode: "first",
-      }),
-    );
+    const durableParams = readFirstMockArg(deliverInboundReplyWithMessageSendContext) as
+      | {
+          accountId?: string;
+          agentId?: string;
+          channel?: string;
+          ctxPayload?: unknown;
+          info?: unknown;
+          payload?: { text?: string };
+          replyToMode?: string;
+        }
+      | undefined;
+    expect(durableParams?.channel).toBe("telegram");
+    expect(durableParams?.accountId).toBe("default");
+    expect(durableParams?.agentId).toBe("main");
+    expect(durableParams?.ctxPayload).toBe(ctxPayload);
+    expect(durableParams?.payload?.text).toBe("hello durable");
+    expect(durableParams?.info).toEqual({ kind: "final" });
+    expect(durableParams?.replyToMode).toBe("first");
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("returns durable no-send results through the SDK compatibility deliverer", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_no_send",
+      reason: "no_visible_result",
+      delivery: {
+        messageIds: [],
+        visibleReplySent: false,
+      },
+    });
+    const recordInboundSession = vi.fn(async () => undefined) as unknown as RecordInboundSession;
+    const deliver = vi.fn(async () => undefined);
+    let deliveryResult: unknown;
+    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
+      deliveryResult = await params.dispatcherOptions.deliver(
+        { text: "cancelled durable" },
+        { kind: "final" },
+      );
+      return {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+      };
+    }) as DispatchReplyWithBufferedBlockDispatcher;
+
+    await recordInboundSessionAndDispatchReply({
+      cfg: {} as OpenClawConfig,
+      channel: "telegram",
+      accountId: "default",
+      agentId: "main",
+      routeSessionKey: "agent:main:telegram:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: {
+        Body: "body",
+        RawBody: "body",
+        CommandBody: "body",
+        From: "sender",
+        To: "123",
+        OriginatingTo: "123",
+        SessionKey: "agent:main:telegram:peer",
+        Provider: "telegram",
+        Surface: "telegram",
+      } as FinalizedMsgContext,
+      recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher,
+      deliver,
+      durable: { replyToMode: "first" },
+      onRecordError: vi.fn(),
+      onDispatchError: vi.fn(),
+    });
+
+    expect(deliveryResult).toMatchObject({ visibleReplySent: false });
     expect(deliver).not.toHaveBeenCalled();
   });
 
@@ -238,7 +301,7 @@ describe("recordInboundSessionAndDispatchReply", () => {
     });
   });
 
-  it("exposes channel-message dispatch names as the canonical helpers for new channel code", () => {
+  it("keeps deprecated channel-message dispatch names as aliases for focused helpers", () => {
     expect(createChannelMessageReplyPipeline).toBe(createChannelReplyPipeline);
     expect(resolveChannelMessageSourceReplyDeliveryMode).toBe(
       resolveChannelSourceReplyDeliveryMode,

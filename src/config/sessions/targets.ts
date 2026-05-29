@@ -60,6 +60,30 @@ function shouldSkipDiscoveredAgentDirName(dirName: string, agentId: string): boo
   );
 }
 
+export function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[] {
+  const ids = new Set(listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId)));
+  const addAcpAgentId = (agentId: string | undefined) => {
+    const raw = agentId?.trim() ?? "";
+    if (!raw || raw === "*") {
+      return;
+    }
+    const normalized = normalizeAgentId(raw);
+    ids.add(normalized);
+  };
+
+  addAcpAgentId(cfg.acp?.defaultAgent);
+  for (const agentId of cfg.acp?.allowedAgents ?? []) {
+    addAcpAgentId(agentId);
+  }
+  for (const agent of cfg.agents?.list ?? []) {
+    if (agent.runtime?.type === "acp") {
+      addAcpAgentId(agent.runtime.acp?.agent ?? agent.id);
+    }
+  }
+
+  return [...ids];
+}
+
 function resolveValidatedDiscoveredStorePathSync(params: {
   sessionsDir: string;
   agentsRoot: string;
@@ -300,22 +324,23 @@ export async function resolveAllAgentSessionStoreTargets(
 ): Promise<SessionStoreTarget[]> {
   const env = params.env ?? process.env;
   const { configuredTargets, agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
-  const realAgentsRoots = new Map<string, string>();
-  const getRealAgentsRoot = async (agentsRoot: string): Promise<string | undefined> => {
-    const cached = realAgentsRoots.get(agentsRoot);
-    if (cached !== undefined) {
-      return cached;
+  const realAgentsRootPromises = new Map<string, Promise<string | undefined>>();
+  const getRealAgentsRoot = (agentsRoot: string): Promise<string | undefined> => {
+    const existing = realAgentsRootPromises.get(agentsRoot);
+    if (existing) {
+      return existing;
     }
-    try {
-      const realAgentsRoot = await fs.realpath(agentsRoot);
-      realAgentsRoots.set(agentsRoot, realAgentsRoot);
-      return realAgentsRoot;
-    } catch (err) {
-      if (shouldSkipDiscoveryError(err)) {
-        return undefined;
-      }
-      throw err;
-    }
+    const p = fs.realpath(agentsRoot).then(
+      (result) => result,
+      (err: unknown) => {
+        if (shouldSkipDiscoveryError(err)) {
+          return undefined;
+        }
+        throw err;
+      },
+    );
+    realAgentsRootPromises.set(agentsRoot, p);
+    return p;
   };
   const validatedConfiguredTargets = (
     await Promise.all(
@@ -402,7 +427,7 @@ export function resolveSessionStoreTargets(
   }
 
   if (allAgents) {
-    const targets = listAgentIds(cfg).map((agentId) => ({
+    const targets = listConfiguredSessionStoreAgentIds(cfg).map((agentId) => ({
       agentId,
       storePath: resolveStorePath(cfg.session?.store, { agentId, env }),
     }));

@@ -1,9 +1,12 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
+import {
+  ensureSqliteStorePermissions,
+  normalizeSqliteNumber,
+  parseDeliveryContextJson,
+} from "./task-registry.sqlite.shared.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
@@ -48,6 +51,7 @@ type TableInfoRow = {
 
 type TaskRegistryStatements = {
   selectAll: StatementSync;
+  selectByOwnerKey: StatementSync;
   selectAllDeliveryStates: StatementSync;
   upsertRow: StatementSync;
   replaceDeliveryState: StatementSync;
@@ -67,36 +71,44 @@ type TaskRegistryDatabase = {
 let cachedDatabase: TaskRegistryDatabase | null = null;
 const TASK_REGISTRY_DIR_MODE = 0o700;
 const TASK_REGISTRY_FILE_MODE = 0o600;
-const TASK_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
+const TASK_RUN_SELECT_COLUMNS = `
+  task_id,
+  runtime,
+  task_kind,
+  source_id,
+  requester_session_key,
+  owner_key,
+  scope_kind,
+  child_session_key,
+  parent_flow_id,
+  parent_task_id,
+  agent_id,
+  run_id,
+  label,
+  task,
+  status,
+  delivery_status,
+  notify_policy,
+  created_at,
+  started_at,
+  ended_at,
+  last_event_at,
+  cleanup_after,
+  error,
+  progress_summary,
+  terminal_summary,
+  terminal_outcome
+`;
 
 function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function parseJsonValue<T>(raw: string | null): T | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return undefined;
-  }
-}
-
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
-  const startedAt = normalizeNumber(row.started_at);
-  const endedAt = normalizeNumber(row.ended_at);
-  const lastEventAt = normalizeNumber(row.last_event_at);
-  const cleanupAfter = normalizeNumber(row.cleanup_after);
+  const startedAt = normalizeSqliteNumber(row.started_at);
+  const endedAt = normalizeSqliteNumber(row.ended_at);
+  const lastEventAt = normalizeSqliteNumber(row.last_event_at);
+  const cleanupAfter = normalizeSqliteNumber(row.cleanup_after);
   const requesterSessionKey =
     row.scope_kind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
   return {
@@ -117,7 +129,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     status: row.status,
     deliveryStatus: row.delivery_status,
     notifyPolicy: row.notify_policy,
-    createdAt: normalizeNumber(row.created_at) ?? 0,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
     ...(startedAt != null ? { startedAt } : {}),
     ...(endedAt != null ? { endedAt } : {}),
     ...(lastEventAt != null ? { lastEventAt } : {}),
@@ -130,8 +142,8 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
 }
 
 function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
-  const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
-  const lastNotifiedEventAt = normalizeNumber(row.last_notified_event_at);
+  const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
+  const lastNotifiedEventAt = normalizeSqliteNumber(row.last_notified_event_at);
   return {
     taskId: row.task_id,
     ...(requesterOrigin ? { requesterOrigin } : {}),
@@ -182,33 +194,15 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
   return {
     selectAll: db.prepare(`
       SELECT
-        task_id,
-        runtime,
-        task_kind,
-        source_id,
-        requester_session_key,
-        owner_key,
-        scope_kind,
-        child_session_key,
-        parent_flow_id,
-        parent_task_id,
-        agent_id,
-        run_id,
-        label,
-        task,
-        status,
-        delivery_status,
-        notify_policy,
-        created_at,
-        started_at,
-        ended_at,
-        last_event_at,
-        cleanup_after,
-        error,
-        progress_summary,
-        terminal_summary,
-        terminal_outcome
+        ${TASK_RUN_SELECT_COLUMNS}
       FROM task_runs
+      ORDER BY created_at ASC, task_id ASC
+    `),
+    selectByOwnerKey: db.prepare(`
+      SELECT
+        ${TASK_RUN_SELECT_COLUMNS}
+      FROM task_runs
+      WHERE owner_key = ?
       ORDER BY created_at ASC, task_id ASC
     `),
     selectAllDeliveryStates: db.prepare(`
@@ -425,16 +419,12 @@ function ensureSchema(db: DatabaseSync) {
 }
 
 function ensureTaskRegistryPermissions(pathname: string) {
-  const dir = resolveTaskRegistryDir(process.env);
-  mkdirSync(dir, { recursive: true, mode: TASK_REGISTRY_DIR_MODE });
-  chmodSync(dir, TASK_REGISTRY_DIR_MODE);
-  for (const suffix of TASK_REGISTRY_SIDECAR_SUFFIXES) {
-    const candidate = `${pathname}${suffix}`;
-    if (!existsSync(candidate)) {
-      continue;
-    }
-    chmodSync(candidate, TASK_REGISTRY_FILE_MODE);
-  }
+  ensureSqliteStorePermissions({
+    dir: resolveTaskRegistryDir(process.env),
+    pathname,
+    dirMode: TASK_REGISTRY_DIR_MODE,
+    fileMode: TASK_REGISTRY_FILE_MODE,
+  });
 }
 
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
@@ -485,6 +475,16 @@ export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
     tasks: new Map(taskRows.map((row) => [row.task_id, rowToTaskRecord(row)])),
     deliveryStates: new Map(deliveryRows.map((row) => [row.task_id, rowToTaskDeliveryState(row)])),
   };
+}
+
+export function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): TaskRecord[] {
+  const key = ownerKey.trim();
+  if (!key) {
+    return [];
+  }
+  const { statements } = openTaskRegistryDatabase();
+  const rows = statements.selectByOwnerKey.all(key) as TaskRegistryRow[];
+  return rows.map(rowToTaskRecord);
 }
 
 export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapshot) {

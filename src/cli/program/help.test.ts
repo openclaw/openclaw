@@ -135,6 +135,11 @@ describe("configureProgramHelp", () => {
 
     const help = captureHelpOutput(program);
     expect(help).toContain("BANNER-LINE");
+    const [version, options] = (formatCliBannerLineMock.mock.calls[0] as unknown as
+      | [string, { mode?: string }]
+      | undefined) ?? [undefined, undefined];
+    expect(version).toBe(testProgramContext.programVersion);
+    expect(options?.mode).toBe("default");
     expect(help).toContain("Examples:");
     expect(help).toContain("https://docs.openclaw.ai/cli");
   });
@@ -159,5 +164,23 @@ describe("configureProgramHelp", () => {
     process.argv = ["node", "openclaw", "--version"];
     resolveCommitHashMock.mockReturnValue(null);
     expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test" });
+  });
+
+  it("does not treat subcommand --version options as root version requests", () => {
+    process.argv = ["node", "openclaw", "skills", "verify", "discrawl", "--version", "1.0.0"];
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? ""}`);
+    }) as typeof process.exit);
+
+    try {
+      const program = makeProgramWithCommands();
+      expect(() => configureProgramHelp(program, testProgramContext)).not.toThrow();
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
   });
 });

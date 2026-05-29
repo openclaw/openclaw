@@ -31,7 +31,7 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
 
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["alpha ", "<<"]);
     expect(chunks.map((chunk) => chunk.source.text).join("")).toBe("alpha <<");
-    expect(chunks.filter((chunk) => chunk.rendered.length > 8)).toEqual([]);
+    expect(chunks.every((chunk) => chunk.rendered.length <= 8)).toBe(true);
   });
 
   it("preserves formatting when a rendered chunk is re-split", () => {
@@ -46,8 +46,8 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
     });
 
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["Which of ", "these"]);
-    expect(chunks.filter((chunk) => !chunk.rendered.startsWith("<b>"))).toEqual([]);
-    expect(chunks.filter((chunk) => !chunk.rendered.endsWith("</b>"))).toEqual([]);
+    expect(chunks.every((chunk) => chunk.rendered.startsWith("<b>"))).toBe(true);
+    expect(chunks.every((chunk) => chunk.rendered.endsWith("</b>"))).toBe(true);
   });
 
   it("checks exact candidates instead of assuming rendered length is monotonic", () => {
@@ -69,5 +69,18 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
     });
 
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["README.md", "<"]);
+  });
+
+  it("normalizes non-finite limits before chunking", () => {
+    const ir = markdownToIR("abc");
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir,
+      limit: Number.NaN,
+      renderChunk: renderEscapedHtml,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["a", "b", "c"]);
+    expect(chunks.every((chunk) => chunk.rendered.length <= 1)).toBe(true);
   });
 });

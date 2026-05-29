@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -50,7 +50,7 @@ describe("resolveChangedClawHubPublishablePluginPackages", () => {
         plugins: publishablePlugins,
         changedPaths: ["pnpm-lock.yaml"],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 
@@ -61,7 +61,7 @@ describe("collectClawHubPublishablePluginPackages", () => {
     });
 
     expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
-      "openclaw.compat.pluginApi is required for external code plugins published to ClawHub.",
+      "openclaw.compat.pluginApi is required for external code plugin packages.",
     );
   });
 
@@ -146,12 +146,13 @@ describe("OpenClaw dual-published plugin metadata", () => {
         };
       };
 
-      expect(packageJson.openclaw?.install).toMatchObject({
+      expect(packageJson.openclaw?.install).toEqual({
         clawhubSpec: `clawhub:${plugin.packageName}`,
         defaultChoice: "npm",
+        minHostVersion: ">=2026.4.25",
         npmSpec: plugin.packageName,
       });
-      expect(packageJson.openclaw?.release).toMatchObject({
+      expect(packageJson.openclaw?.release).toEqual({
         publishToClawHub: true,
         publishToNpm: true,
       });
@@ -245,7 +246,7 @@ describe("collectClawHubVersionGateErrors", () => {
       gitRange: { baseRef, headRef },
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 
   it("does not require a version bump for shared release-tooling changes", () => {
@@ -258,7 +259,7 @@ describe("collectClawHubVersionGateErrors", () => {
       gitRange: { baseRef, headRef },
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 });
 
@@ -322,10 +323,15 @@ describe("collectPluginClawHubReleasePlan", () => {
       registryBaseUrl: "https://clawhub.ai",
     });
 
-    expect(plan.candidates).toEqual([]);
+    expect(plan.candidates).toStrictEqual([]);
     expect(plan.skippedPublished).toHaveLength(1);
-    expect(plan.skippedPublished[0]).toMatchObject({
+    expect(plan.skippedPublished[0]).toEqual({
+      alreadyPublished: true,
+      channel: "stable",
+      extensionId: "demo-plugin",
+      packageDir: "extensions/demo-plugin",
       packageName: "@openclaw/demo-plugin",
+      publishTag: "latest",
       version: "2026.4.1",
     });
   });
@@ -373,7 +379,7 @@ describe("collectClawHubOpenClawOwnerErrors", () => {
       ],
       registryBaseUrl: "https://clawhub.ai",
       fetchImpl: async (url) => {
-        const pathname = new URL(String(url)).pathname;
+        const pathname = new URL(url instanceof Request ? url.url : url).pathname;
         if (pathname.includes("%40openclaw%2Fmissing-plugin")) {
           return new Response("not found", { status: 404 });
         }
@@ -403,7 +409,7 @@ describe("collectClawHubOpenClawOwnerErrors", () => {
         }),
     });
 
-    expect(errors).toEqual([]);
+    expect(errors).toStrictEqual([]);
   });
 });
 
@@ -419,6 +425,9 @@ describe("plugin-clawhub-publish.sh", () => {
       `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> ${JSON.stringify(markerPath)}
+if [[ "\${1:-}" == "--workdir" ]]; then
+  shift 2
+fi
 if [[ "\${1:-}" == "package" && "\${2:-}" == "pack" ]]; then
   pack_destination=""
   while [[ "$#" -gt 0 ]]; do
@@ -463,7 +472,11 @@ exit 0
     expect(output).toContain("Publish command: CLAWHUB_WORKDIR=");
     expect(output).toContain("Resolved ClawPack:");
     const invocations = readFileSync(markerPath, "utf8");
-    expect(invocations).toContain("package pack ./extensions/demo-plugin");
+    const resolvedRepoDir = realpathSync(repoDir);
+    expect(invocations).toContain(`--workdir ${resolvedRepoDir}`);
+    expect(invocations).toContain(
+      `package pack ${join(resolvedRepoDir, "extensions/demo-plugin")}`,
+    );
     expect(invocations).toContain("package publish ");
     expect(invocations).toContain(".tgz --tags latest");
     expect(invocations).toContain("--dry-run");

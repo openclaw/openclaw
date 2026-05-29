@@ -7,6 +7,7 @@ import {
   CircularIncludeError,
   ConfigIncludeError,
   MAX_INCLUDE_FILE_BYTES,
+  MAX_INCLUDE_PATH_LENGTH,
   deepMerge,
   type IncludeResolver,
   resolveConfigIncludes,
@@ -211,7 +212,9 @@ describe("resolveConfigIncludes", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(CircularIncludeError);
       const circular = err as CircularIncludeError;
-      expect(circular.chain).toEqual(expect.arrayContaining([DEFAULT_BASE_PATH, aPath, bPath]));
+      expect(circular.chain).toContain(DEFAULT_BASE_PATH);
+      expect(circular.chain).toContain(aPath);
+      expect(circular.chain).toContain(bPath);
       expect(circular.message).toMatch(/Circular include detected/);
       expect(circular.message).toContain("a.json");
       expect(circular.message).toContain("b.json");
@@ -574,17 +577,30 @@ describe("security: path traversal protection (CWE-22)", () => {
   });
 
   describe("edge cases", () => {
-    it.each([
-      { includePath: "./file\x00.json", expectedError: undefined },
-      { includePath: "//etc/passwd", expectedError: ConfigIncludeError },
-    ] as const)("rejects malformed include path $includePath", ({ includePath, expectedError }) => {
-      const obj = { $include: includePath };
-      if (expectedError) {
-        expectResolveIncludeError(() => resolve(obj, {}));
-        return;
+    it("rejects malformed include paths", () => {
+      const cases = [
+        { includePath: "./file\x00.json", pattern: /null bytes?/i },
+        { includePath: "./a\x00b.json", pattern: /null bytes?/i },
+        { includePath: "//etc/passwd", pattern: /escapes config directory/ },
+      ] as const;
+      for (const testCase of cases) {
+        const obj = { $include: testCase.includePath };
+        expectResolveIncludeError(() => resolve(obj, {}), testCase.pattern);
       }
-      // Path with null byte should be rejected or handled safely.
-      expect(() => resolve(obj, {}), includePath).toThrow();
+    });
+
+    it("rejects include path at or over maximum length (>= MAX_INCLUDE_PATH_LENGTH)", () => {
+      const overLimit = "a".repeat(MAX_INCLUDE_PATH_LENGTH + 1);
+      expectResolveIncludeError(() => resolve({ $include: overLimit }, {}), /maximum length/);
+      // Boundary: length exactly 4096 must be rejected (Linux PATH_MAX includes NUL)
+      const atLimit = "b".repeat(MAX_INCLUDE_PATH_LENGTH);
+      expectResolveIncludeError(() => resolve({ $include: atLimit }, {}), /maximum length/);
+    });
+
+    it("accepts include path at or under maximum length when file exists", () => {
+      const shortPath = configPath("base.json");
+      const files = { [shortPath]: { ok: true } };
+      expect(resolve({ $include: shortPath }, files)).toEqual({ ok: true });
     });
 
     it("allows child include when config is at filesystem root", () => {

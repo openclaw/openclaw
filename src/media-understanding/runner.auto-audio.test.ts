@@ -81,6 +81,16 @@ async function runAutoAudioCase(params: {
   return runResult;
 }
 
+type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
+
+function requireCapabilityOutput(result: CapabilityResult, index: number) {
+  const output = result.outputs[index];
+  if (!output) {
+    throw new Error(`expected media-understanding output at index ${index}`);
+  }
+  return output;
+}
+
 describe("runCapability auto audio entries", () => {
   it("uses provider keys to auto-enable audio transcription", async () => {
     let seenModel: string | undefined;
@@ -90,9 +100,50 @@ describe("runCapability auto audio entries", () => {
         return { text: "ok", model: req.model ?? "unknown" };
       },
     });
-    expect(result.outputs[0]?.text).toBe("ok");
+    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
     expect(seenModel).toBe("gpt-4o-transcribe");
     expect(result.decision.outcome).toBe("success");
+  });
+
+  it("passes workspaceDir to auto-selected audio provider execution auth", async () => {
+    const modelAuth = await import("../agents/model-auth.js");
+    const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
+    resolveApiKeyForProvider.mockClear();
+
+    await withAudioFixture("openclaw-auto-audio-workspace-auth", async ({ ctx, media, cache }) => {
+      const result = await runCapability({
+        capability: "audio",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry: createOpenAiAudioProvider(async (req) => ({
+          text: `workspace ${req.apiKey}`,
+          model: req.model ?? "unknown",
+        })),
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+      });
+
+      expect(result.decision.outcome).toBe("success");
+      expect(requireCapabilityOutput(result, 0).text).toBe("workspace test-key");
+    });
+
+    expect(resolveApiKeyForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+      }),
+    );
   });
 
   it("uses the provider audio default instead of the active Codex chat model", async () => {
@@ -133,7 +184,12 @@ describe("runCapability auto audio entries", () => {
       });
     });
 
-    expect(runResult?.outputs[0]).toMatchObject({
+    if (!runResult) {
+      throw new Error("expected Codex audio result");
+    }
+    expect(requireCapabilityOutput(runResult, 0)).toEqual({
+      kind: "audio.transcription",
+      attachmentIndex: 0,
       provider: "openai-codex",
       model: "gpt-4o-transcribe",
       text: "codex audio",
@@ -163,8 +219,9 @@ describe("runCapability auto audio entries", () => {
           }),
       );
 
-      expect(result.outputs[0]?.provider).toBe("openai");
-      expect(result.outputs[0]?.text).toBe("provider transcription");
+      const output = requireCapabilityOutput(result, 0);
+      expect(output.provider).toBe("openai");
+      expect(output.text).toBe("provider transcription");
       expect(seenModel).toBe("gpt-4o-transcribe");
     } finally {
       clearMediaUnderstandingBinaryCacheForTests();
@@ -210,7 +267,7 @@ describe("runCapability auto audio entries", () => {
       },
     });
 
-    expect(result.outputs[0]?.text).toBe("ok");
+    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
     expect(seenModel).toBe("whisper-1");
   });
 
@@ -246,7 +303,7 @@ describe("runCapability auto audio entries", () => {
       } as Partial<OpenClawConfig>,
     });
 
-    expect(result.outputs[0]?.text).toBe("ok");
+    expect(requireCapabilityOutput(result, 0).text).toBe("ok");
     expect(seenLanguage).toBe("en");
     expect(seenPrompt).toBe("Focus on names");
   });
@@ -264,7 +321,6 @@ describe("runCapability auto audio entries", () => {
           GOOGLE_API_KEY: undefined,
           MISTRAL_API_KEY: "mistral-test-key", // pragma: allowlist secret
           OPENCLAW_AGENT_DIR: isolatedAgentDir,
-          PI_CODING_AGENT_DIR: isolatedAgentDir,
         },
         async () => {
           await withAudioFixture("openclaw-auto-audio-mistral", async ({ ctx, media, cache }) => {
@@ -322,8 +378,9 @@ describe("runCapability auto audio entries", () => {
       throw new Error("Expected auto audio mistral result");
     }
     expect(runResult.decision.outcome).toBe("success");
-    expect(runResult.outputs[0]?.provider).toBe("mistral");
-    expect(runResult.outputs[0]?.model).toBe("voxtral-mini-latest");
-    expect(runResult.outputs[0]?.text).toBe("mistral");
+    const output = requireCapabilityOutput(runResult, 0);
+    expect(output.provider).toBe("mistral");
+    expect(output.model).toBe("voxtral-mini-latest");
+    expect(output.text).toBe("mistral");
   });
 });

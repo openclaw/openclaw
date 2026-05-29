@@ -1,3 +1,5 @@
+import { formatPortRangeHint } from "../cli/error-format.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
@@ -26,6 +28,13 @@ import {
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type GatewayTokenInputMode = "plaintext" | "ref";
 
+function validateGatewayPortInput(value: unknown): string | undefined {
+  if (parsePort(value) === null) {
+    return formatPortRangeHint();
+  }
+  return undefined;
+}
+
 export async function promptGatewayConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
@@ -38,11 +47,11 @@ export async function promptGatewayConfig(
     await text({
       message: "Gateway port",
       initialValue: String(resolveGatewayPort(cfg)),
-      validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
+      validate: validateGatewayPortInput,
     }),
     runtime,
   );
-  const port = Number.parseInt(portRaw, 10);
+  const port = parsePort(portRaw) ?? resolveGatewayPort(cfg);
 
   let bind = guardCancel(
     await select({
@@ -93,9 +102,9 @@ export async function promptGatewayConfig(
 
   let authMode = guardCancel(
     await select({
-      message: "Gateway auth",
+      message: "Gateway access protection",
       options: [
-        { value: "token", label: "Token", hint: "Recommended default" },
+        { value: "token", label: "Token (recommended)", hint: "Recommended default" },
         { value: "password", label: "Password" },
         {
           value: "trusted-proxy",

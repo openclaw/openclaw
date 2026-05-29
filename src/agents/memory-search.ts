@@ -8,7 +8,9 @@ import {
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
+import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
@@ -117,6 +119,7 @@ const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
+const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 
 function normalizeSources(
   sources: Array<"memory" | "sessions"> | undefined,
@@ -178,9 +181,12 @@ function mergeConfig(
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
-  const provider = overrides?.provider ?? defaults?.provider ?? "auto";
-  const primaryAdapter =
-    provider === "auto" ? undefined : getConfiguredMemoryEmbeddingProvider(provider, cfg);
+  const rawProvider = overrides?.provider ?? defaults?.provider;
+  const provider =
+    rawProvider?.trim() === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : rawProvider?.trim() || DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
@@ -200,7 +206,6 @@ function mergeConfig(
   );
   const includeRemote =
     hasRemoteConfig ||
-    provider === "auto" ||
     primaryAdapter?.transport !== "local" ||
     fallbackAdapter?.transport === "remote";
   const batch = {
@@ -225,7 +230,7 @@ function mergeConfig(
         batch,
       }
     : undefined;
-  const modelDefault = provider === "auto" ? undefined : primaryAdapter?.defaultModel;
+  const modelDefault = primaryAdapter?.defaultModel;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
   const queryInputType =
@@ -239,10 +244,11 @@ function mergeConfig(
     contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
-  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const extraPaths = Array.from(new Set(rawPaths));
+  const rawPaths = normalizeStringEntries([
+    ...(defaults?.extraPaths ?? []),
+    ...(overrides?.extraPaths ?? []),
+  ]);
+  const extraPaths = uniqueStrings(rawPaths);
   const multimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
@@ -433,16 +439,14 @@ export function resolveMemorySearchConfig(
     return null;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  const multimodalProvider =
-    resolved.provider === "auto"
-      ? undefined
-      : getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
+  const multimodalProvider = getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
   // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
   // Keep multimodal validation on that config-aware adapter, not the raw id.
   if (
     multimodalActive &&
-    multimodalProvider &&
-    !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
+    ((multimodalProvider &&
+      !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)) ||
+      (!multimodalProvider && getEmbeddingProvider(resolved.provider, cfg)))
   ) {
     throw new Error(
       "agents.*.memorySearch.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",

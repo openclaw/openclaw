@@ -44,7 +44,7 @@ const missingStoreDefaultCases = [
       const cfg = await loadVoiceWakeRoutingConfig(baseDir);
       expect(cfg.version).toBe(1);
       expect(cfg.defaultTarget).toEqual({ mode: "current" });
-      expect(cfg.routes).toEqual([]);
+      expect(cfg.routes).toStrictEqual([]);
       expect(cfg.updatedAtMs).toBe(0);
     },
   },
@@ -59,7 +59,7 @@ describe("infra store", () => {
 
         const result = readSessionStoreJson5(storePath);
         expect(result.ok).toBe(false);
-        expect(result.store).toEqual({});
+        expect(result.store).toStrictEqual({});
       });
     });
 
@@ -283,6 +283,14 @@ describe("infra store", () => {
       expect(cache.check("a", 120)).toBe(false);
       expect(cache.check("c", 200)).toBe(false);
       expect(cache.size()).toBe(2);
+    });
+
+    it("bounds non-finite ttl and max size options", () => {
+      const cache = createDedupeCache({ ttlMs: Number.NaN, maxSize: Number.NaN });
+
+      expect(cache.check("a", 100)).toBe(false);
+      expect(cache.peek("a", 100)).toBe(false);
+      expect(cache.size()).toBe(0);
     });
 
     it("supports non-mutating existence checks via peek()", () => {

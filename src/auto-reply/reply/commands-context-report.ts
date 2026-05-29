@@ -1,8 +1,9 @@
+import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "../../agents/pi-embedded-helpers/bootstrap.js";
+} from "../../agents/embedded-agent-helpers/bootstrap.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import {
   resolveFreshSessionTotalTokens,
@@ -12,6 +13,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { renderContextTreemapPng } from "./context-treemap.js";
 
 function formatInt(n: number): string {
   return new Intl.NumberFormat("en-US").format(n);
@@ -42,17 +44,32 @@ function formatListTop(
   return { lines, omitted };
 }
 
+function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPromptReport | null {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const existing = targetSessionEntry?.systemPromptReport;
+  return existing?.source === "run" ? existing : null;
+}
+
+function resolveContextReportAgentId(params: HandleCommandsParams): string {
+  return resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+    agentId: params.agentId,
+  }).sessionAgentId;
+}
+
 async function resolveContextReport(
   params: HandleCommandsParams,
 ): Promise<SessionSystemPromptReport> {
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const existing = targetSessionEntry?.systemPromptReport;
-  if (existing && existing.source === "run") {
-    return existing;
+  const runReport = resolveRunContextReport(params);
+  if (runReport) {
+    return runReport;
   }
 
-  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const sessionAgentId = resolveContextReportAgentId(params);
+  const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg, sessionAgentId);
+  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
@@ -91,6 +108,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "Try:",
         "- /context list   (short breakdown)",
         "- /context detail (per-file + per-tool + per-skill + system prompt size)",
+        "- /context map    (WinDirStat-style treemap image)",
         "- /context json   (same, machine-readable)",
         "",
         "Inline shortcut = a command token inside a normal message (e.g. “hey /status”). It runs immediately (allowlisted senders only) and is stripped before the model sees the remaining text.",
@@ -98,7 +116,6 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
-  const report = await resolveContextReport(params);
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
   const session = {
     totalTokens: targetSessionEntry?.totalTokens ?? null,
@@ -108,6 +125,34 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     contextTokens: params.contextTokens ?? null,
   } as const;
 
+  if (sub === "map") {
+    const report = resolveRunContextReport(params);
+    if (!report) {
+      return {
+        text: [
+          "Context treemap unavailable.",
+          "No actual run context is cached for this session yet.",
+          "Send a normal message, then run /context map again.",
+        ].join("\n"),
+      };
+    }
+    const treemap = await renderContextTreemapPng({
+      report,
+      session: {
+        cachedContextTokens: cachedContextUsageTokens ?? null,
+        contextWindowTokens: session.contextTokens,
+      },
+    });
+    return {
+      text: treemap.caption,
+      mediaUrl: treemap.path,
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+    };
+  }
+
+  const report = await resolveContextReport(params);
+
   if (sub === "json") {
     return { text: JSON.stringify({ report, session }, null, 2) };
   }
@@ -116,7 +161,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     return {
       text: [
         "Unknown /context mode.",
-        "Use: /context, /context list, /context detail, or /context json",
+        "Use: /context, /context list, /context detail, /context map, or /context json",
       ].join("\n"),
     };
   }
@@ -147,18 +192,19 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     : "Tools: (none)";
   const systemPromptLine = `System prompt (${report.source}): ${formatCharsAndTokens(report.systemPrompt.chars)} (Project Context ${formatCharsAndTokens(report.systemPrompt.projectContextChars)})`;
   const workspaceLabel = report.workspaceDir ?? params.workspaceDir;
+  const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars =
     typeof report.bootstrapMaxChars === "number" &&
     Number.isFinite(report.bootstrapMaxChars) &&
     report.bootstrapMaxChars > 0
       ? report.bootstrapMaxChars
-      : resolveBootstrapMaxChars(params.cfg);
+      : resolveBootstrapMaxChars(params.cfg, sessionAgentId);
   const bootstrapTotalMaxChars =
     typeof report.bootstrapTotalMaxChars === "number" &&
     Number.isFinite(report.bootstrapTotalMaxChars) &&
     report.bootstrapTotalMaxChars > 0
       ? report.bootstrapTotalMaxChars
-      : resolveBootstrapTotalMaxChars(params.cfg);
+      : resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -191,7 +237,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       ? [
           `⚠ Bootstrap context is over configured limits: ${truncatedBootstrapFiles.length} file(s) truncated (${formatInt(bootstrapAnalysis.totals.rawChars)} raw chars -> ${formatInt(bootstrapAnalysis.totals.injectedChars)} injected chars).`,
           ...(truncationCauseParts.length ? [`Causes: ${truncationCauseParts.join("; ")}.`] : []),
-          "Tip: increase `agents.defaults.bootstrapMaxChars` and/or `agents.defaults.bootstrapTotalMaxChars` if this truncation is not intentional.",
+          "Tip: increase this agent's `agents.list[].bootstrapMaxChars` / `agents.list[].bootstrapTotalMaxChars` override, or the matching `agents.defaults.*` fallback, if this truncation is not intentional.",
         ]
       : [];
 
@@ -236,7 +282,11 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
 
     // `systemPrompt.chars` already includes injected files, skills, and tool-list text.
     // Add only tool schemas here so the tracked estimate stays disjoint.
-    const trackedPromptChars = report.systemPrompt.chars + report.tools.schemaChars;
+    const currentTurnChars = report.currentTurn
+      ? report.currentTurn.promptChars + report.currentTurn.runtimeContextChars
+      : 0;
+    const trackedPromptChars =
+      report.systemPrompt.chars + report.tools.schemaChars + currentTurnChars;
     const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPromptChars)}`;
     const actualContextLine =
       cachedContextUsageTokens != null

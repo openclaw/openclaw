@@ -2,7 +2,6 @@ import { Buffer } from "node:buffer";
 import { describe, expect, it, vi } from "vitest";
 import {
   config,
-  flush,
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
@@ -19,6 +18,15 @@ type MonitorSignalProviderOptions = Parameters<typeof monitorSignalProvider>[0];
 async function runMonitorWithMocks(opts: MonitorSignalProviderOptions) {
   return monitorSignalProvider(opts);
 }
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call.at(argIndex);
+}
+
 describe("monitorSignalProvider tool results", () => {
   it("pairs uuid-only senders with a uuid allowlist entry", async () => {
     const baseChannels = (config.channels ?? {}) as Record<string, unknown>;
@@ -62,21 +70,20 @@ describe("monitorSignalProvider tool results", () => {
       abortSignal: abortController.signal,
     });
 
-    await flush();
-
     expect(replyMock).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "signal",
-        id: `uuid:${uuid}`,
-        meta: expect.objectContaining({ name: "Ada" }),
-      }),
-    );
+    expect(upsertPairingRequestMock).toHaveBeenCalledWith({
+      channel: "signal",
+      id: `uuid:${uuid}`,
+      accountId: "default",
+      meta: { name: "Ada" },
+    });
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(sendMock.mock.calls[0]?.[0]).toBe(`signal:${uuid}`);
-    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
-      `Your Signal sender id: uuid:${uuid}`,
-    );
+    expect(mockCallArg(sendMock)).toBe(`signal:${uuid}`);
+    const pairingReply = mockCallArg(sendMock, 0, 1);
+    if (typeof pairingReply !== "string") {
+      throw new Error("Expected pairing reply text");
+    }
+    expect(pairingReply).toContain(`Your Signal sender id: uuid:${uuid}`);
   });
 
   it("reconnects after stream errors until aborted", async () => {
@@ -110,8 +117,8 @@ describe("monitorSignalProvider tool results", () => {
       await monitorPromise;
 
       expect(streamMock).toHaveBeenCalledTimes(2);
-      expect(streamMock.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: 0 });
-      expect(streamMock.mock.calls[1]?.[0]).toMatchObject({ timeoutMs: 0 });
+      expect((mockCallArg(streamMock) as { timeoutMs?: unknown }).timeoutMs).toBe(0);
+      expect((mockCallArg(streamMock, 1) as { timeoutMs?: unknown }).timeoutMs).toBe(0);
     } finally {
       randomSpy.mockRestore();
       vi.useRealTimers();
@@ -150,15 +157,18 @@ describe("monitorSignalProvider tool results", () => {
       abortSignal: abortController.signal,
     });
 
-    await flush();
-
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "getAttachment",
-      expect.objectContaining({ id: "attachment-1", recipient: "+15550001111" }),
-      expect.objectContaining({
+      {
+        id: "attachment-1",
+        recipient: "+15550001111",
+      },
+      {
         baseUrl: "http://127.0.0.1:8080",
+        timeoutMs: undefined,
+        apiMode: "auto",
         maxResponseBytes: expectedMaxResponseBytes,
-      }),
+      },
     );
   });
 });

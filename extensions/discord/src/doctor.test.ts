@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   collectDiscordMissingEnvTokenWarnings,
@@ -116,6 +116,68 @@ describe("discord doctor", () => {
       },
     });
     expect(mainTts?.edge).toBeUndefined();
+  });
+
+  it("removes unsupported Discord realtime wake names", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            voice: {
+              realtime: {
+                wakeNames: ["Claw", "Claw Bot Helper", "Open Claw"],
+              },
+            },
+            accounts: {
+              work: {
+                voice: {
+                  realtime: {
+                    wakeNames: ["Work Bot Helper", "Work Bot"],
+                  },
+                },
+              },
+              invalid: {
+                voice: {
+                  realtime: {
+                    wakeNames: ["Only Three Words"],
+                  },
+                },
+              },
+              empty: {
+                voice: {
+                  realtime: {
+                    wakeNames: [],
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.changes).toEqual([
+      "Shortened 1 unsupported channels.discord.accounts.work.voice.realtime.wakeNames entries to one or two words.",
+      "Shortened 1 unsupported channels.discord.accounts.invalid.voice.realtime.wakeNames entries to one or two words.",
+      "Removed empty channels.discord.accounts.empty.voice.realtime.wakeNames; unset wake names use the default agent/OpenClaw fallback.",
+      "Shortened 1 unsupported channels.discord.voice.realtime.wakeNames entries to one or two words.",
+    ]);
+    expect(result.config.channels?.discord?.voice?.realtime?.wakeNames).toEqual([
+      "Claw",
+      "Claw Bot",
+      "Open Claw",
+    ]);
+    expect(result.config.channels?.discord?.accounts?.work?.voice?.realtime?.wakeNames).toEqual([
+      "Work Bot",
+    ]);
+    expect(result.config.channels?.discord?.accounts?.invalid?.voice?.realtime?.wakeNames).toEqual([
+      "Only Three",
+    ]);
+    expect(result.config.channels?.discord?.accounts?.empty?.voice?.realtime?.wakeNames).toBe(
+      undefined,
+    );
   });
 
   it("moves legacy guild channel allow toggles into enabled", () => {
@@ -237,7 +299,7 @@ describe("discord doctor", () => {
     ]);
     expect(
       result.config.channels?.discord?.accounts?.work?.guilds?.["100"]?.channels?.["200"],
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(result.config.bindings).toEqual([
       { agentId: "main", match: { channel: "discord" } },
       {
@@ -285,7 +347,7 @@ describe("discord doctor", () => {
     expect(result.changes).toEqual([
       "Removed channels.discord.guilds.100.channels.200.agentId; a matching top-level bindings[] route already exists for Discord channel 200.",
     ]);
-    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toEqual({});
+    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toStrictEqual({});
     expect(result.config.bindings).toEqual([existingBinding]);
   });
 
@@ -336,7 +398,7 @@ describe("discord doctor", () => {
     expect(result.config.channels?.discord?.guilds?.main?.users).toEqual(["111"]);
     expect(result.config.channels?.discord?.guilds?.main?.roles).toEqual(["222"]);
     expect(result.changes).not.toHaveLength(0);
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("formats repair guidance for unsafe numeric ids", () => {
@@ -358,19 +420,21 @@ describe("discord doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([
-      expect.stringContaining("DISCORD_BOT_TOKEN is absent"),
+    const missingTokenWarning =
+      "- channels.discord: default account has no available bot token, and DISCORD_BOT_TOKEN is absent in this doctor environment. After migration, verify DISCORD_BOT_TOKEN is present in the state-dir .env or configure channels.discord.token / channels.discord.accounts.default.token as a SecretRef.";
+    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([
+      missingTokenWarning,
     ]);
     expect(
       collectDiscordMissingEnvTokenWarnings({ cfg, env: { DISCORD_BOT_TOKEN: "Bot tok" } }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       await discordDoctor.collectPreviewWarnings?.({
         cfg,
         doctorFixCommand: "openclaw doctor --fix",
         env: {},
       }),
-    ).toEqual([expect.stringContaining("DISCORD_BOT_TOKEN is absent")]);
+    ).toStrictEqual([missingTokenWarning]);
   });
 
   it("does not warn about DISCORD_BOT_TOKEN when a non-default account is selected", () => {
@@ -386,6 +450,6 @@ describe("discord doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([]);
+    expect(collectDiscordMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([]);
   });
 });

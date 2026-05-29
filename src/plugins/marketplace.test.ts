@@ -154,20 +154,70 @@ async function expectRemoteMarketplaceError(params: { manifest: unknown; expecte
   expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
 }
 
-function expectRemoteMarketplaceInstallResult(result: unknown) {
+function installPluginInput(callIndex = 0): Record<string, unknown> {
+  const input = installPluginFromPathMock.mock.calls[callIndex]?.[0];
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected install plugin input ${callIndex}`);
+  }
+  return input as Record<string, unknown>;
+}
+
+function fetchGuardInput(callIndex = 0): Record<string, unknown> {
+  const input = fetchWithSsrFGuardMock.mock.calls[callIndex]?.[0];
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected fetch guard input ${callIndex}`);
+  }
+  return input as Record<string, unknown>;
+}
+
+function expectMarketplaceInstallSuccess(
+  result: unknown,
+  params: {
+    pluginId?: string;
+    marketplacePlugin?: string;
+    marketplaceSource?: string;
+  },
+) {
+  if (!result || typeof result !== "object") {
+    throw new Error("expected marketplace install result");
+  }
+  const record = result as Record<string, unknown>;
+  expect(record.ok).toBe(true);
+  expect(record.pluginId).toBe(params.pluginId ?? "frontend-design");
+  if (params.marketplacePlugin) {
+    expect(record.marketplacePlugin).toBe(params.marketplacePlugin);
+  }
+  if (params.marketplaceSource) {
+    expect(record.marketplaceSource).toBe(params.marketplaceSource);
+  }
+}
+
+function expectRemoteCloneCommand() {
   expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-  expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-    ["git", "clone", "--depth", "1", "https://github.com/owner/repo.git", expect.any(String)],
-    { timeoutMs: 120_000 },
-  );
-  expect(installPluginFromPathMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      path: expect.stringMatching(/[\\/]repo[\\/]plugins[\\/]frontend-design$/),
-    }),
-  );
-  expect(result).toMatchObject({
-    ok: true,
-    pluginId: "frontend-design",
+  const [argv, options] = runCommandWithTimeoutMock.mock.calls[0] ?? [];
+  expect(Array.isArray(argv)).toBe(true);
+  expect((argv as unknown[]).slice(0, 5)).toEqual([
+    "git",
+    "clone",
+    "--depth",
+    "1",
+    "https://github.com/owner/repo.git",
+  ]);
+  expect(typeof (argv as unknown[])[5]).toBe("string");
+  expect(options).toEqual({ timeoutMs: 120_000 });
+}
+
+function expectFetchDownloadCall(url = "https://example.com/frontend-design.tgz") {
+  const input = fetchGuardInput();
+  expect(input.url).toBe(url);
+  expect(input.timeoutMs).toBe(120_000);
+  expect(input.auditContext).toBe("marketplace-plugin-download");
+}
+
+function expectRemoteMarketplaceInstallResult(result: unknown) {
+  expectRemoteCloneCommand();
+  expect(String(installPluginInput().path)).toMatch(/[\\/]repo[\\/]plugins[\\/]frontend-design$/);
+  expectMarketplaceInstallSuccess(result, {
     marketplacePlugin: "frontend-design",
     marketplaceSource: "owner/repo",
   });
@@ -200,14 +250,8 @@ function expectLocalMarketplaceInstallResult(params: {
   pluginDir: string;
   marketplaceSource: string;
 }) {
-  expect(installPluginFromPathMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      path: params.pluginDir,
-    }),
-  );
-  expect(params.result).toMatchObject({
-    ok: true,
-    pluginId: "frontend-design",
+  expect(installPluginInput().path).toBe(params.pluginDir);
+  expectMarketplaceInstallSuccess(params.result, {
     marketplacePlugin: "frontend-design",
     marketplaceSource: params.marketplaceSource,
   });
@@ -313,11 +357,11 @@ describe("marketplace plugins", () => {
         marketplaceSource: manifestPath,
       });
       if (canonicalPluginDir !== pluginDir) {
-        expect(installPluginFromPathMock).not.toHaveBeenCalledWith(
-          expect.objectContaining({
-            path: canonicalPluginDir,
-          }),
-        );
+        expect(
+          installPluginFromPathMock.mock.calls.some(
+            ([input]) => (input as { path?: unknown } | undefined)?.path === canonicalPluginDir,
+          ),
+        ).toBe(false);
       }
     });
   });
@@ -351,12 +395,8 @@ describe("marketplace plugins", () => {
         dangerouslyForceUnsafeInstall: true,
       });
 
-      expect(installPluginFromPathMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: pluginDir,
-          dangerouslyForceUnsafeInstall: true,
-        }),
-      );
+      expect(installPluginInput().path).toBe(pluginDir);
+      expect(installPluginInput().dangerouslyForceUnsafeInstall).toBe(true);
     });
   });
 
@@ -446,14 +486,10 @@ describe("marketplace plugins", () => {
     });
 
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-    expect(installPluginFromPathMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: expect.stringMatching(/[\\/]repo[\\/]plugins[\\/]frontend-design\.tgz$/),
-      }),
+    expect(String(installPluginInput().path)).toMatch(
+      /[\\/]repo[\\/]plugins[\\/]frontend-design\.tgz$/,
     );
-    expect(result).toMatchObject({
-      ok: true,
-      pluginId: "frontend-design",
+    expectMarketplaceInstallSuccess(result, {
       marketplacePlugin: "frontend-design",
       marketplaceSource: "owner/repo",
     });
@@ -551,13 +587,7 @@ describe("marketplace plugins", () => {
         ok: false,
         error: "failed to download https://example.com/frontend-design.tgz: empty response body",
       });
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://example.com/frontend-design.tgz",
-          timeoutMs: 120_000,
-          auditContext: "marketplace-plugin-download",
-        }),
-      );
+      expectFetchDownloadCall();
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledTimes(1);
     });
@@ -651,17 +681,10 @@ describe("marketplace plugins", () => {
         timeoutMs: Number.NaN,
       });
 
-      expect(result).toMatchObject({
-        ok: true,
+      expectMarketplaceInstallSuccess(result, {
         pluginId: "frontend-design",
       });
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://example.com/frontend-design.tgz",
-          timeoutMs: 120_000,
-          auditContext: "marketplace-plugin-download",
-        }),
-      );
+      expectFetchDownloadCall();
     });
   });
 
@@ -698,24 +721,12 @@ describe("marketplace plugins", () => {
         plugin: "frontend-design",
       });
 
-      expect(result).toMatchObject({
-        ok: true,
-        pluginId: "frontend-design",
+      expectMarketplaceInstallSuccess(result, {
         marketplacePlugin: "frontend-design",
         marketplaceSource: manifestPath,
       });
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://example.com/frontend-design.tgz",
-          timeoutMs: 120_000,
-          auditContext: "marketplace-plugin-download",
-        }),
-      );
-      expect(installPluginFromPathMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: expect.stringMatching(/[\\/]frontend-design\.tgz$/),
-        }),
-      );
+      expectFetchDownloadCall();
+      expect(String(installPluginInput().path)).toMatch(/[\\/]frontend-design\.tgz$/);
       expect(release).toHaveBeenCalledTimes(1);
     });
   });
@@ -809,6 +820,50 @@ describe("marketplace plugins", () => {
           "download too large: 268435457 bytes (limit: 268435456 bytes)",
       });
       expect(arrayBuffer).not.toHaveBeenCalled();
+      expect(installPluginFromPathMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects malformed archive content-length headers before streaming", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const reader = {
+        read: vi.fn(),
+        cancel: vi.fn(async () => undefined),
+        releaseLock: vi.fn(),
+      };
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => reader,
+          } as unknown as Response["body"],
+          headers: new Headers({ "content-length": "1e9" }),
+        } as unknown as Response,
+        finalUrl: "https://cdn.example.com/releases/frontend-design.tgz",
+        release: vi.fn(async () => undefined),
+      });
+      const manifestPath = await writeMarketplaceManifest(rootDir, {
+        plugins: [
+          {
+            name: "frontend-design",
+            source: "https://example.com/frontend-design.tgz",
+          },
+        ],
+      });
+
+      const result = await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error:
+          "failed to download https://example.com/frontend-design.tgz: " +
+          "invalid content-length header: 1e9",
+      });
+      expect(reader.read).not.toHaveBeenCalled();
       expect(installPluginFromPathMock).not.toHaveBeenCalled();
     });
   });

@@ -176,10 +176,11 @@ describe("processEvent (functional)", () => {
 
     expect(ctx.activeCalls.size).toBe(0);
     expect(hangupCalls).toEqual([
-      expect.objectContaining({
+      {
+        callId: "prov-dup",
         providerCallId: "prov-dup",
         reason: "hangup-bot",
-      }),
+      },
     ]);
   });
 
@@ -482,12 +483,8 @@ describe("processEvent (functional)", () => {
     processEvent(ctx, event);
 
     const call = requireFirstActiveCall(ctx);
-    expect(call.metadata).toEqual(
-      expect.objectContaining({
-        initialMessage: "Silver Fox Cards, how can I help?",
-        numberRouteKey: "+15550002222",
-      }),
-    );
+    expect(call.metadata?.initialMessage).toBe("Silver Fox Cards, how can I help?");
+    expect(call.metadata?.numberRouteKey).toBe("+15550002222");
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", () => {
@@ -575,7 +572,7 @@ describe("processEvent (functional)", () => {
       throw new Error("expected retryable error call to remain active");
     }
     expect(call.state).toBe("active");
-    expect(Array.from(ctx.processedEventIds)).toEqual([]);
-    expect(call.processedEventIds).toEqual([]);
+    expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
+    expect(call.processedEventIds).toStrictEqual([]);
   });
 });

@@ -10,6 +10,11 @@ import {
   withModelsTempHome,
 } from "./models-config.e2e-harness.js";
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_FILE,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+} from "./plugin-model-catalog.js";
 
 const planOpenClawModelsJsonMock = vi.fn();
 const writePrivateStoreTextWriteMock = vi.fn();
@@ -63,6 +68,34 @@ function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnaps
       indexPluginCount: 0,
       manifestPluginCount: 0,
     },
+  };
+}
+
+async function expectMissingPath(operation: Promise<unknown>) {
+  let error: NodeJS.ErrnoException | undefined;
+  try {
+    await operation;
+  } catch (caught) {
+    error = caught as NodeJS.ErrnoException;
+  }
+  expect(error?.code).toBe("ENOENT");
+}
+
+function planParamsAt(callIndex: number): {
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  providerDiscoveryProviderIds?: string[];
+  providerDiscoveryTimeoutMs?: number;
+  workspaceDir?: string;
+} {
+  const call = planOpenClawModelsJsonMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected models planner call #${callIndex + 1}`);
+  }
+  return call[0] as {
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
+    providerDiscoveryProviderIds?: string[];
+    providerDiscoveryTimeoutMs?: number;
+    workspaceDir?: string;
   };
 }
 
@@ -128,9 +161,8 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir);
 
-      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
-        expect.not.objectContaining({ pluginMetadataSnapshot: snapshot }),
-      );
+      const params = planParamsAt(0);
+      expect(params.pluginMetadataSnapshot).not.toBe(snapshot);
     });
   });
 
@@ -143,12 +175,26 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir, { workspaceDir });
 
-      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceDir,
-          pluginMetadataSnapshot: snapshot,
-        }),
-      );
+      const params = planParamsAt(0);
+      expect(params.workspaceDir).toBe(workspaceDir);
+      expect(params.pluginMetadataSnapshot).toBe(snapshot);
+    });
+  });
+
+  it("does not reuse persisted plugin metadata for provider-scoped discovery", async () => {
+    await withModelsTempHome(async (home) => {
+      const workspaceDir = path.join(home, "agent-workspace");
+      const snapshot = createPluginMetadataSnapshot(workspaceDir);
+      setCurrentPluginMetadataSnapshot(snapshot, { config: {} });
+      const agentDir = path.join(home, "agent-non-default");
+
+      await ensureOpenClawModelsJson({}, agentDir, {
+        workspaceDir,
+        providerDiscoveryProviderIds: ["google"],
+      });
+
+      const params = planParamsAt(0);
+      expect(params.pluginMetadataSnapshot).not.toBe(snapshot);
     });
   });
 
@@ -164,9 +210,105 @@ describe("models-config write serialization", () => {
 
       expect(result.agentDir).toBe(path.join(home, ".openclaw", "agents", "ops", "agent"));
       await expect(fs.access(path.join(result.agentDir, "models.json"))).resolves.toBeUndefined();
-      await expect(
+      await expectMissingPath(
         fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
-      ).rejects.toThrow();
+      );
+    });
+  });
+
+  it("writes plugin-owned model catalogs beside the agent plugin state", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({
+        action: "write",
+        contents: `${JSON.stringify({ providers: {} }, null, 2)}\n`,
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("zai")]: `${JSON.stringify(
+            {
+              generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+              providers: {
+                zai: {
+                  baseUrl: "https://api.z.ai/api/paas/v4",
+                  api: "openai-completions",
+                  apiKey: "ZAI_API_KEY",
+                  models: [{ id: "glm-5.1", name: "GLM 5.1" }],
+                },
+              },
+            },
+            null,
+            2,
+          )}\n`,
+        },
+      }));
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      const root = JSON.parse(await fs.readFile(path.join(agentDir, "models.json"), "utf8")) as {
+        providers?: Record<string, unknown>;
+      };
+      const catalog = JSON.parse(
+        await fs.readFile(path.join(agentDir, "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE), "utf8"),
+      ) as { providers?: Record<string, unknown> };
+      expect(root.providers).toEqual({});
+      expect(root).not.toHaveProperty("pluginCatalogs");
+      expect(Object.keys(catalog.providers ?? {})).toEqual(["zai"]);
+    });
+  });
+
+  it("removes stale plugin-owned model catalogs", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const staleCatalog = path.join(
+        agentDir,
+        "plugins",
+        "old-provider",
+        PLUGIN_MODEL_CATALOG_FILE,
+      );
+      await fs.mkdir(path.dirname(staleCatalog), { recursive: true });
+      await fs.writeFile(
+        staleCatalog,
+        `${JSON.stringify(
+          { generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers: {} },
+          null,
+          2,
+        )}\n`,
+      );
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({
+        action: "noop",
+        pluginCatalogWrites: {},
+      }));
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify({ providers: {} })}\n`,
+      );
+
+      const result = await ensureOpenClawModelsJson({}, agentDir);
+
+      expect(result.wrote).toBe(true);
+      await expect(fs.access(staleCatalog)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("keeps generated plugin catalogs on non-authoritative skip plans", async () => {
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const catalogPath = path.join(agentDir, "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
+      await fs.mkdir(path.dirname(catalogPath), { recursive: true });
+      await fs.writeFile(
+        catalogPath,
+        `${JSON.stringify(
+          { generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers: {} },
+          null,
+          2,
+        )}\n`,
+      );
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({ action: "skip" }));
+
+      const result = await ensureOpenClawModelsJson({}, agentDir);
+
+      expect(result.wrote).toBe(false);
+      await expect(fs.access(catalogPath)).resolves.toBeUndefined();
     });
   });
 
@@ -184,12 +326,9 @@ describe("models-config write serialization", () => {
       });
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
-      expect(planOpenClawModelsJsonMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          providerDiscoveryProviderIds: ["anthropic"],
-          providerDiscoveryTimeoutMs: 5000,
-        }),
-      );
+      const params = planParamsAt(1);
+      expect(params.providerDiscoveryProviderIds).toEqual(["anthropic"]);
+      expect(params.providerDiscoveryTimeoutMs).toBe(5000);
     });
   });
 
@@ -247,15 +386,28 @@ describe("models-config write serialization", () => {
 
       let inFlightWrites = 0;
       let maxInFlightWrites = 0;
+      let markFirstModelsWriteStarted: () => void = () => {};
+      const firstModelsWriteStarted = new Promise<void>((resolve) => {
+        markFirstModelsWriteStarted = resolve;
+      });
+      let releaseModelsWrites: () => void = () => {};
+      const modelsWritesCanContinue = new Promise<void>((resolve) => {
+        releaseModelsWrites = resolve;
+      });
+      let modelsWriteCount = 0;
       writePrivateStoreTextWriteMock.mockImplementation(
         async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
           const isModelsWrite = path.basename(params.filePath) === "models.json";
           if (isModelsWrite) {
+            modelsWriteCount += 1;
             inFlightWrites += 1;
             if (inFlightWrites > maxInFlightWrites) {
               maxInFlightWrites = inFlightWrites;
             }
-            await new Promise((resolve) => setTimeout(resolve, 10));
+            if (modelsWriteCount === 1) {
+              markFirstModelsWriteStarted();
+            }
+            await modelsWritesCanContinue;
           }
           try {
             if (!actualPrivateFileStore) {
@@ -273,7 +425,14 @@ describe("models-config write serialization", () => {
         },
       );
 
-      await Promise.all([ensureOpenClawModelsJson(first), ensureOpenClawModelsJson(second)]);
+      const writes = Promise.all([
+        ensureOpenClawModelsJson(first),
+        ensureOpenClawModelsJson(second),
+      ]);
+      await firstModelsWriteStarted;
+      await Promise.resolve();
+      releaseModelsWrites();
+      await writes;
 
       expect(maxInFlightWrites).toBe(1);
       const parsed = await readGeneratedModelsJson<{

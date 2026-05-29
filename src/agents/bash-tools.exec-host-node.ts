@@ -1,4 +1,3 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import {
   requiresExecApproval,
@@ -26,6 +25,7 @@ import {
   normalizeNotifyOutput,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 export type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
@@ -92,6 +92,7 @@ export async function executeNodeHostCommand(
         nodeId: target.nodeId,
         security: hostSecurity,
         ask: hostAsk,
+        commandHighlighting: params.commandHighlighting,
         ...buildExecApprovalRequesterContext({
           agentId: prepared.agentId,
           sessionKey: prepared.sessionKey,
@@ -147,6 +148,7 @@ export async function executeNodeHostCommand(
       const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
         approvalId,
         sessionKey: params.notifySessionKey ?? params.sessionKey,
+        bashElevated: params.bashElevated,
         turnSourceChannel: params.turnSourceChannel,
         turnSourceTo: params.turnSourceTo,
         turnSourceAccountId: params.turnSourceAccountId,
@@ -218,6 +220,10 @@ export async function executeNodeHostCommand(
               cwd: prepared.cwd,
               agentId: prepared.agentId,
               sessionKey: prepared.sessionKey,
+              turnSourceChannel: params.turnSourceChannel,
+              turnSourceTo: params.turnSourceTo,
+              turnSourceAccountId: params.turnSourceAccountId,
+              turnSourceThreadId: params.turnSourceThreadId,
               approved: approvedByAsk,
               approvalDecision:
                 approvalDecision === "allow-always" && inlineEvalHit !== null

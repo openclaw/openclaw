@@ -19,7 +19,7 @@ const pluginApiMocks = vi.hoisted(() => ({
   renderQrPngDataUrl: vi.fn(async () => "data:image/png;base64,ZmFrZXBuZw=="),
   resolveGatewayPort: vi.fn(() => 18789),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
-  writeQrPngTempFile: vi.fn(async (_data: string, opts: { tmpRoot: string }) => {
+  writeQrPngTempFile: vi.fn(async (dataValue: string, opts: { tmpRoot: string }) => {
     const dirPath = await fs.mkdtemp(path.join(opts.tmpRoot, "device-pair-qr-"));
     const filePath = path.join(dirPath, "pair-qr.png");
     await fs.writeFile(filePath, "fakepng");
@@ -64,6 +64,17 @@ import {
 } from "./api.js";
 import registerDevicePair from "./index.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
 afterAll(() => {
   vi.doUnmock("./api.js");
   vi.doUnmock("./notify.js");
@@ -78,6 +89,7 @@ type ApprovedPairingResult = Extract<
 >;
 type ApprovedPairingDevice = ApprovedPairingResult["device"];
 const INTERNAL_PAIRING_SCOPES = ["operator.write", "operator.pairing"];
+const INTERNAL_SETUP_SCOPES = [...INTERNAL_PAIRING_SCOPES, "operator.talk.secrets"];
 
 function createApi(params?: {
   config?: OpenClawPluginApi["config"];
@@ -131,6 +143,13 @@ function requireText(result: { text?: unknown } | null | undefined): string {
     throw new Error("pair command did not return a text response");
   }
   return result.text;
+}
+
+function requireMediaUrl(opts: { mediaUrl?: string }): string {
+  if (!opts.mediaUrl) {
+    throw new Error("pair command did not send a media URL");
+  }
+  return opts.mediaUrl;
 }
 
 function createChannelRuntime(
@@ -268,7 +287,7 @@ describe("device-pair /pair qr", () => {
     const result = await command.handler(
       createCommandContext({
         channel: "webchat",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
     const payload = result as { text?: string; mediaUrl?: string; sensitiveMedia?: boolean };
@@ -324,6 +343,23 @@ describe("device-pair /pair qr", () => {
     });
   });
 
+  it("rejects qr setup for internal callers without Talk secret scope", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "qr",
+        commandBody: "/pair qr",
+        gatewayClientScopes: INTERNAL_PAIRING_SCOPES,
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ Setup code handoff includes Talk secrets and requires operator.talk.secrets.",
+    });
+  });
+
   it("reissues the bootstrap token if webchat QR rendering fails before falling back", async () => {
     pluginApiMocks.issueDeviceBootstrapToken
       .mockResolvedValueOnce({
@@ -340,7 +376,7 @@ describe("device-pair /pair qr", () => {
     const result = await command.handler(
       createCommandContext({
         channel: "webchat",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
     const text = requireText(result);
@@ -460,7 +496,7 @@ describe("device-pair /pair qr", () => {
     const result = await command.handler(
       createCommandContext({
         ...testCase.ctx,
-        gatewayClientScopes: INTERNAL_PAIRING_SCOPES,
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
     const text = requireText(result);
@@ -479,11 +515,23 @@ describe("device-pair /pair qr", () => {
     expect(caption).toContain("Scan this QR code with the OpenClaw iOS app:");
     expect(caption).toContain("IMPORTANT: After pairing finishes, run /pair cleanup.");
     expect(caption).toContain("If this QR code leaks, run /pair cleanup immediately.");
-    expect(opts.mediaUrl).toMatch(/pair-qr\.png$/);
-    expect(opts.mediaLocalRoots).toEqual([path.dirname(opts.mediaUrl!)]);
-    expect(opts).toMatchObject(testCase.expectedOpts);
+    const mediaUrl = requireMediaUrl(opts);
+    expect(mediaUrl).toMatch(/pair-qr\.png$/);
+    expect(opts).toEqual({
+      cfg: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "gateway-token",
+          },
+        },
+      },
+      mediaUrl,
+      mediaLocalRoots: [path.dirname(mediaUrl)],
+      ...testCase.expectedOpts,
+    });
     expect(sentPng).toBe("fakepng");
-    await expect(fs.access(opts.mediaUrl!)).rejects.toThrow();
+    await expectPathMissing(mediaUrl);
     expect(text).toContain("QR code sent above.");
     expect(text).toContain("IMPORTANT: Run /pair cleanup after pairing finishes.");
   });
@@ -508,7 +556,7 @@ describe("device-pair /pair qr", () => {
       createCommandContext({
         channel: "discord",
         senderId: "123",
-        gatewayClientScopes: INTERNAL_PAIRING_SCOPES,
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
     const text = requireText(result);
@@ -527,7 +575,7 @@ describe("device-pair /pair qr", () => {
       createCommandContext({
         channel: "msteams",
         senderId: "8:orgid:123",
-        gatewayClientScopes: INTERNAL_PAIRING_SCOPES,
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
     const text = requireText(result);
@@ -648,6 +696,23 @@ describe("device-pair /pair default setup code", () => {
     });
   });
 
+  it("rejects setup code issuance for internal callers without Talk secret scope", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: INTERNAL_PAIRING_SCOPES,
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "⚠️ Setup code handoff includes Talk secrets and requires operator.talk.secrets.",
+    });
+  });
+
   it("fails closed for webchat setup code issuance when scopes are absent", async () => {
     const command = registerPairCommand();
     const result = await command.handler(
@@ -719,7 +784,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
     const text = requireText(result);
@@ -739,7 +804,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
     const text = requireText(result);
@@ -759,7 +824,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
 
@@ -778,7 +843,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
 
@@ -797,7 +862,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
 
@@ -831,7 +896,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
 
@@ -860,7 +925,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
     const text = requireText(result);
@@ -880,7 +945,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
 
@@ -910,7 +975,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
 
@@ -937,7 +1002,7 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
 

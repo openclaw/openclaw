@@ -4,10 +4,15 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["byteplus", "byteplus-plan"],
-  "providerAuthEnvVars": {
-    "byteplus": ["BYTEPLUS_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "byteplus",
+        "envVars": ["BYTEPLUS_API_KEY"]
+      }
+    ]
   },
   "providerAuthAliases": {
     "byteplus-plan": "byteplus"

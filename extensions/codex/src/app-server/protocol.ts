@@ -70,18 +70,25 @@ export type CodexDynamicToolSpec = JsonObject & {
   inputSchema: JsonValue;
 };
 
+export type CodexTurnEnvironmentParams = JsonObject & {
+  environmentId: string;
+  cwd: string;
+};
+
 export type CodexThreadStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
   approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
-  sandbox?: CodexSandboxPolicy;
+  sandbox?: string;
   serviceTier?: CodexServiceTier | null;
   dynamicTools?: CodexDynamicToolSpec[] | null;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
+  environments?: CodexTurnEnvironmentParams[] | null;
   persistExtendedHistory?: boolean;
 };
 
@@ -89,6 +96,14 @@ export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
+  approvalPolicy?: string | JsonObject;
+  approvalsReviewer?: string | null;
+  sandbox?: string;
+  serviceTier?: CodexServiceTier | null;
+  config?: JsonObject;
+  developerInstructions?: string;
+  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadStartResponse = {
@@ -97,10 +112,34 @@ export type CodexThreadStartResponse = {
   modelProvider?: string | null;
 };
 
+export type CodexThreadForkParams = CodexThreadStartParams & {
+  threadId: string;
+  baseInstructions?: string;
+  ephemeral?: boolean;
+  threadSource?: string | JsonObject;
+  excludeTurns?: boolean;
+};
+
+export type CodexThreadForkResponse = CodexThreadStartResponse;
+
 export type CodexThreadResumeResponse = {
   thread: CodexThread;
   model: string;
   modelProvider?: string | null;
+};
+
+export type CodexThreadInjectItemsParams = JsonObject & {
+  threadId: string;
+  items: JsonValue[];
+};
+
+export type CodexThreadUnsubscribeParams = JsonObject & {
+  threadId: string;
+};
+
+export type CodexTurnInterruptParams = JsonObject & {
+  threadId: string;
+  turnId: string;
 };
 
 export type CodexTurnStartParams = JsonObject & {
@@ -113,6 +152,8 @@ export type CodexTurnStartParams = JsonObject & {
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
+  personality?: string | null;
+  environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {
     mode: string;
     settings: JsonObject & {
@@ -142,7 +183,54 @@ export type CodexThread = {
   id: string;
   sessionId?: string;
   name?: string | null;
+  preview?: string | null;
+  createdAt?: number | null;
+  updatedAt?: number | null;
+  status?: CodexThreadStatus | null;
   cwd?: string | null;
+  source?: CodexSessionSource | null;
+  threadSource?: string | null;
+  agentNickname?: string | null;
+  agentRole?: string | null;
+};
+
+export type CodexThreadStatus =
+  | { type: "notLoaded" }
+  | { type: "idle" }
+  | { type: "systemError" }
+  | { type: "active"; activeFlags?: string[] };
+
+export type CodexSubAgentThreadSpawnSource = {
+  parent_thread_id: string;
+  depth?: number;
+  agent_path?: string | null;
+  agent_nickname?: string | null;
+  agent_role?: string | null;
+};
+
+export type CodexSubAgentSource =
+  | "review"
+  | "compact"
+  | "memory_consolidation"
+  | { thread_spawn: CodexSubAgentThreadSpawnSource }
+  | { other: string };
+
+export type CodexSessionSource =
+  | "cli"
+  | "vscode"
+  | "exec"
+  | "appServer"
+  | "unknown"
+  | { custom: string }
+  | { subAgent: CodexSubAgentSource };
+
+export type CodexThreadStartedNotification = {
+  thread: CodexThread;
+};
+
+export type CodexThreadStatusChangedNotification = {
+  threadId: string;
+  status: CodexThreadStatus;
 };
 
 export type CodexThreadItem = {
@@ -183,9 +271,15 @@ export type CodexDynamicToolCallParams = {
 };
 
 export type CodexDynamicToolCallResponse = {
+  asyncStarted?: boolean;
   contentItems: CodexDynamicToolCallOutputContentItem[];
+  diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
+  sideEffectEvidence?: boolean;
   success: boolean;
+  terminate?: boolean;
 };
+
+export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";
 
 export type CodexDynamicToolCallOutputContentItem =
   | {
@@ -354,9 +448,32 @@ export type CodexSkillsListParams = {
   forceReload?: boolean;
 };
 
+export type CodexSkillScope = "user" | "repo" | "system" | "admin";
+
+export type CodexSkillMetadata = {
+  name: string;
+  description: string;
+  shortDescription?: string;
+  interface?: JsonObject;
+  dependencies?: JsonObject;
+  path: string;
+  scope: CodexSkillScope;
+  enabled: boolean;
+};
+
+export type CodexSkillErrorInfo = {
+  path: string;
+  message: string;
+};
+
+export type CodexSkillsListEntry = {
+  cwd: string;
+  skills: CodexSkillMetadata[];
+  errors: CodexSkillErrorInfo[];
+};
+
 export type CodexSkillsListResponse = {
-  data: JsonValue[];
-  nextCursor?: string | null;
+  data: CodexSkillsListEntry[];
 };
 
 export type CodexHooksListParams = {
@@ -401,7 +518,12 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "environment/add": { environmentId: string; execServerUrl: string };
+  "thread/fork": CodexThreadForkParams;
+  "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/start": CodexThreadStartParams;
+  "thread/unsubscribe": CodexThreadUnsubscribeParams;
+  "turn/interrupt": CodexTurnInterruptParams;
 };
 
 type CodexAppServerRequestResultMap = {
@@ -410,6 +532,7 @@ type CodexAppServerRequestResultMap = {
   "account/read": CodexGetAccountResponse;
   "app/list": CodexAppsListResponse;
   "config/mcpServer/reload": JsonValue;
+  "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;
@@ -422,15 +545,18 @@ type CodexAppServerRequestResultMap = {
   "review/start": JsonValue;
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
+  "thread/fork": CodexThreadForkResponse;
+  "thread/inject_items": JsonValue;
   "thread/list": JsonValue;
   "thread/resume": CodexThreadResumeResponse;
   "thread/start": CodexThreadStartResponse;
+  "thread/unsubscribe": JsonValue;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;
   "turn/steer": JsonValue;
 };
 
-export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+export function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 

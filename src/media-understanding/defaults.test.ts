@@ -36,11 +36,16 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         autoPriority: { image: 30, audio: 40, video: 10 },
         nativeDocumentInputs: ["pdf"],
       },
-      minimax: { capabilities: ["image"], autoPriority: { image: 40 } },
+      minimax: {
+        capabilities: ["image"],
+        autoPriority: { image: 40 },
+        documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      },
       "minimax-portal": {
         capabilities: ["image"],
         defaultModels: { image: "MiniMax-VL-01" },
         autoPriority: { image: 50 },
+        documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
       },
       mistral: {
         capabilities: ["audio"],
@@ -64,7 +69,11 @@ const mediaMetadataPlugins = vi.hoisted(() => [
       },
       opencode: { capabilities: ["image"], defaultModels: { image: "gpt-5-nano" } },
       "opencode-go": { capabilities: ["image"], defaultModels: { image: "kimi-k2.6" } },
-      openrouter: { capabilities: ["image"], defaultModels: { image: "auto" } },
+      openrouter: {
+        capabilities: ["image", "audio"],
+        defaultModels: { image: "auto", audio: "openai/whisper-large-v3-turbo" },
+        autoPriority: { audio: 35 },
+      },
       qwen: { capabilities: ["video"], autoPriority: { video: 20 } },
       xai: { capabilities: ["audio"], autoPriority: { audio: 25 } },
       zai: { capabilities: ["image"], autoPriority: { image: 60 } },
@@ -101,6 +110,7 @@ import {
   providerSupportsNativePdfDocument,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
+  resolveDocumentMediaModel,
 } from "./defaults.js";
 
 describe("resolveDefaultMediaModel", () => {
@@ -110,6 +120,9 @@ describe("resolveDefaultMediaModel", () => {
     );
     expect(resolveDefaultMediaModel({ providerId: "openai-codex", capability: "audio" })).toBe(
       "gpt-4o-transcribe",
+    );
+    expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "audio" })).toBe(
+      "openai/whisper-large-v3-turbo",
     );
   });
 
@@ -133,6 +146,30 @@ describe("resolveDefaultMediaModel", () => {
       "kimi-k2.6",
     );
   });
+
+  it("prefers configured image models before manifest defaults", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [{ id: "google/gemini-2.5-flash", input: ["text", "image"] }],
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "image", cfg })).toBe(
+      "google/gemini-2.5-flash",
+    );
+    expect(
+      resolveDefaultMediaModel({
+        providerId: "openrouter",
+        capability: "image",
+        cfg,
+        includeConfiguredImageModels: false,
+      }),
+    ).toBe("auto");
+  });
 });
 
 describe("resolveAutoMediaKeyProviders", () => {
@@ -141,6 +178,7 @@ describe("resolveAutoMediaKeyProviders", () => {
       "openai",
       "openai-codex",
       "xai",
+      "openrouter",
       "google",
       "mistral",
     ]);
@@ -156,6 +194,36 @@ describe("resolveAutoMediaKeyProviders", () => {
       "minimax-portal",
       "zai",
     ]);
+  });
+
+  it("preserves configured MiniMax CN aliases for image auto discovery", () => {
+    const providers = resolveAutoMediaKeyProviders({
+      capability: "image",
+      cfg: {
+        models: {
+          providers: {
+            "minimax-cn": {
+              models: [{ id: "MiniMax-M2.7", input: ["text", "image"] }],
+            },
+            "minimax-portal-cn": {
+              models: [{ id: "MiniMax-M2.7", input: ["text", "image"] }],
+            },
+            gemini: {
+              models: [{ id: "gemini-3-flash-preview", input: ["text", "image"] }],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(providers).toContain("minimax-cn");
+    expect(providers).toContain("minimax-portal-cn");
+    expect(providers).not.toContain("gemini");
+    expect(providers).toContain("google");
+    expect(providers.indexOf("minimax-cn")).toBeLessThan(providers.indexOf("minimax"));
+    expect(providers.indexOf("minimax-portal-cn")).toBeLessThan(
+      providers.indexOf("minimax-portal"),
+    );
   });
 
   it("keeps the bundled video fallback order", () => {
@@ -183,5 +251,31 @@ describe("providerSupportsNativePdfDocument", () => {
     expect(providerSupportsNativePdfDocument({ providerId: "openai", providerRegistry })).toBe(
       false,
     );
+  });
+});
+
+describe("resolveDocumentMediaModel", () => {
+  it("reads document model hints from provider metadata", () => {
+    expect(
+      resolveDocumentMediaModel({
+        providerId: "minimax-portal-cn",
+        document: "pdf",
+        mode: "textExtraction",
+      }),
+    ).toBe("MiniMax-M2.7");
+    expect(
+      resolveDocumentMediaModel({
+        providerId: "minimax",
+        document: "pdf",
+        mode: "image",
+      }),
+    ).toBe(false);
+    expect(
+      resolveDocumentMediaModel({
+        providerId: "openai",
+        document: "pdf",
+        mode: "textExtraction",
+      }),
+    ).toBeUndefined();
   });
 });

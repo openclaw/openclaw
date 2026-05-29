@@ -1,6 +1,5 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -13,17 +12,26 @@ import {
 import { builtinModules } from "node:module";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  posix as pathPosix,
+  relative,
+  win32 as pathWin32,
+} from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
   version?: string;
@@ -50,18 +58,28 @@ const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.fi
 );
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
-const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 4 * 1024 * 1024;
+const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 5000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
+  // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
+  // package and falls back when the optional renderer is unavailable.
+  "@a2ui/markdown-it",
   "@discordjs/opus",
   "@lancedb/lancedb",
+  // Feishu/Lark remains a bundled plugin package. Root dist can retain orphaned
+  // lazy chunks from the plugin build even though dist/extensions/feishu is
+  // externalized from the root package scan.
+  "@larksuiteoapi/node-sdk",
+  // Discord remains an official external plugin. The root package can retain
+  // orphaned lazy chunks from the plugin build, but the plugin owns prism-media.
+  "prism-media",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "link-preview-js",
   "matrix-js-sdk",
-  // Discord voice decoder fallback. The root chunk catches missing decoders and the owning
-  // Discord plugin remains externalized from the root package.
-  "opusscript",
+  // Public plugin SDK contract helpers are intentionally test-only entrypoints.
+  // Consumers importing them run under their own Vitest dev dependency.
+  "vitest",
 ]);
 const require = createRequire(import.meta.url);
 const acorn = require("acorn") as typeof import("acorn");
@@ -119,6 +137,7 @@ export function collectInstalledPackageErrors(params: {
   }
 
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
+  errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
   return errors;
@@ -151,7 +170,7 @@ export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string):
 
 export function normalizeInstalledBinaryVersion(output: string): string {
   const trimmed = output.trim();
-  const versionMatch = /\b\d{4}\.\d{1,2}\.\d{1,2}(?:-\d+|-beta\.\d+)?\b/u.exec(trimmed);
+  const versionMatch = /\b\d{4}\.\d{1,2}\.\d{1,2}(?:-\d+|-(?:alpha|beta)\.\d+)?\b/u.exec(trimmed);
   return versionMatch?.[0] ?? trimmed;
 }
 
@@ -202,6 +221,97 @@ export function collectInstalledContextEngineRuntimeErrors(packageRoot: string):
     }
   }
   return errors;
+}
+
+function resolveInstalledDistRelativeImport(params: {
+  distRoot: string;
+  importerPath: string;
+  specifier: string;
+}): string | null {
+  if (!params.specifier.startsWith(".")) {
+    return null;
+  }
+
+  const candidatePath = join(dirname(params.importerPath), params.specifier);
+  const candidatePaths = [
+    candidatePath,
+    `${candidatePath}.js`,
+    `${candidatePath}.mjs`,
+    `${candidatePath}.cjs`,
+    join(candidatePath, "index.js"),
+    join(candidatePath, "index.mjs"),
+    join(candidatePath, "index.cjs"),
+  ];
+
+  for (const resolvedPath of candidatePaths) {
+    const relativePath = relative(params.distRoot, resolvedPath);
+    if (
+      relativePath.length === 0 ||
+      relativePath.startsWith("..") ||
+      isAbsolute(relativePath) ||
+      !existsSync(resolvedPath)
+    ) {
+      continue;
+    }
+    return resolvedPath;
+  }
+
+  return null;
+}
+
+export function collectInstalledPluginSdkZodArtifactErrors(packageRoot: string): string[] {
+  const distRoot = join(packageRoot, "dist");
+  const entryRelativePath = "dist/plugin-sdk/zod.js";
+  const entryPath = join(packageRoot, entryRelativePath);
+  const pending = [entryPath];
+  const visited = new Set<string>();
+
+  while (pending.length > 0) {
+    const filePath = pending.pop();
+    if (!filePath || visited.has(filePath)) {
+      continue;
+    }
+    visited.add(filePath);
+
+    if (!existsSync(filePath)) {
+      return [`installed package is missing required plugin SDK artifact: ${entryRelativePath}`];
+    }
+
+    const relativePath = relative(packageRoot, filePath).replaceAll("\\", "/");
+    const fileStat = lstatSync(filePath);
+    if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
+      return [
+        `installed package plugin SDK artifact '${relativePath}' is invalid or exceeds ${MAX_INSTALLED_ROOT_DIST_JS_BYTES} bytes.`,
+      ];
+    }
+
+    const source = readFileSync(filePath, "utf8");
+    const parsedSpecifiers = extractJavaScriptImportSpecifiers(source);
+    if (!parsedSpecifiers.ok) {
+      return [
+        `installed package plugin SDK artifact '${relativePath}' could not be parsed for runtime dependency verification: ${parsedSpecifiers.error}.`,
+      ];
+    }
+
+    for (const specifier of parsedSpecifiers.specifiers) {
+      if (specifier === "zod" || specifier.startsWith("zod/")) {
+        return [
+          `installed package plugin SDK zod artifact must be self-contained but ${relativePath} imports ${specifier}.`,
+        ];
+      }
+
+      const resolvedPath = resolveInstalledDistRelativeImport({
+        distRoot,
+        importerPath: filePath,
+        specifier,
+      });
+      if (resolvedPath) {
+        pending.push(resolvedPath);
+      }
+    }
+  }
+
+  return [];
 }
 
 function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
@@ -394,8 +504,33 @@ function isBundledExtensionOwnedRuntimeImport(params: {
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
   return platform === "win32"
-    ? join(prefixDir, "openclaw.cmd")
-    : join(prefixDir, "bin", "openclaw");
+    ? pathWin32.join(prefixDir, "openclaw.cmd")
+    : pathPosix.join(prefixDir, "bin", "openclaw");
+}
+
+export function resolveInstalledBinaryCommandInvocation(
+  prefixDir: string,
+  args: string[],
+  params: { comSpec?: string; platform?: NodeJS.Platform } = {},
+): {
+  args: string[];
+  command: string;
+  windowsVerbatimArguments?: boolean;
+} {
+  const platform = params.platform ?? process.platform;
+  const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
+  if (platform === "win32") {
+    return {
+      command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    command: binaryPath,
+    args,
+  };
 }
 
 function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
@@ -475,16 +610,13 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
 
 function npmExec(args: string[], cwd: string): string {
   const invocation = resolveNpmCommandInvocation({
+    npmArgs: args,
     npmExecPath: process.env.npm_execpath,
     nodeExecPath: process.execPath,
     platform: process.platform,
   });
 
-  return execFileSync(invocation.command, [...invocation.args, ...args], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  return runNpmVerifyCommand(invocation, cwd);
 }
 
 function resolveGlobalRoot(prefixDir: string, cwd: string): string {
@@ -500,12 +632,8 @@ function installSpec(prefixDir: string, spec: string, cwd: string): void {
 }
 
 function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
-  return execFileSync(resolveInstalledBinaryPath(prefixDir), ["--version"], {
-    cwd,
-    encoding: "utf8",
-    shell: process.platform === "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  const invocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
+  return runNpmVerifyCommand(invocation, cwd);
 }
 
 function verifyScenario(version: string, scenario: PublishedInstallScenario): void {

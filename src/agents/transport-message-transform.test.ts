@@ -1,9 +1,31 @@
-import type { Api, Context, Model } from "@mariozechner/pi-ai";
+import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
-function makeModel(api: Api, provider: string, id: string): Model<Api> {
-  return { api, provider, id, input: [], output: [] } as unknown as Model<Api>;
+function makeModel(api: Api, provider: string, id: string): Model {
+  return { api, provider, id, input: [], output: [] } as unknown as Model;
+}
+
+type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;
+
+function requireToolResultMessage(
+  message: Context["messages"][number] | undefined,
+): ToolResultMessage {
+  if (!message || message.role !== "toolResult") {
+    throw new Error(`expected toolResult message, got ${message?.role ?? "missing"}`);
+  }
+  return message;
+}
+
+function toolResultSummaries(messages: Context["messages"]) {
+  return messages.map((message) => {
+    const toolResult = requireToolResultMessage(message);
+    return {
+      role: toolResult.role,
+      toolCallId: toolResult.toolCallId,
+      content: toolResult.content,
+    };
+  });
 }
 
 function assistantToolCall(
@@ -23,6 +45,40 @@ function assistantToolCall(
 }
 
 describe("transformTransportMessages synthetic tool-result policy", () => {
+  it("normalizes malformed assistant content before transport conversion", () => {
+    const objectContentMessages = [
+      {
+        ...assistantToolCall("call_object"),
+        stopReason: "stop",
+        content: { type: "text", text: "legacy object" },
+      },
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ] as unknown as Context["messages"];
+    const objectResult = transformTransportMessages(
+      objectContentMessages,
+      makeModel("openai-responses", "openai", "gpt-5.4"),
+    );
+    expect(objectResult[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "legacy object" }],
+    });
+
+    const nullContentMessages = [
+      {
+        ...assistantToolCall("call_null"),
+        stopReason: "stop",
+        content: null,
+      },
+      { role: "user", content: "continue", timestamp: Date.now() },
+    ] as unknown as Context["messages"];
+    const nullResult = transformTransportMessages(
+      nullContentMessages,
+      makeModel("openai-responses", "openai", "gpt-5.4"),
+    );
+    expect(nullResult[0]).toMatchObject({ role: "assistant", content: [] });
+    expect(nullResult[1]).toMatchObject({ role: "user" });
+  });
+
   it("synthesizes Codex-style aborted tool results for OpenAI Responses transports", () => {
     const messages: Context["messages"] = [
       assistantToolCall("call_openai_1"),
@@ -35,12 +91,10 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     );
 
     expect(result.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
-    expect(result[1]).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call_openai_1",
-      isError: true,
-      content: [{ type: "text", text: "aborted" }],
-    });
+    const toolResult = requireToolResultMessage(result[1]);
+    expect(toolResult.toolCallId).toBe("call_openai_1");
+    expect(toolResult.isError).toBe(true);
+    expect(toolResult.content).toEqual([{ type: "text", text: "aborted" }]);
   });
 
   it("preserves real OpenAI transport results and aborts missing parallel siblings", () => {
@@ -74,7 +128,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
       "toolResult",
       "user",
     ]);
-    expect(result.slice(1, 3)).toMatchObject([
+    expect(toolResultSummaries(result.slice(1, 3))).toEqual([
       { role: "toolResult", toolCallId: "call_keep", content: [{ type: "text", text: "ok" }] },
       {
         role: "toolResult",
@@ -115,7 +169,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
       "toolResult",
       "user",
     ]);
-    expect(result.slice(1, 3)).toMatchObject([
+    expect(toolResultSummaries(result.slice(1, 3))).toEqual([
       { role: "toolResult", toolCallId: "call_keep", content: [{ type: "text", text: "late ok" }] },
       {
         role: "toolResult",
@@ -208,11 +262,9 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     );
 
     expect(result.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
-    expect(result[1]).toMatchObject({
-      role: "toolResult",
-      toolCallId: "call_anthropic_1",
-      isError: true,
-    });
+    const toolResult = requireToolResultMessage(result[1]);
+    expect(toolResult.toolCallId).toBe("call_anthropic_1");
+    expect(toolResult.isError).toBe(true);
   });
 
   it("still synthesizes missing tool results for transport alias apis that own replay repair", () => {
@@ -232,10 +284,8 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
       makeModel("openclaw-google-generative-ai-transport" as Api, "google", "gemini-2.5-pro"),
     );
     expect(googleAlias.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
-    expect(googleAlias[1]).toMatchObject({
-      role: "toolResult",
-      content: [{ type: "text", text: "No result provided" }],
-    });
+    const googleToolResult = requireToolResultMessage(googleAlias[1]);
+    expect(googleToolResult.content).toEqual([{ type: "text", text: "No result provided" }]);
 
     const bedrockCanonical = transformTransportMessages(
       messages,

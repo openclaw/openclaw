@@ -1,10 +1,11 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   normalizeInteractiveReply,
   normalizeMessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
+import { readPositiveIntegerParam, readStringParam } from "openclaw/plugin-sdk/param-readers";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
@@ -58,8 +59,14 @@ export async function handleSlackMessageAction(params: {
     if (!content && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
+    const replyBroadcast = readBooleanParam(actionParams, "replyBroadcast");
+    if (replyBroadcast && mediaUrl) {
+      throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
+    }
     const threadId = readStringParam(actionParams, "threadId");
     const replyTo = readStringParam(actionParams, "replyTo");
+    const topLevel =
+      readBooleanParam(actionParams, "topLevel") === true || actionParams.threadId === null;
     return await invoke(
       {
         action: "sendMessage",
@@ -68,6 +75,8 @@ export async function handleSlackMessageAction(params: {
         mediaUrl: mediaUrl ?? undefined,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
+        ...(topLevel ? { topLevel: true } : {}),
+        ...(replyBroadcast ? { replyBroadcast } : {}),
         ...(blocks ? { blocks } : {}),
       },
       cfg,
@@ -98,7 +107,9 @@ export async function handleSlackMessageAction(params: {
     const messageId = readStringParam(actionParams, "messageId", {
       required: true,
     });
-    const limit = readNumberParam(actionParams, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(actionParams, "limit", {
+      message: "limit must be a positive integer.",
+    });
     return await invoke(
       {
         action: "reactions",
@@ -112,7 +123,9 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "read") {
-    const limit = readNumberParam(actionParams, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(actionParams, "limit", {
+      message: "limit must be a positive integer.",
+    });
     const readAction: Record<string, unknown> = {
       action: "readMessages",
       channelId: resolveChannelId(),
@@ -188,11 +201,21 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "emoji-list") {
-    const limit = readNumberParam(actionParams, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(actionParams, "limit", {
+      message: "limit must be a positive integer.",
+    });
     return await invoke({ action: "emojiList", limit, accountId }, cfg);
   }
 
   if (action === "download-file") {
+    const fileIdParam = readStringParam(actionParams, "fileId");
+    const messageIdParam =
+      readStringParam(actionParams, "messageId") ?? readStringParam(actionParams, "message_id");
+    if (!fileIdParam && messageIdParam) {
+      throw new Error(
+        "download-file requires fileId (the Slack file id, for example F0B0LTT8M36 from event.files[].id), not messageId. Did you mean to pass fileId? messageId is the Slack message timestamp and is used by react / reactions / edit / delete / pin / unpin actions, not download-file.",
+      );
+    }
     const fileId = readStringParam(actionParams, "fileId", { required: true });
     const channelId =
       readStringParam(actionParams, "channelId") ?? readStringParam(actionParams, "to");
@@ -207,10 +230,15 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
   if (action === "upload-file") {
+    const replyBroadcast = readBooleanParam(actionParams, "replyBroadcast");
+    if (replyBroadcast) {
+      throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
+    }
     const to = readStringParam(actionParams, "to") ?? resolveChannelId();
     const filePath =
       readStringParam(actionParams, "filePath", { trim: false }) ??
@@ -221,6 +249,8 @@ export async function handleSlackMessageAction(params: {
     }
     const threadId =
       readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo");
+    const topLevel =
+      readBooleanParam(actionParams, "topLevel") === true || actionParams.threadId === null;
     return await invoke(
       {
         action: "uploadFile",
@@ -233,6 +263,7 @@ export async function handleSlackMessageAction(params: {
         filename: readStringParam(actionParams, "filename"),
         title: readStringParam(actionParams, "title"),
         threadTs: threadId ?? undefined,
+        ...(topLevel ? { topLevel: true } : {}),
         accountId,
       },
       cfg,

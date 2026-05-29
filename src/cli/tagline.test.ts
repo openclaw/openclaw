@@ -15,7 +15,19 @@ describe("pickTagline", () => {
       mode: "random",
       env: { OPENCLAW_TAGLINE_INDEX: "0" } as NodeJS.ProcessEnv,
     });
-    expect(value.length).toBeGreaterThan(0);
+    expect(value).toBe(
+      "Your terminal just grew claws\u2014type something and let the bot pinch the busywork.",
+    );
     expect(value).not.toBe(DEFAULT_TAGLINE);
+  });
+
+  it("ignores partial OPENCLAW_TAGLINE_INDEX values", () => {
+    expect(
+      pickTagline({
+        mode: "random",
+        env: { OPENCLAW_TAGLINE_INDEX: "1abc" } as NodeJS.ProcessEnv,
+        random: () => 0,
+      }),
+    ).toBe("Your terminal just grew claws\u2014type something and let the bot pinch the busywork.");
   });
 });

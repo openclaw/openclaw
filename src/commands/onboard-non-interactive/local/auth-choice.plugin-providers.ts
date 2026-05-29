@@ -5,6 +5,7 @@ import {
 } from "../../../agents/agent-scope.js";
 import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace.js";
+import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { enablePluginInConfig } from "../../../plugins/enable.js";
 import { resolvePreferredProviderForAuthChoice } from "../../../plugins/provider-auth-choice-preference.js";
@@ -16,6 +17,11 @@ import type {
 } from "../../../plugins/types.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { createLazyRuntimeSurface } from "../../../shared/lazy-runtime.js";
+import {
+  CODEX_RUNTIME_PLUGIN_ID,
+  ensureCodexRuntimePluginForModelSelection,
+} from "../../codex-runtime-plugin-install.js";
+import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 const PROVIDER_PLUGIN_CHOICE_PREFIX = "provider-plugin:";
@@ -59,10 +65,13 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       workspaceDir,
       includeUntrustedWorkspacePlugins: false,
     }));
-  const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
-    await loadAuthChoicePluginProvidersRuntime();
+  const {
+    resolveOwningPluginIdsForProviderRef,
+    resolveProviderPluginChoice,
+    resolvePluginProviders,
+  } = await loadAuthChoicePluginProvidersRuntime();
   const owningPluginIds = preferredProviderId
-    ? resolveOwningPluginIdsForProvider({
+    ? resolveOwningPluginIdsForProviderRef({
         provider: preferredProviderId,
         config: params.nextConfig,
         workspaceDir,
@@ -139,7 +148,7 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     return null;
   }
 
-  return method.runNonInteractive({
+  const result = await method.runNonInteractive({
     authChoice: params.authChoice,
     config: enableResult.config,
     baseConfig: params.baseConfig,
@@ -150,4 +159,37 @@ export async function applyNonInteractivePluginProviderChoice(params: {
     resolveApiKey: params.resolveApiKey,
     toApiKeyCredential: params.toApiKeyCredential,
   });
+  if (!result) {
+    return result;
+  }
+  const selectedModel = resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
+  if (!selectedModel) {
+    return result;
+  }
+  const nonInteractivePrompter = createNonInteractiveLoggingPrompter(
+    params.runtime,
+    (message) => `Non-interactive setup cannot prompt for plugin install: ${message}`,
+  );
+  const codexInstall = await ensureCodexRuntimePluginForModelSelection({
+    cfg: result,
+    model: selectedModel,
+    prompter: nonInteractivePrompter,
+    runtime: params.runtime,
+    workspaceDir,
+  });
+  if (codexInstall.installed) {
+    // Non-interactive onboarding never auto-applies migration; emit a hint so
+    // the operator knows Codex CLI state is available to import deliberately.
+    // Gated on installed (not freshlyInstalled) so repair runs against an
+    // already-present harness still surface the hint.
+    const { offerPostInstallMigrations } =
+      await import("../../../wizard/setup.post-install-migration.js");
+    await offerPostInstallMigrations({
+      config: codexInstall.cfg,
+      runtime: params.runtime,
+      installedPluginIds: [CODEX_RUNTIME_PLUGIN_ID],
+      nonInteractive: true,
+    });
+  }
+  return codexInstall.cfg;
 }

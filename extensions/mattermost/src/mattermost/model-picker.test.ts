@@ -59,7 +59,15 @@ describe("Mattermost model picker", () => {
     expect(view.text).toContain("/oc_model <provider/model> to switch");
     expect(view.text).toContain("Browse keeps the current runtime");
     expect(view.text).toContain("/oc_model <provider/model> --runtime <runtime>");
-    expect(view.buttons[0]?.[0]?.text).toBe("Browse providers");
+    const firstRow = view.buttons[0];
+    if (!firstRow) {
+      throw new Error("expected Mattermost model picker button row");
+    }
+    const browseButton = firstRow[0];
+    if (!browseButton) {
+      throw new Error("expected Mattermost browse providers button");
+    }
+    expect(browseButton.text).toBe("Browse providers");
   });
 
   it("trims accidental model spacing in Mattermost current-model text", () => {
@@ -104,7 +112,7 @@ describe("Mattermost model picker", () => {
     });
 
     const ids = modelsView.buttons.flat().map((button) => button.id);
-    expect(ids.filter((id) => typeof id !== "string" || !/^[a-z0-9]+$/.test(id))).toEqual([]);
+    expect(ids.every((id) => typeof id === "string" && /^[a-z0-9]+$/.test(id))).toBe(true);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
@@ -126,6 +134,23 @@ describe("Mattermost model picker", () => {
       model: "gpt-5",
     });
     expect(parseMattermostModelPickerContext({ action: "select" })).toBeNull();
+  });
+
+  it("does not coerce partial page strings in signed picker contexts", () => {
+    expect(
+      parseMattermostModelPickerContext({
+        oc_model_picker: true,
+        action: "list",
+        ownerUserId: "user-1",
+        provider: "openai",
+        page: "2next",
+      }),
+    ).toEqual({
+      action: "list",
+      ownerUserId: "user-1",
+      provider: "openai",
+      page: 1,
+    });
   });
 
   it("falls back to the routed agent default model when no override is stored", () => {

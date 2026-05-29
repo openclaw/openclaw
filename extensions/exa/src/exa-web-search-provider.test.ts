@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { __testing } from "../test-api.js";
+import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
@@ -14,7 +14,11 @@ describe("exa web search provider", () => {
     expect(provider.id).toBe("exa");
     expect(provider.onboardingScopes).toEqual(["text-inference"]);
     expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("keeps the lightweight contract surface aligned with provider metadata", () => {
@@ -25,7 +29,19 @@ describe("exa web search provider", () => {
     }
     const applied = contractProvider.applySelectionConfig({});
 
-    expect(contractProvider).toMatchObject({
+    expect({
+      id: contractProvider.id,
+      label: contractProvider.label,
+      hint: contractProvider.hint,
+      onboardingScopes: contractProvider.onboardingScopes,
+      credentialLabel: contractProvider.credentialLabel,
+      envVars: contractProvider.envVars,
+      placeholder: contractProvider.placeholder,
+      signupUrl: contractProvider.signupUrl,
+      docsUrl: contractProvider.docsUrl,
+      autoDetectOrder: contractProvider.autoDetectOrder,
+      credentialPath: contractProvider.credentialPath,
+    }).toEqual({
       id: provider.id,
       label: provider.label,
       hint: provider.hint,
@@ -39,26 +55,33 @@ describe("exa web search provider", () => {
       credentialPath: provider.credentialPath,
     });
     expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
-    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected contract Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("prefers scoped configured api keys over environment fallbacks", () => {
-    expect(__testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
+    expect(testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
   });
 
   it("resolves Exa search base URL overrides", () => {
-    expect(__testing.resolveExaSearchEndpoint()).toEqual({
+    expect(testing.resolveExaSearchEndpoint()).toEqual({
       endpoint: "https://api.exa.ai/search",
     });
-    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "https://proxy.example/exa" })).toEqual({
+    expect(testing.resolveExaSearchEndpoint({ baseUrl: "https://proxy.example/exa" })).toEqual({
       endpoint: "https://proxy.example/exa/search",
     });
-    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
+    expect(testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
       endpoint: "https://proxy.example/exa/search",
     });
-    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual(
-      expect.objectContaining({ error: "invalid_base_url" }),
-    );
+    expect(testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual({
+      docs: "https://docs.openclaw.ai/tools/exa-search",
+      error: "invalid_base_url",
+      message:
+        "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
+    });
   });
 
   it("partitions Exa cache keys by resolved endpoint", () => {
@@ -68,12 +91,12 @@ describe("exa web search provider", () => {
       count: 5,
     };
     expect(
-      __testing.buildExaCacheKey({
+      testing.buildExaCacheKey({
         ...base,
         endpoint: "https://api.exa.ai/search",
       }),
     ).not.toBe(
-      __testing.buildExaCacheKey({
+      testing.buildExaCacheKey({
         ...base,
         endpoint: "https://proxy.example/exa/search",
       }),
@@ -82,22 +105,22 @@ describe("exa web search provider", () => {
 
   it("normalizes Exa result descriptions from highlights before text", () => {
     expect(
-      __testing.resolveExaDescription({
+      testing.resolveExaDescription({
         highlights: ["first", "", "second"],
         text: "full text",
       }),
     ).toBe("first\nsecond");
-    expect(__testing.resolveExaDescription({ text: "full text" })).toBe("full text");
+    expect(testing.resolveExaDescription({ text: "full text" })).toBe("full text");
   });
 
   it("handles month freshness without date overflow", () => {
-    const iso = __testing.resolveFreshnessStartDate("month");
+    const iso = testing.resolveFreshnessStartDate("month");
     expect(Number.isNaN(Date.parse(iso))).toBe(false);
   });
 
   it("accepts current Exa contents object options from the docs", () => {
     expect(
-      __testing.parseExaContents({
+      testing.parseExaContents({
         text: { maxCharacters: 1200 },
         highlights: {
           maxCharacters: 4000,
@@ -123,11 +146,13 @@ describe("exa web search provider", () => {
 
   it("rejects invalid Exa contents objects", () => {
     expect(
-      __testing.parseExaContents({
+      testing.parseExaContents({
         highlights: { numSentences: 0 },
       }),
-    ).toMatchObject({
+    ).toEqual({
       error: "invalid_contents",
+      message: "contents.highlights.numSentences must be a positive integer.",
+      docs: "https://docs.openclaw.ai/tools/web",
     });
   });
 
@@ -157,8 +182,8 @@ describe("exa web search provider", () => {
       "deep-reasoning",
       "instant",
     ]);
-    expect(__testing.resolveExaSearchCount(80, 10)).toBe(80);
-    expect(__testing.resolveExaSearchCount(120, 10)).toBe(100);
+    expect(testing.resolveExaSearchCount(80, 10)).toBe(80);
+    expect(testing.resolveExaSearchCount(120, 10)).toBe(100);
   });
 
   it("returns validation errors for conflicting time filters", async () => {
@@ -177,8 +202,11 @@ describe("exa web search provider", () => {
       date_after: "2026-03-01",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       error: "conflicting_time_filters",
+      message:
+        "freshness cannot be combined with date_after or date_before. Use one time-filter mode.",
+      docs: "https://docs.openclaw.ai/tools/web",
     });
   });
 
@@ -197,8 +225,16 @@ describe("exa web search provider", () => {
       date_after: "2026-02-31",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       error: "invalid_date",
+      message: "date_after must be YYYY-MM-DD format.",
+      docs: "https://docs.openclaw.ai/tools/web",
     });
+  });
+
+  it("reports malformed Exa API JSON with a stable provider error", async () => {
+    await expect(testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
+      "Exa API returned malformed JSON",
+    );
   });
 });

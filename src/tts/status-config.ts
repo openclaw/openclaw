@@ -2,6 +2,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -101,10 +102,6 @@ function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefin
   return undefined;
 }
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizeStatusDetail(
   value: unknown,
   maxLength = MAX_STATUS_DETAIL_LENGTH,
@@ -200,7 +197,13 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
   if (model) {
     details.model = model;
   }
-  const voice = firstStatusDetail(record, ["voice", "voiceId", "voiceName"]);
+  const voice = firstStatusDetail(record, [
+    "speakerVoice",
+    "speakerVoiceId",
+    "voice",
+    "voiceId",
+    "voiceName",
+  ]);
   if (voice) {
     details.voice = voice;
   }

@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -67,9 +67,9 @@ function runWrappedPayloadCase(params: {
   payload?: Record<string, unknown>;
 }) {
   const payload = params.payload ?? { store: false };
-  let capturedOptions: (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined;
+  let capturedOptions: SimpleStreamOptions | undefined;
   const baseStreamFn: StreamFn = (model, _context, options) => {
-    capturedOptions = options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined;
+    capturedOptions = options;
     options?.onPayload?.(payload, model);
     return {} as ReturnType<StreamFn>;
   };
@@ -92,6 +92,29 @@ function runWrappedPayloadCase(params: {
   };
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function expectCatalogEntry(entries: unknown, id: string, expected: Record<string, unknown>): void {
+  expect(Array.isArray(entries)).toBe(true);
+  const entry = (entries as Array<Record<string, unknown>>).find(
+    (candidate) => candidate.id === id,
+  );
+  expectFields(entry, expected);
+}
+
+function expectNoCatalogEntry(entries: unknown, id: string): void {
+  expect(Array.isArray(entries)).toBe(true);
+  expect((entries as Array<Record<string, unknown>>).map((entry) => entry.id)).not.toContain(id);
+}
+
 describe("buildOpenAIProvider", () => {
   beforeEach(() => {
     mocks.openAIResponsesTransportStreamFn.mockReset();
@@ -104,11 +127,12 @@ describe("buildOpenAIProvider", () => {
     const provider = buildOpenAIProvider();
     const apiKey = provider.auth.find((method) => method.id === "api-key");
 
-    expect(apiKey?.wizard).toMatchObject({
+    expectFields(apiKey?.wizard, {
       choiceLabel: "OpenAI API Key",
+      choiceHint: "Use your OpenAI API key directly",
       groupId: "openai",
       groupLabel: "OpenAI",
-      groupHint: "Direct API key",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
   });
 
@@ -162,7 +186,7 @@ describe("buildOpenAIProvider", () => {
       modelRegistry: registry as never,
     });
 
-    expect(mini).toMatchObject({
+    expectFields(mini, {
       provider: "openai",
       id: "gpt-5.4-mini",
       api: "openai-responses",
@@ -170,7 +194,7 @@ describe("buildOpenAIProvider", () => {
       contextWindow: 400_000,
       maxTokens: 128_000,
     });
-    expect(nano).toMatchObject({
+    expectFields(nano, {
       provider: "openai",
       id: "gpt-5.4-nano",
       api: "openai-responses",
@@ -189,16 +213,16 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.4-mini",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
     expect(
       provider
         .resolveThinkingProfile?.({
           provider: "openai",
           modelId: "gpt-5.4-nano",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
 
     const entries = provider.augmentModelCatalog?.({
       env: process.env,
@@ -208,26 +232,22 @@ describe("buildOpenAIProvider", () => {
       ],
     } as never);
 
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-mini",
-        name: "gpt-5.4-mini",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 400_000,
-      }),
-    );
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.4-nano",
-        name: "gpt-5.4-nano",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 400_000,
-      }),
-    );
+    expectCatalogEntry(entries, "gpt-5.4-mini", {
+      provider: "openai",
+      id: "gpt-5.4-mini",
+      name: "gpt-5.4-mini",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+    });
+    expectCatalogEntry(entries, "gpt-5.4-nano", {
+      provider: "openai",
+      id: "gpt-5.4-nano",
+      name: "gpt-5.4-nano",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+    });
   });
 
   it("owns native reasoning output mode for OpenAI and Azure OpenAI responses", () => {
@@ -264,7 +284,7 @@ describe("buildOpenAIProvider", () => {
       modelRegistry: { find: () => null },
     } as never);
 
-    expect(openaiModel).toMatchObject({
+    expectFields(openaiModel, {
       provider: "openai",
       id: "gpt-5.4",
       api: "openai-responses",
@@ -272,7 +292,7 @@ describe("buildOpenAIProvider", () => {
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
-    expect(codexModel).toMatchObject({
+    expectFields(codexModel, {
       provider: "openai-codex",
       id: "gpt-5.4",
       api: "openai-codex-responses",
@@ -307,7 +327,7 @@ describe("buildOpenAIProvider", () => {
       } as never,
     });
 
-    expect(model).toMatchObject({
+    expectFields(model, {
       provider: "openai",
       id: "chat-latest",
       api: "openai-responses",
@@ -325,7 +345,7 @@ describe("buildOpenAIProvider", () => {
       modelRegistry: { find: () => null },
     } as never);
 
-    expect(fallback).toMatchObject({
+    expectFields(fallback, {
       provider: "openai",
       id: "chat-latest",
       api: "openai-responses",
@@ -336,7 +356,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
+  it("resolves gpt-5.5 locally without cached catalog metadata", () => {
     const provider = buildOpenAIProvider();
 
     const model = provider.resolveDynamicModel?.({
@@ -360,6 +380,25 @@ describe("buildOpenAIProvider", () => {
             : null,
       } as never,
     });
+
+    expectFields(model, {
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      mediaInput: {
+        image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+      },
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+  });
+
+  it("resolves gpt-5.5-pro locally", () => {
+    const provider = buildOpenAIProvider();
+
     const pro = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: "gpt-5.5-pro",
@@ -382,8 +421,7 @@ describe("buildOpenAIProvider", () => {
       } as never,
     });
 
-    expect(model).toBeUndefined();
-    expect(pro).toMatchObject({
+    expectFields(pro, {
       provider: "openai",
       id: "gpt-5.5-pro",
       api: "openai-responses",
@@ -403,29 +441,19 @@ describe("buildOpenAIProvider", () => {
           provider: "openai",
           modelId: "gpt-5.5",
         } as never)
-        ?.levels.some((level) => level.id === "xhigh"),
-    ).toBe(true);
+        ?.levels.map((level) => level.id),
+    ).toContain("xhigh");
 
     const entries = provider.augmentModelCatalog?.({
       env: process.env,
       entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4" }],
     } as never);
 
-    expect(entries).not.toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "gpt-5.5",
-      }),
-    );
-    expect(entries).not.toContainEqual(
-      expect.objectContaining({
-        provider: "openai",
-        id: "chat-latest",
-      }),
-    );
+    expectNoCatalogEntry(entries, "gpt-5.5");
+    expectNoCatalogEntry(entries, "chat-latest");
   });
 
-  it("keeps modern live selection on OpenAI 5.2+ and current Codex models", () => {
+  it("keeps modern live selection on current OpenAI and Codex models", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
 
@@ -440,7 +468,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         modelId: "gpt-5.2",
       } as never),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       provider.isModernModelRef?.({
         provider: "openai",
@@ -537,6 +565,7 @@ describe("buildOpenAIProvider", () => {
       sanitizeToolCallIds: false,
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
+      allowSyntheticToolResults: true,
     });
   });
 
@@ -573,10 +602,9 @@ describe("buildOpenAIProvider", () => {
       },
     });
 
-    expect(extraParams).toMatchObject({
+    expectFields(extraParams, {
       transport: "sse",
     });
-    expect(extraParams?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
       { type: "compaction", compact_threshold: 140_000 },
@@ -743,12 +771,11 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
   });
 
-  it("preserves explicit OpenAI responses transport and warmup overrides", () => {
+  it("preserves explicit OpenAI responses transport overrides", () => {
     const provider = buildOpenAIProvider();
 
     const explicit = {
       transport: "websocket",
-      openaiWsWarmup: false,
       fastMode: true,
     };
 
@@ -761,7 +788,7 @@ describe("buildOpenAIProvider", () => {
     ).toBe(explicit);
   });
 
-  it("defaults Codex responses transport without forcing warmup flags", () => {
+  it("defaults Codex responses transport without forcing extra flags", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     expect(
@@ -777,7 +804,6 @@ describe("buildOpenAIProvider", () => {
 
     const explicit = {
       transport: "sse",
-      openaiWsWarmup: false,
     };
     expect(
       provider.prepareExtraParams?.({
@@ -823,7 +849,6 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(result.options?.transport).toBeUndefined();
-    expect(result.options?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.reasoning).toEqual({ effort: "none" });
   });
 
@@ -884,10 +909,12 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(mocks.openAIResponsesTransportStreamFn).not.toHaveBeenCalled();
-    expect(result.options?.headers).toMatchObject({
+    const headers = result.options?.headers as Record<string, unknown> | undefined;
+    expectFields(result.options?.headers, {
       originator: "openclaw",
-      "User-Agent": expect.stringMatching(/^openclaw\//u),
     });
+    expect(typeof headers?.["User-Agent"]).toBe("string");
+    expect(String(headers?.["User-Agent"]).startsWith("openclaw/")).toBe(true);
     expect(result.payload.store).toBe(false);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "high" });

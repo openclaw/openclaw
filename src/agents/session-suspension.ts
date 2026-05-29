@@ -1,11 +1,12 @@
 import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
-import { updateSessionStoreEntry } from "../config/sessions.js";
+import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
+import { applySessionStoreEntryPatch } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 
 const log = createSubsystemLogger("session-suspension");
 
@@ -23,10 +24,8 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
     case "subagent":
       return resolveSubagentMaxConcurrent(cfg);
     case "cron":
-    case "cron-nested": {
-      const raw = cfg?.cron?.maxConcurrentRuns;
-      return typeof raw === "number" && Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 1;
-    }
+    case "cron-nested":
+      return resolveCronMaxConcurrentRuns(cfg?.cron);
     default:
       return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
   }
@@ -99,10 +98,10 @@ export async function suspendSession(params: {
   const now = Date.now();
 
   try {
-    await updateSessionStoreEntry({
+    await applySessionStoreEntryPatch({
       storePath,
       sessionKey,
-      update: async () => ({
+      patch: {
         quotaSuspension: {
           schemaVersion: 1,
           suspendedAt: now,
@@ -114,7 +113,7 @@ export async function suspendSession(params: {
           expectedResumeBy: now + ttlMs,
           state: "suspended",
         },
-      }),
+      },
     });
   } catch (err) {
     log.warn("failed to persist quota suspension; not throttling lane", {
@@ -135,7 +134,8 @@ export async function suspendSession(params: {
   }
 }
 
-export const __testing = {
+export const testing = {
   resolveLaneResumeConcurrency,
   resolveSessionSuspensionReason,
 } as const;
+export { testing as __testing };

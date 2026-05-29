@@ -3,6 +3,7 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-aut
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
+import { buildGoogleStaticCatalogProvider } from "./provider-catalog.js";
 import { GOOGLE_GEMINI_PROVIDER_HOOKS } from "./provider-hooks.js";
 import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./provider-models.js";
 import {
@@ -13,7 +14,6 @@ import {
   createGoogleGenerativeAiTransportStreamFn,
   createGoogleVertexTransportStreamFn,
 } from "./transport-stream.js";
-import { hasGoogleVertexAuthorizedUserAdcSync } from "./vertex-adc.js";
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -47,6 +47,10 @@ export function buildGoogleProvider(): ProviderPlugin {
     normalizeTransport: ({ api, baseUrl }) => resolveGoogleGenerativeAiTransport({ api, baseUrl }),
     normalizeConfig: ({ provider, providerConfig }) =>
       normalizeGoogleProviderConfig(provider, providerConfig),
+    staticCatalog: {
+      order: "simple",
+      run: async () => ({ providers: { google: buildGoogleStaticCatalogProvider() } }),
+    },
     normalizeModelId: ({ modelId }) => normalizeGoogleModelId(modelId),
     resolveDynamicModel: (ctx) =>
       resolveGoogleGeminiForwardCompatModel({
@@ -57,7 +61,7 @@ export function buildGoogleProvider(): ProviderPlugin {
       if (model.api === "google-generative-ai") {
         return createGoogleGenerativeAiTransportStreamFn();
       }
-      if (model.api === "google-vertex" && hasGoogleVertexAuthorizedUserAdcSync()) {
+      if (model.api === "google-vertex") {
         return createGoogleVertexTransportStreamFn();
       }
       return undefined;

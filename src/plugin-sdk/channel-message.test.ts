@@ -1,32 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
-import { defineChannelMessageAdapter } from "./channel-message.js";
+import { defineChannelMessageAdapter as defineCoreChannelMessageAdapter } from "../channels/message/index.js";
+import { defineChannelMessageAdapter } from "./channel-outbound.js";
 
 describe("defineChannelMessageAdapter", () => {
   it("keeps new and legacy channel plugin SDK subpaths importable", async () => {
-    const [
-      channelMessage,
-      channelMessageRuntime,
-      channelMessageRuntimeDirect,
-      channelReplyPipeline,
-      compat,
-    ] = await Promise.all([
-      import("openclaw/plugin-sdk/channel-message"),
-      import("openclaw/plugin-sdk/channel-message-runtime"),
-      import("../channels/message/runtime.js"),
-      import("openclaw/plugin-sdk/channel-reply-pipeline"),
-      import("openclaw/plugin-sdk/compat"),
-    ]);
+    const [channelOutbound, channelMessage, channelMessageRuntime, channelReplyPipeline, compat] =
+      await Promise.all([
+        import("openclaw/plugin-sdk/channel-outbound"),
+        import("openclaw/plugin-sdk/channel-message"),
+        import("openclaw/plugin-sdk/channel-message-runtime"),
+        import("openclaw/plugin-sdk/channel-reply-pipeline"),
+        import("openclaw/plugin-sdk/compat"),
+      ]);
 
-    expect(channelMessage.createChannelMessageReplyPipeline).toBe(
+    expect(channelOutbound.createChannelMessageReplyPipeline).toBe(
       channelReplyPipeline.createChannelReplyPipeline,
+    );
+    expect(channelMessage.createChannelMessageReplyPipeline).toBe(
+      channelOutbound.createChannelMessageReplyPipeline,
     );
     expect(channelMessage.createReplyPrefixOptions).toBe(
       channelReplyPipeline.createReplyPrefixOptions,
     );
     expect(channelMessage.createTypingCallbacks).toBe(channelReplyPipeline.createTypingCallbacks);
     expect(channelMessageRuntime.sendDurableMessageBatch).toBe(
-      channelMessageRuntimeDirect.sendDurableMessageBatch,
+      channelMessage.sendDurableMessageBatch,
     );
+    expect(channelMessageRuntime.withDurableMessageSendContext).toBe(
+      channelMessage.withDurableMessageSendContext,
+    );
+    expect(channelOutbound.defineChannelMessageAdapter).toBe(defineCoreChannelMessageAdapter);
     expect(compat.createChannelReplyPipeline).toBe(channelReplyPipeline.createChannelReplyPipeline);
   });
 

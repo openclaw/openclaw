@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   browserPluginNodeHostCommands,
   browserPluginReload,
@@ -25,6 +25,7 @@ const runtimeApiMocks = vi.hoisted(() => ({
   handleBrowserGatewayRequest: vi.fn(),
   registerBrowserCli: vi.fn(),
   runBrowserProxyCommand: vi.fn(async () => "ok"),
+  stopBrowserControlService: vi.fn(async () => undefined),
 }));
 
 vi.mock("./register.runtime.js", async () => {
@@ -44,6 +45,22 @@ vi.mock("./src/cli/browser-cli.js", () => ({
   registerBrowserCli: runtimeApiMocks.registerBrowserCli,
 }));
 
+vi.mock("./src/control-service.js", () => ({
+  stopBrowserControlService: runtimeApiMocks.stopBrowserControlService,
+}));
+
+beforeAll(async () => {
+  await import("./register.runtime.js");
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function createApi() {
   const registerCli = vi.fn();
   const registerGatewayMethod = vi.fn();
@@ -61,6 +78,14 @@ function createApi() {
     registerTool,
   });
   return { api, registerCli, registerGatewayMethod, registerService, registerTool };
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call[argIndex];
 }
 
 function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
@@ -82,12 +107,10 @@ function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
 describe("browser plugin", () => {
   it("exposes static browser metadata on the plugin definition", () => {
     expect(browserPluginReload).toEqual({ restartPrefixes: ["browser"] });
-    expect(browserPluginNodeHostCommands).toEqual([
-      expect.objectContaining({
-        command: "browser.proxy",
-        cap: "browser",
-      }),
-    ]);
+    expect(browserPluginNodeHostCommands).toHaveLength(1);
+    expect(browserPluginNodeHostCommands[0]?.command).toBe("browser.proxy");
+    expect(browserPluginNodeHostCommands[0]?.cap).toBe("browser");
+    expect(typeof browserPluginNodeHostCommands[0]?.handle).toBe("function");
     expect(browserSecurityAuditCollectors).toHaveLength(1);
   });
 
@@ -105,7 +128,7 @@ describe("browser plugin", () => {
     const { api, registerTool } = createApi();
     registerBrowserPlugin(api);
 
-    const factory = registerTool.mock.calls[0]?.[0];
+    const factory = mockCallArg(registerTool);
     if (typeof factory !== "function") {
       throw new Error("expected browser plugin to register a tool factory");
     }
@@ -135,21 +158,19 @@ describe("browser plugin", () => {
     const { api, registerCli } = createApi();
     registerBrowserPlugin(api);
 
-    expect(registerCli).toHaveBeenCalledWith(
-      expect.any(Function),
-      expect.objectContaining({
-        commands: ["browser"],
-        descriptors: [
-          {
-            name: "browser",
-            description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
-            hasSubcommands: true,
-          },
-        ],
-      }),
-    );
-
-    const registrar = registerCli.mock.calls[0]?.[0];
+    expect(registerCli).toHaveBeenCalledTimes(1);
+    const registrar = mockCallArg(registerCli) as (params: { program: never }) => unknown;
+    expect(typeof registrar).toBe("function");
+    expect(mockCallArg(registerCli, 0, 1)).toEqual({
+      commands: ["browser"],
+      descriptors: [
+        {
+          name: "browser",
+          description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
+          hasSubcommands: true,
+        },
+      ],
+    });
     await registrar({ program: {} as never });
     expect(runtimeApiMocks.registerBrowserCli).toHaveBeenCalledWith({});
   });
@@ -158,10 +179,15 @@ describe("browser plugin", () => {
     const { api, registerGatewayMethod } = createApi();
     registerBrowserPlugin(api);
 
-    expect(registerGatewayMethod).toHaveBeenCalledWith("browser.request", expect.any(Function), {
+    expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(registerGatewayMethod)).toBe("browser.request");
+    const handler = mockCallArg(registerGatewayMethod, 0, 1) as (request: {
+      method: string;
+    }) => unknown;
+    expect(typeof handler).toBe("function");
+    expect(mockCallArg(registerGatewayMethod, 0, 2)).toEqual({
       scope: "operator.admin",
     });
-    const handler = registerGatewayMethod.mock.calls[0]?.[1];
     await handler({ method: "browser.request" });
     expect(runtimeApiMocks.handleBrowserGatewayRequest).toHaveBeenCalledWith({
       method: "browser.request",
@@ -172,21 +198,60 @@ describe("browser plugin", () => {
     await expect(browserPluginNodeHostCommands[0]?.handle("{}")).resolves.toBe("ok");
     expect(runtimeApiMocks.runBrowserProxyCommand).toHaveBeenCalledWith("{}");
 
-    await expect(browserSecurityAuditCollectors[0]?.({} as never)).resolves.toEqual([]);
+    await expect(browserSecurityAuditCollectors[0]?.({} as never)).resolves.toStrictEqual([]);
     expect(runtimeApiMocks.collectBrowserSecurityAuditFindings).toHaveBeenCalled();
   });
 
-  it("lazy-loads the browser service on start", async () => {
+  it("registers a lazy browser control service", async () => {
     const { api, registerService } = createApi();
     registerBrowserPlugin(api);
 
-    const service = registerService.mock.calls[0]?.[0];
-    expect(service).toMatchObject({ id: "browser-control" });
+    const service = mockCallArg(registerService) as {
+      id: string;
+      start: (...args: unknown[]) => unknown;
+      stop: (...args: unknown[]) => unknown;
+    };
+    expect(service?.id).toBe("browser-control");
+    expect(typeof service?.start).toBe("function");
+    expect(typeof service?.stop).toBe("function");
     expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+
+    await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+    expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+
+    await service.stop({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+    expect(runtimeApiMocks.stopBrowserControlService).toHaveBeenCalledOnce();
+  });
+
+  it("eager-loads the browser control service when explicitly requested", async () => {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
+    const { api, registerService } = createApi();
+    registerBrowserPlugin(api);
+
+    const service = mockCallArg(registerService) as {
+      id: string;
+      start: (...args: unknown[]) => unknown;
+    };
 
     await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
     expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
   });
+
+  for (const value of ["false", "", "disabled"]) {
+    it(`keeps browser control service env value ${JSON.stringify(value)} lazy`, async () => {
+      vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
+      const { api, registerService } = createApi();
+      registerBrowserPlugin(api);
+
+      const service = mockCallArg(registerService) as {
+        id: string;
+        start: (...args: unknown[]) => unknown;
+      };
+
+      await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+      expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+    });
+  }
 
   it("declares setup auto-enable reasons for browser config surfaces", () => {
     const probe = registerBrowserAutoEnableProbe();

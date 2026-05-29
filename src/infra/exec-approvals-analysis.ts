@@ -4,19 +4,28 @@ import {
   resolveCommandResolutionFromArgv,
   type CommandResolution,
 } from "./exec-command-resolution.js";
+import {
+  extractShellWrapperInlineCommand,
+  resolveShellWrapperTransportArgv,
+} from "./exec-wrapper-resolution.js";
+import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "./shell-inline-command.js";
 
 export {
   matchAllowlist,
   parseExecArgvToken,
   resolveAllowlistCandidatePath,
   resolveApprovalAuditCandidatePath,
+  resolveApprovalAuditTrustPath,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
+  resolveExecutionTargetTrustPath,
   resolvePolicyAllowlistCandidatePath,
   resolvePolicyTargetCandidatePath,
   resolvePolicyTargetResolution,
+  resolvePolicyTargetTrustPath,
+  resolveExecutableTrustPath,
   type CommandResolution,
   type ExecutableResolution,
   type ExecArgvToken,
@@ -25,6 +34,7 @@ export {
 export type ExecCommandSegment = {
   raw: string;
   argv: string[];
+  sourceArgv?: string[];
   resolution: CommandResolution | null;
 };
 
@@ -51,6 +61,7 @@ const WINDOWS_UNSUPPORTED_TOKENS = new Set([
   "|",
   "<",
   ">",
+  ";",
   "^",
   "(",
   ")",
@@ -633,6 +644,7 @@ function analyzeWindowsShellCommand(params: {
   command: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
 }): ExecCommandAnalysis {
   const effective = stripWindowsShellWrapper(params.command.trim());
   const unsupported = findWindowsUnsupportedToken(effective);
@@ -653,7 +665,12 @@ function analyzeWindowsShellCommand(params: {
       {
         raw: params.command,
         argv,
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+        resolution: resolveCommandResolutionFromArgv(
+          argv,
+          params.cwd,
+          params.env,
+          (params.platform ?? undefined) as NodeJS.Platform | undefined,
+        ),
       },
     ],
   };
@@ -668,6 +685,7 @@ function parseSegmentsFromParts(
   parts: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  platform?: string | null,
 ): ExecCommandSegment[] | null {
   const segments: ExecCommandSegment[] = [];
   for (const raw of parts) {
@@ -678,7 +696,12 @@ function parseSegmentsFromParts(
     segments.push({
       raw,
       argv,
-      resolution: resolveCommandResolutionFromArgv(argv, cwd, env),
+      resolution: resolveCommandResolutionFromArgv(
+        argv,
+        cwd,
+        env,
+        (platform ?? undefined) as NodeJS.Platform | undefined,
+      ),
     });
   }
   return segments;
@@ -994,6 +1017,97 @@ function renderSafeBinSegmentArgv(
   return renderQuotedArgv(argv, platform);
 }
 
+function findSubsequence(haystack: readonly string[], needle: readonly string[]): number {
+  if (needle.length === 0 || needle.length > haystack.length) {
+    return -1;
+  }
+  for (let start = 0; start <= haystack.length - needle.length; start += 1) {
+    let matches = true;
+    for (let offset = 0; offset < needle.length; offset += 1) {
+      if (haystack[start + offset] !== needle[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      return start;
+    }
+  }
+  return -1;
+}
+
+function replaceShellInlineCommandArgv(params: {
+  argv: string[];
+  oldCommand: string;
+  nextCommand: string;
+}): string[] | null {
+  const transportArgv = resolveShellWrapperTransportArgv(params.argv);
+  if (!transportArgv) {
+    return null;
+  }
+  const transportStart = findSubsequence(params.argv, transportArgv);
+  if (transportStart < 0) {
+    return null;
+  }
+  const match = resolveInlineCommandMatch(transportArgv, POSIX_INLINE_COMMAND_FLAGS, {
+    allowCombinedC: true,
+  });
+  if (match.valueTokenIndex === null) {
+    return null;
+  }
+  const absoluteValueIndex = transportStart + match.valueTokenIndex;
+  const token = params.argv[absoluteValueIndex];
+  if (token === undefined) {
+    return null;
+  }
+  const rewritten = [...params.argv];
+  if (token === params.oldCommand) {
+    rewritten[absoluteValueIndex] = params.nextCommand;
+    return rewritten;
+  }
+  if (token.endsWith(params.oldCommand)) {
+    rewritten[absoluteValueIndex] =
+      token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
+    return rewritten;
+  }
+  return null;
+}
+
+function renderInlineChainSegmentArgv(params: {
+  segment: ExecCommandSegment;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  platform?: string | null;
+}): string | null {
+  const inlineCommand = extractShellWrapperInlineCommand(params.segment.argv);
+  if (!inlineCommand) {
+    return null;
+  }
+  const analysis = analyzeShellCommand({
+    command: inlineCommand,
+    cwd: params.cwd,
+    env: params.env,
+    platform: params.platform,
+  });
+  if (!analysis.ok) {
+    return null;
+  }
+  const rebuilt = buildEnforcedShellCommand({
+    command: inlineCommand,
+    segments: analysis.segments,
+    platform: params.platform,
+  });
+  if (!rebuilt.ok || !rebuilt.command) {
+    return null;
+  }
+  const rewrittenArgv = replaceShellInlineCommandArgv({
+    argv: params.segment.argv,
+    oldCommand: inlineCommand,
+    nextCommand: rebuilt.command,
+  });
+  return rewrittenArgv ? renderQuotedArgv(rewrittenArgv, params.platform) : null;
+}
+
 /**
  * Rebuilds a shell command and selectively single-quotes argv tokens for segments that
  * must be treated as literal (safeBins hardening) while preserving the rest of the
@@ -1002,7 +1116,9 @@ function renderSafeBinSegmentArgv(
 export function buildSafeBinsShellCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
-  segmentSatisfiedBy: ("allowlist" | "safeBins" | "skills" | "skillPrelude" | null)[];
+  segmentSatisfiedBy: ("allowlist" | "safeBins" | "inlineChain" | "skills" | null)[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
   platform?: string | null;
 }): { ok: boolean; command?: string; reason?: string } {
   if (params.segments.length !== params.segmentSatisfiedBy.length) {
@@ -1018,6 +1134,18 @@ export function buildSafeBinsShellCommand(params: {
         return { ok: false, reason: "segment mapping failed" };
       }
       const needsLiteral = by === "safeBins";
+      if (by === "inlineChain") {
+        const rendered = renderInlineChainSegmentArgv({
+          segment: seg,
+          cwd: params.cwd,
+          env: params.env,
+          platform: params.platform,
+        });
+        if (!rendered) {
+          return { ok: false, reason: "inline chain execution plan unavailable" };
+        }
+        return { ok: true, rendered };
+      }
       if (!needsLiteral) {
         return { ok: true, rendered: raw.trim() };
       }
@@ -1090,7 +1218,12 @@ export function analyzeShellCommand(params: {
       if (!pipelineSplit.ok) {
         return { ok: false, reason: pipelineSplit.reason, segments: [] };
       }
-      const segments = parseSegmentsFromParts(pipelineSplit.segments, params.cwd, params.env);
+      const segments = parseSegmentsFromParts(
+        pipelineSplit.segments,
+        params.cwd,
+        params.env,
+        params.platform,
+      );
       if (!segments) {
         return { ok: false, reason: "unable to parse shell segment", segments: [] };
       }
@@ -1106,7 +1239,7 @@ export function analyzeShellCommand(params: {
   if (!split.ok) {
     return { ok: false, reason: split.reason, segments: [] };
   }
-  const segments = parseSegmentsFromParts(split.segments, params.cwd, params.env);
+  const segments = parseSegmentsFromParts(split.segments, params.cwd, params.env, params.platform);
   if (!segments) {
     return { ok: false, reason: "unable to parse shell segment", segments: [] };
   }
@@ -1117,6 +1250,7 @@ export function analyzeArgvCommand(params: {
   argv: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
 }): ExecCommandAnalysis {
   const argv = params.argv.filter((entry) => entry.trim().length > 0);
   if (argv.length === 0) {
@@ -1128,7 +1262,13 @@ export function analyzeArgvCommand(params: {
       {
         raw: argv.join(" "),
         argv,
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+        sourceArgv: [...params.argv],
+        resolution: resolveCommandResolutionFromArgv(
+          argv,
+          params.cwd,
+          params.env,
+          (params.platform ?? undefined) as NodeJS.Platform | undefined,
+        ),
       },
     ],
   };

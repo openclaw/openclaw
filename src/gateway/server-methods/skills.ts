@@ -1,28 +1,4 @@
 import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
-import { canExecRequestNode } from "../../agents/exec-defaults.js";
-import {
-  installSkillFromClawHub,
-  searchSkillsFromClawHub,
-  updateSkillsFromClawHub,
-} from "../../agents/skills-clawhub.js";
-import { installSkill } from "../../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
-import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
-import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
-import { replaceConfigFile } from "../../config/config.js";
-import { redactConfigObject, REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -30,10 +6,41 @@ import {
   validateSkillsDetailParams,
   validateSkillsInstallParams,
   validateSkillsSearchParams,
+  validateSkillsSecurityVerdictsParams,
+  validateSkillsSkillCardParams,
   validateSkillsStatusParams,
   validateSkillsUpdateParams,
-} from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
+import { canExecRequestNode } from "../../agents/exec-defaults.js";
+import {
+  installSkillFromClawHub,
+  readLocalSkillCardContentSync,
+  searchSkillsFromClawHub,
+  updateSkillsFromClawHub,
+} from "../../agents/skills-clawhub.js";
+import { installSkill } from "../../agents/skills-install.js";
+import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
+import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
+import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
+import { redactConfigObject } from "../../config/redact-snapshot.js";
+import {
+  fetchClawHubSkillDetail,
+  fetchClawHubSkillSecurityVerdicts,
+  resolveClawHubBaseUrl,
+  type ClawHubSkillSecurityVerdictItem,
+} from "../../infra/clawhub.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { updateSkillConfigEntry } from "./skills-config-mutations.js";
+import { installUploadedSkillArchive, skillsUploadHandlers } from "./skills-upload.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 function collectSkillBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
@@ -66,7 +73,184 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
   return [...bins].toSorted();
 }
 
+type OpenClawSkillSecurityVerdictItem = Omit<
+  ClawHubSkillSecurityVerdictItem,
+  "decision" | "error" | "security"
+> & {
+  registry: string;
+  decision: string;
+  securityStatus?: string | null;
+  securityPassed?: boolean | null;
+  error?: {
+    code?: string;
+    message?: string;
+  };
+};
+
+function readSecurityStatus(security: unknown): string | null | undefined {
+  if (!security || typeof security !== "object" || !("status" in security)) {
+    return undefined;
+  }
+  const status = (security as { status?: unknown }).status;
+  return typeof status === "string" ? status : undefined;
+}
+
+function readSecurityPassed(security: unknown): boolean | null | undefined {
+  if (!security || typeof security !== "object" || !("passed" in security)) {
+    return undefined;
+  }
+  const passed = (security as { passed?: unknown }).passed;
+  return typeof passed === "boolean" ? passed : undefined;
+}
+
+function projectClawHubVerdictItem(
+  item: ClawHubSkillSecurityVerdictItem,
+  registry: string,
+): OpenClawSkillSecurityVerdictItem {
+  const projected: OpenClawSkillSecurityVerdictItem = {
+    registry,
+    ok: item.ok,
+    decision: item.decision,
+    reasons: item.reasons,
+    requestedSlug: item.requestedSlug,
+    requestedVersion: item.requestedVersion,
+  };
+  if (item.slug !== undefined) {
+    projected.slug = item.slug;
+  }
+  if (item.version !== undefined) {
+    projected.version = item.version;
+  }
+  if (item.displayName !== undefined) {
+    projected.displayName = item.displayName;
+  }
+  if (item.publisherHandle !== undefined) {
+    projected.publisherHandle = item.publisherHandle;
+  }
+  if (item.publisherDisplayName !== undefined) {
+    projected.publisherDisplayName = item.publisherDisplayName;
+  }
+  if (item.createdAt !== undefined) {
+    projected.createdAt = item.createdAt;
+  }
+  if (item.checkedAt !== undefined) {
+    projected.checkedAt = item.checkedAt;
+  }
+  if (item.skillUrl !== undefined) {
+    projected.skillUrl = item.skillUrl;
+  }
+  if (item.securityAuditUrl !== undefined) {
+    projected.securityAuditUrl = item.securityAuditUrl;
+  }
+  const securityStatus = readSecurityStatus(item.security);
+  if (securityStatus !== undefined) {
+    projected.securityStatus = securityStatus;
+  }
+  const securityPassed = readSecurityPassed(item.security);
+  if (securityPassed !== undefined) {
+    projected.securityPassed = securityPassed;
+  }
+  if (item.error) {
+    const error: OpenClawSkillSecurityVerdictItem["error"] = {};
+    if (typeof item.error.code === "string") {
+      error.code = item.error.code;
+    }
+    if (typeof item.error.message === "string") {
+      error.message = item.error.message;
+    }
+    if (Object.keys(error).length > 0) {
+      projected.error = error;
+    }
+  }
+  return projected;
+}
+
+function normalizeAutoVerdictRegistryBase(registry: string): string | null {
+  try {
+    const url = new URL(registry);
+    const normalizedPath = url.pathname.replace(/\/+$/, "");
+    return `${url.origin}${normalizedPath}`;
+  } catch {
+    return null;
+  }
+}
+
+function canAutoFetchVerdictRegistry(registry: string): boolean {
+  const configured = normalizeAutoVerdictRegistryBase(resolveClawHubBaseUrl());
+  const target = normalizeAutoVerdictRegistryBase(registry);
+  return configured !== null && target === configured;
+}
+
+function collectClawHubVerdictTargets(report: ReturnType<typeof buildWorkspaceSkillStatus>) {
+  const targets = new Map<string, { registry: string; slug: string; version: string }>();
+  for (const skill of report.skills) {
+    const link = skill.clawhub;
+    if (!link || link.status !== "linked" || !link.valid) {
+      continue;
+    }
+    if (!canAutoFetchVerdictRegistry(link.registry)) {
+      continue;
+    }
+    const key = `${link.registry}\0${link.slug}\0${link.installedVersion}`;
+    targets.set(key, {
+      registry: link.registry,
+      slug: link.slug,
+      version: link.installedVersion,
+    });
+  }
+  return [...targets.values()];
+}
+
+function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
+  const cfg = context.getRuntimeConfig();
+  const agentIdRaw =
+    params && typeof params === "object" && "agentId" in params
+      ? normalizeOptionalString((params as { agentId?: unknown }).agentId)
+      : undefined;
+  const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
+  if (agentIdRaw) {
+    const knownAgents = listAgentIds(cfg);
+    if (!knownAgents.includes(agentId)) {
+      return {
+        ok: false as const,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
+      };
+    }
+  }
+  return {
+    ok: true as const,
+    cfg,
+    agentId,
+    workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+  };
+}
+
+async function fetchOpenClawSkillSecurityVerdicts(
+  targets: Array<{ registry: string; slug: string; version: string }>,
+): Promise<OpenClawSkillSecurityVerdictItem[]> {
+  const byRegistry = new Map<string, Array<{ slug: string; version: string }>>();
+  for (const target of targets) {
+    const registryTargets = byRegistry.get(target.registry) ?? [];
+    registryTargets.push({ slug: target.slug, version: target.version });
+    byRegistry.set(target.registry, registryTargets);
+  }
+
+  const items: OpenClawSkillSecurityVerdictItem[] = [];
+  for (const [registry, registryTargets] of byRegistry) {
+    const response = await fetchClawHubSkillSecurityVerdicts({
+      baseUrl: registry,
+      items: registryTargets,
+      skipAuth: true,
+    });
+    for (const item of response.items) {
+      items.push(projectClawHubVerdictItem(item, registry));
+    }
+  }
+  return items;
+}
+
 export const skillsHandlers: GatewayRequestHandlers = {
+  ...skillsUploadHandlers,
   "skills.status": ({ params, respond, context }) => {
     if (!validateSkillsStatusParams(params)) {
       respond(
@@ -79,33 +263,114 @@ export const skillsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const cfg = context.getRuntimeConfig();
-    const agentIdRaw = normalizeOptionalString(params?.agentId) ?? "";
-    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
-    if (agentIdRaw) {
-      const knownAgents = listAgentIds(cfg);
-      if (!knownAgents.includes(agentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
-        );
-        return;
-      }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
     }
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const report = buildWorkspaceSkillStatus(workspaceDir, {
-      config: cfg,
+    const report = buildWorkspaceSkillStatus(resolved.workspaceDir, {
+      config: resolved.cfg,
       eligibility: {
         remote: getRemoteSkillEligibility({
           advertiseExecNode: canExecRequestNode({
-            cfg,
-            agentId,
+            cfg: resolved.cfg,
+            agentId: resolved.agentId,
           }),
         }),
       },
     });
     respond(true, report, undefined);
+  },
+  "skills.securityVerdicts": async ({ params, respond, context }) => {
+    if (!validateSkillsSecurityVerdictsParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.securityVerdicts params: ${formatValidationErrors(validateSkillsSecurityVerdictsParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      const report = buildWorkspaceSkillStatus(resolved.workspaceDir, {
+        config: resolved.cfg,
+        eligibility: {
+          remote: getRemoteSkillEligibility({
+            advertiseExecNode: canExecRequestNode({
+              cfg: resolved.cfg,
+              agentId: resolved.agentId,
+            }),
+          }),
+        },
+      });
+      const targets = collectClawHubVerdictTargets(report);
+      if (targets.length === 0) {
+        respond(true, { schema: "openclaw.skills.security-verdicts.v1", items: [] }, undefined);
+        return;
+      }
+      const items = await fetchOpenClawSkillSecurityVerdicts(targets);
+      respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+  "skills.skillCard": ({ params, respond, context }) => {
+    if (!validateSkillsSkillCardParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.skillCard params: ${formatValidationErrors(validateSkillsSkillCardParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    const report = buildWorkspaceSkillStatus(resolved.workspaceDir, {
+      config: resolved.cfg,
+      agentId: resolved.agentId,
+    });
+    const skill = report.skills.find((candidate) => candidate.skillKey === params.skillKey);
+    if (!skill?.skillCard) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `skill card not found for ${params.skillKey}`),
+      );
+      return;
+    }
+    const content = readLocalSkillCardContentSync(skill.baseDir);
+    if (content === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `skill card not readable for ${params.skillKey}`),
+      );
+      return;
+    }
+    respond(
+      true,
+      {
+        schema: "openclaw.skills.skill-card.v1",
+        skillKey: skill.skillKey,
+        path: skill.skillCard.path,
+        sizeBytes: skill.skillCard.sizeBytes,
+        content,
+      },
+      undefined,
+    );
   },
   "skills.bins": ({ params, respond, context }) => {
     if (!validateSkillsBinsParams(params)) {
@@ -218,6 +483,31 @@ export const skillsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (params && typeof params === "object" && "source" in params && params.source === "upload") {
+      const p = params as {
+        source: "upload";
+        uploadId: string;
+        slug: string;
+        force?: boolean;
+        sha256?: string;
+        timeoutMs?: number;
+      };
+      const result = await installUploadedSkillArchive({
+        uploadId: p.uploadId,
+        slug: p.slug,
+        force: Boolean(p.force),
+        sha256: p.sha256,
+        timeoutMs: p.timeoutMs,
+        workspaceDir: workspaceDirRaw,
+        context,
+      });
+      respond(
+        result.ok,
+        result,
+        result.ok ? undefined : errorShape(result.errorCode, result.error),
+      );
+      return;
+    }
     const p = params as {
       name: string;
       installId: string;
@@ -304,55 +594,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       apiKey?: string;
       env?: Record<string, string>;
     };
-    const cfg = context.getRuntimeConfig();
-    const skills = cfg.skills ? { ...cfg.skills } : {};
-    const entries = skills.entries ? { ...skills.entries } : {};
-    const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
-    if (typeof p.enabled === "boolean") {
-      current.enabled = p.enabled;
-    }
-    if (typeof p.apiKey === "string") {
-      const trimmed = normalizeSecretInput(p.apiKey);
-      if (trimmed === REDACTED_SENTINEL) {
-        // Keep the stored secret when a client round-trips a redacted response value.
-      } else if (trimmed) {
-        current.apiKey = trimmed;
-      } else {
-        delete current.apiKey;
-      }
-    }
-    if (p.env && typeof p.env === "object") {
-      const nextEnv = current.env ? { ...current.env } : {};
-      for (const [key, value] of Object.entries(p.env)) {
-        const trimmedKey = key.trim();
-        if (!trimmedKey) {
-          continue;
-        }
-        const trimmedVal = value.trim();
-        if (trimmedVal === REDACTED_SENTINEL) {
-          continue;
-        }
-        if (!trimmedVal) {
-          delete nextEnv[trimmedKey];
-        } else {
-          nextEnv[trimmedKey] = trimmedVal;
-        }
-      }
-      current.env = nextEnv;
-    }
-    entries[p.skillKey] = current;
-    skills.entries = entries;
-    const nextConfig: OpenClawConfig = {
-      ...cfg,
-      skills,
-    };
-    await replaceConfigFile({
-      nextConfig,
-      afterWrite: { mode: "auto" },
-    });
+    const updated = await updateSkillConfigEntry(p);
     respond(
       true,
-      { ok: true, skillKey: p.skillKey, config: redactConfigObject(current) },
+      { ok: true, skillKey: p.skillKey, config: redactConfigObject(updated) },
       undefined,
     );
   },

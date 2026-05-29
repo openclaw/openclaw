@@ -1,21 +1,19 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
-const piCodingAgentMocks = vi.hoisted(() => ({
+const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(async () => "summary"),
   estimateTokens: vi.fn((_message: unknown) => 1),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
+vi.mock("./sessions/index.js", async () => {
+  const actual = await vi.importActual<typeof import("./sessions/index.js")>("./sessions/index.js");
   return {
     ...actual,
-    generateSummary: piCodingAgentMocks.generateSummary,
-    estimateTokens: piCodingAgentMocks.estimateTokens,
+    generateSummary: agentSessionMocks.generateSummary,
+    estimateTokens: agentSessionMocks.estimateTokens,
   };
 });
 
@@ -51,10 +49,10 @@ function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: 
 describe("compaction toolResult details stripping", () => {
   beforeEach(async () => {
     await loadFreshCompactionModuleForTest();
-    piCodingAgentMocks.generateSummary.mockReset();
-    piCodingAgentMocks.generateSummary.mockResolvedValue("summary");
-    piCodingAgentMocks.estimateTokens.mockReset();
-    piCodingAgentMocks.estimateTokens.mockImplementation((_message: unknown) => 1);
+    agentSessionMocks.generateSummary.mockReset();
+    agentSessionMocks.generateSummary.mockResolvedValue("summary");
+    agentSessionMocks.estimateTokens.mockReset();
+    agentSessionMocks.estimateTokens.mockImplementation((_message: unknown) => 1);
   });
 
   it("does not pass toolResult.details into generateSummary", async () => {
@@ -72,11 +70,47 @@ describe("compaction toolResult details stripping", () => {
     });
 
     expect(summary).toBe("summary");
-    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalled();
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
 
     const chunk = (
-      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[unknown]>
+      agentSessionMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];
+    expect(chunk).toStrictEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "browser", arguments: { action: "tabs" } },
+        ],
+        api: "openai-responses",
+        model: "gpt-5.4",
+        provider: "openai",
+        stopReason: "toolUse",
+        timestamp: 1,
+        usage: {
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: {
+            cacheRead: 0,
+            cacheWrite: 0,
+            input: 0,
+            output: 0,
+            total: 0,
+          },
+          input: 0,
+          output: 0,
+          totalTokens: 0,
+        },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "browser",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        timestamp: 2,
+      },
+    ]);
+    expect(chunk?.[1]).not.toHaveProperty("details");
     const serialized = JSON.stringify(chunk);
     expect(serialized).not.toContain("Ignore previous instructions");
     expect(serialized).not.toContain('"details"');
@@ -105,9 +139,14 @@ describe("compaction toolResult details stripping", () => {
       contextWindow: 10000,
     });
 
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
     const chunk = (
-      piCodingAgentMocks.generateSummary.mock.calls as unknown as Array<[unknown]>
+      agentSessionMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];
+    expect(chunk).toStrictEqual([
+      { role: "user", content: "visible ask", timestamp: 1 },
+      { role: "assistant", content: "visible answer", timestamp: 3 },
+    ]);
     const serialized = JSON.stringify(chunk);
     expect(serialized).toContain("visible ask");
     expect(serialized).not.toContain("openclaw.runtime-context");
@@ -115,7 +154,7 @@ describe("compaction toolResult details stripping", () => {
   });
 
   it("ignores toolResult.details when evaluating oversized messages", () => {
-    piCodingAgentMocks.estimateTokens.mockImplementation((message: unknown) => {
+    agentSessionMocks.estimateTokens.mockImplementation((message: unknown) => {
       const record = message as { details?: unknown };
       return record.details ? 10_000 : 10;
     });

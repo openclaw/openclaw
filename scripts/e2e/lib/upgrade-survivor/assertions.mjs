@@ -6,6 +6,7 @@ const SCENARIOS = new Set([
   "base",
   "feishu-channel",
   "bootstrap-persona",
+  "channel-post-core-restore",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
@@ -48,6 +49,21 @@ function resolveHomePath(value) {
 function isPathInside(parent, child) {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isPathInsideManagedNpmProjectPackageRoot(params) {
+  const relative = path.relative(path.join(params.stateDir, "npm", "projects"), params.installPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const segments = relative.split(path.sep);
+  const packageSegments = params.packageName.split("/");
+  return (
+    segments.length === 2 + packageSegments.length &&
+    Boolean(segments[0]) &&
+    segments[1] === "node_modules" &&
+    packageSegments.every((segment, index) => segments[index + 2] === segment)
+  );
 }
 
 function write(file, contents) {
@@ -295,6 +311,15 @@ function assertConfigSurvived() {
     }
   }
 
+  if (getScenario() === "channel-post-core-restore") {
+    const whatsapp = config.channels?.whatsapp;
+    assert(whatsapp?.enabled === true, "post-core channel restore dropped WhatsApp");
+    assert(
+      whatsapp.groups?.["120363000000000000@g.us"]?.requireMention === true,
+      "post-core channel restore changed WhatsApp group config",
+    );
+  }
+
   if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
     const matrix = config.channels?.matrix;
     assert(matrix?.enabled === true, "matrix enabled flag changed");
@@ -389,9 +414,14 @@ function readInstalledPluginIndex() {
 function assertExternalPluginInstall(records, pluginId, packageName) {
   const record = records[pluginId];
   assert(record, `configured external ${pluginId} plugin install record missing`);
+  const installedFromNpm = record.source === "npm";
+  const installedFromOfficialClawHubNpmPack =
+    record.source === "clawhub" &&
+    record.clawhubChannel === "official" &&
+    record.artifactKind === "npm-pack";
   assert(
-    record.source === "npm",
-    `configured external ${pluginId} plugin must be installed from npm, got: ${record.source}`,
+    installedFromNpm || installedFromOfficialClawHubNpmPack,
+    `configured external ${pluginId} plugin must be installed from npm or official ClawHub npm-pack, got: ${record.source}`,
   );
   const installPath = resolveHomePath(record.installPath);
   assert(
@@ -411,14 +441,26 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
     packageJson.name === packageName,
     `configured external ${pluginId} package name changed: ${packageJson.name}`,
   );
-  const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+  if (installedFromNpm) {
+    const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+    assert(
+      isPathInsideManagedNpmProjectPackageRoot({ stateDir, installPath, packageName }),
+      `configured external ${pluginId} npm install path outside managed npm project root: ${installPath}`,
+    );
+    assert(
+      String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
+      `configured external ${pluginId} plugin npm spec changed`,
+    );
+    return;
+  }
   assert(
-    isPathInside(npmRoot, installPath),
-    `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
+    record.clawhubPackage === packageName,
+    `configured external ${pluginId} ClawHub package changed: ${record.clawhubPackage}`,
   );
+  const extensionsRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "extensions");
   assert(
-    String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
-    `configured external ${pluginId} plugin npm spec changed`,
+    isPathInside(extensionsRoot, installPath),
+    `configured external ${pluginId} ClawHub install path outside managed extensions root: ${installPath}`,
   );
 }
 
@@ -433,16 +475,34 @@ function assertConfiguredPluginInstalls() {
   }
   const index = readInstalledPluginIndex();
   const records = index.installRecords ?? {};
-  const matrix = records.matrix;
-  const bundledMatrix = (index.plugins ?? []).find((plugin) => plugin?.pluginId === "matrix");
-  assert(!matrix, "internal matrix plugin should not be installed externally");
-  assert(bundledMatrix, "configured bundled matrix plugin is missing from the plugin index");
-  assert(bundledMatrix.enabled !== false, "configured bundled matrix plugin is disabled");
-  const brave = (index.plugins ?? []).find((plugin) => plugin?.pluginId === "brave");
-  assert(brave, "configured external brave plugin is missing from the plugin index");
-  assert(brave.enabled !== false, "configured external brave plugin is disabled");
-  assertExternalPluginInstall(records, "brave", "@openclaw/brave-plugin");
+  assertOptionalConfiguredPluginIndex(records, index.plugins ?? [], {
+    bundled: true,
+    packageName: "@openclaw/matrix",
+    pluginId: "matrix",
+  });
+  assertOptionalConfiguredPluginIndex(records, index.plugins ?? [], {
+    packageName: "@openclaw/brave-plugin",
+    pluginId: "brave",
+  });
   assert(!records.telegram, "internal telegram plugin should not be installed externally");
+}
+
+function assertOptionalConfiguredPluginIndex(
+  records,
+  plugins,
+  { bundled = false, packageName, pluginId },
+) {
+  const record = records[pluginId];
+  const plugin = plugins.find((entry) => entry?.pluginId === pluginId);
+  if (record) {
+    assertExternalPluginInstall(records, pluginId, packageName);
+  }
+  if (plugin) {
+    assert(
+      plugin.enabled !== false,
+      `configured ${bundled ? "bundled" : "external"} ${pluginId} plugin is disabled`,
+    );
+  }
 }
 
 function assertStatusJson([file]) {

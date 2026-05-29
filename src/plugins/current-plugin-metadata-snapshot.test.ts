@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  captureCurrentPluginMetadataSnapshotState,
   clearCurrentPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshot,
+  restoreCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -14,11 +16,13 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 function createSnapshot(
   params: {
     config?: Parameters<typeof resolveInstalledPluginIndexPolicyHash>[0];
+    registrySource?: PluginMetadataSnapshot["registrySource"];
     workspaceDir?: string;
   } = {},
 ): PluginMetadataSnapshot {
   return {
     policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+    ...(params.registrySource ? { registrySource: params.registrySource } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index: {
       version: 1,
@@ -139,7 +143,7 @@ describe("current plugin metadata snapshot", () => {
     ).toBe(snapshot);
   });
 
-  it("rejects a current snapshot when env-resolved plugin load paths change", () => {
+  it("reuses exact cached config when env-resolved plugin load paths change before reload", () => {
     const config = { plugins: { load: { paths: ["~/plugins"] } } };
     const snapshot = createSnapshot({ config });
     const snapshotEnv = {
@@ -153,10 +157,10 @@ describe("current plugin metadata snapshot", () => {
     setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
 
     expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
-    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
+    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBe(snapshot);
   });
 
-  it("rejects a current snapshot when env-resolved plugin roots change", () => {
+  it("reuses exact cached config when env-resolved plugin roots change before reload", () => {
     const config = {};
     const snapshot = createSnapshot({ config });
     const snapshotEnv = {
@@ -170,7 +174,47 @@ describe("current plugin metadata snapshot", () => {
     setCurrentPluginMetadataSnapshot(snapshot, { config, env: snapshotEnv });
 
     expect(getCurrentPluginMetadataSnapshot({ config, env: snapshotEnv })).toBe(snapshot);
-    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBeUndefined();
+    expect(getCurrentPluginMetadataSnapshot({ config, env: requestedEnv })).toBe(snapshot);
+  });
+
+  it("reuses exact cached config after in-place policy changes before reload", () => {
+    const config = { plugins: { allow: ["demo"] } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+
+    config.plugins.allow = ["other"];
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+  });
+
+  it("reuses exact cached config after in-place load path changes before reload", () => {
+    const config = { plugins: { load: { paths: ["/plugins/one"] } } };
+    const snapshot = createSnapshot({ config });
+    setCurrentPluginMetadataSnapshot(snapshot, { config });
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+
+    config.plugins.load.paths.push("/plugins/two");
+
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBe(snapshot);
+  });
+
+  it("reuses exact cached config after in-place env root changes before reload", () => {
+    const config = {};
+    const snapshot = createSnapshot({ config });
+    const env = {
+      HOME: "/home/snapshot",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env });
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(snapshot);
+
+    env.HOME = "/home/requested";
+
+    expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(snapshot);
   });
 
   it("keeps source-policy compatibility when storing an auto-enabled runtime config", () => {
@@ -212,6 +256,30 @@ describe("current plugin metadata snapshot", () => {
     clearCurrentPluginMetadataSnapshot();
 
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+  });
+
+  it("keeps derived registry snapshots as the current process snapshot", () => {
+    const persisted = createSnapshot({ registrySource: "persisted" });
+    const derived = createSnapshot({ registrySource: "derived" });
+    setCurrentPluginMetadataSnapshot(persisted);
+    setCurrentPluginMetadataSnapshot(derived);
+
+    expect(getCurrentPluginMetadataSnapshot()).toBe(derived);
+  });
+
+  it("restores a captured current snapshot state", () => {
+    const firstConfig = { plugins: { allow: ["first"] } };
+    const secondConfig = { plugins: { allow: ["second"] } };
+    const first = createSnapshot({ config: firstConfig });
+    const second = createSnapshot({ config: secondConfig });
+    setCurrentPluginMetadataSnapshot(first, { config: firstConfig });
+    const captured = captureCurrentPluginMetadataSnapshotState();
+
+    setCurrentPluginMetadataSnapshot(second, { config: secondConfig });
+    restoreCurrentPluginMetadataSnapshotState(captured);
+
+    expect(getCurrentPluginMetadataSnapshot({ config: firstConfig })).toBe(first);
+    expect(getCurrentPluginMetadataSnapshot({ config: secondConfig })).toBeUndefined();
   });
 
   it("clears the current snapshot when the persisted installed index changes", () => {

@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedBrowserConfig } from "./config.js";
 
 export type BrowserExecutable = {
@@ -14,6 +14,9 @@ export type BrowserExecutable = {
 };
 
 const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
+const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
+const BROWSER_VERSION_TIMEOUT_MS = 6000;
+const MAC_PLISTBUDDY_TIMEOUT_MS = 800;
 
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
@@ -485,6 +488,48 @@ function findFirstChromeExecutable(candidates: string[]): BrowserExecutable | nu
   return null;
 }
 
+function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecutable> {
+  const candidates: Array<BrowserExecutable> = [];
+  for (const browserPath of getPlaywrightBrowserCachePaths()) {
+    for (const entry of readSortedDirNames(browserPath)) {
+      if (!entry.startsWith("chromium-")) {
+        continue;
+      }
+      for (const linuxDir of ["chrome-linux64", "chrome-linux"]) {
+        candidates.push({
+          kind: "chromium",
+          path: path.join(browserPath, entry, linuxDir, "chrome"),
+        });
+      }
+    }
+  }
+  return candidates;
+}
+
+function getPlaywrightBrowserCachePaths(): string[] {
+  const configured = normalizeOptionalString(process.env[PLAYWRIGHT_BROWSERS_PATH_ENV]);
+  const candidates = [
+    configured && configured !== "0" ? configured : null,
+    path.join(os.homedir(), ".cache", "ms-playwright"),
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((candidate): candidate is string => {
+    if (!candidate || seen.has(candidate)) {
+      return false;
+    }
+    seen.add(candidate);
+    return true;
+  });
+}
+
+function readSortedDirNames(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir).toSorted();
+  } catch {
+    return [];
+  }
+}
+
 export function findChromeExecutableMac(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     {
@@ -568,6 +613,7 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
     { kind: "chromium", path: "/usr/lib/chromium/chromium" },
     { kind: "chromium", path: "/usr/lib/chromium-browser/chromium-browser" },
     { kind: "chromium", path: "/snap/bin/chromium" },
+    ...findPlaywrightChromiumExecutableCandidatesLinux(),
   ];
 
   return findFirstExecutable(candidates);
@@ -688,11 +734,40 @@ export function resolveGoogleChromeExecutableForPlatform(
 }
 
 export function readBrowserVersion(executablePath: string): string | null {
-  const output = execText(executablePath, ["--version"], 2000);
+  if (process.platform === "darwin") {
+    const bundleVersion = readMacBundleBrowserVersion(executablePath);
+    if (bundleVersion) {
+      return bundleVersion;
+    }
+  }
+
+  const output = execText(executablePath, ["--version"], BROWSER_VERSION_TIMEOUT_MS);
   if (!output) {
     return null;
   }
   return output.replace(/\s+/g, " ").trim();
+}
+
+function readMacBundleBrowserVersion(executablePath: string): string | null {
+  const appBundlePath = resolveMacAppBundlePath(executablePath);
+  if (!appBundlePath) {
+    return null;
+  }
+  const plistPath = path.join(appBundlePath, "Contents", "Info.plist");
+  return execText(
+    "/usr/libexec/PlistBuddy",
+    ["-c", "Print :CFBundleShortVersionString", plistPath],
+    MAC_PLISTBUDDY_TIMEOUT_MS,
+  );
+}
+
+function resolveMacAppBundlePath(executablePath: string): string | null {
+  const parts = path.normalize(executablePath).split(path.sep);
+  const appIndex = parts.findIndex((part) => part.endsWith(".app"));
+  if (appIndex < 0) {
+    return null;
+  }
+  return parts.slice(0, appIndex + 1).join(path.sep) || path.sep;
 }
 
 export function parseBrowserMajorVersion(rawVersion: string | null | undefined): number | null {

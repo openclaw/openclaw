@@ -51,8 +51,8 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.33.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
+  OPENCLAW_CI_OPENAI_FALLBACK_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_FALLBACK_MODEL || 'openai/gpt-5.4' }}
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -60,13 +60,17 @@ jobs:
   authorize_actor:
     name: Authorize workflow actor
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
     steps:
       - name: Require maintainer-level repository access
+        id: permission
         uses: actions/github-script@v8
         with:
           script: |
             if (context.eventName === "schedule") {
               core.info("Scheduled default-branch QA run; actor permission check is only required for manual dispatch.");
+              core.setOutput("authorized", "true");
               return;
             }
             const allowed = new Set(["admin", "maintain", "write"]);
@@ -79,14 +83,18 @@ jobs:
             const permission = data.permission;
             core.info(`Actor ${context.actor} permission: ${permission}`);
             if (!allowed.has(permission)) {
-              core.setFailed(
+              core.notice(
                 `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
               );
+              core.setOutput("authorized", "false");
+              return;
             }
+            core.setOutput("authorized", "true");
 
   validate_selected_ref:
     name: Validate selected ref
     needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
@@ -174,10 +182,11 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run OpenAI candidate lane
@@ -187,35 +196,124 @@ jobs:
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model openai/gpt-5.4-alt \
-            --output-dir .artifacts/qa-e2e/gpt54
+            --alt-model openai/gpt-5.5-alt \
+            --output-dir .artifacts/qa-e2e/openai-candidate
 
-      - name: Run Opus 4.6 lane
+      - name: Run Opus 4.8 lane
         run: |
           pnpm openclaw qa suite \
             --provider-mode mock-openai \
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
-            --model anthropic/claude-opus-4-6 \
+            --model anthropic/claude-opus-4-8 \
             --alt-model anthropic/claude-sonnet-4-6 \
-            --output-dir .artifacts/qa-e2e/opus46
+            --output-dir .artifacts/qa-e2e/anthropic-baseline
 
       - name: Generate parity report
         run: |
           pnpm openclaw qa parity-report \
             --repo-root . \
-            --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
-            --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
+            --candidate-summary .artifacts/qa-e2e/openai-candidate/qa-suite-summary.json \
+            --baseline-summary .artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json \
             --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --baseline-label anthropic/claude-opus-4-6 \
+            --baseline-label anthropic/claude-opus-4-8 \
             --output-dir .artifacts/qa-e2e/parity
 
       - name: Upload parity artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qa-parity-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
+  run_live_runtime_token_efficiency:
+    name: Run live runtime token-efficiency lane
+    needs: [authorize_actor, validate_selected_ref]
+    if: github.event_name == 'schedule'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    environment: qa-live-shared
+    env:
+      QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+      OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Validate required QA credential env
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing required OPENAI_API_KEY." >&2
+            exit 1
+          fi
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build
+
+      - name: Run live runtime parity lane
+        id: run_lane
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/runtime-token-efficiency-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa suite \
+            --repo-root . \
+            --provider-mode live-frontier \
+            --runtime-parity-tier standard \
+            --runtime-parity-tier live-only \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
+            --runtime-pair openclaw,codex \
+            --fast \
+            --allow-failures \
+            --output-dir "${output_dir}/runtime-suite"
+
+      - name: Generate live runtime token-efficiency report
+        if: always() && steps.run_lane.outcome != 'skipped' && steps.run_lane.outcome != 'cancelled'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --runtime-axis \
+            --token-efficiency \
+            --summary "${{ steps.run_lane.outputs.output_dir }}/runtime-suite/qa-suite-summary.json" \
+            --output-dir "${{ steps.run_lane.outputs.output_dir }}/runtime-report"
+
+      - name: Upload live runtime token-efficiency artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: qa-live-runtime-token-efficiency-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: warn
 
@@ -238,7 +336,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -254,6 +351,8 @@ jobs:
           fi
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Matrix live lane
@@ -275,7 +374,7 @@ jobs:
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
             --profile "${INPUT_MATRIX_PROFILE}" \
             --fast
           )
@@ -287,7 +386,7 @@ jobs:
 
       - name: Upload Matrix QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qa-live-matrix-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
@@ -322,7 +421,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -338,6 +436,8 @@ jobs:
           fi
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Matrix live lane shard
@@ -358,7 +458,7 @@ jobs:
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
             --profile "${{ matrix.profile }}" \
             --fast
           )
@@ -370,7 +470,7 @@ jobs:
 
       - name: Upload Matrix QA shard artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qa-live-matrix-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
@@ -395,7 +495,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -420,6 +519,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Telegram live lane
@@ -429,6 +530,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario || '' }}
@@ -455,7 +557,7 @@ jobs:
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
             --fast \
             --credential-source convex \
             --credential-role ci \
@@ -463,7 +565,7 @@ jobs:
 
       - name: Upload Telegram QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qa-live-telegram-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
@@ -488,7 +590,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -513,6 +614,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Discord live lane
@@ -547,8 +650,8 @@ jobs:
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
-            --model openai/gpt-5.4 \
-            --alt-model openai/gpt-5.4 \
+            --model openai/gpt-5.5 \
+            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
             --fast \
             --credential-source convex \
             --credential-role ci \
@@ -556,7 +659,7 @@ jobs:
 
       - name: Upload Discord QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qa-live-discord-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
@@ -568,6 +671,9 @@ jobs:
     needs: [authorize_actor, validate_selected_ref]
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
+    concurrency:
+      group: qa-live-whatsapp-shared
+      cancel-in-progress: false
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
@@ -581,7 +687,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -606,6 +711,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run WhatsApp live lane
@@ -641,7 +748,7 @@ jobs:
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
             --fast \
             --credential-source convex \
             --credential-role ci \
@@ -649,7 +756,7 @@ jobs:
 
       - name: Upload WhatsApp QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qa-live-whatsapp-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
@@ -674,7 +781,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate required QA credential env
@@ -699,6 +805,8 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
       - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
       - name: Run Slack live lane
@@ -734,7 +842,7 @@ jobs:
             --output-dir "${output_dir}" \
             --provider-mode live-frontier \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
             --fast \
             --credential-source convex \
             --credential-role ci \
@@ -742,7 +850,7 @@ jobs:
 
       - name: Upload Slack QA artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: qa-live-slack-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}

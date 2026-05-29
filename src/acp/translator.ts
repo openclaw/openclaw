@@ -33,12 +33,13 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
-import { listThinkingLevels } from "../auto-reply/thinking.js";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
 import {
   createFixedWindowRateLimiter,
+  resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -56,7 +57,17 @@ import {
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
-import { readBool, readNumber, readString } from "./meta.js";
+import { readBool, readNonNegativeInteger, readNumber, readString } from "./meta.js";
+import {
+  buildAcpPermissionRequest,
+  parseGatewayExecApprovalEventData,
+  parseGatewayExecApprovalRequestEventPayload,
+  resolveGatewayDecisionFromPermissionOutcome,
+  type GatewayExecApprovalDecision,
+  type GatewayExecApprovalDetails,
+  type GatewayExecApprovalEvent,
+} from "./permission-relay.js";
+import { toAcpSessionLineageMeta, type AcpSessionLineageMeta } from "./session-lineage-meta.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
 import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
@@ -116,6 +127,20 @@ type PendingPrompt = {
   toolCalls?: Map<string, PendingToolCall>;
 };
 
+type ClientCapabilityState = {
+  readTextFile: boolean;
+  writeTextFile: boolean;
+  terminal: boolean;
+};
+
+type PendingApprovalRelay = {
+  approvalId: string;
+  runId: string;
+  sessionId: string;
+  sessionKey: string;
+  state: "active" | "completed";
+};
+
 type PendingToolCall = {
   kind: ToolKind;
   locations?: ToolCallLocation[];
@@ -130,6 +155,16 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
 
 type GatewaySessionPresentationRow = Pick<
   GatewaySessionRow,
+  | "key"
+  | "kind"
+  | "channel"
+  | "parentSessionKey"
+  | "spawnedBy"
+  | "spawnDepth"
+  | "subagentRole"
+  | "subagentControlScope"
+  | "spawnedWorkspaceDir"
+  | "spawnedCwd"
   | "displayName"
   | "label"
   | "derivedTitle"
@@ -157,12 +192,23 @@ type SessionPresentation = {
 type SessionMetadata = {
   title?: string | null;
   updatedAt?: string | null;
+  _meta?: AcpSessionLineageMeta;
 };
 
 type SessionUsageSnapshot = {
   size: number;
   used: number;
 };
+
+function normalizeClientCapabilities(
+  capabilities: InitializeRequest["clientCapabilities"] | undefined,
+): ClientCapabilityState {
+  return {
+    readTextFile: capabilities?.fs?.readTextFile === true,
+    writeTextFile: capabilities?.fs?.writeTextFile === true,
+    terminal: capabilities?.terminal === true,
+  };
+}
 
 function isAdminScopeProvenanceRejection(err: unknown): boolean {
   if (!(err instanceof Error)) {
@@ -325,7 +371,7 @@ function buildSessionPresentation(params: {
     ...params.overrides,
   };
   const availableLevelIds: string[] = row.thinkingLevels?.map((level) => level.id) ?? [
-    ...listThinkingLevels(row.modelProvider, row.model),
+    ...BASE_THINKING_LEVELS,
   ];
   const currentModeId = normalizeOptionalString(row.thinkingLevel) || "adaptive";
   if (!availableLevelIds.includes(currentModeId)) {
@@ -460,7 +506,16 @@ function buildSessionMetadata(params: {
     typeof params.row?.updatedAt === "number" && Number.isFinite(params.row.updatedAt)
       ? new Date(params.row.updatedAt).toISOString()
       : null;
-  return { title, updatedAt };
+  return {
+    title,
+    updatedAt,
+    _meta: toAcpSessionLineageMeta(
+      params.row ?? {
+        key: params.sessionKey,
+        kind: "unknown",
+      },
+    ),
+  };
 }
 
 function buildSessionUsageSnapshot(
@@ -531,6 +586,9 @@ export class AcpGatewayAgent implements Agent {
   private eventLedger: AcpEventLedger;
   private sessionCreateRateLimiter: FixedWindowRateLimiter;
   private pendingPrompts = new Map<string, PendingPrompt>();
+  private approvalRelays = new Map<string, PendingApprovalRelay>();
+  private clientCapabilities: ClientCapabilityState = normalizeClientCapabilities(undefined);
+  private clientInfo: InitializeRequest["clientInfo"] = null;
   private disconnectTimer: NodeJS.Timeout | null = null;
   private activeDisconnectContext: DisconnectContext | null = null;
   private disconnectGeneration = 0;
@@ -555,19 +613,37 @@ export class AcpGatewayAgent implements Agent {
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
     this.eventLedger = opts.eventLedger ?? createInMemoryAcpEventLedger();
     this.sessionCreateRateLimiter = createFixedWindowRateLimiter({
-      maxRequests: Math.max(
-        1,
-        opts.sessionCreateRateLimit?.maxRequests ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+      maxRequests: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.maxRequests,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+        { min: 1 },
       ),
-      windowMs: Math.max(
-        1_000,
-        opts.sessionCreateRateLimit?.windowMs ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+      windowMs: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.windowMs,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+        { min: 1_000 },
       ),
     });
   }
 
   start(): void {
     this.log("ready");
+  }
+
+  supportsClientReadTextFile(): boolean {
+    return this.clientCapabilities.readTextFile;
+  }
+
+  supportsClientWriteTextFile(): boolean {
+    return this.clientCapabilities.writeTextFile;
+  }
+
+  supportsClientTerminal(): boolean {
+    return this.clientCapabilities.terminal;
+  }
+
+  getClientInfo(): InitializeRequest["clientInfo"] {
+    return this.clientInfo;
   }
 
   handleGatewayReconnect(): void {
@@ -602,12 +678,18 @@ export class AcpGatewayAgent implements Agent {
       await this.handleChatEvent(evt);
       return;
     }
+    if (evt.event === "exec.approval.requested") {
+      this.handleExecApprovalRequestEvent(evt);
+      return;
+    }
     if (evt.event === "agent") {
       await this.handleAgentEvent(evt);
     }
   }
 
-  async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
+  async initialize(params: InitializeRequest): Promise<InitializeResponse> {
+    this.clientCapabilities = normalizeClientCapabilities(params.clientCapabilities);
+    this.clientInfo = params.clientInfo ?? null;
     return {
       protocolVersion: await getAcpProtocolVersion(),
       agentCapabilities: {
@@ -637,7 +719,7 @@ export class AcpGatewayAgent implements Agent {
     this.enforceSessionCreateRateLimit("newSession");
 
     const sessionId = randomUUID();
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
       fallbackKey: `acp:${sessionId}`,
@@ -670,7 +752,7 @@ export class AcpGatewayAgent implements Agent {
       this.enforceSessionCreateRateLimit("loadSession");
     }
 
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
     const exactLedgerReplay: AcpEventLedgerReplay = hasExplicitRouting
       ? { complete: false, events: [] }
@@ -737,7 +819,7 @@ export class AcpGatewayAgent implements Agent {
       throw new Error("ACP session list cursor does not match the cwd filter.");
     }
 
-    const pageSize = resolveListSessionsPageSize(params._meta);
+    const pageSize = resolveListSessionsPageSize(params["_meta"]);
     const start = cursor.offset;
     const end = start + pageSize;
     let fetchLimit = end + 1;
@@ -753,7 +835,10 @@ export class AcpGatewayAgent implements Agent {
           if (!requestedCwd) {
             return true;
           }
-          return normalizeOptionalString(session.spawnedWorkspaceDir) === requestedCwd;
+          return (
+            (normalizeOptionalString(session.spawnedCwd) ??
+              normalizeOptionalString(session.spawnedWorkspaceDir)) === requestedCwd
+          );
         })
         .map((session) => this.mapGatewaySessionToAcpSessionInfo(session, fallbackCwd));
       if (
@@ -788,7 +873,7 @@ export class AcpGatewayAgent implements Agent {
       this.enforceSessionCreateRateLimit("resumeSession");
     }
 
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     const fallbackKey = existingSession?.sessionKey ?? params.sessionId;
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
@@ -906,7 +991,7 @@ export class AcpGatewayAgent implements Agent {
       this.sessionStore.cancelActiveRun(params.sessionId);
     }
 
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     // Pass MAX_PROMPT_BYTES so extractTextFromPrompt rejects oversized content
     // block-by-block, before the full string is ever assembled in memory (CWE-400)
     const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
@@ -939,9 +1024,9 @@ export class AcpGatewayAgent implements Agent {
       message,
       attachments: attachments.length > 0 ? attachments : undefined,
       idempotencyKey: runId,
-      thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
-      deliver: readBool(params._meta, ["deliver"]),
-      timeoutMs: readNumber(params._meta, ["timeoutMs"]),
+      thinking: readString(params["_meta"], ["thinking", "thinkingLevel"]),
+      deliver: readBool(params["_meta"], ["deliver"]),
+      timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
     };
 
     return new Promise<PromptResponse>((resolve, reject) => {
@@ -995,6 +1080,7 @@ export class AcpGatewayAgent implements Agent {
         if (isGatewayCloseError(err) && this.getPendingPrompt(params.sessionId, runId)) {
           return;
         }
+        this.clearApprovalRelaysForPrompt(params.sessionId, runId, { denyActive: true });
         this.pendingPrompts.delete(params.sessionId);
         this.sessionStore.clearActiveRun(params.sessionId);
         if (this.pendingPrompts.size === 0) {
@@ -1042,6 +1128,11 @@ export class AcpGatewayAgent implements Agent {
     const data = payload.data as Record<string, unknown> | undefined;
     const sessionKey = payload.sessionKey as string | undefined;
     if (!stream || !data || !sessionKey) {
+      return;
+    }
+
+    if (stream === "approval") {
+      await this.handleApprovalEvent({ sessionKey, runId, data });
       return;
     }
 
@@ -1136,6 +1227,163 @@ export class AcpGatewayAgent implements Agent {
           locations: extractToolCallLocations(toolState?.locations, data.result),
         },
       });
+    }
+  }
+
+  private async handleApprovalEvent(params: {
+    sessionKey: string;
+    runId?: string;
+    data: Record<string, unknown>;
+  }): Promise<void> {
+    const approvalEvent = parseGatewayExecApprovalEventData(params.data);
+    if (!approvalEvent) {
+      return;
+    }
+    this.startApprovalRelay({
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+      approvalEvent,
+    });
+  }
+
+  private handleExecApprovalRequestEvent(evt: EventFrame): void {
+    const payload = evt.payload as Record<string, unknown> | undefined;
+    if (!payload) {
+      return;
+    }
+    const approvalEvent = parseGatewayExecApprovalRequestEventPayload(payload);
+    if (!approvalEvent) {
+      return;
+    }
+    const request = payload.request as Record<string, unknown> | undefined;
+    const sessionKey = normalizeOptionalString(request?.sessionKey);
+    if (!sessionKey) {
+      return;
+    }
+    this.startApprovalRelay({ sessionKey, approvalEvent });
+  }
+
+  private startApprovalRelay(params: {
+    sessionKey: string;
+    runId?: string;
+    approvalEvent: GatewayExecApprovalEvent;
+  }): void {
+    const approvalEvent = params.approvalEvent;
+    if (this.approvalRelays.has(approvalEvent.approvalId)) {
+      return;
+    }
+
+    const pending = params.runId
+      ? this.findPendingBySessionKey(params.sessionKey, params.runId)
+      : this.findUniquePendingBySessionKey(params.sessionKey);
+    if (!pending) {
+      return;
+    }
+
+    const relay: PendingApprovalRelay = {
+      approvalId: approvalEvent.approvalId,
+      runId: pending.idempotencyKey,
+      sessionId: pending.sessionId,
+      sessionKey: pending.sessionKey,
+      state: "active",
+    };
+    this.approvalRelays.set(relay.approvalId, relay);
+    void this.runApprovalRelay(relay, approvalEvent);
+  }
+
+  private async runApprovalRelay(
+    relay: PendingApprovalRelay,
+    approvalEvent: GatewayExecApprovalEvent,
+  ): Promise<void> {
+    let resolved = false;
+    try {
+      const details = await this.getGatewayApprovalDetails(relay.approvalId);
+      if (!this.isApprovalRelayActive(relay)) {
+        resolved = await this.resolveGatewayApproval(relay.approvalId, "deny");
+        return;
+      }
+
+      const request = buildAcpPermissionRequest({
+        sessionId: relay.sessionId,
+        event: approvalEvent,
+        details,
+      });
+      let decision: GatewayExecApprovalDecision | undefined;
+      try {
+        const response = await this.connection.requestPermission(request);
+        decision = resolveGatewayDecisionFromPermissionOutcome(response, request.options);
+      } catch (err) {
+        this.log(`approval relay request failed for ${relay.approvalId}: ${String(err)}`);
+      }
+
+      const selectedDecision = this.isApprovalRelayActive(relay) && decision ? decision : "deny";
+      resolved = await this.resolveGatewayApproval(relay.approvalId, selectedDecision);
+    } finally {
+      const current = this.approvalRelays.get(relay.approvalId);
+      if (current === relay && current.state === "active") {
+        if (resolved) {
+          // Keep completed relays until prompt cleanup as replay/dedup sentinels.
+          current.state = "completed";
+        } else {
+          this.approvalRelays.delete(relay.approvalId);
+        }
+      }
+    }
+  }
+
+  private async getGatewayApprovalDetails(
+    approvalId: string,
+  ): Promise<GatewayExecApprovalDetails | null> {
+    try {
+      return await this.gateway.request<GatewayExecApprovalDetails>("exec.approval.get", {
+        id: approvalId,
+      });
+    } catch (err) {
+      this.log(`approval relay hydrate failed for ${approvalId}: ${String(err)}`);
+      return null;
+    }
+  }
+
+  private async resolveGatewayApproval(
+    approvalId: string,
+    decision: GatewayExecApprovalDecision,
+  ): Promise<boolean> {
+    try {
+      await this.gateway.request("exec.approval.resolve", {
+        id: approvalId,
+        decision,
+      });
+      return true;
+    } catch (err) {
+      this.log(`approval relay resolve failed for ${approvalId}: ${String(err)}`);
+      return false;
+    }
+  }
+
+  private isApprovalRelayActive(relay: PendingApprovalRelay): boolean {
+    return (
+      this.approvalRelays.get(relay.approvalId) === relay &&
+      relay.state === "active" &&
+      this.getPendingPrompt(relay.sessionId, relay.runId) !== undefined
+    );
+  }
+
+  private clearApprovalRelaysForPrompt(
+    sessionId: string,
+    runId?: string,
+    opts: { denyActive?: boolean } = {},
+  ): void {
+    for (const [approvalId, relay] of this.approvalRelays) {
+      if (relay.sessionId !== sessionId) {
+        continue;
+      }
+      if (runId && relay.runId !== runId) {
+        continue;
+      }
+      this.approvalRelays.delete(approvalId);
+      if (opts.denyActive && relay.state === "active") {
+        void this.resolveGatewayApproval(approvalId, "deny");
+      }
     }
   }
 
@@ -1250,6 +1498,7 @@ export class AcpGatewayAgent implements Agent {
     pending: PendingPrompt,
     stopReason: StopReason,
   ): Promise<void> {
+    this.clearApprovalRelaysForPrompt(sessionId, pending.idempotencyKey, { denyActive: true });
     this.pendingPrompts.delete(sessionId);
     this.sessionStore.clearActiveRun(sessionId);
     if (this.pendingPrompts.size === 0) {
@@ -1298,6 +1547,20 @@ export class AcpGatewayAgent implements Agent {
     return undefined;
   }
 
+  private findUniquePendingBySessionKey(sessionKey: string): PendingPrompt | undefined {
+    let match: PendingPrompt | undefined;
+    for (const pending of this.pendingPrompts.values()) {
+      if (pending.sessionKey !== sessionKey) {
+        continue;
+      }
+      if (match) {
+        return undefined;
+      }
+      match = pending;
+    }
+    return match;
+  }
+
   private reconcilePendingSessionKey(pending: PendingPrompt, sessionKey: string): void {
     if (pending.sessionKey === sessionKey) {
       return;
@@ -1332,6 +1595,9 @@ export class AcpGatewayAgent implements Agent {
     if (currentPending !== pending) {
       return;
     }
+    this.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
+      denyActive: true,
+    });
     this.pendingPrompts.delete(pending.sessionId);
     this.sessionStore.clearActiveRun(pending.sessionId);
     if (this.pendingPrompts.size === 0) {
@@ -1640,17 +1906,16 @@ export class AcpGatewayAgent implements Agent {
     session: GatewaySessionRow,
     fallbackCwd: string,
   ): SessionInfo {
-    const cwd = normalizeOptionalString(session.spawnedWorkspaceDir) ?? fallbackCwd;
+    const cwd =
+      normalizeOptionalString(session.spawnedCwd) ??
+      normalizeOptionalString(session.spawnedWorkspaceDir) ??
+      fallbackCwd;
     return {
       sessionId: session.key,
       cwd,
       title: session.derivedTitle ?? session.displayName ?? session.label ?? session.key,
       updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
-      _meta: {
-        sessionKey: session.key,
-        kind: session.kind,
-        channel: session.channel,
-      },
+      _meta: toAcpSessionLineageMeta(session),
     };
   }
 
@@ -1678,6 +1943,9 @@ export class AcpGatewayAgent implements Agent {
     }
 
     if (pending) {
+      this.clearApprovalRelaysForPrompt(session.sessionId, pending.idempotencyKey, {
+        denyActive: true,
+      });
       this.pendingPrompts.delete(session.sessionId);
       if (this.pendingPrompts.size === 0) {
         this.clearDisconnectTimer();
@@ -1699,6 +1967,16 @@ export class AcpGatewayAgent implements Agent {
       return undefined;
     }
     return {
+      key: session.key,
+      kind: session.kind,
+      channel: session.channel,
+      parentSessionKey: session.parentSessionKey,
+      spawnedBy: session.spawnedBy,
+      spawnDepth: session.spawnDepth,
+      subagentRole: session.subagentRole,
+      subagentControlScope: session.subagentControlScope,
+      spawnedWorkspaceDir: session.spawnedWorkspaceDir,
+      spawnedCwd: session.spawnedCwd,
       displayName: session.displayName,
       label: session.label,
       derivedTitle: session.derivedTitle,

@@ -210,6 +210,29 @@ function makeRuntime(): RuntimeEnv {
   };
 }
 
+function promptModelAllowlistOptions(index = 0) {
+  return mocks.promptModelAllowlist.mock.calls[index]?.[0] as
+    | {
+        allowedKeys?: string[];
+        initialSelections?: string[];
+        loadCatalog?: boolean;
+        message?: string;
+        preferredProvider?: string;
+        providerScopedCatalog?: boolean;
+      }
+    | undefined;
+}
+
+function promptDefaultModelOptions(index = 0) {
+  return mocks.promptDefaultModel.mock.calls[index]?.[0] as
+    | {
+        browseCatalogOnDemand?: boolean;
+        loadCatalog?: boolean;
+        preferredProvider?: string;
+      }
+    | undefined;
+}
+
 const noopPrompter = {} as WizardPrompter;
 
 function createKilocodeProvider() {
@@ -318,13 +341,12 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedKeys: ["anthropic/claude-sonnet-4-6"],
-        initialSelections: ["anthropic/claude-sonnet-4-6"],
-        message: "Anthropic OAuth models",
-      }),
-    );
+    const allowlistOptions = mocks.promptModelAllowlist.mock.calls
+      .map(([options]) => options)
+      .find((options) => options?.message === "Anthropic OAuth models");
+    expect(allowlistOptions?.allowedKeys).toStrictEqual(["anthropic/claude-sonnet-4-6"]);
+    expect(allowlistOptions?.initialSelections).toStrictEqual(["anthropic/claude-sonnet-4-6"]);
+    expect(allowlistOptions?.message).toBe("Anthropic OAuth models");
   });
 
   it("preserves existing model entries outside provider-scoped allowlist updates", async () => {
@@ -431,11 +453,8 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preferredProvider: "openai",
-      }),
-    );
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
   });
 
   it("keeps the selected provider scope when existing config has another provider", async () => {
@@ -464,11 +483,8 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preferredProvider: "github-copilot",
-      }),
-    );
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("github-copilot");
   });
 
   it("loads the selected provider catalog after auth enables that plugin", async () => {
@@ -511,8 +527,9 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.preferredProvider).toBe("github-copilot");
-    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.loadCatalog).toBe(true);
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("github-copilot");
+    expect(promptModelAllowlistOptions()?.loadCatalog).toBe(true);
+    expect(promptModelAllowlistOptions()?.providerScopedCatalog).toBe(false);
   });
 
   it("loads configured provider models after Ollama Cloud + Local and Cloud only setup", async () => {
@@ -540,12 +557,11 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preferredProvider: "ollama",
-        loadCatalog: true,
-      }),
-    );
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    const allowlistOptions = promptModelAllowlistOptions();
+    expect(allowlistOptions?.preferredProvider).toBe("ollama");
+    expect(allowlistOptions?.loadCatalog).toBe(true);
+    expect(allowlistOptions?.providerScopedCatalog).toBe(true);
   });
 
   it("loads plugin catalog when the selected provider allowlist requires it", async () => {
@@ -583,12 +599,11 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preferredProvider: "github-copilot",
-        loadCatalog: true,
-      }),
-    );
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    const allowlistOptions = promptModelAllowlistOptions();
+    expect(allowlistOptions?.preferredProvider).toBe("github-copilot");
+    expect(allowlistOptions?.loadCatalog).toBe(true);
+    expect(allowlistOptions?.providerScopedCatalog).toBe(true);
   });
 
   it("loads catalog when the selected provider has manifest catalog rows", async () => {
@@ -625,9 +640,39 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    const call = mocks.promptModelAllowlist.mock.calls[0]?.[0];
+    const call = promptModelAllowlistOptions();
     expect(call?.preferredProvider).toBe("github-copilot");
     expect(call?.loadCatalog).toBe(true);
+    expect(call?.providerScopedCatalog).toBe(true);
+  });
+
+  it("lets skip-auth model browsing scope the allowlist to the selected model provider", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("skip");
+    mocks.promptDefaultModel.mockResolvedValue({ model: "openai-codex/gpt-5.5" });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["openai-codex/gpt-5.5"],
+      scopeKeys: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.5-pro"],
+    });
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    const result = await promptAuthConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "fleet-router/qwen3.6:latest" },
+          },
+        },
+      },
+      makeRuntime(),
+      noopPrompter,
+    );
+
+    expect(promptDefaultModelOptions()?.loadCatalog).toBe(true);
+    expect(promptDefaultModelOptions()?.browseCatalogOnDemand).toBe(true);
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai-codex");
+    expect(result.agents?.defaults?.model).toEqual({ primary: "openai-codex/gpt-5.5" });
+    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual(["openai-codex/gpt-5.5"]);
   });
 
   it("returns to auth selection when plugin install onboarding asks for a retry", async () => {

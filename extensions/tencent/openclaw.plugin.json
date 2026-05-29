@@ -4,7 +4,7 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["tencent-tokenhub"],
   "modelCatalog": {
     "providers": {
@@ -60,8 +60,13 @@
       "tencent-tokenhub": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "tencent-tokenhub": ["TOKENHUB_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "tencent-tokenhub",
+        "envVars": ["TOKENHUB_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

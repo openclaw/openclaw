@@ -17,6 +17,7 @@ type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
 }>;
 type GatewayClientOptions = GatewayClientCallbacks &
   GatewayClientAuth & {
+    caps?: string[];
     url?: string;
   };
 
@@ -27,7 +28,7 @@ const mockState = vi.hoisted(() => ({
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
-  startProxy: vi.fn(async (_config: unknown) => null as unknown),
+  startProxy: vi.fn(async (configForTest: unknown) => null as unknown),
   stopProxy: vi.fn(async (_handle: unknown) => {}),
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",
@@ -164,6 +165,18 @@ describe("serveAcpGateway startup", () => {
     return gateway;
   }
 
+  function getGatewayBootstrapParams(): { env?: unknown; gatewayUrl?: unknown } {
+    const firstCall = mockState.resolveGatewayClientBootstrap.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("Expected gateway bootstrap resolution call");
+    }
+    const params = firstCall[0];
+    if (!params || typeof params !== "object") {
+      throw new Error("Expected gateway bootstrap params");
+    }
+    return params;
+  }
+
   function captureProcessSignalHandlers() {
     const signalHandlers = new Map<NodeJS.Signals, () => void>();
     const onceSpy = vi.spyOn(process, "once").mockImplementation(((
@@ -236,6 +249,21 @@ describe("serveAcpGateway startup", () => {
     }
   });
 
+  it("subscribes the Gateway client to run-scoped tool events", async () => {
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+
+      expect(mockState.gatewayOptions[0]?.caps).toEqual(["tool-events"]);
+
+      await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
   it("routes logs to stderr before loading gateway config", async () => {
     const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
 
@@ -291,11 +319,8 @@ describe("serveAcpGateway startup", () => {
       const servePromise = serveAcpGateway({});
       await Promise.resolve();
 
-      expect(mockState.resolveGatewayClientBootstrap).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-        }),
-      );
+      const bootstrapParams = getGatewayBootstrapParams();
+      expect(bootstrapParams.env).toBe(process.env);
       expect(mockState.gatewayAuth[0]).toEqual({
         token: undefined,
         password: "resolved-secret-password", // pragma: allowlist secret
@@ -317,12 +342,9 @@ describe("serveAcpGateway startup", () => {
       });
       await Promise.resolve();
 
-      expect(mockState.resolveGatewayClientBootstrap).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-          gatewayUrl: "wss://override.example/ws",
-        }),
-      );
+      const bootstrapParams = getGatewayBootstrapParams();
+      expect(bootstrapParams.env).toBe(process.env);
+      expect(bootstrapParams.gatewayUrl).toBe("wss://override.example/ws");
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
@@ -348,11 +370,7 @@ describe("serveAcpGateway startup", () => {
       });
       await Promise.resolve();
 
-      expect(mockState.gatewayOptions[0]).toEqual(
-        expect.objectContaining({
-          url: "ws://127.0.0.1:19999",
-        }),
-      );
+      expect(mockState.gatewayOptions[0]?.url).toBe("ws://127.0.0.1:19999");
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);

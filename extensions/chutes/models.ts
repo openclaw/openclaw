@@ -5,9 +5,10 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isChutesModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
 const log = createSubsystemLogger("chutes-models");
@@ -349,6 +350,9 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     name: "Qwen/Qwen2.5-VL-32B-Instruct",
     reasoning: false,
     input: ["text", "image"],
+    mediaInput: {
+      image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
+    },
     contextWindow: 16384,
     maxTokens: 16384,
     cost: { input: 0.05, output: 0.22, cacheRead: 0, cacheWrite: 0 },
@@ -358,6 +362,9 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     name: "Qwen/Qwen3-VL-235B-A22B-Instruct",
     reasoning: false,
     input: ["text", "image"],
+    mediaInput: {
+      image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
+    },
     contextWindow: 262144,
     maxTokens: 262144,
     cost: { input: 0.3, output: 1.2, cacheRead: 0, cacheWrite: 0 },
@@ -610,8 +617,9 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
             cacheRead: 0,
             cacheWrite: 0,
           },
-          contextWindow: entry.context_length || CHUTES_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: entry.max_output_length || CHUTES_DEFAULT_MAX_TOKENS,
+          contextWindow:
+            asPositiveSafeInteger(entry.context_length) ?? CHUTES_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: asPositiveSafeInteger(entry.max_output_length) ?? CHUTES_DEFAULT_MAX_TOKENS,
           compat: {
             supportsUsageInStreaming: false,
           },

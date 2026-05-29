@@ -1,5 +1,6 @@
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifest } from "./manifest.js";
 
 export type BundledPluginSource = {
@@ -38,11 +39,11 @@ export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
   /** Use an explicit env when bundled roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
 }): Map<string, BundledPluginSource> {
-  const discovery = discoverOpenClawPlugins({
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const discovery =
+    params.discovery ??
+    discoverOpenClawPlugins({ workspaceDir: params.workspaceDir, env: params.env });
   const bundled = new Map<string, BundledPluginSource>();
 
   for (const candidate of discovery.candidates) {
@@ -81,10 +82,6 @@ export function resolveBundledPluginSources(params: {
   }
 
   return bundled;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function pluginConfigSchemaHasRequiredFields(schema: unknown): boolean {

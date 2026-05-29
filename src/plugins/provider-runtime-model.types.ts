@@ -1,11 +1,14 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
+import type { Model } from "openclaw/plugin-sdk/llm";
 
 /**
  * Fully-resolved runtime model shape used after provider/plugin-owned
  * discovery, overrides, and compat normalization.
  */
-export type ProviderRuntimeModel = Model<Api> & {
+export type ProviderRuntimeModel = Omit<Model, "compat"> & {
+  compat?: ModelCompatConfig;
   contextTokens?: number;
   params?: Record<string, unknown>;
   requestTimeoutMs?: number;
+  mediaInput?: ModelMediaInputConfig;
 };

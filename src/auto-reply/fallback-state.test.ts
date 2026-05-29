@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import {
+  buildFallbackNotice,
   resolveActiveFallbackState,
   resolveFallbackTransition,
   type FallbackNoticeState,
@@ -18,6 +20,20 @@ const activeFallbackState: FallbackNoticeState = {
   fallbackNoticeReason: "rate limit",
 };
 
+function registerAnthropicCliBackendForTest(): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+    ],
+  });
+}
+
 function resolveDemoFallbackTransition(
   overrides: Partial<Parameters<typeof resolveFallbackTransition>[0]> = {},
 ) {
@@ -33,6 +49,10 @@ function resolveDemoFallbackTransition(
 }
 
 describe("fallback-state", () => {
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+  });
+
   it.each([
     {
       name: "treats fallback as active only when state matches selected and active refs",
@@ -119,5 +139,69 @@ describe("fallback-state", () => {
     expect(resolved.nextState.selectedModel).toBeUndefined();
     expect(resolved.nextState.activeModel).toBeUndefined();
     expect(resolved.nextState.reason).toBeUndefined();
+  });
+
+  it("does not treat a CLI runtime alias as a model fallback", () => {
+    registerAnthropicCliBackendForTest();
+
+    const resolved = resolveFallbackTransition({
+      selectedProvider: "anthropic",
+      selectedModel: "claude-opus-4-7",
+      activeProvider: "claude-cli",
+      activeModel: "claude-opus-4-7",
+      attempts: [],
+      state: {
+        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
+        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
+        fallbackNoticeReason: "selected model unavailable",
+      },
+    });
+
+    expect(resolved.fallbackActive).toBe(false);
+    expect(resolved.fallbackCleared).toBe(false);
+    expect(resolved.stateChanged).toBe(true);
+    expect(resolved.nextState.selectedModel).toBeUndefined();
+    expect(resolved.nextState.activeModel).toBeUndefined();
+  });
+
+  it("does not build a fallback notice for equivalent CLI runtime aliases", () => {
+    registerAnthropicCliBackendForTest();
+
+    expect(
+      buildFallbackNotice({
+        selectedProvider: "anthropic",
+        selectedModel: "claude-opus-4-7",
+        activeProvider: "claude-cli",
+        activeModel: "claude-opus-4-7",
+        attempts: [],
+      }),
+    ).toBeNull();
+  });
+
+  it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "o3"])(
+    "does not build a fallback notice for the OpenAI Codex runtime provider alias with %s",
+    (model) => {
+      expect(
+        buildFallbackNotice({
+          selectedProvider: "openai",
+          selectedModel: model,
+          activeProvider: "openai-codex",
+          activeModel: model,
+          attempts: [],
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("still reports fallback when the OpenAI Codex runtime switches model ids", () => {
+    expect(
+      buildFallbackNotice({
+        selectedProvider: "openai",
+        selectedModel: "gpt-5.5",
+        activeProvider: "openai-codex",
+        activeModel: "gpt-5.4",
+        attempts: [],
+      }),
+    ).toContain("selected openai/gpt-5.5");
   });
 });

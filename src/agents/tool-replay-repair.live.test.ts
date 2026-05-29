@@ -1,20 +1,27 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { completeSimple, type Api, type Context, type Model } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
+import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
+import {
+  completeSimpleWithTimeout,
+  type CompleteSimpleContent,
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  logLiveProgress,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
+} from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const DEFAULT_TARGET_MODEL_REFS = "openai-codex/gpt-5.5,google/gemini-3-flash-preview";
 const TARGET_MODEL_REFS = parseTargetModelRefs(
   process.env.OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS ?? DEFAULT_TARGET_MODEL_REFS,
@@ -28,54 +35,25 @@ type TargetModelRef = {
 };
 
 function parseTargetModelRefs(raw: string | undefined): TargetModelRef[] {
-  return (raw ?? "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((ref) => {
-      const [provider, ...rest] = ref.split("/");
-      const modelId = rest.join("/").trim();
-      if (!provider?.trim() || !modelId) {
-        throw new Error(
-          `Invalid OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS entry: ${JSON.stringify(ref)}`,
-        );
-      }
-      return { ref, provider: provider.trim(), modelId };
-    });
-}
-
-function logProgress(message: string): void {
-  process.stderr.write(`[live] ${message}\n`);
-}
-
-async function completeSimpleWithTimeout<TApi extends Api>(
-  model: Model<TApi>,
-  context: Parameters<typeof completeSimple<TApi>>[1],
-  options: Parameters<typeof completeSimple<TApi>>[2],
-  timeoutMs: number,
-): Promise<Awaited<ReturnType<typeof completeSimple<TApi>>>> {
-  const controller = new AbortController();
-  const abortTimer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
-  abortTimer.unref?.();
-  try {
-    return await Promise.race([
-      completeSimple(model, context, {
-        ...options,
-        signal: controller.signal,
-      }),
-      new Promise<never>((_, reject) => {
-        const hardTimer = setTimeout(() => {
-          reject(new Error(`model call timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        hardTimer.unref?.();
-      }),
-    ]);
-  } finally {
-    clearTimeout(abortTimer);
+  const refs: TargetModelRef[] = [];
+  for (const item of (raw ?? "").split(",")) {
+    const ref = item.trim();
+    if (!ref) {
+      continue;
+    }
+    const [provider, ...rest] = ref.split("/");
+    const modelId = rest.join("/").trim();
+    if (!provider?.trim() || !modelId) {
+      throw new Error(
+        `Invalid OPENCLAW_LIVE_TOOL_REPLAY_REPAIR_MODELS entry: ${JSON.stringify(ref)}`,
+      );
+    }
+    refs.push({ ref, provider: provider.trim(), modelId });
   }
+  return refs;
 }
+
+const logProgress = logLiveProgress;
 
 function isOpenAIResponsesFamily(api: string): boolean {
   return (
@@ -85,7 +63,24 @@ function isOpenAIResponsesFamily(api: string): boolean {
   );
 }
 
-function buildReplayMessages(model: Model<Api>): AgentMessage[] {
+function createNoopTools() {
+  return [
+    {
+      name: "noop",
+      description: "Return ok.",
+      parameters: Type.Object({}, { additionalProperties: false }),
+    },
+  ];
+}
+
+function replayValidationTools(model: Model) {
+  // Responses-family providers may force or reject fresh tool-choice policy
+  // when tools are present. These probes validate repaired historical transcript
+  // shape, not new tool invocation.
+  return isOpenAIResponsesFamily(model.api) ? undefined : createNoopTools();
+}
+
+function buildReplayMessages(model: Model): AgentMessage[] {
   const now = Date.now();
   // Gemini source metadata deliberately simulates a model switch from a
   // provider-owned transcript. That forces the same id sanitization and replay
@@ -139,7 +134,7 @@ function buildReplayMessages(model: Model<Api>): AgentMessage[] {
   ] as unknown as AgentMessage[];
 }
 
-function buildAbortedTransportMessages(model: Model<Api>): Context["messages"] {
+function buildAbortedTransportMessages(model: Model): Context["messages"] {
   const now = Date.now();
   return [
     {
@@ -171,7 +166,23 @@ function assistantToolCallIds(message: AgentMessage): string[] {
   if (message.role !== "assistant") {
     return [];
   }
-  return message.content.filter((block) => block.type === "toolCall").map((block) => block.id);
+  const ids: string[] = [];
+  for (const block of message.content) {
+    if (block.type === "toolCall") {
+      ids.push(block.id);
+    }
+  }
+  return ids;
+}
+
+function responseText(content: CompleteSimpleContent): string {
+  const parts: string[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      parts.push(block.text.trim());
+    }
+  }
+  return parts.join(" ").trim();
 }
 
 function isKnownLiveBlocker(errorMessage: string): boolean {
@@ -192,7 +203,7 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model<Api> | null;
+        const model = modelRegistry.find(target.provider, target.modelId) as Model | null;
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
@@ -204,14 +215,20 @@ describeLive("tool replay repair live", () => {
           apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
         } catch (error) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
           return;
         }
 
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+        if (
+          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+          !apiKeyInfo.source.startsWith("profile:")
+        ) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );
@@ -260,13 +277,7 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: sanitized as never,
-            tools: [
-              {
-                name: "noop",
-                description: "Return ok.",
-                parameters: Type.Object({}, { additionalProperties: false }),
-              },
-            ],
+            tools: replayValidationTools(model),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),
@@ -276,11 +287,7 @@ describeLive("tool replay repair live", () => {
           120_000,
         );
 
-        const text = response.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text.trim())
-          .join(" ")
-          .trim();
+        const text = responseText(response.content);
         const errorMessage =
           typeof (response as { errorMessage?: unknown }).errorMessage === "string"
             ? ((response as { errorMessage?: string }).errorMessage ?? "")
@@ -307,7 +314,7 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model<Api> | null;
+        const model = modelRegistry.find(target.provider, target.modelId) as Model | null;
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
@@ -319,14 +326,20 @@ describeLive("tool replay repair live", () => {
           apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
         } catch (error) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
           return;
         }
 
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+        if (
+          requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+          !apiKeyInfo.source.startsWith("profile:")
+        ) {
           logProgress(
             `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
           );
@@ -345,13 +358,7 @@ describeLive("tool replay repair live", () => {
           {
             systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
             messages: transformed as never,
-            tools: [
-              {
-                name: "noop",
-                description: "Return ok.",
-                parameters: Type.Object({}, { additionalProperties: false }),
-              },
-            ],
+            tools: replayValidationTools(model),
           },
           {
             apiKey: requireApiKey(apiKeyInfo, model.provider),
@@ -361,11 +368,7 @@ describeLive("tool replay repair live", () => {
           120_000,
         );
 
-        const text = response.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text.trim())
-          .join(" ")
-          .trim();
+        const text = responseText(response.content);
         const errorMessage =
           typeof (response as { errorMessage?: unknown }).errorMessage === "string"
             ? ((response as { errorMessage?: string }).errorMessage ?? "")

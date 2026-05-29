@@ -3,12 +3,32 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 
+type InboundMetadataParams = {
+  sessionKey?: string;
+  storePath?: string;
+};
+
 const mocks = vi.hoisted(() => ({
-  recordSessionMetaFromInbound: vi.fn(async () => ({ ok: true })),
+  recordSessionMetaFromInbound: vi.fn(async (_params: InboundMetadataParams) => ({ ok: true })),
   resolveStorePath: vi.fn(
     (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
   ),
 }));
+
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} params to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
   recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
@@ -330,6 +350,66 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "channel",
       },
     },
+    {
+      name: "FallbackChat explicit group prefix",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "group:ops",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:group:ops",
+        from: "fallbackchat:group:ops",
+        to: "channel:ops",
+        chatType: "group",
+      },
+    },
+    {
+      name: "FallbackChat plugin parser classifies space-style target",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "spaces/AAA",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:group:spaces/aaa",
+        from: "fallbackchat:group:spaces/AAA",
+        to: "channel:spaces/AAA",
+        chatType: "group",
+      },
+    },
+    {
+      name: "FallbackChat explicit user prefix",
+      cfg: perChannelPeerCfg,
+      channel: "fallbackchat",
+      target: "user:U123",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:direct:u123",
+        from: "fallbackchat:U123",
+        to: "user:U123",
+        chatType: "direct",
+      },
+    },
+    {
+      name: "FallbackChat explicit thread prefix",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "thread:abc",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:channel:abc",
+        from: "fallbackchat:channel:abc",
+        to: "channel:abc",
+        chatType: "channel",
+      },
+    },
+    {
+      name: "Legacy parser-only plugin chat type fallback",
+      cfg: baseConfig,
+      channel: "legacyparser",
+      target: "team-ops",
+      expected: {
+        sessionKey: "agent:main:legacyparser:group:team-ops",
+        from: "legacyparser:group:team-ops",
+        to: "channel:team-ops",
+        chatType: "group",
+      },
+    },
   ] satisfies NamedRouteCase[])("$name", async ({ name: _name, ...params }) => {
     await expectResolvedRoute(params);
   });
@@ -394,7 +474,9 @@ describe("resolveOutboundSessionRoute", () => {
       resolvedTarget,
     });
 
-    expect(route).toMatchObject(expected);
+    for (const [key, value] of Object.entries(expected)) {
+      expect((route as Record<string, unknown>)[key]).toEqual(value);
+    }
   });
 
   it("rejects bare numeric GuildChat targets when the caller has no kind hint", async () => {
@@ -436,11 +518,12 @@ describe("ensureOutboundSessionEntry", () => {
     expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
       agentId: "main",
     });
-    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/stores/main.json",
-        sessionKey: "agent:main:workspace:channel:c1",
-      }),
+    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledOnce();
+    const metadata = firstMockArg(
+      mocks.recordSessionMetaFromInbound,
+      "recordSessionMetaFromInbound",
     );
+    expect(metadata.storePath).toBe("/stores/main.json");
+    expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
   });
 });

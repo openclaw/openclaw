@@ -106,6 +106,9 @@ describe("createOllamaStreamFn thinking events", () => {
   async function streamOllamaEvents(
     chunks: Array<Record<string, unknown>>,
     options: Parameters<ReturnType<typeof createOllamaStreamFn>>[2] = {},
+    context: Parameters<ReturnType<typeof createOllamaStreamFn>>[1] = {
+      messages: [{ role: "user", content: "test" }],
+    } as never,
   ): Promise<Array<{ type: string; [key: string]: unknown }>> {
     const body = makeNdjsonBody(chunks);
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -116,7 +119,7 @@ describe("createOllamaStreamFn thinking events", () => {
     const streamFn = createOllamaStreamFn("http://localhost:11434");
     const stream = streamFn(
       { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
-      { messages: [{ role: "user", content: "test" }] } as never,
+      context,
       options,
     );
 
@@ -190,8 +193,8 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const done = events.find((e) => e.type === "done") as { message?: { content: unknown[] } };
     const content = done?.message?.content ?? [];
-    expect(content[0]).toMatchObject({ type: "thinking", thinking: "Step 1 and step 2" });
-    expect(content[1]).toMatchObject({ type: "text", text: "The answer" });
+    expect(content[0]).toEqual({ type: "thinking", thinking: "Step 1 and step 2" });
+    expect(content[1]).toEqual({ type: "text", text: "The answer" });
   });
 
   it("streams without thinking events when no thinking content is present", async () => {
@@ -229,10 +232,128 @@ describe("createOllamaStreamFn thinking events", () => {
   it("uses generic stream timeout for Ollama request timeout", async () => {
     await streamOllamaEvents([makeOllamaResponse({ content: "ok" })], { timeoutMs: 2500 });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 2500,
-      }),
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "http://localhost:11434/api/chat",
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3.5",
+          messages: [{ role: "user", content: "test" }],
+          stream: true,
+          options: {},
+        }),
+      },
+      policy: {
+        allowPrivateNetwork: true,
+        hostnameAllowlist: ["localhost"],
+      },
+      timeoutMs: 2500,
+      auditContext: "ollama-stream.chat",
+    });
+  });
+
+  it("promotes standalone bracketed local-model tool text to a structured tool call", async () => {
+    const rawToolText = [
+      "[mempalace_mempalace_search]",
+      '{"query":"codename","wing":"personal","room":"identities"}',
+      "[END_TOOL_REQUEST]",
+    ].join("\n");
+
+    const events = await streamOllamaEvents(
+      [
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: rawToolText },
+          done: false,
+        },
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:01Z",
+          message: { role: "assistant", content: "" },
+          done: true,
+          done_reason: "stop",
+          prompt_eval_count: 10,
+          eval_count: 5,
+        },
+      ],
+      {},
+      {
+        messages: [{ role: "user", content: "test" }],
+        tools: [
+          {
+            name: "mempalace_mempalace_search",
+            description: "Search MemPalace",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
     );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+      reason?: string;
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content?.[0]).toMatchObject({
+      type: "toolCall",
+      name: "mempalace_mempalace_search",
+      arguments: { query: "codename", wing: "personal", room: "identities" },
+    });
+  });
+
+  it("promotes standalone Harmony local-model tool text to a structured tool call", async () => {
+    const rawToolText =
+      'commentary to=read code {"path":"/path/to/file","line_start":1,"line_end":400}';
+
+    const events = await streamOllamaEvents(
+      [
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:00Z",
+          message: { role: "assistant", content: rawToolText },
+          done: false,
+        },
+        {
+          model: "qwen3.5",
+          created_at: "2026-01-01T00:00:01Z",
+          message: { role: "assistant", content: "" },
+          done: true,
+          done_reason: "stop",
+          prompt_eval_count: 10,
+          eval_count: 5,
+        },
+      ],
+      {},
+      {
+        messages: [{ role: "user", content: "test" }],
+        tools: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
+      } as never,
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+      reason?: string;
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.content?.[0]).toMatchObject({
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/path/to/file", line_start: 1, line_end: 400 },
+    });
   });
 });

@@ -16,7 +16,8 @@ const PLUGIN_STATE_SCHEMA_VERSION = 1;
 const PLUGIN_STATE_DIR_MODE = 0o700;
 const PLUGIN_STATE_FILE_MODE = 0o600;
 const PLUGIN_STATE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-const MAX_ENTRIES_PER_PLUGIN = 1_000;
+// Plugin-wide fuse only; namespace maxEntries still owns normal cache eviction.
+const MAX_ENTRIES_PER_PLUGIN = 6_000;
 
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 65_536;
 export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = MAX_ENTRIES_PER_PLUGIN;
@@ -57,6 +58,15 @@ type PluginStateDatabase = {
   path: string;
   statements: PluginStateStatements;
   walMaintenance: SqliteWalMaintenance;
+};
+
+type PluginStateSeedEntryForTests = {
+  pluginId: string;
+  namespace: string;
+  key: string;
+  valueJson: string;
+  createdAt?: number;
+  expiresAt?: number | null;
 };
 
 let cachedDatabase: PluginStateDatabase | null = null;
@@ -412,7 +422,24 @@ function enforcePostRegisterLimits(params: {
       | CountRow
       | undefined,
   );
-  if (pluginCount > MAX_ENTRIES_PER_PLUGIN) {
+  if (pluginCount <= MAX_ENTRIES_PER_PLUGIN) {
+    return;
+  }
+
+  // Shed rows from the namespace that grew before failing the plugin write.
+  params.store.statements.deleteOldestNamespace.run(
+    params.pluginId,
+    params.namespace,
+    params.protectedKey,
+    params.now,
+    pluginCount - MAX_ENTRIES_PER_PLUGIN,
+  );
+  const remainingPluginCount = countRow(
+    params.store.statements.countLivePlugin.get(params.pluginId, params.now) as
+      | CountRow
+      | undefined,
+  );
+  if (remainingPluginCount > MAX_ENTRIES_PER_PLUGIN) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_LIMIT_EXCEEDED",
       operation: "register",
@@ -600,6 +627,20 @@ export function pluginStateEntries(params: {
   }
 }
 
+export function countPluginStateLiveEntries(pluginId: string): number {
+  try {
+    const { statements } = openPluginStateDatabase("entries");
+    return countRow(statements.countLivePlugin.get(pluginId, Date.now()) as CountRow | undefined);
+  } catch (error) {
+    throw wrapPluginStateError(
+      error,
+      "entries",
+      "PLUGIN_STATE_READ_FAILED",
+      "Failed to count plugin state entries.",
+    );
+  }
+}
+
 export function pluginStateClear(params: { pluginId: string; namespace: string }): void {
   try {
     const { statements } = openPluginStateDatabase("clear");
@@ -631,6 +672,34 @@ export function sweepExpiredPluginStateEntries(): number {
 
 export function isPluginStateDatabaseOpen(): boolean {
   return cachedDatabase !== null;
+}
+
+export function clearPluginStateSqliteStoreForTests(): void {
+  const store = openPluginStateDatabase("clear");
+  store.db.exec("DELETE FROM plugin_state_entries;");
+}
+
+export function seedPluginStateSqliteEntriesForTests(
+  entries: readonly PluginStateSeedEntryForTests[],
+): void {
+  if (entries.length === 0) {
+    return;
+  }
+
+  const now = Date.now();
+  runWriteTransaction("register", (store) => {
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      store.statements.upsertEntry.run({
+        plugin_id: entry.pluginId,
+        namespace: entry.namespace,
+        entry_key: entry.key,
+        value_json: entry.valueJson,
+        created_at: entry.createdAt ?? now + index,
+        expires_at: entry.expiresAt ?? null,
+      });
+    }
+  });
 }
 
 export function probePluginStateStore(): PluginStateStoreProbeResult {

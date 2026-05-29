@@ -1,17 +1,19 @@
 import type {
+  APIGuild,
   APIGuildMember,
   APIGuildScheduledEvent,
   APIRole,
   APIVoiceState,
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import {
   addGuildMemberRole,
   createGuildBan,
   createGuildScheduledEvent,
   getChannel,
+  getGuild,
   getGuildMember,
   getGuildVoiceState,
   listGuildChannels,
@@ -66,6 +68,14 @@ export async function fetchChannelInfoDiscord(
 ): Promise<APIChannel> {
   const rest = resolveDiscordRest(opts);
   return await getChannel(rest, channelId);
+}
+
+export async function fetchGuildInfoDiscord(
+  guildId: string,
+  opts: DiscordReactOpts,
+): Promise<APIGuild> {
+  const rest = resolveDiscordRest(opts);
+  return await getGuild(rest, guildId);
 }
 
 export async function listGuildChannelsDiscord(

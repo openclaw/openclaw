@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
@@ -6,7 +6,8 @@ import {
   type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
-  type ProviderDiscoveryContext,
+  type ProviderCatalogContext,
+  type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
@@ -45,25 +46,18 @@ import { readProviderBaseUrl } from "./src/provider-base-url.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
-  isOllamaCompatProvider,
   resolveConfiguredOllamaProviderConfig,
 } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 import { checkWsl2CrashLoopRisk } from "./src/wsl2-crash-loop-check.js";
 
-function usesOllamaOpenAICompatTransport(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  return (
-    model.api === "openai-completions" &&
-    isOllamaCompatProvider({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-      api: "openai-completions",
-    })
-  );
+function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
+  return {
+    ...buildOpenAICompatibleReplayPolicy("openai-completions", {
+      sanitizeToolCallIds: false,
+    }),
+    sanitizeToolCallIds: false,
+  };
 }
 
 const dynamicModelCache = new Map<string, ProviderRuntimeModel[]>();
@@ -199,9 +193,9 @@ export default definePluginEntry({
           },
         },
       ],
-      discovery: {
+      catalog: {
         order: "late",
-        run: async (ctx: ProviderDiscoveryContext) =>
+        run: async (ctx: ProviderCatalogContext) =>
           await resolveOllamaDiscoveryResult({
             ctx,
             pluginConfig: resolveCurrentPluginConfig(ctx.config),
@@ -245,10 +239,8 @@ export default definePluginEntry({
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
       buildReplayPolicy: (ctx) =>
         ctx.modelApi === "ollama"
-          ? buildOpenAICompatibleReplayPolicy("openai-completions")
+          ? buildNativeOllamaReplayPolicy()
           : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
-      contributeResolvedModelCompat: ({ model }) =>
-        usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : undefined,
       resolveReasoningOutputMode: () => "native",
       resolveThinkingProfile: resolveOllamaThinkingProfile,
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,

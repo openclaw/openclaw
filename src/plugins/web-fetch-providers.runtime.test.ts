@@ -14,8 +14,15 @@ let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
 let resolvePluginWebFetchProviders: WebFetchProvidersRuntimeModule["resolvePluginWebFetchProviders"];
+let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
 const DEFAULT_WORKSPACE = "/tmp/workspace";
+
+type PluginLoadOptions = { logger?: Record<string, unknown> } & Record<string, unknown>;
+
+function firstPluginLoadOptions(mock: { mock: { calls: unknown[][] } }): PluginLoadOptions {
+  return (mock.mock.calls[0]?.[0] ?? {}) as PluginLoadOptions;
+}
 
 function createWebFetchEnv(overrides?: Partial<NodeJS.ProcessEnv>) {
   return {
@@ -112,10 +119,12 @@ describe("resolvePluginWebFetchProviders", () => {
     manifestRegistryModule = await import("./manifest-registry.js");
     webFetchProvidersSharedModule = await import("./web-fetch-providers.shared.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
+    ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
     ({ resolvePluginWebFetchProviders } = await import("./web-fetch-providers.runtime.js"));
   });
 
   beforeEach(() => {
+    clearLoadPluginMetadataSnapshotMemo();
     vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistry").mockReturnValue(
       createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
         ...args: unknown[]
@@ -135,6 +144,7 @@ describe("resolvePluginWebFetchProviders", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
+    clearLoadPluginMetadataSnapshotMemo();
     vi.restoreAllMocks();
   });
 
@@ -169,20 +179,28 @@ describe("resolvePluginWebFetchProviders", () => {
 
     const providers = resolvePluginWebFetchProviders({
       config: createFirecrawlAllowConfig(),
-      bundledAllowlistCompat: true,
       workspaceDir: DEFAULT_WORKSPACE,
       env: createWebFetchEnv(),
     });
 
-    expect(providers).toEqual([]);
-    expect(inFlightSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activate: false,
-        cache: true,
-        onlyPluginIds: ["firecrawl"],
-        workspaceDir: DEFAULT_WORKSPACE,
-      }),
-    );
+    expect(providers).toStrictEqual([]);
+    const { logger: inFlightLogger, ...inFlightLoadOptions } = firstPluginLoadOptions(inFlightSpy);
+    expect(Object.keys(inFlightLogger ?? {}).toSorted()).toEqual([
+      "debug",
+      "error",
+      "info",
+      "warn",
+    ]);
+    expect(inFlightLoadOptions).toEqual({
+      config: createFirecrawlAllowConfig(),
+      activationSourceConfig: createFirecrawlAllowConfig(),
+      autoEnabledReasons: {},
+      workspaceDir: DEFAULT_WORKSPACE,
+      env: createWebFetchEnv(),
+      cache: true,
+      activate: false,
+      onlyPluginIds: ["firecrawl"],
+    });
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -192,10 +210,9 @@ describe("resolvePluginWebFetchProviders", () => {
     const { config, activationSourceConfig, autoEnabledReasons } =
       webFetchProvidersSharedModule.resolveBundledWebFetchResolutionConfig({
         config: rawConfig,
-        bundledAllowlistCompat: true,
         env,
       });
-    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+    const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
       config,
       activationSourceConfig,
       autoEnabledReasons,
@@ -206,12 +223,12 @@ describe("resolvePluginWebFetchProviders", () => {
       activate: false,
     });
     const registry = createEmptyPluginRegistry();
+    registry.plugins.push({ id: "firecrawl", status: "loaded" } as never);
     registry.webFetchProviders.push(createRuntimeWebFetchProvider());
     setActivePluginRegistry(registry, cacheKey);
 
     const providers = resolvePluginWebFetchProviders({
       config: rawConfig,
-      bundledAllowlistCompat: true,
       workspaceDir: DEFAULT_WORKSPACE,
       env,
     });
@@ -228,11 +245,10 @@ describe("resolvePluginWebFetchProviders", () => {
     const { config, activationSourceConfig, autoEnabledReasons } =
       webFetchProvidersSharedModule.resolveBundledWebFetchResolutionConfig({
         config: rawConfig,
-        bundledAllowlistCompat: true,
         workspaceDir: DEFAULT_WORKSPACE,
         env,
       });
-    const { cacheKey } = loaderModule.__testing.resolvePluginLoadCacheContext({
+    const { cacheKey } = loaderModule.testing.resolvePluginLoadCacheContext({
       config,
       activationSourceConfig,
       autoEnabledReasons,
@@ -243,12 +259,12 @@ describe("resolvePluginWebFetchProviders", () => {
       activate: false,
     });
     const registry = createEmptyPluginRegistry();
+    registry.plugins.push({ id: "firecrawl", status: "loaded" } as never);
     registry.webFetchProviders.push(createRuntimeWebFetchProvider());
     setActivePluginRegistry(registry, cacheKey, "default", DEFAULT_WORKSPACE);
 
     const providers = resolvePluginWebFetchProviders({
       config: rawConfig,
-      bundledAllowlistCompat: true,
       env,
     });
 
@@ -271,21 +287,28 @@ describe("resolvePluginWebFetchProviders", () => {
 
     resolvePluginWebFetchProviders({
       config: rawConfig,
-      bundledAllowlistCompat: true,
       env,
     });
 
-    expect(manifestRegistryModule.loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/runtime-workspace",
-      }),
-    );
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/runtime-workspace",
-        onlyPluginIds: ["firecrawl"],
-      }),
-    );
+    expect(manifestRegistryModule.loadPluginManifestRegistry).toHaveBeenCalledWith({
+      config: rawConfig,
+      workspaceDir: "/tmp/runtime-workspace",
+      env,
+      diagnostics: [],
+      installRecords: {},
+    });
+    const { logger, ...loadOptions } = firstPluginLoadOptions(loadOpenClawPluginsMock);
+    expect(Object.keys(logger ?? {}).toSorted()).toEqual(["debug", "error", "info", "warn"]);
+    expect(loadOptions).toEqual({
+      config: createFirecrawlAllowConfig(),
+      activationSourceConfig: createFirecrawlAllowConfig(),
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp/runtime-workspace",
+      env,
+      cache: true,
+      activate: false,
+      onlyPluginIds: ["firecrawl"],
+    });
   });
 
   it("resolves web-fetch providers for each active registry workspace", () => {
@@ -295,14 +318,12 @@ describe("resolvePluginWebFetchProviders", () => {
     setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-a");
     resolvePluginWebFetchProviders({
       config,
-      bundledAllowlistCompat: true,
       env,
     });
 
     setActivePluginRegistry(createEmptyPluginRegistry(), undefined, "default", "/tmp/workspace-b");
     resolvePluginWebFetchProviders({
       config,
-      bundledAllowlistCompat: true,
       env,
     });
 

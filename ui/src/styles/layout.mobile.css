@@ -4,10 +4,11 @@
 
 @media (max-width: 1320px) {
   .content--chat .content-header {
-    align-items: stretch;
+    align-items: center;
     gap: 8px;
     row-gap: 0;
-    max-height: 56px;
+    min-height: 44px;
+    max-height: 44px;
     overflow: visible;
   }
 
@@ -16,6 +17,9 @@
   }
 
   .content--chat .page-meta {
+    align-self: center;
+    height: 36px;
+    align-items: center;
     min-width: 0;
     justify-content: flex-end;
     flex-wrap: nowrap;
@@ -26,6 +30,14 @@
     margin-left: 0;
     justify-content: flex-end;
     row-gap: 0;
+  }
+
+  .shell--chat-focus .content--chat .content-header {
+    min-height: 0;
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    overflow: hidden;
   }
 
   .chat-controls__session-row {
@@ -43,6 +55,21 @@
     grid-template-areas: "session model thinking";
   }
 
+  .chat-controls__session-row--has-quota {
+    grid-template-columns:
+      minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
+      minmax(112px, 4fr) minmax(96px, auto);
+    grid-template-areas: "agent session model thinking quota";
+  }
+
+  .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+    grid-template-columns: minmax(112px, 7fr) minmax(116px, 5fr) minmax(112px, 4fr) minmax(
+        96px,
+        auto
+      );
+    grid-template-areas: "session model thinking quota";
+  }
+
   .chat-controls__agent {
     grid-area: agent;
   }
@@ -57,6 +84,11 @@
 
   .chat-controls__thinking-select {
     grid-area: thinking;
+  }
+
+  .chat-controls__quota {
+    grid-area: quota;
+    min-width: 96px;
   }
 
   .chat-controls__session,
@@ -88,7 +120,7 @@
   }
 
   .shell--chat-focus {
-    grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
+    grid-template-rows: 0 minmax(0, 1fr);
   }
 
   .shell-nav,
@@ -456,6 +488,22 @@
       "model model";
   }
 
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--has-quota {
+    grid-template-areas:
+      "agent session"
+      "model thinking"
+      "quota quota";
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+    grid-template-areas:
+      "session thinking"
+      "model model"
+      "quota quota";
+  }
+
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
     min-width: unset;
     max-width: unset;
@@ -473,6 +521,36 @@
     grid-area: session;
   }
 
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker {
+    position: static;
+    width: 100%;
+    max-height: min(52vh, 420px);
+    margin-top: 8px;
+    box-shadow: none;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-session-picker
+    .chat-session-picker__icon-button.btn--icon {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
     grid-area: model;
   }
@@ -484,13 +562,20 @@
     width: 100%;
   }
 
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__quota {
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+  }
+
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select-full {
     display: block;
     width: 100%;
     max-width: none;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
     width: 100%;
     font-size: 14px;
     min-height: 44px;
@@ -505,17 +590,18 @@
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    justify-content: flex-end;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: center;
+    justify-content: stretch;
+    gap: 8px;
     width: 100%;
     padding: 0;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .btn--icon {
-    width: 44px;
-    min-width: 44px;
+    width: 100%;
+    min-width: 0;
     height: 44px;
   }
 
@@ -668,6 +754,33 @@
     max-height: 380px;
   }
 
+  /* Reset the desktop fill-height chain on mobile — single page scroll is
+     more usable on small viewports than a tiny pinned log panel.
+     Selectors are intentionally double-classed so they outrank the
+     desktop rules in components.css / config-quick.css, which are
+     imported AFTER this file (see ui/src/styles.css). */
+  .card--fill-height.card--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
+  }
+
+  .content.content--logs {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .content.content--logs .settings-workspace {
+    display: block;
+    height: auto;
+    flex: initial;
+  }
+
+  .content.content--logs .settings-workspace__body {
+    display: block;
+    flex: initial;
+  }
+
   .log-row {
     grid-template-columns: 1fr;
     gap: 4px;
@@ -787,30 +900,30 @@
 
 /* nth-child is 1-based and includes the checkbox column (col 1). */
 
-/* ≤1400px: hide Verbose (col 10) and Reasoning (col 11) */
+/* ≤1400px: hide Verbose (col 12) and Reasoning (col 13) */
 @media (max-width: 1400px) {
   .data-table.sessions-table {
-    min-width: 1080px;
+    min-width: 1120px;
   }
 
-  .sessions-table th:nth-child(10),
-  .sessions-table td:nth-child(10),
-  .sessions-table th:nth-child(11),
-  .sessions-table td:nth-child(11) {
+  .sessions-table th:nth-child(12),
+  .sessions-table td:nth-child(12),
+  .sessions-table th:nth-child(13),
+  .sessions-table td:nth-child(13) {
     display: none;
   }
 }
 
-/* ≤1100px: also hide Fast (col 9) and Kind (col 4) */
+/* ≤1100px: also hide Fast (col 11) and Kind (col 4) */
 @media (max-width: 1100px) {
   .data-table.sessions-table {
-    min-width: 900px;
+    min-width: 930px;
   }
 
   .sessions-table th:nth-child(4),
   .sessions-table td:nth-child(4),
-  .sessions-table th:nth-child(9),
-  .sessions-table td:nth-child(9) {
+  .sessions-table th:nth-child(11),
+  .sessions-table td:nth-child(11) {
     display: none;
   }
 
@@ -820,28 +933,28 @@
   }
 }
 
-/* ≤900px: also hide Thinking (col 8) and Label (col 3) */
+/* ≤900px: also hide Thinking (col 10) and Label (col 3) */
 @media (max-width: 900px) {
   .data-table.sessions-table {
-    min-width: 690px;
+    min-width: 720px;
   }
 
   .sessions-table th:nth-child(3),
   .sessions-table td:nth-child(3),
-  .sessions-table th:nth-child(8),
-  .sessions-table td:nth-child(8) {
+  .sessions-table th:nth-child(10),
+  .sessions-table td:nth-child(10) {
     display: none;
   }
 }
 
-/* ≤768px: also hide Tokens (col 6); tighten padding; stack pagination */
+/* ≤768px: also hide Tokens (col 8); tighten padding; stack pagination */
 @media (max-width: 768px) {
   .data-table.sessions-table {
-    min-width: 540px;
+    min-width: 560px;
   }
 
-  .sessions-table th:nth-child(6),
-  .sessions-table td:nth-child(6) {
+  .sessions-table th:nth-child(8),
+  .sessions-table td:nth-child(8) {
     display: none;
   }
 
@@ -920,21 +1033,40 @@
   }
 }
 
-/* ≤500px: tighten further, truncate key column */
+/* ≤500px: hide Runtime (col 6) and Updated (col 7); keep live status visible */
 @media (max-width: 500px) {
   .data-table.sessions-table {
-    min-width: 330px;
+    min-width: 340px;
   }
 
-  .sessions-table th:nth-child(5),
-  .sessions-table td:nth-child(5) {
+  .sessions-table th:nth-child(6),
+  .sessions-table td:nth-child(6),
+  .sessions-table th:nth-child(7),
+  .sessions-table td:nth-child(7) {
     display: none;
   }
 
   .data-table.sessions-table .data-table-key-col {
-    width: 144px;
-    min-width: 144px;
-    max-width: 144px;
+    width: 106px;
+    min-width: 106px;
+    max-width: 106px;
+  }
+
+  .sessions-table .session-status-col {
+    width: 76px;
+    min-width: 76px;
+    max-width: 76px;
+  }
+
+  .sessions-table .session-status-badge {
+    max-width: 72px;
+    gap: 5px;
+    padding: 2px 6px;
+  }
+
+  .sessions-table .session-compaction-col {
+    width: 84px;
+    min-width: 84px;
   }
 
   .data-table th,

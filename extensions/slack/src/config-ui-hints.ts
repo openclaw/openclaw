@@ -29,6 +29,26 @@ export const slackChannelConfigUiHints = {
     label: "Slack Allow Bot Messages",
     help: "Allow bot-authored messages to trigger Slack replies (default: false).",
   },
+  botLoopProtection: {
+    label: "Slack Bot Loop Protection",
+    help: "Sliding-window guard for Slack bot-to-bot loops. Default is enabled whenever allowBots lets bot-authored messages reach dispatch.",
+  },
+  "botLoopProtection.enabled": {
+    label: "Slack Bot Loop Protection Enabled",
+    help: 'Enable the bot-pair loop guard. Defaults to true when allowBots is true or "mentions", and false when bot messages are ignored.',
+  },
+  "botLoopProtection.maxEventsPerWindow": {
+    label: "Slack Bot Loop Events per Window",
+    help: "Maximum accepted bot-pair messages within the sliding window before suppression starts. Default: 20.",
+  },
+  "botLoopProtection.windowSeconds": {
+    label: "Slack Bot Loop Window Seconds",
+    help: "Sliding window length for counting bot-pair messages. Default: 60.",
+  },
+  "botLoopProtection.cooldownSeconds": {
+    label: "Slack Bot Loop Cooldown Seconds",
+    help: "How long to suppress the bot pair after it exceeds the budget. Default: 60.",
+  },
   socketMode: {
     label: "Slack Socket Mode Transport",
     help: "Slack Socket Mode transport tuning passed to the Slack SDK. Use only when investigating ping/pong timeout or stale websocket behavior.",
@@ -133,9 +153,17 @@ export const slackChannelConfigUiHints = {
     label: "Slack Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
   },
+  "streaming.progress.maxLineChars": {
+    label: "Slack Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
   "streaming.progress.render": {
     label: "Slack Progress Renderer",
     help: 'Progress draft renderer: "text" uses one portable text body; "rich" renders structured Slack Block Kit fields with the same text fallback.',
+  },
+  "streaming.progress.nativeTaskCards": {
+    label: "Slack Native Progress Task Cards",
+    help: 'Opt in to Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Default: false.',
   },
   "streaming.progress.toolProgress": {
     label: "Slack Progress Tool Lines",

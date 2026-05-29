@@ -1,9 +1,17 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocketServer } from "ws";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../protocol/client-info.js";
-import { PROTOCOL_VERSION } from "../protocol/index.js";
-import { GATEWAY_STARTUP_UNAVAILABLE_REASON } from "../protocol/startup-unavailable.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_CLOSE_REASON,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+  GATEWAY_STARTUP_UNAVAILABLE_REASON,
+} from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 function createLogger() {
@@ -51,6 +59,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       headers: { host: "127.0.0.1:19001" },
       socket: { localAddress: "127.0.0.1" },
     };
+    const logWsControl = createLogger();
 
     attachGatewayWsConnectionHandler({
       wss,
@@ -64,7 +73,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       refreshHealthSnapshot: vi.fn(async () => ({}) as never),
       logGateway: createLogger() as never,
       logHealth: createLogger() as never,
-      logWsControl: createLogger() as never,
+      logWsControl: logWsControl as never,
       extraHandlers: {},
       broadcast: vi.fn(),
       buildRequestContext: () => createRequestContext() as never,
@@ -107,21 +116,52 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       ).toBe(true);
     });
 
-    expect(sent).toContainEqual(
+    const response = sent.find(
+      (frame) =>
+        typeof frame === "object" &&
+        frame !== null &&
+        (frame as { type?: unknown; id?: unknown }).type === "res" &&
+        (frame as { id?: unknown }).id === "connect-1",
+    ) as
+      | {
+          type?: unknown;
+          id?: unknown;
+          ok?: unknown;
+          error?: {
+            code?: unknown;
+            retryable?: unknown;
+            retryAfterMs?: unknown;
+            details?: unknown;
+          };
+        }
+      | undefined;
+    expect(response?.type).toBe("res");
+    expect(response?.id).toBe("connect-1");
+    expect(response?.ok).toBe(false);
+    expect(response?.error?.code).toBe("UNAVAILABLE");
+    expect(response?.error?.retryable).toBe(true);
+    expect(response?.error?.retryAfterMs).toBe(500);
+    expect(response?.error?.details).toEqual({ reason: GATEWAY_STARTUP_UNAVAILABLE_REASON });
+    await vi.waitFor(() => {
+      expect(socket.close).toHaveBeenCalledWith(
+        GATEWAY_STARTUP_CLOSE_CODE,
+        GATEWAY_STARTUP_CLOSE_REASON,
+      );
+    });
+    expect(logWsControl.debug).toHaveBeenCalledWith(
+      expect.stringContaining("closed before connect"),
       expect.objectContaining({
-        type: "res",
-        id: "connect-1",
-        ok: false,
-        error: expect.objectContaining({
-          code: "UNAVAILABLE",
-          retryable: true,
-          retryAfterMs: 500,
-          details: { reason: GATEWAY_STARTUP_UNAVAILABLE_REASON },
-        }),
+        cause: GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+        handshake: "failed",
       }),
     );
-    await vi.waitFor(() => {
-      expect(socket.close).toHaveBeenCalledWith(1013, "gateway starting");
-    });
+    expect(logWsControl.debug).toHaveBeenCalledWith(
+      expect.stringContaining(`code=${GATEWAY_STARTUP_CLOSE_CODE}`),
+      expect.anything(),
+    );
+    expect(logWsControl.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("closed before connect"),
+      expect.anything(),
+    );
   });
 });

@@ -3,12 +3,12 @@ import path from "node:path";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "../agents/queued-file-writer.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { redactSecrets } from "../logging/redact.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryPointerOpenFlags,
@@ -45,6 +45,7 @@ type TrajectoryRuntimeRecorder = {
   filePath: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
+  describeFlushState: () => string | undefined;
 };
 
 const writers = new Map<string, QueuedFileWriter>();
@@ -192,7 +193,7 @@ function limitTrajectoryPayloadValue(
     limited[key] = limitTrajectoryPayloadValue(record[key], depth + 1, seen);
   }
   if (keys.length > TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS) {
-    limited._truncated = truncatedTrajectoryValue("trajectory-object-size-limit", {
+    limited["_truncated"] = truncatedTrajectoryValue("trajectory-object-size-limit", {
       originalKeys: keys.length,
       limitKeys: TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS,
     });
@@ -202,7 +203,33 @@ function limitTrajectoryPayloadValue(
 }
 
 function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
-  return sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(data)) as Record<string, unknown>;
+  return redactSecrets(sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(data))) as Record<
+    string,
+    unknown
+  >;
+}
+
+function describeTrajectoryWriterFlushState(writer: QueuedFileWriter): string | undefined {
+  const diagnostics = writer.describeQueue?.();
+  if (!diagnostics) {
+    return undefined;
+  }
+  const parts = [
+    `pendingWrites=${diagnostics.pendingWrites}`,
+    `queuedBytes=${diagnostics.queuedBytes}`,
+    `activeOperation=${diagnostics.activeOperation}`,
+    `yieldBeforeWrite=${diagnostics.yieldBeforeWrite}`,
+  ];
+  if (diagnostics.activeWriteBytes !== undefined) {
+    parts.push(`activeWriteBytes=${diagnostics.activeWriteBytes}`);
+  }
+  if (diagnostics.maxQueuedBytes !== undefined) {
+    parts.push(`maxQueuedBytes=${diagnostics.maxQueuedBytes}`);
+  }
+  if (diagnostics.maxFileBytes !== undefined) {
+    parts.push(`maxFileBytes=${diagnostics.maxFileBytes}`);
+  }
+  return parts.join(" ");
 }
 
 export function toTrajectoryToolDefinitions(
@@ -358,5 +385,6 @@ export function createTrajectoryRuntimeRecorder(
         writers.delete(filePath);
       }
     },
+    describeFlushState: () => describeTrajectoryWriterFlushState(writer),
   };
 }

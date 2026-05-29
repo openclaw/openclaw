@@ -1,5 +1,5 @@
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { RequestClient } from "./internal/discord.js";
 
@@ -81,6 +81,7 @@ export type DiscordMessageQuery = {
 
 export type DiscordMessageEdit = {
   content?: string;
+  flags?: number;
 };
 
 export type DiscordThreadCreate = {

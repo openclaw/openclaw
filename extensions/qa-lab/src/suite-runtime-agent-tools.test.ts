@@ -1,18 +1,23 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const requireFromHere = createRequire(import.meta.url);
 
 const connectMock = vi.hoisted(() => vi.fn(async () => undefined));
 const listToolsMock = vi.hoisted(() => vi.fn(async () => ({ tools: [] })));
 const callToolMock = vi.hoisted(() => vi.fn(async () => ({ content: [] })));
 const closeMock = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
+const stderrOnMock = vi.hoisted(() => vi.fn());
 const stdioTransportMock = vi.hoisted(() =>
   vi.fn().mockImplementation(function StdioClientTransport(
-    this: { params?: unknown },
+    this: { params?: unknown; stderr?: { on: typeof stderrOnMock } },
     params: unknown,
   ) {
     this.params = params;
+    this.stderr = { on: stderrOnMock };
   }),
 );
 
@@ -63,6 +68,7 @@ describe("qa suite runtime agent tools helpers", () => {
     callToolMock.mockReset();
     closeMock.mockClear();
     resolveQaNodeExecPathMock.mockClear();
+    stderrOnMock.mockClear();
     stdioTransportMock.mockClear();
   });
 
@@ -133,7 +139,7 @@ describe("qa suite runtime agent tools helpers", () => {
       command: "/usr/bin/node",
       args: [
         "--import",
-        expect.stringContaining(path.join("node_modules", "tsx")),
+        requireFromHere.resolve("tsx"),
         path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
       ],
       stderr: "pipe",
@@ -143,10 +149,17 @@ describe("qa suite runtime agent tools helpers", () => {
         OPENCLAW_KEY: "1",
       },
     });
-    expect(callToolMock).toHaveBeenCalledWith({
-      name: "plugin.echo",
-      arguments: { text: "hello" },
-    });
+    expect(stderrOnMock).toHaveBeenCalledWith("data", expect.any(Function));
+    expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
+    expect(listToolsMock).toHaveBeenCalledWith({}, { timeout: 180_000 });
+    expect(callToolMock).toHaveBeenCalledWith(
+      {
+        name: "plugin.echo",
+        arguments: { text: "hello" },
+      },
+      undefined,
+      { timeout: 180_000 },
+    );
     expect(closeMock).toHaveBeenCalled();
   });
 
@@ -174,6 +187,42 @@ describe("qa suite runtime agent tools helpers", () => {
     );
 
     expect(callToolMock).not.toHaveBeenCalled();
+    expect(closeMock).toHaveBeenCalled();
+  });
+
+  it("keeps only a byte-bounded plugin-tools MCP stderr tail on call failures", async () => {
+    listToolsMock.mockResolvedValueOnce({
+      tools: [{ name: "plugin.echo" }] as never[],
+    });
+    callToolMock.mockImplementationOnce(async () => {
+      const stderrListener = stderrOnMock.mock.calls[0]?.[1] as
+        | ((chunk: unknown) => void)
+        | undefined;
+      stderrListener?.(Buffer.from(`old stderr${"x".repeat(12_000)}\nrecent MCP stderr tail`));
+      throw new Error("tool call failed");
+    });
+
+    const error = await callPluginToolsMcp({
+      env: {
+        gateway: {
+          tempRoot: gatewayTempRoot,
+          runtimeEnv: {
+            PATH: "/usr/bin",
+          },
+        },
+        repoRoot,
+      } as never,
+      toolName: "plugin.echo",
+      args: { text: "hello" },
+    }).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("tool call failed");
+    expect(message).toContain("MCP stderr tail:");
+    expect(message).toContain("MCP stderr truncated to last");
+    expect(message).toContain("recent MCP stderr tail");
+    expect(message).not.toContain("old stderr");
     expect(closeMock).toHaveBeenCalled();
   });
 });

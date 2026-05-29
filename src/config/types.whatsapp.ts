@@ -10,7 +10,7 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
+} from "./types.channel-health.js";
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -134,6 +134,11 @@ export type WhatsAppConfig = WhatsAppConfigCore &
     defaultAccount?: string;
     /** Per-action tool gating (default: true for all). */
     actions?: WhatsAppActionConfig;
+    /** Plugin hook opt-in configuration for privacy-sensitive inbound events. */
+    pluginHooks?: {
+      /** Enable message_received hooks to broadcast inbound WhatsApp messages to plugins. */
+      messageReceived?: boolean;
+    };
   };
 
 export type WhatsAppAccountConfig = WhatsAppConfigCore &
@@ -144,10 +149,9 @@ export type WhatsAppAccountConfig = WhatsAppConfigCore &
     enabled?: boolean;
     /** Override auth directory (Baileys multi-file auth state). */
     authDir?: string;
+    /** Plugin hook opt-in configuration for privacy-sensitive inbound events. */
+    pluginHooks?: {
+      /** Enable message_received hooks to broadcast inbound WhatsApp messages to plugins. */
+      messageReceived?: boolean;
+    };
   };
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    whatsapp?: WhatsAppConfig;
-  }
-}

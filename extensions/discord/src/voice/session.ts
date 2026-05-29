@@ -1,11 +1,12 @@
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { TranscriptUtterance } from "openclaw/plugin-sdk/transcripts";
 import { ChannelType } from "../internal/discord.js";
 import type { VoiceCaptureState } from "./capture-state.js";
 import type { VoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 export const MIN_SEGMENT_SECONDS = 0.35;
-export const CAPTURE_FINALIZE_GRACE_MS = 2_500;
+export const CAPTURE_FINALIZE_GRACE_MS = 2_000;
 export const VOICE_CONNECT_READY_TIMEOUT_MS = 30_000;
 export const VOICE_RECONNECT_GRACE_MS = 15_000;
 export const PLAYBACK_READY_TIMEOUT_MS = 60_000;
@@ -50,7 +51,8 @@ export type VoiceRealtimeSession = {
   ) => VoiceRealtimeSpeakerTurn;
   close: () => void;
   connect: () => Promise<void>;
-  handleBargeIn: () => void;
+  handleBargeIn: (reason?: string) => void;
+  isBargeInEnabled: () => boolean;
 };
 
 export type VoiceSessionEntry = {
@@ -59,14 +61,21 @@ export type VoiceSessionEntry = {
   channelId: string;
   channelName?: string;
   sessionChannelId: string;
+  voiceSessionKey: string;
   route: ReturnType<typeof resolveAgentRoute>;
   connection: import("@discordjs/voice").VoiceConnection;
   player: import("@discordjs/voice").AudioPlayer;
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
+  pendingRealtime?: VoiceRealtimeSession;
   realtime?: VoiceRealtimeSession;
+  transcripts?: {
+    sessionId: string;
+    onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
+  };
   receiveRecovery: VoiceReceiveRecoveryState;
+  isStopped: () => boolean;
   stop: () => void;
 };
 

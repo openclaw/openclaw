@@ -42,10 +42,9 @@ describe("plugin-sdk/command-auth", () => {
     expect(buildHelpMessage(cfg)).toContain("/commands for full list");
     expect(buildCommandsMessage(cfg)).toContain("More: /tools for available capabilities");
     expect(buildCommandsMessage(cfg)).toContain("/models - List model providers/models.");
-    expect(buildCommandsMessagePaginated(cfg)).toMatchObject({
-      currentPage: 1,
-      totalPages: expect.any(Number),
-    });
+    const commandsPage = buildCommandsMessagePaginated(cfg);
+    expect(commandsPage.currentPage).toBe(1);
+    expect(typeof commandsPage.totalPages).toBe("number");
   });
 
   it("resolves command authorization across allowlist sources", async () => {
@@ -135,7 +134,7 @@ describe("plugin-sdk/command-auth", () => {
         useAccessGroups && authorizers.some((entry) => entry.configured && entry.allowed),
     });
 
-    expect(result.effectiveAllowFrom).toEqual([]);
+    expect(result.effectiveAllowFrom).toStrictEqual([]);
     expect(result.senderAllowedForCommands).toBe(false);
     expect(result.commandAuthorized).toBeUndefined();
   });

@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 vi.mock("../logging/subsystem.js", () => {
   const createMockLogger = () => ({
@@ -29,7 +30,7 @@ const acpManagerMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../acp/control-plane/manager.js", () => ({
-  __testing: {
+  testing: {
     resetAcpSessionManagerForTests: vi.fn(() => {
       acpManagerMock.current = {
         resolveSession: vi.fn(() => null),
@@ -42,9 +43,9 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: vi.fn(() => acpManagerMock.current),
 }));
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  runEmbeddedAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
@@ -87,6 +88,13 @@ vi.mock("../agents/model-selection.js", () => {
   });
   const modelKey = (provider: string, model: string) =>
     `${provider.trim().toLowerCase()}/${model.trim().toLowerCase()}`;
+  const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
+    if (allowedKeys.has(key)) {
+      return true;
+    }
+    const slash = key.indexOf("/");
+    return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
+  };
   const resolvePrimary = (cfg?: ConfigWithModels): string | undefined => {
     const primary = cfg?.agents?.defaults?.model;
     if (typeof primary === "string") {
@@ -131,7 +139,49 @@ vi.mock("../agents/model-selection.js", () => {
         allowAny: Object.keys(modelConfig).length === 0,
       };
     }),
+    createModelVisibilityPolicy: vi.fn(
+      ({ cfg, catalog = [] }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
+        const refs = new Set<string>();
+        const modelConfig = cfg?.agents?.defaults?.models ?? {};
+        for (const raw of Object.keys(modelConfig)) {
+          const parsed = parseModelRefImpl(raw, "openai");
+          if (parsed) {
+            refs.add(modelKey(parsed.provider, parsed.model));
+          }
+        }
+        const primary = resolveDefaultRef(cfg);
+        refs.add(modelKey(primary.provider, primary.model));
+        const allowAny = Object.keys(modelConfig).length === 0;
+        const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(refs, key);
+        return {
+          allowAny,
+          allowedKeys: refs,
+          allowedCatalog: catalog,
+          exactModelRefs: Object.keys(modelConfig).filter((key) => !key.endsWith("/*")),
+          providerWildcards: new Set(
+            Object.keys(modelConfig)
+              .filter((key) => key.endsWith("/*"))
+              .map((key) => key.slice(0, -2).trim().toLowerCase()),
+          ),
+          hasConfiguredEntries: Object.keys(modelConfig).length > 0,
+          hasProviderWildcards: Object.keys(modelConfig).some((key) => key.endsWith("/*")),
+          allowsKey,
+          allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
+          resolveSelection: ({ provider, model }: ModelRef) => {
+            const key = modelKey(provider, model);
+            if (allowsKey(key)) {
+              return { provider, model };
+            }
+            const fallback = catalog[0];
+            return fallback?.id ? { provider: "openai", model: fallback.id } : null;
+          },
+          visibleCatalog: ({ catalog: visibleCatalog }: { catalog: CatalogEntry[] }) =>
+            visibleCatalog,
+        };
+      },
+    ),
     buildConfiguredModelCatalog: vi.fn(() => []),
+    isModelKeyAllowedBySet,
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
@@ -206,7 +256,7 @@ vi.mock("../agents/skills/refresh-state.js", () => ({
 
 vi.mock("../agents/skills/filter.js", () => ({
   normalizeSkillFilter: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
-    skillFilter?.map((entry) => String(entry).trim()).filter(Boolean),
+    skillFilter ? normalizeStringEntries(skillFilter) : undefined,
   ),
   normalizeSkillFilterForComparison: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
     skillFilter

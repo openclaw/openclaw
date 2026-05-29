@@ -1,6 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
+import { readEnvInt } from "./bash-tools.shared.js";
 import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -15,7 +17,7 @@ function clampTtl(value: number | undefined) {
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
 }
 
-let jobTtlMs = clampTtl(Number.parseInt(process.env.PI_BASH_JOB_TTL_MS ?? "", 10));
+let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
 
 export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 
@@ -25,6 +27,9 @@ export type SessionStdin = {
   // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
   destroy?: () => void;
   destroyed?: boolean;
+  writable?: boolean;
+  writableEnded?: boolean;
+  writableFinished?: boolean;
 };
 
 export interface ProcessSession {
@@ -32,6 +37,19 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config, snapshotted at exec start.
+   *  Used by background-exit notifications to remap cron-run keys to the
+   *  agent's main queue without an ambient config load. If config changes
+   *  while the process runs, the exit notification follows the start-time
+   *  session contract. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; required so the cron-run remap
+   *  can route global-scope agents to the literal "global" queue instead
+   *  of an agent-main queue the heartbeat never drains. Snapshotted with
+   *  `mainKey` for the same start-time routing reason. */
+  sessionScope?: "per-sender" | "global";
+  /** Start-time routing policy for detached exec system events. */
+  eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;

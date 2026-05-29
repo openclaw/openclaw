@@ -229,10 +229,12 @@ describe("engine/utils/audio", () => {
 
       const wav = buildMinimalWav(stereoPcm, 24000, 2);
       const result = parseWavFallback(wav);
-      expect(result).not.toBeNull();
+      if (!result) {
+        throw new Error("expected downmixed WAV fallback result");
+      }
       // mono output: 2 samples × 2 bytes = 4 bytes
-      expect(result!.length).toBe(4);
-      const outView = new DataView(result!.buffer, result!.byteOffset);
+      expect(result.length).toBe(4);
+      const outView = new DataView(result.buffer, result.byteOffset);
       expect(outView.getInt16(0, true)).toBe(150); // (100+200)/2
       expect(outView.getInt16(2, true)).toBe(-150); // (-100+-200)/2
     });

@@ -13,8 +13,16 @@ import { installDiscordRegistryHooks } from "./test-helpers/command-auth-registr
 installDiscordRegistryHooks();
 
 describe("resolveCommandAuthorization", () => {
-  const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) =>
-    allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
+  const formatAllowFrom = ({ allowFrom }: { allowFrom: Array<string | number> }) => {
+    const values: string[] = [];
+    for (const entry of allowFrom) {
+      const value = String(entry).trim();
+      if (value) {
+        values.push(value);
+      }
+    }
+    return values;
+  };
 
   function createAllowFromPlugin(
     id: string,
@@ -339,7 +347,6 @@ describe("resolveCommandAuthorization", () => {
         OriginatingChannel: "telegram",
         From: "owner-123",
         To: "owner-123",
-        ForceSenderIsOwnerFalse: true,
       } as MsgContext,
       cfg,
       commandAuthorized: true,
@@ -1005,8 +1012,9 @@ describe("resolveCommandAuthorization", () => {
           commandAuthorized: true,
         });
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("Error");
-        expect(String(warn.mock.calls[0]?.[0] ?? "")).not.toContain("SECRET-TOKEN-123");
+        const warning = String(warn.mock.calls[0]?.[0] ?? "");
+        expect(warning).toContain("Error");
+        expect(warning).not.toContain("SECRET-TOKEN-123");
       } finally {
         warn.mockRestore();
       }

@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import {
@@ -21,7 +22,6 @@ import {
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { startGatewayServer } from "./server.js";
 
 export async function getFreeGatewayPort(): Promise<number> {
@@ -68,23 +68,29 @@ export async function connectGatewayClient(params: {
     );
   return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
     let settled = false;
-    const stop = (err?: Error, client?: InstanceType<typeof GatewayClient>) => {
+    let client: InstanceType<typeof GatewayClient> | undefined;
+    const stop = (err?: Error, connectedClient?: InstanceType<typeof GatewayClient>) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
       if (err) {
+        void client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {
+          client?.stop();
+        });
         reject(err);
       } else {
-        resolve(client as InstanceType<typeof GatewayClient>);
+        resolve(connectedClient as InstanceType<typeof GatewayClient>);
       }
     };
-    const client = new GatewayClient({
+    client = new GatewayClient({
       url: params.url,
       token: params.token,
       deviceToken: params.deviceToken,
-      connectChallengeTimeoutMs: params.connectChallengeTimeoutMs ?? 0,
+      ...(params.connectChallengeTimeoutMs !== undefined
+        ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
+        : {}),
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",

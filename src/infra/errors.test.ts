@@ -50,7 +50,7 @@ describe("error helpers", () => {
         ...((current as { errors?: unknown[] }).errors ?? []),
       ]),
     ).toEqual([root, child, leaf]);
-    expect(collectErrorGraphCandidates(null)).toEqual([]);
+    expect(collectErrorGraphCandidates(null)).toStrictEqual([]);
   });
 
   it("matches errno-shaped errors by code", () => {
@@ -88,11 +88,37 @@ describe("error helpers", () => {
     expect(formatted).toBe("error A | error B");
   });
 
+  it("dedupes repeated cause messages while preserving deeper distinct causes", () => {
+    const rootCause = new Error("provider auth lookup failed");
+    const inner = new Error('No API key found for provider "openai-codex".', { cause: rootCause });
+    const wrapper = new Error(inner.message, { cause: inner });
+    expect(formatErrorMessage(wrapper)).toBe(`${inner.message} | ${rootCause.message}`);
+  });
+
   it("redacts sensitive tokens from formatted error messages", () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     const formatted = formatErrorMessage(new Error(`Authorization: Bearer ${token}`));
     expect(formatted).toContain("Authorization: Bearer");
     expect(formatted).not.toContain(token);
+  });
+
+  it("redacts HTTP client config secrets from formatted error chains", () => {
+    const appSecret = "feishu_app_secret_1234567890";
+    const tenantToken = "feishu_tenant_access_abcdef123456";
+    const rootCause = new Error(
+      `request config: { appSecret: '${appSecret}', headers: { authorization: 'Bearer ${tenantToken}' } }`,
+    );
+    const httpError = Object.assign(new Error(`POST /auth/v3/tenant_access_token failed`), {
+      cause: rootCause,
+    });
+
+    const formatted = formatErrorMessage(httpError);
+
+    expect(formatted).toContain("POST /auth/v3/tenant_access_token failed");
+    expect(formatted).toContain("appSecret:");
+    expect(formatted).toContain("authorization:");
+    expect(formatted).not.toContain(appSecret);
+    expect(formatted).not.toContain(tenantToken);
   });
 
   it.each([

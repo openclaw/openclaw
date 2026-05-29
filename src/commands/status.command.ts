@@ -1,10 +1,11 @@
-import { withProgress } from "../cli/progress.js";
 import {
   normalizePairingConnectRequestId,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
   type ConnectPairingRequiredReason,
-} from "../gateway/protocol/connect-error-details.js";
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { withProgress } from "../cli/progress.js";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { type RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
@@ -17,6 +18,7 @@ import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
+import { formatUpdateRestartStatusValue } from "./status-update-restart.ts";
 import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
@@ -28,9 +30,6 @@ const statusScanFastJsonModuleLoader = createLazyImportLoader(
 const statusAllModuleLoader = createLazyImportLoader(() => import("./status-all.js"));
 const statusCommandTextRuntimeLoader = createLazyImportLoader(
   () => import("./status.command.text-runtime.js"),
-);
-const statusGatewayConnectionRuntimeLoader = createLazyImportLoader(
-  () => import("./status.gateway-connection.runtime.js"),
 );
 const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
 
@@ -48,10 +47,6 @@ function loadStatusAllModule() {
 
 function loadStatusCommandTextRuntime() {
   return statusCommandTextRuntimeLoader.load();
-}
-
-function loadStatusGatewayConnectionRuntime() {
-  return statusGatewayConnectionRuntimeLoader.load();
 }
 
 function loadStatusNodeModeModule() {
@@ -177,14 +172,14 @@ export async function statusCommand(
         },
         async () => await resolveStatusSecurityAudit(input),
       ),
-    resolveUsage: async (timeoutMs) =>
+    resolveUsage: async (input) =>
       await withProgress(
         {
           label: "Fetching usage snapshot…",
           indeterminate: true,
           enabled: opts.json !== true,
         },
-        async () => await resolveStatusUsageSummary(timeoutMs),
+        async () => await resolveStatusUsageSummary(input),
       ),
     resolveHealth: async (input) =>
       await withProgress(
@@ -226,7 +221,7 @@ export async function statusCommand(
   });
 
   if (opts.verbose) {
-    const { buildGatewayConnectionDetails } = await loadStatusGatewayConnectionRuntime();
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
     const details = buildGatewayConnectionDetails({ config: scan.cfg });
     logGatewayConnectionDetails({
       runtime,
@@ -283,6 +278,15 @@ export async function statusCommand(
     nodeService: nodeDaemon,
     nodeOnlyGateway,
   });
+  const updateRestartValue = formatUpdateRestartStatusValue(
+    (await readRestartSentinel().catch(() => null))?.payload,
+    {
+      ok,
+      warn,
+      muted,
+      formatTimeAgo,
+    },
+  );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
       opts,
@@ -322,6 +326,7 @@ export async function statusCommand(
       updateValue: updateSurface.updateAvailable
         ? warn(`available · ${updateSurface.updateLine}`)
         : updateSurface.updateLine,
+      updateRestartValue,
     }),
   );
   for (const line of lines) {

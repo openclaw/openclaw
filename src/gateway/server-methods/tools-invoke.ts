@@ -1,12 +1,11 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateToolsInvokeParams,
   type ToolsInvokeResult,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -31,7 +30,7 @@ function resolveRpcErrorCode(params: {
 }
 
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
-  "tools.invoke": async ({ params, client, respond, context }) => {
+  "tools.invoke": async ({ params, respond, context }) => {
     if (!validateToolsInvokeParams(params)) {
       respond(
         false,
@@ -56,7 +55,6 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
     const outcome = await invokeGatewayTool({
       cfg: context.getRuntimeConfig(),
       input: params,
-      senderIsOwner: Boolean(client?.connect.scopes?.includes(ADMIN_SCOPE)),
       toolCallIdPrefix: "rpc",
       approvalMode: params.confirm === true ? "request" : "report",
     });

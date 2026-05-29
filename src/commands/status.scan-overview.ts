@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
-import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
@@ -13,6 +12,8 @@ import {
 } from "./status.scan.bootstrap-shared.js";
 import { loadStatusScanCommandConfig } from "./status.scan.config-shared.js";
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
+
+type StatusGatewayProbeTimeoutResolver = (cfg: OpenClawConfig) => number | undefined;
 
 const statusScanDepsRuntimeModuleLoader = createLazyImportLoader(
   () => import("./status.scan.deps.runtime.js"),
@@ -26,6 +27,9 @@ const statusScanRuntimeModuleLoader = createLazyImportLoader(
 );
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
 const statusSummaryModuleLoader = createLazyImportLoader(() => import("./status.summary.js"));
+const channelPluginIdsModuleLoader = createLazyImportLoader(
+  () => import("../plugins/channel-plugin-ids.js"),
+);
 const configModuleLoader = createLazyImportLoader(() => import("../config/config.js"));
 const commandConfigResolutionModuleLoader = createLazyImportLoader(
   () => import("../cli/command-config-resolution.js"),
@@ -56,6 +60,10 @@ function loadGatewayCallModule() {
 
 function loadStatusSummaryModule() {
   return statusSummaryModuleLoader.load();
+}
+
+function loadChannelPluginIdsModule() {
+  return channelPluginIdsModuleLoader.load();
 }
 
 function loadConfigModule() {
@@ -129,11 +137,22 @@ export async function collectStatusScanOverview(params: {
   showSecrets: boolean;
   runtime?: RuntimeEnv;
   allowMissingConfigFastPath?: boolean;
-  resolveHasConfiguredChannels?: (cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => boolean;
+  skipUpdateCheck?: boolean;
+  fetchGitUpdate?: boolean;
+  includeRegistryUpdate?: boolean;
+  resolveHasConfiguredChannels?: (
+    cfg: OpenClawConfig,
+    sourceConfig: OpenClawConfig,
+  ) => boolean | Promise<boolean>;
   includeChannelsData?: boolean;
   includeLiveChannelStatus?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewayProbeTimeoutMs?: number | StatusGatewayProbeTimeoutResolver;
   includeChannelSetupRuntimeFallback?: boolean;
+  channelCredentialResolutionSkipped?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
+  includeChannelSecretTargets?: boolean;
+  skipConfigPluginValidation?: boolean;
   progress?: {
     setLabel(label: string): void;
     tick(): void;
@@ -159,7 +178,10 @@ export async function collectStatusScanOverview(params: {
   } = await loadStatusScanCommandConfig({
     commandName: params.commandName,
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
-    readBestEffortConfig: async () => (await loadConfigModule()).readBestEffortConfig(),
+    readBestEffortConfig: async () =>
+      (await loadConfigModule()).readBestEffortConfig({
+        skipPluginValidation: params.skipConfigPluginValidation,
+      }),
     resolveConfig: async (loadedConfig) =>
       await (
         await loadCommandConfigResolutionModule()
@@ -168,6 +190,8 @@ export async function collectStatusScanOverview(params: {
         commandName: params.commandName,
         targetIds: (await loadCommandSecretTargetsModule()).getStatusCommandSecretTargetIds(
           loadedConfig,
+          process.env,
+          { includeChannelTargets: params.includeChannelSecretTargets },
         ),
         mode: "read_only_status",
         ...(params.runtime ? { runtime: params.runtime } : {}),
@@ -175,9 +199,18 @@ export async function collectStatusScanOverview(params: {
   });
   params.progress?.tick();
   const hasConfiguredChannels = params.resolveHasConfiguredChannels
-    ? params.resolveHasConfiguredChannels(cfg, sourceConfig)
-    : hasConfiguredChannelsForReadOnlyScope({ config: cfg, activationSourceConfig: sourceConfig });
+    ? await params.resolveHasConfiguredChannels(cfg, sourceConfig)
+    : await loadChannelPluginIdsModule().then(({ hasConfiguredChannelsForReadOnlyScope }) =>
+        hasConfiguredChannelsForReadOnlyScope({
+          config: cfg,
+          activationSourceConfig: sourceConfig,
+        }),
+      );
   const osSummary = resolveOsSummary();
+  const gatewayProbeTimeoutMs =
+    typeof params.gatewayProbeTimeoutMs === "function"
+      ? params.gatewayProbeTimeoutMs(cfg)
+      : params.gatewayProbeTimeoutMs;
   const bootstrap = await createStatusScanCoreBootstrap<
     Awaited<ReturnType<typeof getAgentLocalStatusesFn>>
   >({
@@ -185,6 +218,11 @@ export async function collectStatusScanOverview(params: {
     cfg,
     hasConfiguredChannels,
     opts: params.opts,
+    skipUpdateCheck: params.skipUpdateCheck,
+    fetchGitUpdate: params.fetchGitUpdate,
+    includeRegistryUpdate: params.includeRegistryUpdate,
+    includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
+    gatewayProbeTimeoutMs,
     getTailnetHostname: async (runner) =>
       await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
@@ -252,6 +290,9 @@ export async function collectStatusScanOverview(params: {
           sourceConfig,
           includeSetupFallbackPlugins: params.includeChannelSetupRuntimeFallback !== false,
           liveChannelStatus: channelsStatus,
+          ...(params.channelCredentialResolutionSkipped === true
+            ? { credentialResolutionSkipped: true }
+            : {}),
         });
         params.progress?.tick();
         return { channelsStatus, channelIssues, channels };

@@ -61,6 +61,25 @@ function createSession() {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireMockRecordArg(mock: ReturnType<typeof vi.fn>, callIndex: number, label: string) {
+  return requireRecord(mock.mock.calls[callIndex]?.[0], label);
+}
+
+function requireSshRunCommandParams(callIndex = 0) {
+  return requireMockRecordArg(sshMocks.runSshSandboxCommand, callIndex, "ssh run command params");
+}
+
+function requireSshUploadParams(callIndex: number, label: string) {
+  return requireMockRecordArg(sshMocks.uploadDirectoryToSshTarget, callIndex, label);
+}
+
 function createBackendSandboxConfig(params?: { binds?: string[]; target?: string }): SandboxConfig {
   return {
     mode: "all",
@@ -170,17 +189,15 @@ describe("ssh sandbox backend", () => {
       actualConfigLabel: "peter@example.com:2222",
       configLabelMatch: true,
     });
-    expect(sshMocks.createSshSandboxSessionFromSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: "peter@example.com:2222",
-        workspaceRoot: "/remote/openclaw",
-      }),
+    const sessionSettings = requireMockRecordArg(
+      sshMocks.createSshSandboxSessionFromSettings,
+      0,
+      "ssh session settings",
     );
-    expect(sshMocks.runSshSandboxCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        remoteCommand: expect.stringContaining("/remote/openclaw/openclaw-ssh-agent-worker"),
-      }),
-    );
+    expect(sessionSettings.target).toBe("peter@example.com:2222");
+    expect(sessionSettings.workspaceRoot).toBe("/remote/openclaw");
+    const commandParams = requireSshRunCommandParams();
+    expect(commandParams.remoteCommand).toContain("/remote/openclaw/openclaw-ssh-agent-worker");
   });
 
   it("removes runtimes by deleting the remote scope root", async () => {
@@ -198,12 +215,9 @@ describe("ssh sandbox backend", () => {
       config: createConfig(),
     });
 
-    expect(sshMocks.runSshSandboxCommand).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowFailure: true,
-        remoteCommand: expect.stringContaining('rm -rf -- "$1"'),
-      }),
-    );
+    const commandParams = requireSshRunCommandParams();
+    expect(commandParams.allowFailure).toBe(true);
+    expect(commandParams.remoteCommand).toContain('rm -rf -- "$1"');
   });
 
   it("creates a remote-canonical backend that seeds once and reuses ssh exec", async () => {
@@ -277,25 +291,24 @@ describe("ssh sandbox backend", () => {
       usePty: false,
     });
 
-    expect(execSpec.argv).toEqual(
-      expect.arrayContaining(["ssh", "-F", createSession().configPath, "-T", createSession().host]),
-    );
+    expect(execSpec.argv.slice(0, 5)).toEqual([
+      "ssh",
+      "-F",
+      createSession().configPath,
+      "-T",
+      createSession().host,
+    ]);
     expect(execSpec.argv.at(-1)).toContain("/remote/openclaw/openclaw-ssh-agent-worker");
     expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenCalledTimes(2);
-    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        localDir: "/tmp/workspace",
-        remoteDir: expect.stringContaining("/workspace"),
-      }),
+    const workspaceUploadParams = requireSshUploadParams(0, "workspace upload params");
+    expect(workspaceUploadParams.localDir).toBe("/tmp/workspace");
+    expect(workspaceUploadParams.remoteDir).toContain("/workspace");
+    const agentUploadParams = requireRecord(
+      sshMocks.uploadDirectoryToSshTarget.mock.calls.at(1)?.[0],
+      "agent upload params",
     );
-    expect(sshMocks.uploadDirectoryToSshTarget).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        localDir: "/tmp/agent",
-        remoteDir: expect.stringContaining("/agent"),
-      }),
-    );
+    expect(agentUploadParams.localDir).toBe("/tmp/agent");
+    expect(agentUploadParams.remoteDir).toContain("/agent");
 
     await backend.finalizeExec?.({
       status: "completed",
@@ -303,7 +316,8 @@ describe("ssh sandbox backend", () => {
       timedOut: false,
       token: execSpec.finalizeToken,
     });
-    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalled();
+    expect(sshMocks.createSshSandboxSessionFromSettings).toHaveBeenCalledTimes(2);
+    expect(sshMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
   });
 
   it("filters blocked secrets from exec subprocess env", async () => {

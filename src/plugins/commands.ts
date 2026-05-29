@@ -5,6 +5,7 @@
  * These commands are processed before built-in commands and before agent invocation.
  */
 
+import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
@@ -21,7 +22,9 @@ import {
   validatePluginCommandDefinition,
 } from "./command-registration.js";
 import {
+  canExposeSenderIsOwner,
   isTrustedReservedCommandOwner,
+  listRegisteredPluginAgentPromptGuidance,
   pluginCommands,
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
@@ -47,6 +50,7 @@ export {
   clearPluginCommandsForPlugin,
   getPluginCommandSpecs,
   listProviderPluginCommandSpecs,
+  listRegisteredPluginAgentPromptGuidance,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
@@ -167,6 +171,54 @@ function resolveBindingConversationFromCommand(params: {
   });
 }
 
+type PluginCommandRuntimeLlm = NonNullable<PluginCommandContext["runtimeContext"]>["llm"];
+type PluginCommandLlmCompleteParams = Parameters<
+  NonNullable<PluginCommandRuntimeLlm>["complete"]
+>[0];
+
+function buildPluginCommandRuntimeContext(params: {
+  command: RegisteredPluginCommand;
+  config: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  authProfileId?: string;
+}): PluginCommandContext["runtimeContext"] {
+  const sessionKey = params.sessionKey?.trim();
+  const agentId = resolveBoundAgentIdForSession({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey,
+  });
+  if (!sessionKey && !agentId) {
+    return undefined;
+  }
+  return {
+    llm: {
+      complete: async (request: PluginCommandLlmCompleteParams) => {
+        const { createRuntimeLlm } = await import("./runtime/runtime-llm.runtime.js");
+        return await createRuntimeLlm({
+          getConfig: () => params.config,
+          authority: {
+            caller: {
+              kind: "plugin",
+              id: params.command.pluginId,
+              name: params.command.pluginName,
+            },
+            pluginIdForPolicy: params.command.pluginId,
+            requiresBoundAgent: true,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(agentId ? { agentId } : {}),
+            ...(params.authProfileId ? { preferredProfile: params.authProfileId } : {}),
+            allowAgentIdOverride: false,
+            allowModelOverride: false,
+            allowComplete: true,
+          },
+        }).complete(request);
+      },
+    },
+  };
+}
+
 /**
  * Execute a plugin command handler.
  *
@@ -182,9 +234,12 @@ export async function executePluginCommand(params: {
   isAuthorizedSender: boolean;
   senderIsOwner?: boolean;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
+  /** Host-resolved agent authority for plugin-owned or non-agent-shaped session keys. */
+  agentId?: string;
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
   sessionFile?: PluginCommandContext["sessionFile"];
+  authProfileId?: string;
   commandBody: string;
   config: OpenClawConfig;
   from?: PluginCommandContext["from"];
@@ -253,7 +308,7 @@ export async function executePluginCommand(params: {
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
   const senderIsOwnerForCommand =
-    requiredScopes.length > 0 ||
+    canExposeSenderIsOwner(command) ||
     (isTrustedReservedCommandOwner(command) &&
       command.ownership === "reserved" &&
       isReservedCommandName(command.name) &&
@@ -301,6 +356,13 @@ export async function executePluginCommand(params: {
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
+    runtimeContext: buildPluginCommandRuntimeContext({
+      command,
+      config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      authProfileId: params.authProfileId,
+    }),
     ...(diagnosticsUploadApprovedForCommand === undefined
       ? {}
       : { diagnosticsUploadApproved: diagnosticsUploadApprovedForCommand }),
@@ -390,6 +452,7 @@ function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): st
   return listPluginInvocationKeys(command);
 }
 
-export const __testing = {
+export const testing = {
   resolveBindingConversationFromCommand,
 };
+export { testing as __testing };

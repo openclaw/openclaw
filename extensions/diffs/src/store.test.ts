@@ -2,10 +2,14 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
 import { DiffArtifactStore } from "./store.js";
-import { createDiffStoreHarness } from "./test-helpers.js";
+import { createDiffStoreHarness, ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
+
+beforeAll(async () => {
+  await ensureCuratedViewerRuntimeForTests();
+});
 
 describe("DiffArtifactStore", () => {
   let rootDir: string;
@@ -141,9 +145,12 @@ describe("DiffArtifactStore", () => {
     vi.setSystemTime(new Date(now.getTime() + 2_000));
     await store.cleanupExpired();
 
-    await expect(fs.stat(path.dirname(standalone.filePath))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const error = await fs.stat(path.dirname(standalone.filePath)).then(
+      () => undefined,
+      (statError: unknown) => statError,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 
   it("supports image path aliases for backward compatibility", async () => {

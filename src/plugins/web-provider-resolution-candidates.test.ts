@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   loadPluginRegistrySnapshot: vi.fn(),
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
   loadPluginMetadataSnapshot: vi.fn(),
+  resolvePluginMetadataSnapshot: vi.fn(),
 }));
 
 vi.mock("./plugin-registry.js", () => ({
@@ -22,6 +23,8 @@ vi.mock("./manifest-registry-installed.js", () => ({
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.loadPluginMetadataSnapshot(...args),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+    mocks.resolvePluginMetadataSnapshot(...args),
 }));
 
 let resolveManifestDeclaredWebProviderCandidatePluginIds: typeof import("./web-provider-resolution-shared.js").resolveManifestDeclaredWebProviderCandidatePluginIds;
@@ -61,6 +64,10 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
     mocks.loadPluginMetadataSnapshot.mockImplementation((...args: unknown[]) => ({
       plugins: mocks.loadPluginManifestRegistryForInstalledIndex(...args).plugins,
     }));
+    mocks.resolvePluginMetadataSnapshot.mockReset();
+    mocks.resolvePluginMetadataSnapshot.mockImplementation((...args: unknown[]) => ({
+      plugins: mocks.loadPluginManifestRegistryForInstalledIndex(...args).plugins,
+    }));
   });
 
   it("treats explicit empty plugin scopes as scoped-empty", () => {
@@ -70,7 +77,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         configKey: "webSearch",
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(mocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
@@ -81,8 +88,8 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         configKey: "webSearch",
         onlyPluginIds: ["missing-plugin"],
       }),
-    ).toEqual([]);
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+    ).toStrictEqual([]);
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledOnce();
   });
 
   it("keeps origin filters with no declared web candidates scoped-empty", () => {
@@ -105,7 +112,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         configKey: "webSearch",
         origin: "bundled",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("derives provider candidates from a single manifest-registry read", () => {
@@ -115,7 +122,7 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
         configKey: "webSearch",
       }),
     ).toEqual(["alpha", "beta"]);
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(1);
   });
 });

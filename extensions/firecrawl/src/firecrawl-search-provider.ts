@@ -1,9 +1,6 @@
-import {
-  createWebSearchProviderContractFields,
-  type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
-
-const FIRECRAWL_CREDENTIAL_PATH = "plugins.entries.firecrawl.config.webSearch.apiKey";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+import { type WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
+import { buildFirecrawlWebSearchProviderBase } from "../web-search-shared.js";
 
 type FirecrawlClientModule = typeof import("./firecrawl-client.js");
 
@@ -19,7 +16,7 @@ const GenericFirecrawlSearchSchema = {
   properties: {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-10).",
       minimum: 1,
       maximum: 10,
@@ -30,23 +27,7 @@ const GenericFirecrawlSearchSchema = {
 
 export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    id: "firecrawl",
-    label: "Firecrawl Search",
-    hint: "Structured results with optional result scraping",
-    onboardingScopes: ["text-inference"],
-    credentialLabel: "Firecrawl API key",
-    envVars: ["FIRECRAWL_API_KEY"],
-    placeholder: "fc-...",
-    signupUrl: "https://www.firecrawl.dev/",
-    docsUrl: "https://docs.openclaw.ai/tools/firecrawl",
-    autoDetectOrder: 60,
-    credentialPath: FIRECRAWL_CREDENTIAL_PATH,
-    ...createWebSearchProviderContractFields({
-      credentialPath: FIRECRAWL_CREDENTIAL_PATH,
-      searchCredential: { type: "scoped", scopeId: "firecrawl" },
-      configuredCredential: { pluginId: "firecrawl" },
-      selectionPluginId: "firecrawl",
-    }),
+    ...buildFirecrawlWebSearchProviderBase(),
     createTool: (ctx) => ({
       description:
         "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
@@ -56,7 +37,10 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
         return await runFirecrawlSearch({
           cfg: ctx.config,
           query: typeof args.query === "string" ? args.query : "",
-          count: typeof args.count === "number" ? args.count : undefined,
+          count: readPositiveIntegerParam(args, "count", {
+            message: "count must be an integer from 1 to 10",
+            max: 10,
+          }),
         });
       },
     }),

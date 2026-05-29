@@ -4,6 +4,7 @@ import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   formatInheritedThinkingLabel,
@@ -13,6 +14,7 @@ import {
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
+  SessionRunStatus,
   GatewayThinkingLevelOption,
   SessionCompactionCheckpoint,
   SessionsListResult,
@@ -174,6 +176,58 @@ function buildFastLevelOptions(): Array<{ value: string; label: string }> {
   }));
 }
 
+function formatSessionRunStatus(status: SessionRunStatus): string {
+  switch (status) {
+    case "running":
+      return t("sessionsView.statusRunning");
+    case "done":
+      return t("sessionsView.statusDone");
+    case "failed":
+      return t("sessionsView.statusFailed");
+    case "killed":
+      return t("sessionsView.statusKilled");
+    case "timeout":
+      return t("sessionsView.statusTimeout");
+    default:
+      return t("sessionsView.statusUnknown");
+  }
+}
+
+function resolveSessionStatusBadge(row: GatewaySessionRow): {
+  label: string;
+  tone: "live" | "idle" | "done" | "failed" | "muted";
+} {
+  if (isSessionRunActive(row)) {
+    return { label: t("sessionsView.statusLive"), tone: "live" };
+  }
+  if (row.status === "running" && row.hasActiveRun === false) {
+    return { label: t("sessionsView.statusIdle"), tone: "idle" };
+  }
+  if (row.status) {
+    const tone = row.status === "done" ? "done" : ("failed" as const);
+    return { label: formatSessionRunStatus(row.status), tone };
+  }
+  if (row.hasActiveRun === false) {
+    return { label: t("sessionsView.statusIdle"), tone: "idle" };
+  }
+  return { label: t("sessionsView.statusUnknown"), tone: "muted" };
+}
+
+function renderSessionStatusBadge(row: GatewaySessionRow) {
+  const badge = resolveSessionStatusBadge(row);
+  const title = `${t("sessionsView.status")}: ${badge.label}`;
+  return html`
+    <span
+      class="session-status-badge session-status-badge--${badge.tone}"
+      title=${title}
+      aria-label=${title}
+    >
+      <span class="session-status-badge__dot" aria-hidden="true"></span>
+      <span class="session-status-badge__label">${badge.label}</span>
+    </span>
+  `;
+}
+
 function resolveThinkLevelPatchValue(value: string): string | null {
   if (!value) {
     return null;
@@ -196,12 +250,20 @@ function filterRows(
     const kind = normalizeLowercaseStringOrEmpty(row.kind);
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
     const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
+    const status = normalizeLowercaseStringOrEmpty(row.status);
+    const liveState = isSessionRunActive(row)
+      ? "live running"
+      : row.hasActiveRun === false
+        ? "idle"
+        : "";
     if (
       key.includes(q) ||
       label.includes(q) ||
       kind.includes(q) ||
       displayName.includes(q) ||
-      runtime.includes(q)
+      runtime.includes(q) ||
+      status.includes(q) ||
+      liveState.includes(q)
     ) {
       return true;
     }
@@ -634,6 +696,7 @@ export function renderSessions(props: SessionsProps) {
                 ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
                 <th>${t("sessionsView.label")}</th>
                 ${sortHeader("kind", t("sessionsView.kind"))}
+                <th class="session-status-col">${t("sessionsView.status")}</th>
                 <th>${t("agents.context.runtime")}</th>
                 ${sortHeader("updated", t("sessionsView.updated"))}
                 ${sortHeader("tokens", t("sessionsView.tokens"))}
@@ -648,7 +711,7 @@ export function renderSessions(props: SessionsProps) {
               ${paginated.length === 0
                 ? html`
                     <tr>
-                      <td colspan="12" class="data-table-empty-cell">
+                      <td colspan="13" class="data-table-empty-cell">
                         ${emptyBecauseFiltered
                           ? html`
                               <div class="data-table-empty-state" role="status" aria-live="polite">
@@ -850,6 +913,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td>
         <span class="data-table-badge ${badgeClass}">${row.kind}</span>
       </td>
+      <td class="session-status-col">${renderSessionStatusBadge(row)}</td>
       <td class="session-runtime-cell">
         <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
       </td>
@@ -952,7 +1016,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     ...(isExpanded && hasCheckpoints
       ? [
           html`<tr id=${detailsId} class="session-checkpoint-details-row">
-            <td colspan="12">
+            <td colspan="13">
               <div class="session-details-panel">
                 <div class="session-details-panel__hero">
                   <div>
@@ -966,7 +1030,10 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                         `
                       : nothing}
                   </div>
-                  <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+                  <div class="session-details-panel__badges">
+                    ${renderSessionStatusBadge(row)}
+                    <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+                  </div>
                 </div>
 
                 <div class="session-details-grid">

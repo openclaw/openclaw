@@ -4,12 +4,28 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { readDiscordComponentSpec } from "./components.js";
+import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
+
+const trustedRequesterGuildAdminActions = new Set<ChannelMessageActionName>([
+  "emoji-upload",
+  "sticker-upload",
+  "role-add",
+  "role-remove",
+  "channel-create",
+  "channel-edit",
+  "channel-delete",
+  "channel-move",
+  "category-create",
+  "category-edit",
+  "category-delete",
+  "event-create",
+]);
 
 let discordChannelActionsRuntimePromise:
   | Promise<typeof import("./channel-actions.runtime.js")>
@@ -165,6 +181,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   resolveExecutionMode: ({ action }) =>
     action === "read" || action === "search" ? "gateway" : "local",
   describeMessageTool: describeDiscordMessageTool,
+  requiresTrustedRequesterSender: ({ action, toolContext }) =>
+    normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase() === "discord" &&
+    trustedRequesterGuildAdminActions.has(action),
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";
     if (action === "sendMessage") {
@@ -180,6 +199,10 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     if (ctx.action !== "send") {
       return null;
     }
+    const payloadWithDeliveryMetadata = withDiscordInboundEventDeliveryMetadata(payload, {
+      sessionKey: ctx.sessionKey,
+      inboundEventKind: ctx.inboundEventKind,
+    });
     const rawComponents = ctx.params.components;
     if (typeof rawComponents === "function") {
       return null;
@@ -195,18 +218,18 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     }
     const filename = normalizeOptionalString(ctx.params.filename);
     if (!componentSpec && !nativeComponents && !embeds?.length && !filename) {
-      return payload;
+      return payloadWithDeliveryMetadata;
     }
     const discordData =
-      payload.channelData?.discord &&
-      typeof payload.channelData.discord === "object" &&
-      !Array.isArray(payload.channelData.discord)
-        ? (payload.channelData.discord as Record<string, unknown>)
+      payloadWithDeliveryMetadata.channelData?.discord &&
+      typeof payloadWithDeliveryMetadata.channelData.discord === "object" &&
+      !Array.isArray(payloadWithDeliveryMetadata.channelData.discord)
+        ? (payloadWithDeliveryMetadata.channelData.discord as Record<string, unknown>)
         : {};
     return {
-      ...payload,
+      ...payloadWithDeliveryMetadata,
       channelData: {
-        ...payload.channelData,
+        ...payloadWithDeliveryMetadata.channelData,
         discord: {
           ...discordData,
           ...(componentSpec ? { components: componentSpec } : {}),
@@ -227,6 +250,8 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
+    sessionKey,
+    inboundEventKind,
   }) => {
     return await (
       await loadDiscordChannelActionsRuntime()
@@ -240,6 +265,8 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(inboundEventKind ? { inboundEventKind } : {}),
     });
   },
 };

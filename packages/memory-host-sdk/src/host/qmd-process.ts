@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
 export type CliSpawnInvocation = {
@@ -8,10 +9,25 @@ export type CliSpawnInvocation = {
   windowsHide?: boolean;
 };
 
-export type QmdBinaryAvailability = {
-  available: boolean;
-  error?: string;
+export type QmdBinaryUnavailableReason = "binary" | "workspace-cwd";
+
+export type QmdBinaryUnavailable = {
+  available: false;
+  /**
+   * Optional for source compatibility with older plugin SDK callers that
+   * returned only `{ available: false, error }`.
+   */
+  reason?: QmdBinaryUnavailableReason;
+  error: string;
 };
+
+export type QmdBinaryAvailability = { available: true } | QmdBinaryUnavailable;
+
+export function resolveQmdBinaryUnavailableReason(
+  result: QmdBinaryUnavailable,
+): QmdBinaryUnavailableReason {
+  return result.reason ?? "binary";
+}
 
 export function resolveCliSpawnInvocation(params: {
   command: string;
@@ -45,7 +61,13 @@ export async function checkQmdBinaryAvailability(params: {
       packageName: "qmd",
     });
   } catch (err) {
-    return { available: false, error: formatQmdAvailabilityError(err) };
+    return { available: false, reason: "binary", error: formatQmdAvailabilityError(err) };
+  }
+
+  const cwd = params.cwd ?? process.cwd();
+  const cwdError = validateQmdProbeCwd(cwd);
+  if (cwdError) {
+    return cwdError;
   }
 
   return await new Promise((resolve) => {
@@ -64,7 +86,7 @@ export async function checkQmdBinaryAvailability(params: {
 
     const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
       env: params.env,
-      cwd: params.cwd ?? process.cwd(),
+      cwd,
       shell: spawnInvocation.shell,
       windowsHide: spawnInvocation.windowsHide,
       stdio: "ignore",
@@ -73,12 +95,13 @@ export async function checkQmdBinaryAvailability(params: {
       child.kill("SIGKILL");
       finish({
         available: false,
+        reason: "binary",
         error: `spawn ${params.command} timed out after ${params.timeoutMs ?? 2_000}ms`,
       });
     }, params.timeoutMs ?? 2_000);
 
     child.once("error", (err) => {
-      finish({ available: false, error: formatQmdAvailabilityError(err) });
+      finish({ available: false, reason: "binary", error: formatQmdAvailabilityError(err) });
     });
     child.once("spawn", () => {
       didSpawn = true;
@@ -92,6 +115,33 @@ export async function checkQmdBinaryAvailability(params: {
       finish({ available: true });
     });
   });
+}
+
+function validateQmdProbeCwd(cwd: string): QmdBinaryAvailability | null {
+  try {
+    const stat = statSync(cwd);
+    if (!stat.isDirectory()) {
+      return {
+        available: false,
+        reason: "workspace-cwd",
+        error: `workspace directory is not a directory: ${cwd}`,
+      };
+    }
+    return null;
+  } catch (err) {
+    if (typeof err === "object" && err && "code" in err && err.code === "ENOENT") {
+      return {
+        available: false,
+        reason: "workspace-cwd",
+        error: `workspace directory missing: ${cwd}`,
+      };
+    }
+    return {
+      available: false,
+      reason: "workspace-cwd",
+      error: `workspace directory unavailable: ${cwd} (${formatQmdAvailabilityError(err)})`,
+    };
+  }
 }
 
 export async function runCliCommand(params: {
@@ -140,7 +190,7 @@ export async function runCliCommand(params: {
       }
       reject(err);
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (timer) {
         clearTimeout(timer);
       }
@@ -155,10 +205,52 @@ export async function runCliCommand(params: {
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
-        reject(new Error(`${params.commandSummary} failed (code ${code}): ${stderr || stdout}`));
+        reject(
+          new CliCommandError({
+            commandSummary: params.commandSummary,
+            code,
+            signal: signal ?? null,
+            stdout,
+            stderr,
+          }),
+        );
       }
     });
   });
+}
+
+class CliCommandError extends Error {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stdout: string;
+  readonly stderr: string;
+
+  constructor(params: {
+    commandSummary: string;
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    stdout: string;
+    stderr: string;
+  }) {
+    super(formatCliCommandFailureMessage(params));
+    this.name = "CliCommandError";
+    this.code = params.code;
+    this.signal = params.signal;
+    this.stdout = params.stdout;
+    this.stderr = params.stderr;
+  }
+}
+
+function formatCliCommandFailureMessage(params: {
+  commandSummary: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}): string {
+  const exit =
+    params.code === null ? `signal ${params.signal ?? "unknown"}` : `code ${String(params.code)}`;
+  return `${params.commandSummary} failed (${exit}): ${params.stderr || params.stdout}`;
 }
 
 function appendOutputWithCap(
@@ -167,10 +259,11 @@ function appendOutputWithCap(
   maxChars: number,
 ): { text: string; truncated: boolean } {
   const appended = current + chunk;
-  if (appended.length <= maxChars) {
+  const chars = Array.from(appended);
+  if (chars.length <= maxChars) {
     return { text: appended, truncated: false };
   }
-  return { text: appended.slice(-maxChars), truncated: true };
+  return { text: chars.slice(-maxChars).join(""), truncated: true };
 }
 
 function formatQmdAvailabilityError(err: unknown): string {

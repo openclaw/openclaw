@@ -22,6 +22,8 @@ import { withTempConfig } from "./test-temp-config.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
+await import("./server.js");
+
 const PREAUTH_HANDSHAKE_TEST_CLOSE_LIMIT_MS = 5_000;
 
 let cleanupEnv: Array<() => void> = [];
@@ -225,15 +227,12 @@ describe("gateway pre-auth hardening", () => {
 
       const result = await closed;
       expect(result.code).toBe(1009);
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          type: "payload.large",
-          surface: "gateway.ws.preauth",
-          action: "rejected",
-          limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
-          reason: "preauth_frame_limit",
-        }),
-      );
+      const event = events.find((candidate) => candidate.type === "payload.large");
+      expect(event?.type).toBe("payload.large");
+      expect(event?.surface).toBe("gateway.ws.preauth");
+      expect(event?.action).toBe("rejected");
+      expect(event?.limitBytes).toBe(MAX_PREAUTH_PAYLOAD_BYTES);
+      expect(event?.reason).toBe("preauth_frame_limit");
     } finally {
       stopDiagnostics();
       resetDiagnosticEventsForTest();
