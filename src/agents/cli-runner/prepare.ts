@@ -89,7 +89,9 @@ const prepareDeps = {
 };
 
 const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
-  opus: "claude-opus-4-7",
+  opus: "claude-opus-4-8",
+  "opus-4.8": "claude-opus-4-8",
+  "opus-4-8": "claude-opus-4-8",
   "opus-4.7": "claude-opus-4-7",
   "opus-4-7": "claude-opus-4-7",
   "opus-4.6": "claude-opus-4-6",
