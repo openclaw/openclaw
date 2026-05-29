@@ -156,7 +156,7 @@ final class ExecApprovalsGatewayPrompter {
             let denied = ExecDenylistEvaluator.denied(
                 command: parsedCommand.isEmpty ? [request.command] : parsedCommand,
                 displayCommand: request.command,
-                env: [:],
+                env: request.env ?? [:],
                 denylist: denylist)
             return denied ? .deny : .allowOnce
         }
@@ -264,6 +264,7 @@ extension ExecApprovalsGatewayPrompter {
     static func _testFallbackDecision(
         command: String,
         askFallback: ExecSecurity,
+        env: [String: String]? = nil,
         denylistPatterns: [String]) -> ExecApprovalDecision
     {
         self.fallbackDecision(
@@ -275,7 +276,8 @@ extension ExecApprovalsGatewayPrompter {
                 ask: nil,
                 agentId: nil,
                 resolvedPath: nil,
-                sessionKey: nil),
+                sessionKey: nil,
+                env: env),
             askFallback: askFallback,
             allowlist: [],
             denylist: denylistPatterns.map { ExecDenylistEntry(id: nil, pattern: $0, flags: nil) })

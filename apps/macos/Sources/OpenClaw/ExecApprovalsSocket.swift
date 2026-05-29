@@ -14,6 +14,7 @@ struct ExecApprovalPromptRequest: Codable {
     var agentId: String?
     var resolvedPath: String?
     var sessionKey: String?
+    var env: [String: String]?
     var allowedDecisions: [ExecApprovalDecision]?
 
     init(
@@ -25,6 +26,7 @@ struct ExecApprovalPromptRequest: Codable {
         agentId: String? = nil,
         resolvedPath: String? = nil,
         sessionKey: String? = nil,
+        env: [String: String]? = nil,
         allowedDecisions: [ExecApprovalDecision]? = nil)
     {
         self.command = command
@@ -35,6 +37,7 @@ struct ExecApprovalPromptRequest: Codable {
         self.agentId = agentId
         self.resolvedPath = resolvedPath
         self.sessionKey = sessionKey
+        self.env = env
         self.allowedDecisions = allowedDecisions
     }
 
@@ -47,6 +50,7 @@ struct ExecApprovalPromptRequest: Codable {
         case agentId
         case resolvedPath
         case sessionKey
+        case env
         case allowedDecisions
     }
 
@@ -60,6 +64,7 @@ struct ExecApprovalPromptRequest: Codable {
         self.agentId = try container.decodeIfPresent(String.self, forKey: .agentId)
         self.resolvedPath = try container.decodeIfPresent(String.self, forKey: .resolvedPath)
         self.sessionKey = try container.decodeIfPresent(String.self, forKey: .sessionKey)
+        self.env = try container.decodeIfPresent([String: String].self, forKey: .env)
         let decodedDecisions = (try? container.decodeIfPresent(
             [DecodedExecApprovalDecision].self,
             forKey: .allowedDecisions)) ?? []

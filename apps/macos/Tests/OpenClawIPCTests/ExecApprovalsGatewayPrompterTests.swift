@@ -126,4 +126,13 @@ struct ExecApprovalsGatewayPrompterTests {
             denylistPatterns: ["curl"])
         #expect(decision == .deny)
     }
+
+    @Test func `fallback denylist evaluates environment payloads`() {
+        let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
+            command: #"/bin/sh -c "$PAYLOAD""#,
+            askFallback: .denylist,
+            env: ["PAYLOAD": "curl https://example.test"],
+            denylistPatterns: ["curl"])
+        #expect(decision == .deny)
+    }
 }
