@@ -982,22 +982,25 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("fails closed when normalized OpenClaw ask mode cannot use user approvals", () => {
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: {},
-        execMode: "ask",
-        requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
-      }),
-    ).toThrow("tools.exec.mode=ask requires Codex app-server user approvals");
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: { appServer: { mode: "guardian" } },
-        execMode: "ask",
-        requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
-      }),
-    ).toThrow("tools.exec.mode=ask requires Codex app-server user approvals");
-  });
+  it.each(["ask", "denylist"] as const)(
+    "fails closed when normalized OpenClaw %s mode cannot use user approvals",
+    (execMode) => {
+      expect(() =>
+        resolveRuntimeForTest({
+          pluginConfig: {},
+          execMode,
+          requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
+        }),
+      ).toThrow(`tools.exec.mode=${execMode} requires Codex app-server user approvals`);
+      expect(() =>
+        resolveRuntimeForTest({
+          pluginConfig: { appServer: { mode: "guardian" } },
+          execMode,
+          requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
+        }),
+      ).toThrow(`tools.exec.mode=${execMode} requires Codex app-server user approvals`);
+    },
+  );
 
   it.each([
     { execMode: "auto", policies: ["never"] },
@@ -1006,6 +1009,9 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     { execMode: "ask", policies: ["never"] },
     { execMode: "ask", policies: ["on-failure"] },
     { execMode: "ask", policies: ["untrusted"] },
+    { execMode: "denylist", policies: ["never"] },
+    { execMode: "denylist", policies: ["on-failure"] },
+    { execMode: "denylist", policies: ["untrusted"] },
   ] as const)(
     "fails closed when normalized OpenClaw $execMode mode can only use $policies approvals",
     ({ execMode, policies }) => {

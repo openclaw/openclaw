@@ -449,7 +449,9 @@ export function resolveCodexAppServerRuntimeOptions(
           forceGuardian: normalizedPolicyMode === "guardian",
           forceUserReviewer,
           execModeRequiringPromptingApprovals:
-            execMode === "auto" || execMode === "ask" ? execMode : undefined,
+            execMode === "auto" || execMode === "ask" || execMode === "denylist"
+              ? execMode
+              : undefined,
           requirementsToml: params.requirementsToml,
           requirementsPath: params.requirementsPath,
           readRequirementsFile: params.readRequirementsFile,
@@ -706,7 +708,7 @@ function resolveDefaultCodexAppServerPolicy(params: {
   transport: CodexAppServerTransportMode;
   forceGuardian?: boolean;
   forceUserReviewer?: boolean;
-  execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask">;
+  execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask" | "denylist">;
   env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
   requirementsPath?: string;
@@ -730,7 +732,10 @@ function resolveDefaultCodexAppServerPolicy(params: {
         params.execModeRequiringPromptingApprovals,
       ),
       approvalsReviewer: params.forceUserReviewer
-        ? selectUserApprovalsReviewer(undefined)
+        ? selectUserApprovalsReviewer(
+            undefined,
+            params.execModeRequiringPromptingApprovals === "denylist" ? "denylist" : "ask",
+          )
         : selectGuardianApprovalsReviewer(
             undefined,
             params.execModeRequiringPromptingApprovals === "auto" ? "auto" : undefined,
@@ -761,7 +766,10 @@ function resolveDefaultCodexAppServerPolicy(params: {
       params.execModeRequiringPromptingApprovals,
     ),
     approvalsReviewer: params.forceUserReviewer
-      ? selectUserApprovalsReviewer(allowedApprovalsReviewers)
+      ? selectUserApprovalsReviewer(
+          allowedApprovalsReviewers,
+          params.execModeRequiringPromptingApprovals === "denylist" ? "denylist" : "ask",
+        )
       : selectGuardianApprovalsReviewer(
           allowedApprovalsReviewers,
           params.execModeRequiringPromptingApprovals === "auto" ? "auto" : undefined,
@@ -1012,7 +1020,7 @@ function normalizeRequirementsApprovalsReviewer(
 
 function selectGuardianApprovalPolicy(
   allowedApprovalPolicies: Set<CodexAppServerApprovalPolicy> | undefined,
-  execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask">,
+  execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask" | "denylist">,
 ): CodexAppServerApprovalPolicy {
   if (allowedApprovalPolicies === undefined || allowedApprovalPolicies.has("on-request")) {
     return "on-request";
@@ -1057,11 +1065,14 @@ function selectGuardianApprovalsReviewer(
 
 function selectUserApprovalsReviewer(
   allowedApprovalsReviewers: Set<CodexAppServerApprovalsReviewer> | undefined,
+  execModeRequiringUserApprovals: Extract<OpenClawExecMode, "ask" | "denylist">,
 ): CodexAppServerApprovalsReviewer {
   if (allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("user")) {
     return "user";
   }
-  throw new Error("tools.exec.mode=ask requires Codex app-server user approvals");
+  throw new Error(
+    `tools.exec.mode=${execModeRequiringUserApprovals} requires Codex app-server user approvals`,
+  );
 }
 
 function selectForcedPromptingSandbox(params: {
