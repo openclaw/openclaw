@@ -1516,7 +1516,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
-  it("creates an instructed response for manual speech without injecting a user item", async () => {
+  it("creates an explicit user item and response for manual speech", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onEvent = vi.fn();
     const bridge = provider.createBridge({
@@ -1538,79 +1538,27 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
 
-    expect(parseSent(socket).slice(-1)).toEqual([
+    expect(parseSent(socket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Say exactly: hello from explicit speech.",
+            },
+          ],
+        },
+      },
       {
         type: "response.create",
-        response: {
-          instructions: "Say exactly: hello from explicit speech.",
-        },
       },
     ]);
     expect(JSON.stringify(parseSent(socket).at(-1))).not.toContain("output_modalities");
+    expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "conversation.item.create" });
     expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
-  });
-
-  it("preserves configured session instructions for manual speech", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      instructions: "Stay concise and follow the configured call policy.",
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
-
-    bridge.triggerGreeting?.("Say exactly: hello from explicit speech.");
-
-    expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "response.create",
-        response: {
-          instructions:
-            "Stay concise and follow the configured call policy.\n\nSay exactly: hello from explicit speech.",
-        },
-      },
-    ]);
-  });
-
-  it("prepends configured instructions when manual speech only contains them as text", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      instructions: "Stay concise.",
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
-
-    bridge.triggerGreeting?.('Say exactly: "Stay concise."');
-
-    expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "response.create",
-        response: {
-          instructions: 'Stay concise.\n\nSay exactly: "Stay concise."',
-        },
-      },
-    ]);
   });
 
   it("defers manual response.create while a realtime response is active", async () => {
@@ -1648,79 +1596,6 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       },
     ]);
 
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
-
-    expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
-  });
-
-  it("preserves manual speech instructions while response.create is deferred", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
-
-    bridge.triggerGreeting?.("Say exactly: hello after the current response.");
-
-    expect(parseSent(socket).at(-1)).toEqual({
-      type: "session.update",
-      session: expect.any(Object),
-    });
-
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
-
-    expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "response.create",
-        response: {
-          instructions: "Say exactly: hello after the current response.",
-        },
-      },
-    ]);
-  });
-
-  it("lets a newer bare deferred response clear stale manual speech instructions", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
-    socket.emit(
-      "message",
-      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
-    );
-
-    if (!bridge.sendUserMessage) {
-      throw new Error("expected bridge to support user messages");
-    }
-    bridge.triggerGreeting?.("Say exactly: stale manual speech.");
-    bridge.sendUserMessage("Respond to this newer user message.");
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
 
     expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
@@ -2215,102 +2090,6 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     await connecting;
 
     bridge.submitToolResult("call_1", { text: "done" });
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "error",
-          error: {
-            message: "Conversation already has an active response in progress: resp_1",
-          },
-        }),
-      ),
-    );
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
-
-    expect(onError).not.toHaveBeenCalled();
-    expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
-  });
-
-  it("preserves manual speech instructions across active-response retry", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
-
-    bridge.triggerGreeting?.("Say exactly: hello after retry.");
-    expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "response.create",
-        response: {
-          instructions: "Say exactly: hello after retry.",
-        },
-      },
-    ]);
-
-    socket.emit(
-      "message",
-      Buffer.from(
-        JSON.stringify({
-          type: "error",
-          error: {
-            message: "Conversation already has an active response in progress: resp_1",
-          },
-        }),
-      ),
-    );
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
-
-    expect(onError).not.toHaveBeenCalled();
-    expect(parseSent(socket).slice(-1)).toEqual([
-      {
-        type: "response.create",
-        response: {
-          instructions: "Say exactly: hello after retry.",
-        },
-      },
-    ]);
-  });
-
-  it("keeps newer bare response intent across active-response retry", async () => {
-    const provider = buildOpenAIRealtimeVoiceProvider();
-    const onError = vi.fn();
-    const bridge = provider.createBridge({
-      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError,
-    });
-    const connecting = bridge.connect();
-    const socket = FakeWebSocket.instances[0];
-    if (!socket) {
-      throw new Error("expected bridge to create a websocket");
-    }
-
-    socket.readyState = FakeWebSocket.OPEN;
-    socket.emit("open");
-    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-    await connecting;
-
-    if (!bridge.sendUserMessage) {
-      throw new Error("expected bridge to support user messages");
-    }
-    bridge.triggerGreeting?.("Say exactly: stale in-flight speech.");
-    bridge.sendUserMessage("Respond to this newer user message.");
     socket.emit(
       "message",
       Buffer.from(

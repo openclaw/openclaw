@@ -433,8 +433,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseCreateInFlight = false;
   private responseCancelInFlight = false;
   private responseCreatePending = false;
-  private pendingResponseCreateInstructions: string | undefined;
-  private responseCreateInFlightInstructions: string | undefined;
   private continuingToolCallIds = new Set<string>();
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
@@ -490,7 +488,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!this.isConnected() || !this.ws) {
       return;
     }
-    this.requestResponseCreate(this.buildResponseInstructions(instructions));
+    this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
   }
 
   submitToolResult(
@@ -1039,7 +1037,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "response.created":
         this.responseActive = true;
         this.responseCreateInFlight = false;
-        this.responseCreateInFlightInstructions = undefined;
         return;
 
       case "conversation.output_audio.delta":
@@ -1155,10 +1152,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         if (detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)) {
           this.responseActive = true;
           this.responseCreateInFlight = false;
-          if (this.responseCreateInFlightInstructions && !this.responseCreatePending) {
-            this.pendingResponseCreateInstructions = this.responseCreateInFlightInstructions;
-          }
-          this.responseCreateInFlightInstructions = undefined;
           this.responseCreatePending = true;
           return;
         }
@@ -1258,7 +1251,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     });
   }
 
-  private requestResponseCreate(instructions?: string): void {
+  private requestResponseCreate(): void {
     if (
       this.responseActive ||
       this.responseCreateInFlight ||
@@ -1266,44 +1259,19 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.continuingToolCallIds.size > 0
     ) {
       this.responseCreatePending = true;
-      this.pendingResponseCreateInstructions = instructions;
       return;
     }
     this.responseCreatePending = false;
-    this.pendingResponseCreateInstructions = undefined;
     this.responseCreateInFlight = true;
-    this.responseCreateInFlightInstructions = instructions;
-    this.sendEvent(
-      instructions
-        ? {
-            type: "response.create",
-            response: { instructions },
-          }
-        : { type: "response.create" },
-    );
-  }
-
-  private buildResponseInstructions(instructions?: string): string {
-    const responseInstructions = instructions?.trim() || "Greet the meeting.";
-    const baseInstructions = this.config.instructions?.trim();
-    if (
-      !baseInstructions ||
-      responseInstructions === baseInstructions ||
-      responseInstructions.startsWith(`${baseInstructions}\n\n`)
-    ) {
-      return responseInstructions;
-    }
-    return `${baseInstructions}\n\n${responseInstructions}`;
+    this.sendEvent({ type: "response.create" });
   }
 
   private flushPendingResponseCreate(): void {
     if (!this.responseCreatePending) {
       return;
     }
-    const instructions = this.pendingResponseCreateInstructions;
     this.responseCreatePending = false;
-    this.pendingResponseCreateInstructions = undefined;
-    this.requestResponseCreate(instructions);
+    this.requestResponseCreate();
   }
 
   private resetRealtimeSessionState(): void {
@@ -1313,8 +1281,6 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCreateInFlight = false;
     this.responseCancelInFlight = false;
     this.responseCreatePending = false;
-    this.pendingResponseCreateInstructions = undefined;
-    this.responseCreateInFlightInstructions = undefined;
     this.continuingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();
