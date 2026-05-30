@@ -117,6 +117,13 @@ function expectResumeRequest(
   }
 }
 
+function getTurnStartInputText(requests: Array<{ method: string; params: unknown }>): string {
+  const turnStart = requests.find((request) => request.method === "turn/start");
+  return (
+    (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ?? ""
+  );
+}
+
 async function writeExistingBinding(
   sessionFile: string,
   workspaceDir: string,
@@ -1722,7 +1729,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("does not inject mirrored history when starting Codex without a native thread binding", async () => {
+  it("projects fresh-thread continuity when starting Codex without a native thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
@@ -1738,15 +1745,12 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
+    const inputText = getTurnStartInputText(harness.requests);
 
-    expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).not.toContain("we are fixing the Opik default project");
-    expect(inputText).not.toContain("Opik default project context");
-    expect(inputText).not.toContain("Current user request:");
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("we are fixing the Opik default project");
+    expect(inputText).toContain("Opik default project context");
+    expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
@@ -1777,10 +1781,7 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     expect(harness.requests.map((request) => request.method)).toContain("thread/resume");
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    const inputText =
-      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
-      "";
+    const inputText = getTurnStartInputText(harness.requests);
 
     expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
     expect(inputText).not.toContain("we were discussing the Sonnet leak screenshots");
@@ -1820,10 +1821,7 @@ describe("runCodexAppServerAttempt", () => {
     await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await firstRun;
 
-    const firstTurnStart = firstHarness.requests.find((request) => request.method === "turn/start");
-    const firstInputText =
-      (firstTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
-        ?.text ?? "";
+    const firstInputText = getTurnStartInputText(firstHarness.requests);
     expect(firstInputText).not.toContain("OpenClaw assembled context for this turn:");
     expect(firstInputText).not.toContain("we were discussing the Sonnet leak screenshots");
     expect(firstInputText).toContain("is the previous message trustworthy?");
@@ -1836,16 +1834,51 @@ describe("runCodexAppServerAttempt", () => {
     await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await secondRun;
 
-    const secondTurnStart = secondHarness.requests.find(
-      (request) => request.method === "turn/start",
-    );
-    const secondInputText =
-      (secondTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
-        ?.text ?? "";
+    const secondInputText = getTurnStartInputText(secondHarness.requests);
     expect(secondInputText).not.toContain("OpenClaw assembled context for this turn:");
     expect(secondInputText).not.toContain("we were discussing the Sonnet leak screenshots");
     expect(secondInputText).not.toContain("is the previous message trustworthy?");
     expect(secondInputText).toContain("continue from there");
+  });
+
+  it("projects fresh-thread continuity when runtime policy forces a transient start", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage("we already narrowed this to the transient-thread case", Date.now()),
+    );
+    sessionManager.appendMessage(
+      assistantMessage("restricted Codex runs still need bounded continuity", Date.now() + 1),
+    );
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = [];
+    params.prompt = "apply the safe transient-thread fix";
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/resume");
+    const inputText = getTurnStartInputText(harness.requests);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("we already narrowed this to the transient-thread case");
+    expect(inputText).toContain("restricted Codex runs still need bounded continuity");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("apply the safe transient-thread fix");
   });
 
   it("passes stable workspace files as Codex developer instructions and routes MEMORY.md through tools", async () => {
