@@ -576,6 +576,7 @@ type MessageToolOptions = {
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  allowInternalSourceReplySink?: boolean;
   inboundEventKind?: InboundEventKind;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
@@ -826,6 +827,7 @@ function buildMessageToolDescription(options?: {
   agentId?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  allowInternalSourceReplySink?: boolean;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 }): string {
@@ -856,6 +858,8 @@ function buildMessageToolDescription(options?: {
           `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
           resolvedOptions.sourceReplyDeliveryMode,
           resolvedOptions.requireExplicitTarget,
+          resolvedOptions.currentChannelId,
+          resolvedOptions.allowInternalSourceReplySink,
         ),
         sortedActions,
       );
@@ -866,6 +870,8 @@ function buildMessageToolDescription(options?: {
     `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`,
     resolvedOptions.sourceReplyDeliveryMode,
     resolvedOptions.requireExplicitTarget,
+    resolvedOptions.currentChannelId,
+    resolvedOptions.allowInternalSourceReplySink,
   );
 }
 
@@ -873,7 +879,25 @@ function appendMessageToolVisibleReplyHint(
   description: string,
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
   requireExplicitTarget?: boolean,
+  currentChannelId?: string,
+  allowInternalSourceReplySink?: boolean,
 ): string {
+  if (sourceReplyDeliveryMode === "automatic") {
+    const automaticGuidance =
+      `${description} This turn: reply normally for visible replies to the current source conversation; ` +
+      "OpenClaw will deliver them automatically.";
+    if (
+      allowInternalSourceReplySink === true &&
+      !requireExplicitTarget &&
+      normalizeOptionalString(currentChannelId)
+    ) {
+      return `${automaticGuidance} If action="send" is used without an explicit target for a text reply, OpenClaw keeps it on the source reply path. Use explicit targets for out-of-band sends.`;
+    }
+    const sendGuidance = requireExplicitTarget
+      ? 'If you intentionally use action="send", include an explicit target.'
+      : "Use explicit targets for out-of-band sends.";
+    return `${automaticGuidance} ${sendGuidance}`;
+  }
   if (sourceReplyDeliveryMode !== "message_tool_only") {
     return description;
   }
@@ -947,6 +971,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     agentId: resolvedAgentId,
     requireExplicitTarget: options?.requireExplicitTarget,
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+    allowInternalSourceReplySink: options?.allowInternalSourceReplySink,
     requesterSenderId: options?.requesterSenderId,
     senderIsOwner: options?.senderIsOwner,
   });
@@ -1084,6 +1109,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         agentId: resolvedAgentId,
         sandboxRoot: options?.sandboxRoot,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        allowInternalSourceReplySink: options?.allowInternalSourceReplySink,
         inboundEventKind: options?.inboundEventKind,
         abortSignal: signal,
       });

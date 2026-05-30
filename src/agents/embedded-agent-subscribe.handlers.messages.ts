@@ -797,7 +797,8 @@ export function handleMessageEnd(
     extractStandaloneMessageToolText(rawVisibleText, {
       allowRoutedReply: isOpenAiCompletionsAssistantMessage(assistantMessage),
       allowCurrentSourceReply:
-        ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
+        (ctx.params.sourceReplyDeliveryMode === "message_tool_only" ||
+          ctx.params.sourceReplyDeliveryMode === "automatic") &&
         ctx.builtinToolNames?.has("message") === true,
     }) ?? rawVisibleText;
 

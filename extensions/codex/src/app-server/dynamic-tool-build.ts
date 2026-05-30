@@ -249,6 +249,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    allowInternalSourceReplySink: true,
     disableMessageTool: params.disableMessageTool,
     forceMessageTool: shouldForceMessageTool(params),
     enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,

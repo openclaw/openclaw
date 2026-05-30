@@ -247,7 +247,8 @@ export function buildEmbeddedRunPayloads(params: {
   }> = [];
 
   const sourceReplyPayloads =
-    params.sourceReplyDeliveryMode === "message_tool_only"
+    params.sourceReplyDeliveryMode === "message_tool_only" ||
+    params.sourceReplyDeliveryMode === "automatic"
       ? (params.messagingToolSourceReplyPayloads ?? [])
       : [];
   const sourceReplyStartIndex = replyItems.length;

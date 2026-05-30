@@ -30,6 +30,7 @@ import {
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { stripPlainTextToolCallBlocks } from "../../plugin-sdk/tool-payload.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
@@ -44,6 +45,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   INTERNAL_MESSAGE_CHANNEL,
+  normalizeMessageChannel,
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
@@ -56,6 +58,7 @@ import {
 } from "./channel-selection.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
@@ -127,6 +130,7 @@ export type RunMessageActionParams = {
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  allowInternalSourceReplySink?: boolean;
   inboundEventKind?: InboundEventKind;
   abortSignal?: AbortSignal;
 };
@@ -534,12 +538,128 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
 
 function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
   for (const key of ["channel", "target", "to", "channelId"]) {
-    if (normalizeOptionalString(params[key])) {
+    if (normalizeOptionalString(readSnakeCaseParamRaw(params, key))) {
       return true;
     }
   }
   return (
-    Array.isArray(params.targets) && params.targets.some((value) => normalizeOptionalString(value))
+    Array.isArray(readSnakeCaseParamRaw(params, "targets")) &&
+    (readSnakeCaseParamRaw(params, "targets") as unknown[]).some((value) =>
+      normalizeOptionalString(value),
+    )
+  );
+}
+
+function hasExplicitSendTargetParam(params: Record<string, unknown>): boolean {
+  return ["target", "to", "channelId"].some((key) =>
+    Boolean(normalizeOptionalString(readSnakeCaseParamRaw(params, key))),
+  );
+}
+
+function hasExplicitSendRouteParam(
+  params: Record<string, unknown>,
+  toolContext?: ChannelThreadingToolContext,
+): boolean {
+  if (hasExplicitSendTargetParam(params)) {
+    return true;
+  }
+  if (
+    Array.isArray(readSnakeCaseParamRaw(params, "targets")) &&
+    (readSnakeCaseParamRaw(params, "targets") as unknown[]).some((value) =>
+      normalizeOptionalString(value),
+    )
+  ) {
+    return true;
+  }
+  const explicitChannelRaw = normalizeOptionalString(readSnakeCaseParamRaw(params, "channel"));
+  const explicitChannel =
+    normalizeMessageChannel(explicitChannelRaw) ??
+    normalizeOptionalLowercaseString(explicitChannelRaw);
+  if (!explicitChannel) {
+    return false;
+  }
+  const currentProviderRaw = normalizeOptionalString(toolContext?.currentChannelProvider);
+  const currentProvider =
+    normalizeMessageChannel(currentProviderRaw) ??
+    normalizeOptionalLowercaseString(currentProviderRaw);
+  return !currentProvider || explicitChannel !== currentProvider;
+}
+
+function readPresentBooleanParam(
+  params: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const raw = readSnakeCaseParamRaw(params, key);
+  return raw != null ? readBooleanParam({ [key]: raw }, key) : undefined;
+}
+
+function hasPresentObjectParam(params: Record<string, unknown>, key: string): boolean {
+  const value = readSnakeCaseParamRaw(params, key);
+  return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasStructuredSendPayloadParam(params: Record<string, unknown>): boolean {
+  for (const key of [
+    "media",
+    "mediaUrl",
+    "base64",
+    "image",
+    "path",
+    "filePath",
+    "fileUrl",
+    "buffer",
+    "filename",
+    "contentType",
+    "mimeType",
+    "replyTo",
+    "replyToId",
+    "threadId",
+    "quoteText",
+    "effectId",
+    "effect",
+  ] as const) {
+    if (normalizeOptionalString(readSnakeCaseParamRaw(params, key))) {
+      return true;
+    }
+  }
+  for (const key of [
+    "asVoice",
+    "audioAsVoice",
+    "silent",
+    "gifPlayback",
+    "forceDocument",
+    "asDocument",
+    "pin",
+    "topLevel",
+    "replyBroadcast",
+  ] as const) {
+    if (readPresentBooleanParam(params, key) === true) {
+      return true;
+    }
+  }
+  if (readSnakeCaseParamRaw(params, "threadId") === null) {
+    return true;
+  }
+  if (readPresentBooleanParam(params, "bestEffort") !== undefined) {
+    return true;
+  }
+  for (const key of ["delivery", "channelData"] as const) {
+    if (hasPresentObjectParam(params, key)) {
+      return true;
+    }
+  }
+  const mediaUrls = readSnakeCaseParamRaw(params, "mediaUrls");
+  if (Array.isArray(mediaUrls) && mediaUrls.some((value) => normalizeOptionalString(value))) {
+    return true;
+  }
+  const attachments = readSnakeCaseParamRaw(params, "attachments");
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    return true;
+  }
+  return (
+    hasMessagePresentationBlocks(readSnakeCaseParamRaw(params, "presentation")) ||
+    hasInteractiveReplyBlocks(readSnakeCaseParamRaw(params, "interactive")) ||
+    hasPotentialPluginActionParam(params)
   );
 }
 
@@ -547,14 +667,34 @@ function shouldUseInternalSourceReplySink(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
 ) {
-  return (
-    input.action === "send" &&
-    input.sourceReplyDeliveryMode === "message_tool_only" &&
-    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider) ===
-      INTERNAL_MESSAGE_CHANNEL &&
-    Boolean(input.sessionKey?.trim()) &&
-    !hasExplicitRouteParam(params)
+  const sourceReplyDeliveryMode =
+    input.sourceReplyDeliveryMode ??
+    (input.allowInternalSourceReplySink === true ? "automatic" : undefined);
+  const currentChannelProvider = normalizeOptionalLowercaseString(
+    input.toolContext?.currentChannelProvider,
   );
+  const hasCurrentSourceConversation =
+    Boolean(currentChannelProvider) ||
+    Boolean(normalizeOptionalString(input.toolContext?.currentChannelId));
+  const isMessageToolOnlySourceReply =
+    input.action === "send" &&
+    sourceReplyDeliveryMode === "message_tool_only" &&
+    Boolean(input.sessionKey?.trim()) &&
+    ((currentChannelProvider === INTERNAL_MESSAGE_CHANNEL && !hasExplicitRouteParam(params)) ||
+      (input.allowInternalSourceReplySink === true &&
+        hasCurrentSourceConversation &&
+        !hasExplicitSendRouteParam(params, input.toolContext) &&
+        !hasStructuredSendPayloadParam(params)));
+
+  const isImplicitAutomaticTextSourceReply =
+    input.action === "send" &&
+    sourceReplyDeliveryMode === "automatic" &&
+    input.allowInternalSourceReplySink === true &&
+    hasCurrentSourceConversation &&
+    !hasExplicitSendRouteParam(params, input.toolContext) &&
+    !hasStructuredSendPayloadParam(params);
+
+  return isMessageToolOnlySourceReply || isImplicitAutomaticTextSourceReply;
 }
 
 async function runGatewayPluginMessageActionOrNull(params: {
@@ -703,6 +843,9 @@ async function handleInternalSourceReplySendAction(
   params: Record<string, unknown>,
 ): Promise<MessageActionRunResult> {
   throwIfAborted(input.abortSignal);
+  const sourceReplyDeliveryMode =
+    input.sourceReplyDeliveryMode ??
+    (input.allowInternalSourceReplySink === true ? "automatic" : undefined);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
   const sourceReply = await buildSendPayloadParts({
     cfg: input.cfg,
@@ -714,12 +857,15 @@ async function handleInternalSourceReplySendAction(
         ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
         : undefined),
   });
+  const sourceChannel =
+    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider) ??
+    INTERNAL_MESSAGE_CHANNEL;
   const payload = {
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
-    channel: INTERNAL_MESSAGE_CHANNEL,
+    channel: sourceChannel,
     target: "current-run",
-    sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
+    sourceReplyDeliveryMode,
     ...(dryRun ? {} : { sourceReplySink: "internal-ui" as const }),
     sourceReply: sourceReply.payload,
     ...(sourceReply.message ? { message: sourceReply.message } : {}),
@@ -729,7 +875,7 @@ async function handleInternalSourceReplySendAction(
   };
   return {
     kind: "send",
-    channel: INTERNAL_MESSAGE_CHANNEL,
+    channel: sourceChannel,
     action: "send",
     to: "current-run",
     handledBy: "internal-source",
@@ -770,7 +916,7 @@ function buildInternalSourceReplyToolResult(payload: {
     content: [
       {
         type: "text",
-        text: `${action} visible reply to the current webchat conversation${sink}.`,
+        text: `${action} visible reply to the current source conversation${sink}.`,
       },
     ],
     details: {

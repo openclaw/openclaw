@@ -90,32 +90,35 @@ describe("mergeAttemptToolMediaPayloads", () => {
     ]);
   });
 
-  it("does not attach tool media to message-tool-only source reply mirrors", () => {
-    const sourceReply = setReplyPayloadMetadata(
-      { text: "sent through message tool" },
-      {
+  it.each(["message_tool_only", "automatic"] as const)(
+    "does not attach tool media to %s source reply mirrors",
+    (sourceReplyDeliveryMode) => {
+      const sourceReply = setReplyPayloadMetadata(
+        { text: "sent through message tool" },
+        {
+          deliverDespiteSourceReplySuppression: true,
+          sourceReplyTranscriptMirror: {
+            sessionKey: "agent:main",
+            text: "sent through message tool",
+          },
+        },
+      );
+
+      const [mergedReply] =
+        mergeAttemptToolMediaPayloads({
+          payloads: [sourceReply],
+          toolMediaUrls: ["/tmp/generated.png"],
+          sourceReplyDeliveryMode,
+        }) ?? [];
+
+      expect(mergedReply).toEqual({ text: "sent through message tool" });
+      expect(getReplyPayloadMetadata(mergedReply ?? {})).toMatchObject({
         deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
           sessionKey: "agent:main",
           text: "sent through message tool",
         },
-      },
-    );
-
-    const [mergedReply] =
-      mergeAttemptToolMediaPayloads({
-        payloads: [sourceReply],
-        toolMediaUrls: ["/tmp/generated.png"],
-        sourceReplyDeliveryMode: "message_tool_only",
-      }) ?? [];
-
-    expect(mergedReply).toEqual({ text: "sent through message tool" });
-    expect(getReplyPayloadMetadata(mergedReply ?? {})).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-      sourceReplyTranscriptMirror: {
-        sessionKey: "agent:main",
-        text: "sent through message tool",
-      },
-    });
-  });
+      });
+    },
+  );
 });

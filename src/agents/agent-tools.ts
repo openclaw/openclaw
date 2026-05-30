@@ -479,6 +479,8 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** If true, message-tool source replies can be consumed by the embedded run subscriber. */
+  allowInternalSourceReplySink?: boolean;
   inboundEventKind?: InboundEventKind;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
@@ -1000,6 +1002,7 @@ export function createOpenClawCodingTools(options?: {
           modelHasVision: options?.modelHasVision,
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
           sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+          allowInternalSourceReplySink: options?.allowInternalSourceReplySink,
           inboundEventKind: options?.inboundEventKind,
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,

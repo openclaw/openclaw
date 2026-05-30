@@ -26,7 +26,8 @@ export function mergeAttemptToolMediaPayloads(params: {
   if (payloadIndex >= 0) {
     const payload = payloads[payloadIndex];
     if (
-      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      (params.sourceReplyDeliveryMode === "message_tool_only" ||
+        params.sourceReplyDeliveryMode === "automatic") &&
       getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror
     ) {
       return payloads;

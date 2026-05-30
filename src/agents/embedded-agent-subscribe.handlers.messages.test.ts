@@ -756,7 +756,7 @@ describe("handleMessageEnd", () => {
     expect(metadata?.registeredTool).toBe(true);
   });
 
-  it("unwraps only source-routed or message-tool-only standalone message-tool JSON", () => {
+  it("unwraps only source-routed or source-reply-mode standalone message-tool JSON", () => {
     const visibleReply = "No specific tasks planned, but I'll keep watching for updates.";
     const unroutedEnvelope = createMessageToolEnvelope(visibleReply);
     const routedEnvelope = createMessageToolEnvelope(visibleReply, { target: "user:redacted" });
@@ -764,6 +764,7 @@ describe("handleMessageEnd", () => {
 
     for (const [text, api, builtinToolNames, sourceReplyDeliveryMode, expected] of [
       [unroutedEnvelope, undefined, new Set(["message"]), "message_tool_only", visibleReply],
+      [unroutedEnvelope, undefined, new Set(["message"]), "automatic", visibleReply],
       [routedEnvelope, "openai-completions", new Set<string>(), undefined, visibleReply],
       [toRoutedEnvelope, "openai-completions", new Set<string>(), undefined, visibleReply],
       [routedEnvelope, undefined, new Set<string>(), undefined, routedEnvelope],

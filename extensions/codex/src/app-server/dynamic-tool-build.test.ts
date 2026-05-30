@@ -837,6 +837,30 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldForceMessageTool(params)).toBe(false);
   });
 
+  it.each(["automatic", "message_tool_only"] as const)(
+    "allows %s source replies to use the internal sink in Codex app-server tools",
+    async (sourceReplyDeliveryMode) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      params.sourceReplyDeliveryMode = sourceReplyDeliveryMode;
+      const factoryOptions: unknown[] = [];
+      setOpenClawCodingToolsFactoryForTests((options) => {
+        factoryOptions.push(options);
+        return [];
+      });
+
+      await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+      expect(factoryOptions).toHaveLength(1);
+      expect(factoryOptions[0]).toMatchObject({
+        sourceReplyDeliveryMode,
+        allowInternalSourceReplySink: true,
+      });
+    },
+  );
+
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);

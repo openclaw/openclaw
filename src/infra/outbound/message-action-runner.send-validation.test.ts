@@ -122,7 +122,7 @@ describe("runMessageAction send validation", () => {
     expect(result.toolResult?.content).toEqual([
       {
         type: "text",
-        text: "Sent visible reply to the current webchat conversation via internal-ui.",
+        text: "Sent visible reply to the current source conversation via internal-ui.",
       },
     ]);
     expect(result.toolResult?.details).toEqual({
@@ -166,6 +166,95 @@ describe("runMessageAction send validation", () => {
     expect(JSON.stringify(result.payload)).not.toContain("turn2view0");
   });
 
+  it("keeps implicit current-channel text sends on the source reply path during message-tool-only delivery", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        message: "visible answer",
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+      allowInternalSourceReplySink: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "current-run",
+      handledBy: "internal-source",
+      dryRun: false,
+      payload: {
+        status: "ok",
+        deliveryStatus: "sent",
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplySink: "internal-ui",
+        sourceReply: {
+          text: "visible answer",
+        },
+      },
+    });
+  });
+
+  it("keeps provider-only source text sends on the source reply path during message-tool-only delivery", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        message: "visible answer",
+      },
+      toolContext: {
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+      allowInternalSourceReplySink: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "current-run",
+      handledBy: "internal-source",
+      dryRun: false,
+      payload: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplySink: "internal-ui",
+        sourceReply: {
+          text: "visible answer",
+        },
+      },
+    });
+  });
+
+  it("keeps message-tool-only current-channel text sends on outbound path without an internal source consumer", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        message: "visible answer",
+        dryRun: true,
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      handledBy: "core",
+      dryRun: true,
+    });
+  });
+
   it("does not infer an internal UI sink outside message-tool-only source delivery", async () => {
     await expect(
       runMessageAction({
@@ -182,6 +271,466 @@ describe("runMessageAction send validation", () => {
       }),
     ).rejects.toThrow(/requires a target/i);
   });
+
+  it("keeps implicit current-channel text sends on the normal outbound path without an internal source consumer", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        message: "visible answer",
+        dryRun: true,
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "automatic",
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      handledBy: "core",
+      dryRun: true,
+    });
+  });
+
+  it("keeps implicit current-channel text sends on the source reply path during automatic delivery", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        message: "visible answer",
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "automatic",
+      allowInternalSourceReplySink: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "current-run",
+      handledBy: "internal-source",
+      dryRun: false,
+      payload: {
+        status: "ok",
+        deliveryStatus: "sent",
+        sourceReplyDeliveryMode: "automatic",
+        sourceReplySink: "internal-ui",
+        sourceReply: {
+          text: "visible answer",
+        },
+      },
+    });
+  });
+
+  it("treats omitted source delivery mode as automatic when an internal source consumer is present", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        message: "visible answer",
+      },
+      toolContext: {
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      allowInternalSourceReplySink: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "current-run",
+      handledBy: "internal-source",
+      dryRun: false,
+      payload: {
+        status: "ok",
+        deliveryStatus: "sent",
+        sourceReplyDeliveryMode: "automatic",
+        sourceReplySink: "internal-ui",
+        sourceReply: {
+          text: "visible answer",
+        },
+      },
+    });
+  });
+
+  it.each([
+    { name: "silent false", actionParams: { message: "visible answer", silent: false } },
+    { name: "asVoice false", actionParams: { message: "visible answer", asVoice: false } },
+    {
+      name: "snake_case voice false",
+      actionParams: { message: "visible answer", as_voice: "false" },
+    },
+    {
+      name: "forceDocument false",
+      actionParams: { message: "visible answer", forceDocument: false },
+    },
+    { name: "gifPlayback false", actionParams: { message: "visible answer", gifPlayback: false } },
+    { name: "pin false", actionParams: { message: "visible answer", pin: false } },
+    { name: "topLevel false", actionParams: { message: "visible answer", topLevel: false } },
+    {
+      name: "replyBroadcast false",
+      actionParams: { message: "visible answer", replyBroadcast: false },
+    },
+    {
+      name: "idempotency key",
+      actionParams: { message: "visible answer", idempotencyKey: "run-1:message-tool:1" },
+    },
+  ])(
+    "keeps implicit current-channel text sends with no-op $name on the source reply path",
+    async ({ actionParams }) => {
+      const result = await runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: actionParams,
+        toolContext: {
+          currentChannelId: "C12345678",
+          currentChannelProvider: "workspace",
+        },
+        sessionKey: "agent:main",
+        sourceReplyDeliveryMode: "automatic",
+        allowInternalSourceReplySink: true,
+      });
+
+      expect(result).toMatchObject({
+        kind: "send",
+        channel: "workspace",
+        to: "current-run",
+        handledBy: "internal-source",
+        payload: {
+          sourceReplyDeliveryMode: "automatic",
+          sourceReplySink: "internal-ui",
+          sourceReply: {
+            text: "visible answer",
+          },
+        },
+      });
+    },
+  );
+
+  it("keeps explicit same-channel text sends on the source reply path during automatic delivery", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        channel: "workspace",
+        message: "visible answer",
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "automatic",
+      allowInternalSourceReplySink: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload: {
+        sourceReplyDeliveryMode: "automatic",
+        sourceReplySink: "internal-ui",
+        sourceReply: {
+          text: "visible answer",
+        },
+      },
+    });
+  });
+
+  it("keeps explicit same-channel aliases on the source reply path during automatic delivery", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "workspace",
+          source: "test",
+          plugin: {
+            ...workspaceTestPlugin,
+            meta: {
+              ...workspaceTestPlugin.meta,
+              aliases: ["workspace-chat"],
+            },
+          },
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        channel: "workspace-chat",
+        message: "visible answer",
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "automatic",
+      allowInternalSourceReplySink: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      to: "current-run",
+      handledBy: "internal-source",
+      payload: {
+        sourceReplyDeliveryMode: "automatic",
+        sourceReplySink: "internal-ui",
+        sourceReply: {
+          text: "visible answer",
+        },
+      },
+    });
+  });
+
+  it("does not treat a different explicit channel as a current-source reply", async () => {
+    await expect(
+      runMessageAction({
+        cfg: {
+          channels: {
+            workspace: {
+              botToken: "workspace-test",
+              appToken: "workspace-app-test",
+            },
+            forum: {
+              botToken: "forum-test",
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "forum",
+          message: "visible answer",
+          dryRun: true,
+        },
+        toolContext: {
+          currentChannelId: "C12345678",
+          currentChannelProvider: "workspace",
+        },
+        sessionKey: "agent:main",
+        sourceReplyDeliveryMode: "automatic",
+        allowInternalSourceReplySink: true,
+      }),
+    ).rejects.toThrow(/Cross-context messaging denied/);
+  });
+
+  it("keeps explicit current-channel sends on the normal outbound path in automatic mode", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        target: "#C12345678",
+        message: "visible answer",
+        dryRun: true,
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "automatic",
+      allowInternalSourceReplySink: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      handledBy: "core",
+      dryRun: true,
+    });
+  });
+
+  it("allows implicit current-channel media sends during automatic source delivery", async () => {
+    const result = await runMessageAction({
+      cfg: workspaceConfig,
+      action: "send",
+      params: {
+        media: "https://example.com/report.png",
+        dryRun: true,
+      },
+      toolContext: {
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+      },
+      sessionKey: "agent:main",
+      sourceReplyDeliveryMode: "automatic",
+      allowInternalSourceReplySink: true,
+    });
+
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "workspace",
+      handledBy: "core",
+      dryRun: true,
+    });
+  });
+
+  it.each([
+    {
+      name: "base64 media hint",
+      actionParams: {
+        message: "visible answer",
+        base64: "AAAA",
+        dryRun: true,
+      },
+    },
+    {
+      name: "image media hint",
+      actionParams: {
+        message: "visible answer",
+        image: "https://example.com/report.png",
+        dryRun: true,
+      },
+    },
+    {
+      name: "reply threading",
+      actionParams: {
+        message: "visible answer",
+        replyTo: "msg-42",
+        dryRun: true,
+      },
+    },
+    {
+      name: "top-level thread control",
+      actionParams: {
+        message: "visible answer",
+        topLevel: true,
+        dryRun: true,
+      },
+    },
+    {
+      name: "null thread control",
+      actionParams: {
+        message: "visible answer",
+        threadId: null,
+        dryRun: true,
+      },
+    },
+    {
+      name: "Slack reply broadcast",
+      actionParams: {
+        message: "visible answer",
+        replyBroadcast: true,
+        dryRun: true,
+      },
+    },
+    {
+      name: "snake_case reply broadcast",
+      actionParams: {
+        message: "visible answer",
+        reply_broadcast: true,
+        dryRun: true,
+      },
+    },
+    {
+      name: "voice delivery option",
+      actionParams: {
+        message: "visible answer",
+        asVoice: true,
+        dryRun: true,
+      },
+    },
+    {
+      name: "silent delivery option",
+      actionParams: {
+        message: "visible answer",
+        silent: true,
+        dryRun: true,
+      },
+    },
+    {
+      name: "string voice delivery option",
+      actionParams: {
+        message: "visible answer",
+        asVoice: "true",
+        dryRun: true,
+      },
+    },
+    {
+      name: "snake_case media URL hint",
+      actionParams: {
+        message: "visible answer",
+        media_url: "https://example.com/report.png",
+        dryRun: true,
+      },
+    },
+    {
+      name: "snake_case reply threading",
+      actionParams: {
+        message: "visible answer",
+        reply_to: "msg-42",
+        dryRun: true,
+      },
+    },
+    {
+      name: "snake_case voice delivery option",
+      actionParams: {
+        message: "visible answer",
+        as_voice: true,
+        dryRun: true,
+      },
+    },
+    {
+      name: "required delivery option",
+      actionParams: {
+        message: "visible answer",
+        bestEffort: false,
+        dryRun: true,
+      },
+    },
+    {
+      name: "delivery pin option",
+      actionParams: {
+        message: "visible answer",
+        delivery: { pin: { enabled: true } },
+        dryRun: true,
+      },
+    },
+    {
+      name: "plugin-owned send option",
+      actionParams: {
+        message: "visible answer",
+        workspaceComponent: "summary-card",
+        dryRun: true,
+      },
+    },
+  ])(
+    "keeps implicit current-channel sends with $name on the normal outbound path",
+    async ({ actionParams }) => {
+      const result = await runMessageAction({
+        cfg: workspaceConfig,
+        action: "send",
+        params: actionParams,
+        toolContext: {
+          currentChannelId: "C12345678",
+          currentChannelProvider: "workspace",
+        },
+        sessionKey: "agent:main",
+        sourceReplyDeliveryMode: "automatic",
+        allowInternalSourceReplySink: true,
+      });
+
+      expect(result).toMatchObject({
+        kind: "send",
+        channel: "workspace",
+        handledBy: "core",
+        dryRun: true,
+      });
+    },
+  );
 
   it("keeps explicit message routes on the normal outbound path", async () => {
     const result = await runMessageAction({

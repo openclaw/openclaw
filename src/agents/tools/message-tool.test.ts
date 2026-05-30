@@ -117,6 +117,7 @@ type RunMessageActionInput = {
   sandboxRoot?: string;
   sessionKey?: string;
   sourceReplyDeliveryMode?: string;
+  allowInternalSourceReplySink?: boolean;
   toolContext?: {
     currentChannelId?: string;
     currentChannelProvider?: string;
@@ -464,6 +465,23 @@ describe("message tool secret scoping", () => {
       requireExplicitTarget: true,
       sourceReplyDeliveryMode: "message_tool_only",
     });
+    const automaticTool = createMessageTool({
+      sourceReplyDeliveryMode: "automatic",
+    });
+    const automaticCurrentChannelNoSinkTool = createMessageTool({
+      currentChannelId: "channel:C123",
+      sourceReplyDeliveryMode: "automatic",
+    });
+    const automaticCurrentChannelTool = createMessageTool({
+      currentChannelId: "channel:C123",
+      sourceReplyDeliveryMode: "automatic",
+      allowInternalSourceReplySink: true,
+    });
+    const automaticExplicitTargetTool = createMessageTool({
+      currentChannelId: "channel:C123",
+      requireExplicitTarget: true,
+      sourceReplyDeliveryMode: "automatic",
+    });
     const defaultTool = createMessageTool();
 
     expect(scopedTool.description).toContain(
@@ -474,6 +492,26 @@ describe("message tool secret scoping", () => {
     expect(explicitTargetTool.description).toContain("Include target when sending");
     expect(explicitTargetTool.description).not.toContain(
       "target defaults to the current source conversation",
+    );
+    expect(automaticTool.description).toContain(
+      "reply normally for visible replies to the current source conversation",
+    );
+    expect(automaticTool.description).toContain("OpenClaw will deliver them automatically");
+    expect(automaticTool.description).not.toContain(
+      'action="send" is used without an explicit target for a text reply',
+    );
+    expect(automaticTool.description).toContain("Use explicit targets for out-of-band sends");
+    expect(automaticCurrentChannelNoSinkTool.description).not.toContain(
+      'action="send" is used without an explicit target for a text reply',
+    );
+    expect(automaticCurrentChannelTool.description).toContain(
+      'action="send" is used without an explicit target for a text reply',
+    );
+    expect(automaticExplicitTargetTool.description).not.toContain(
+      'action="send" is used without an explicit target for a text reply',
+    );
+    expect(automaticExplicitTargetTool.description).toContain(
+      'If you intentionally use action="send", include an explicit target',
     );
     expect(defaultTool.description).not.toContain(
       "visible replies to the current source conversation",
@@ -498,12 +536,14 @@ describe("message tool secret scoping", () => {
       action: { message: "hi" },
       toolOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        allowInternalSourceReplySink: true,
         currentChannelProvider: "webchat",
         agentSessionKey: "agent:main",
       },
     });
 
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.allowInternalSourceReplySink).toBe(true);
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
   });
 
