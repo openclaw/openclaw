@@ -157,6 +157,11 @@ Codex native permission prompts can also travel through plugin approvals, but
 they have different ownership than plugin-authored hooks.
 
 - Codex app-server approval requests route through OpenClaw after Codex review.
+- Plugin hook `before_tool_call.requireApproval` is not the same thing as a
+  Codex `PermissionRequest`. In Codex app-server report-mode `PreToolUse`
+  relays, hook-level approval requirements do not open an interactive OpenClaw
+  plugin approval prompt on their own; they stay tied to the matching
+  Codex-owned approval flow.
 - The native hook `permission_request` relay can ask through
   `plugin.approval.request` when that relay is enabled.
 - MCP tool approval elicitations route through plugin approvals when Codex marks

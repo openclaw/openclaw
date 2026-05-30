@@ -172,7 +172,12 @@ Quick `/acp` flow from chat:
     For Codex-native tool events, OpenClaw injects a per-turn native
     hook relay so plugin hooks can block `before_tool_call`, observe
     `after_tool_call`, and route Codex `PermissionRequest` events
-    through OpenClaw approvals. Codex `Stop` hooks are relayed to
+    through OpenClaw approvals. Hook-level
+    `before_tool_call.requireApproval` is a separate path: in app-server
+    report-mode `PreToolUse` relays it does not open an interactive
+    OpenClaw plugin approval prompt, and the native call stays blocked
+    until the matching Codex-owned approval flow decides it. Codex
+    `Stop` hooks are relayed to
     OpenClaw `before_agent_finalize`, where plugins can request one more
     model pass before Codex finalizes its answer. The relay remains
     deliberately conservative: it does not mutate Codex-native tool
