@@ -22,7 +22,9 @@ import {
   type CodexAppServerReasoningEffort,
 } from "./reasoning-defaults.js";
 
-const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
+const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
+const CODEX_APP_SERVER_NATIVE_CLI_AUTH_PROVIDER = "openai";
+const CODEX_APP_SERVER_NATIVE_CLI_PROFILE_ID = "openai:default";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
@@ -374,7 +376,7 @@ export function isCodexAppServerNativeAuthProfile(
       ...lookup,
       authProfileId,
     });
-    if (!credential || credential.type === "api_key") {
+    if (credential?.type !== "oauth" && credential?.type !== "token") {
       return false;
     }
     return isOpenAiAuthProvider({ provider: credential.provider, config: lookup.config });
@@ -421,7 +423,12 @@ function resolveCodexAppServerAuthProfileCredential(
       authProfileId,
       config: lookup.config,
     });
-  return store.profiles[authProfileId];
+  return (
+    store.profiles[authProfileId] ??
+    (authProfileId === "openai-codex:default"
+      ? store.profiles[CODEX_APP_SERVER_NATIVE_CLI_PROFILE_ID]
+      : undefined)
+  );
 }
 
 function loadCodexAppServerAuthProfileStore(params: {
@@ -434,8 +441,14 @@ function loadCodexAppServerAuthProfileStore(params: {
     {
       allowKeychainPrompt: false,
       config: params.config,
-      externalCliProviderIds: [CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER],
-      externalCliProfileIds: [params.authProfileId],
+      externalCliProviderIds: [
+        CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER,
+        CODEX_APP_SERVER_NATIVE_CLI_AUTH_PROVIDER,
+      ],
+      externalCliProfileIds:
+        params.authProfileId === "openai-codex:default"
+          ? [params.authProfileId, CODEX_APP_SERVER_NATIVE_CLI_PROFILE_ID]
+          : [params.authProfileId],
     },
   );
 }
@@ -445,10 +458,10 @@ function isOpenAiAuthProvider(params: {
   config?: ProviderAuthAliasConfig;
 }): boolean {
   const provider = params.provider?.trim();
-  return Boolean(
-    provider &&
-    resolveProviderIdForAuth(provider, { config: params.config }) ===
-      CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER,
+  const resolved = provider ? resolveProviderIdForAuth(provider, { config: params.config }) : "";
+  return (
+    resolved === CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER ||
+    resolved === CODEX_APP_SERVER_NATIVE_CLI_AUTH_PROVIDER
   );
 }
 

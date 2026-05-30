@@ -70,8 +70,8 @@ import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session
 import * as sharedClientModule from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
-  buildTurnCollaborationMode,
   buildThreadResumeParams,
+  buildTurnCollaborationMode,
   buildTurnStartParams,
   startOrResumeThread,
 } from "./thread-lifecycle.js";
@@ -4624,6 +4624,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeParams.developerInstructions).toContain(
       "You are a personal agent running inside OpenClaw.",
     );
+    expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnParams = buildTurnStartParams(params, {
       threadId: "thread-1",
       cwd: "/tmp/workspace",

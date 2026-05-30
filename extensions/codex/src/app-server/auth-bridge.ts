@@ -33,7 +33,8 @@ const CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS = [
   LEGACY_CODEX_APP_SERVER_AUTH_PROVIDER,
 ];
 const OPENAI_PROVIDER = "openai";
-const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
+const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+const OPENAI_NATIVE_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
@@ -92,11 +93,34 @@ export function resolveCodexAppServerAuthProfileId(params: {
   if (requested) {
     return requested;
   }
-  return resolveAuthProfileOrder({
+  const ordered = resolveAuthProfileOrder({
     cfg: params.config,
     store: params.store,
     provider: CODEX_APP_SERVER_AUTH_PROVIDER,
   })[0]?.trim();
+  const codexDefault = params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
+  const nativeDefault = params.store.profiles[OPENAI_NATIVE_DEFAULT_PROFILE_ID];
+  return (
+    ordered ||
+    (codexDefault && isInlineCodexAuthProfileCandidate(codexDefault)
+      ? OPENAI_CODEX_DEFAULT_PROFILE_ID
+      : undefined) ||
+    (nativeDefault && isInlineCodexAuthProfileCandidate(nativeDefault)
+      ? OPENAI_NATIVE_DEFAULT_PROFILE_ID
+      : undefined)
+  );
+}
+
+function isInlineCodexAuthProfileCandidate(credential: AuthProfileCredential): boolean {
+  if (!isCodexSubscriptionCredential(credential)) {
+    return false;
+  }
+  const record = credential as Record<string, unknown>;
+  return Boolean(
+    (typeof record.access === "string" && record.access.trim()) ||
+    (typeof record.refresh === "string" && record.refresh.trim()) ||
+    (typeof record.token === "string" && record.token.trim()),
+  );
 }
 
 export function resolveCodexAppServerAuthProfileIdForAgent(params: {
@@ -641,7 +665,8 @@ function shouldClearOpenAiApiKeyForCodexAuthProfile(params: {
   const profileId = params.authProfileId?.trim();
   const credential = profileId
     ? params.store.profiles[profileId]
-    : params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID];
+    : (params.store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID] ??
+      params.store.profiles[OPENAI_NATIVE_DEFAULT_PROFILE_ID]);
   return isCodexSubscriptionCredential(credential, params.config);
 }
 
