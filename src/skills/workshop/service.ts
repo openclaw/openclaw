@@ -9,7 +9,9 @@ import {
   resolveSkillStatusEntry,
   type SkillStatusEntry,
 } from "../discovery/status.js";
+import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { scanSkillContent, scanSource } from "../security/scanner.js";
+import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "./config.js";
 import {
   readProposalFrontmatter,
   renderProposalMarkdown,
@@ -70,6 +72,7 @@ type SkillProposalScopeOptions = {
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
+const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 512;
 
 export async function listSkillProposals(
   options: SkillProposalScopeOptions = {},
@@ -220,12 +223,16 @@ export async function proposeCreateSkill(
 ): Promise<SkillProposalReadResult> {
   const name = normalizeRequired(input.name, "Skill name");
   const description = normalizeRequired(input.description, "Skill description");
+  const config = resolveSkillWorkshopConfig(input.config);
+  assertProposalDescriptionWithinLimit(description);
+  assertProposalContentWithinLimit(input.content, config.maxSkillBytes);
   const target = resolveSkillProposalTarget({ workspaceDir: input.workspaceDir, skillName: name });
   if (await readWorkspaceSkillFile(target.skillFile)) {
     throw new Error(`Skill already exists at ${target.skillFile}.`);
   }
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
+  await assertCanCreatePendingProposal(input.workspaceDir, config);
   const now = new Date().toISOString();
   const proposalContent = renderProposalMarkdown({
     name: target.skillKey,
@@ -271,6 +278,7 @@ export async function proposeUpdateSkill(
   input: SkillProposalUpdateInput & SkillWorkshopWorkspaceOptions,
 ): Promise<SkillProposalReadResult> {
   const skillName = normalizeRequired(input.skillName, "Skill name");
+  const config = resolveSkillWorkshopConfig(input.config);
   const status = buildWorkspaceSkillStatus(input.workspaceDir, {
     config: input.config,
     agentId: input.agentId,
@@ -284,8 +292,11 @@ export async function proposeUpdateSkill(
   if (currentContent === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
   }
+  assertProposalDescriptionWithinLimit(targetSkill.description);
+  assertProposalContentWithinLimit(input.content, config.maxSkillBytes);
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
+  await assertCanCreatePendingProposal(input.workspaceDir, config);
   const now = new Date().toISOString();
   const proposalContent = renderProposalMarkdown({
     name: targetSkill.skillKey,
@@ -332,6 +343,7 @@ export async function proposeUpdateSkill(
 export async function reviseSkillProposal(
   input: SkillProposalReviseInput,
 ): Promise<SkillProposalReadResult> {
+  const config = resolveSkillWorkshopConfig(input.config);
   const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
   const { record } = read;
   if (record.status !== "pending") {
@@ -365,6 +377,7 @@ export async function reviseSkillProposal(
     input.supportFiles === undefined
       ? await readProposalSupportFiles(record)
       : prepareSkillProposalSupportFiles(input.supportFiles);
+  assertProposalContentWithinLimit(input.content, config.maxSkillBytes);
   const supportFileMetadata =
     supportFiles.length > 0
       ? await buildSupportFileMetadata(
@@ -374,6 +387,7 @@ export async function reviseSkillProposal(
       : [];
   const nextVersion = nextProposalVersion(record.proposedVersion);
   const description = normalizeOptionalString(input.description) ?? record.description;
+  assertProposalDescriptionWithinLimit(description);
   const now = new Date().toISOString();
   const proposalContent = renderProposalMarkdown({
     name: record.target.skillKey,
@@ -514,6 +528,11 @@ export async function applySkillProposal(
       skillContent,
       supportFiles,
       previousSupportFiles: targetState.previousSupportFiles,
+    });
+    bumpSkillsSnapshotVersion({
+      workspaceDir: input.workspaceDir,
+      reason: "workshop",
+      changedPath: record.target.skillFile,
     });
     const now = new Date().toISOString();
     const applied: SkillProposalRecord = {
@@ -694,6 +713,37 @@ function scanProposalBundle(
     info,
     findings,
   };
+}
+
+async function assertCanCreatePendingProposal(
+  workspaceDir: string,
+  config: SkillWorkshopConfig,
+): Promise<void> {
+  const manifest = await listSkillProposals({ workspaceDir });
+  const activeProposalCount = manifest.proposals.filter(
+    (entry) => entry.status === "pending" || entry.status === "quarantined",
+  ).length;
+  if (activeProposalCount >= config.maxPending) {
+    throw new Error(`Skill Workshop pending proposal limit reached (${config.maxPending}).`);
+  }
+}
+
+function assertProposalDescriptionWithinLimit(description: string): void {
+  const sizeBytes = Buffer.byteLength(description, "utf8");
+  if (sizeBytes > MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES) {
+    throw new Error(
+      `Skill proposal description is too large (${sizeBytes} bytes, max ${MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES}).`,
+    );
+  }
+}
+
+function assertProposalContentWithinLimit(content: string, maxSkillBytes: number): void {
+  const sizeBytes = Buffer.byteLength(content, "utf8");
+  if (sizeBytes > maxSkillBytes) {
+    throw new Error(
+      `Skill proposal content is too large (${sizeBytes} bytes, max ${maxSkillBytes}).`,
+    );
+  }
 }
 
 async function buildSupportFileMetadata(

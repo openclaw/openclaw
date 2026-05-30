@@ -310,6 +310,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         true,
         await proposeCreateSkill({
           workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
           name: params.name,
           description: params.description,
           content: params.content,
@@ -381,6 +382,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         true,
         await reviseSkillProposal({
           workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
           proposalId: params.proposalId,
           content: params.content,
           supportFiles: params.supportFiles,

@@ -22,8 +22,8 @@ export async function runSkillResearchAutoCapture(params: {
   ctx: SkillResearchAgentContext;
   config?: OpenClawConfig;
 }): Promise<void> {
-  const config = resolveSkillWorkshopConfig(params.config);
-  if (!config.autonomous.enabled) {
+  const workshopConfig = resolveSkillWorkshopConfig(params.config);
+  if (!workshopConfig.autonomous.enabled) {
     return;
   }
   if (params.event.success === false) {
@@ -38,20 +38,15 @@ export async function runSkillResearchAutoCapture(params: {
   if (!proposal) {
     return;
   }
-  if (Buffer.byteLength(proposal.content, "utf8") > config.maxSkillBytes) {
-    log.warn(`skill research auto-capture skipped oversized proposal: ${proposal.skillName}`);
-    return;
-  }
 
   const manifest = await listSkillProposals({ workspaceDir });
-  const activeProposals = manifest.proposals.filter(
-    (entry) => entry.status === "pending" || entry.status === "quarantined",
-  );
-  if (activeProposals.length >= config.maxPending) {
-    log.warn("skill research auto-capture skipped because pending proposal limit was reached");
-    return;
-  }
-  if (activeProposals.some((entry) => entry.skillKey === proposal.skillName)) {
+  if (
+    manifest.proposals.some(
+      (entry) =>
+        (entry.status === "pending" || entry.status === "quarantined") &&
+        entry.skillKey === proposal.skillName,
+    )
+  ) {
     return;
   }
 
@@ -65,6 +60,7 @@ export async function runSkillResearchAutoCapture(params: {
       existingSkill === null
         ? await proposeCreateSkill({
             workspaceDir,
+            config: params.config,
             name: proposal.skillName,
             description: proposal.description,
             content: proposal.content,

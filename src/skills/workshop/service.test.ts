@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
+import {
+  getSkillsSnapshotVersion,
+  resetSkillsRefreshStateForTest,
+} from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
   applySkillProposal,
@@ -17,11 +21,7 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
-import {
-  MAX_PROPOSAL_BYTES,
-  readSkillProposalManifest,
-  resolveProposalDraftPath,
-} from "./store.js";
+import { readSkillProposalManifest, resolveProposalDraftPath } from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -35,6 +35,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   envSnapshot.restore();
+  resetSkillsRefreshStateForTest();
   await tempDirs.cleanup();
 });
 
@@ -99,10 +100,12 @@ describe("skill workshop proposals", () => {
       scanState: "clean",
     });
 
+    const beforeVersion = getSkillsSnapshotVersion(workspaceDir);
     const applied = await applySkillProposal({
       workspaceDir,
       proposalId: proposal.record.id,
     });
+    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(beforeVersion);
     expect(applied.targetSkillFile).toBe(proposal.record.target.skillFile);
     await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toBe(
       '---\nname: "weather-helper"\ndescription: "Check weather before planning outdoor tasks"\n---\n\n# Weather Helper\n\nUse the weather provider before answering.\n',
@@ -558,6 +561,103 @@ describe("skill workshop proposals", () => {
     expect(manifest.proposals[0]?.id).toBe(proposal.record.id);
   });
 
+  it("enforces configured proposal limits before writing proposal state", async () => {
+    const workspaceDir = await makeWorkspace();
+    const limitedConfig = { skills: { workshop: { maxPending: 1, maxSkillBytes: 1024 } } };
+    const first = await proposeCreateSkill({
+      workspaceDir,
+      config: limitedConfig,
+      name: "First Limited",
+      description: "First limited proposal",
+      content: "# First Limited\n",
+    });
+
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        config: limitedConfig,
+        name: "Second Limited",
+        description: "Second limited proposal",
+        content: "# Second Limited\n",
+      }),
+    ).rejects.toThrow("pending proposal limit");
+    expect((await listSkillProposals({ workspaceDir })).proposals.map((entry) => entry.id)).toEqual(
+      [first.record.id],
+    );
+
+    await rejectSkillProposal({ workspaceDir, proposalId: first.record.id });
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        config: limitedConfig,
+        name: "Oversized Limited",
+        description: "Oversized limited proposal",
+        content: "x".repeat(1025),
+      }),
+    ).rejects.toThrow("proposal content is too large");
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(1);
+
+    const skillDir = path.join(workspaceDir, "skills", "limited-update");
+    await writeSkill({
+      dir: skillDir,
+      name: "limited-update",
+      description: "Limited update",
+      body: "# Limited Update\n",
+    });
+    await expect(
+      proposeUpdateSkill({
+        workspaceDir,
+        config: limitedConfig,
+        skillName: "limited-update",
+        content: "x".repeat(1025),
+      }),
+    ).rejects.toThrow("proposal content is too large");
+
+    const revision = await proposeCreateSkill({
+      workspaceDir,
+      config: { skills: { workshop: { maxSkillBytes: 2000 } } },
+      name: "Limited Revision",
+      description: "Limited revision",
+      content: "# Limited Revision\n",
+    });
+    await expect(
+      reviseSkillProposal({
+        workspaceDir,
+        config: limitedConfig,
+        proposalId: revision.record.id,
+        content: "x".repeat(1025),
+      }),
+    ).rejects.toThrow("proposal content is too large");
+  });
+
+  it("bounds proposal descriptions before writing proposal state", async () => {
+    const workspaceDir = await makeWorkspace();
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        name: "Oversized Description",
+        description: "x".repeat(513),
+        content: "# Oversized Description\n",
+      }),
+    ).rejects.toThrow("proposal description is too large");
+    await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Description Revision",
+      description: "Short description",
+      content: "# Description Revision\n",
+    });
+    await expect(
+      reviseSkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        description: "x".repeat(513),
+        content: "# Description Revision\n",
+      }),
+    ).rejects.toThrow("proposal description is too large");
+  });
+
   it("quarantines unsafe proposals during apply", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
@@ -673,21 +773,6 @@ describe("skill workshop proposals", () => {
     await expect(readSkillProposalDraftDirectory(draftDir)).rejects.toThrow(
       "Proposal support files must not be executable",
     );
-  });
-
-  it("rejects rendered proposals that exceed the persisted draft size limit", async () => {
-    const workspaceDir = await makeWorkspace();
-
-    await expect(
-      proposeCreateSkill({
-        workspaceDir,
-        name: "Oversized Proposal",
-        description: "Reject final rendered drafts above the store limit",
-        content: "x".repeat(MAX_PROPOSAL_BYTES),
-      }),
-    ).rejects.toThrow("Skill proposal is too large.");
-
-    await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
   });
 
   it("quarantines proposals with unsafe support file contents during apply", async () => {
