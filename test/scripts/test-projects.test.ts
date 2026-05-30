@@ -422,6 +422,7 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/check-composite-action-input-interpolation.test.ts",
         "test/scripts/check-no-conflict-markers.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/check-workflows.test.ts",
       ],
     });
   });
