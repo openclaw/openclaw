@@ -32,6 +32,13 @@ function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
+/** Check whether the number of markdown tables is within Feishu card limits (≤5). */
+function withinCardTableLimit(text: string): boolean {
+  const stripped = text.replace(/```[\s\S]*?```/g, "");
+  const separators = stripped.match(/^[ \t]*\|[-:| \t]+\|[ \t]*$/gm);
+  return (separators?.length ?? 0) <= 5;
+}
+
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
 const TYPING_INDICATOR_MAX_AGE_MS = 2 * 60_000;
@@ -540,7 +547,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           hasText &&
           (renderMode === "card" ||
             (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-            (renderMode === "auto" && shouldUseCard(text)));
+            (renderMode === "auto" && shouldUseCard(text))) &&
+          withinCardTableLimit(text);
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
         const skipTextForClosedStreamingFinal =
