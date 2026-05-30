@@ -8,6 +8,7 @@ import path from "node:path";
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { isApprovalNotFoundError } from "../infra/approval-errors.js";
 import {
   diagnosticErrorCategory,
   diagnosticHttpStatusCode,
@@ -801,6 +802,16 @@ async function requestPluginToolApproval(params: {
         kind: "failure",
         deniedReason: "plugin-approval",
         reason: "Approval cancelled (run aborted)",
+        params: params.baseParams,
+      };
+    }
+    if (isApprovalNotFoundError(err)) {
+      log.warn(`plugin approval no longer available; blocking tool call: ${String(err)}`);
+      return {
+        blocked: true,
+        kind: "failure",
+        deniedReason: "plugin-approval",
+        reason: "Plugin approval unavailable (stale approval)",
         params: params.baseParams,
       };
     }

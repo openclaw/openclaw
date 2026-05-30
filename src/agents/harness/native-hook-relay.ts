@@ -25,6 +25,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
@@ -2055,24 +2056,31 @@ async function waitForNativeHookRelayApprovalDecision(params: {
       { timeoutMs: params.timeoutMs + 10_000 },
       { id: params.approvalId },
     );
-  if (!params.signal) {
-    return waitPromise;
-  }
-  let onAbort: (() => void) | undefined;
-  const abortPromise = new Promise<never>((_, reject) => {
-    if (params.signal!.aborted) {
-      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
-      return;
-    }
-    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
-    params.signal!.addEventListener("abort", onAbort, { once: true });
-  });
   try {
-    return await Promise.race([waitPromise, abortPromise]);
-  } finally {
-    if (onAbort) {
-      params.signal.removeEventListener("abort", onAbort);
+    if (!params.signal) {
+      return await waitPromise;
     }
+    let onAbort: (() => void) | undefined;
+    const abortPromise = new Promise<never>((_, reject) => {
+      if (params.signal!.aborted) {
+        reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
+        return;
+      }
+      onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
+      params.signal!.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      return await Promise.race([waitPromise, abortPromise]);
+    } finally {
+      if (onAbort) {
+        params.signal.removeEventListener("abort", onAbort);
+      }
+    }
+  } catch (error) {
+    if (isApprovalNotFoundError(error)) {
+      return undefined;
+    }
+    throw error;
   }
 }
 

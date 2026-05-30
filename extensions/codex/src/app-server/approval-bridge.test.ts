@@ -2149,6 +2149,38 @@ describe("Codex app-server approval bridge", () => {
     findApprovalEvent(params, { status: "unavailable", reason: "needs write access" });
   });
 
+  it("fails closed when waitDecision reports a stale approval id", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-stale", status: "accepted" })
+      .mockRejectedValueOnce(new Error("unknown or expired approval id"));
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/fileChange/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "patch-stale",
+        reason: "needs write access",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+    findApprovalEvent(params, {
+      status: "unavailable",
+      approvalId: "plugin:approval-stale",
+      reason: "needs write access",
+      message: "Codex app-server approval unavailable.",
+    });
+  });
+
   it("sanitizes reason previews before forwarding approval text and events", async () => {
     const params = createParams();
     mockCallGatewayTool.mockResolvedValueOnce({
