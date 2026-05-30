@@ -286,6 +286,50 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     expect(host.chatModelOverrides?.main).toBeNull();
   });
 
+  it("emits streamed tool result images as message-level image blocks", () => {
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-image",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "image_gen.generate",
+        toolCallId: "image-tool-1",
+        result: {
+          content: [
+            { type: "text", text: "Generated image" },
+            { type: "image", url: "https://example.com/generated.png" },
+          ],
+        },
+      },
+    });
+
+    expect(host.chatToolMessages).toHaveLength(1);
+    expect(host.chatToolMessages[0]).toMatchObject({
+      role: "assistant",
+      toolCallId: "image-tool-1",
+      content: [
+        {
+          type: "toolcall",
+          name: "image_gen.generate",
+        },
+        {
+          type: "toolresult",
+          name: "image_gen.generate",
+          text: "Generated image",
+        },
+        {
+          type: "image",
+          url: "https://example.com/generated.png",
+        },
+      ],
+    });
+  });
+
   it("records tool activity summaries without storing raw argument values", () => {
     useToolStreamFakeTimers();
     const host = createHost();

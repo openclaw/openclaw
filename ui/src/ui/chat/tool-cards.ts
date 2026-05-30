@@ -60,6 +60,52 @@ function coerceArgs(value: unknown): unknown {
   }
 }
 
+function buildBase64ImageUrl(data: string, mediaType?: string): string {
+  if (data.startsWith("data:")) {
+    return data;
+  }
+  return `data:${mediaType ?? "image/png"};base64,${data}`;
+}
+
+function isManagedOutgoingUrl(source: string): boolean {
+  const trimmed = source.trim();
+  if (trimmed.startsWith("/api/chat/media/outgoing/")) {
+    return true;
+  }
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    return (
+      parsed.origin === window.location.origin &&
+      parsed.pathname.startsWith("/api/chat/media/outgoing/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function extractToolImages(item: Record<string, unknown>): string[] {
+  const content = normalizeContent(item.content);
+  const urls: string[] = [];
+  for (const block of content) {
+    if (block.type !== "image") {
+      continue;
+    }
+    if (typeof block.url === "string" && block.url.trim()) {
+      urls.push(block.url);
+    } else if (typeof block.data === "string") {
+      const mimeType = typeof block.mimeType === "string" ? block.mimeType : undefined;
+      urls.push(buildBase64ImageUrl(block.data, mimeType));
+    } else if (block.source && typeof block.source === "object") {
+      const s = block.source as Record<string, unknown>;
+      if (s.type === "base64" && typeof s.data === "string") {
+        const mt = typeof s.media_type === "string" ? s.media_type : undefined;
+        urls.push(buildBase64ImageUrl(s.data, mt));
+      }
+    }
+  }
+  return urls;
+}
+
 function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.text === "string") {
     return item.text;
@@ -295,12 +341,16 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
+      const images = extractToolImages(item);
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.outputText = text;
         existing.preview = preview;
         if (isError !== undefined) {
           existing.isError = isError;
+        }
+        if (images.length > 0) {
+          existing.images = images;
         }
         continue;
       }
@@ -310,6 +360,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         outputText: text,
         messageId: transcriptMessageId,
         ...(isError !== undefined ? { isError } : {}),
+        ...(images.length > 0 ? { images } : {}),
         preview,
       });
     }
@@ -761,6 +812,15 @@ export function renderExpandedToolCardContent(
               expanded: true,
             })
         : nothing}
+      ${card.images?.length
+        ? html`<div class="chat-tool-card__images">
+            ${card.images.map((url) =>
+              isManagedOutgoingUrl(url)
+                ? nothing
+                : html`<img class="chat-tool-card__image" src=${url} alt="${card.name} output" />`,
+            )}
+          </div>`
+        : nothing}
     </div>
   `;
 }
@@ -861,6 +921,15 @@ export function renderToolCardSidebar(
         : nothing}
       ${showInline
         ? html`<div class="chat-tool-card__inline mono">${card.outputText}</div>`
+        : nothing}
+      ${card.images?.length
+        ? html`<div class="chat-tool-card__images">
+            ${card.images.map((url) =>
+              isManagedOutgoingUrl(url)
+                ? nothing
+                : html`<img class="chat-tool-card__image" src=${url} alt="${card.name} output" />`,
+            )}
+          </div>`
         : nothing}
     </div>
   `;

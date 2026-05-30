@@ -43,6 +43,7 @@ export type ToolStreamEntry = {
   name: string;
   args?: unknown;
   output?: string;
+  outputImages?: string[];
   startedAt: number;
   updatedAt: number;
   message: Record<string, unknown>;
@@ -153,6 +154,43 @@ function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
     out.push({ provider, model, reason });
   }
   return out;
+}
+
+function extractToolOutputImages(value: unknown): string[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const record = value as Record<string, unknown>;
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const entry = item as Record<string, unknown>;
+      if (entry.type !== "image") {
+        return null;
+      }
+      if (typeof entry.url === "string" && entry.url.trim()) {
+        return entry.url;
+      }
+      if (typeof entry.data === "string") {
+        const mime = typeof entry.mimeType === "string" ? entry.mimeType : "image/png";
+        return `data:${mime};base64,${entry.data}`;
+      }
+      if (entry.source && typeof entry.source === "object") {
+        const s = entry.source as Record<string, unknown>;
+        if (s.type === "base64" && typeof s.data === "string") {
+          const mt = typeof s.media_type === "string" ? s.media_type : "image/png";
+          return `data:${mt};base64,${s.data}`;
+        }
+      }
+      return null;
+    })
+    .filter((part): part is string => Boolean(part));
 }
 
 function extractToolOutputText(value: unknown): string | null {
@@ -371,12 +409,17 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     name: entry.name,
     arguments: entry.args ?? {},
   });
-  if (entry.output) {
+  if (entry.output || (entry.outputImages?.length ?? 0) > 0) {
     content.push({
       type: "toolresult",
       name: entry.name,
-      text: entry.output,
+      text: entry.output ?? undefined,
     });
+  }
+  if (entry.outputImages?.length) {
+    for (const url of entry.outputImages) {
+      content.push({ type: "image", url });
+    }
   }
   return {
     role: "assistant",
@@ -776,6 +819,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       : phase === "result"
         ? formatToolOutput(data.result)
         : undefined;
+  const outputImages = phase === "result" ? extractToolOutputImages(data.result) : undefined;
   if (name === "session_status" && phase === "result") {
     syncSessionStatusModelOverride(host, data);
   }
@@ -802,6 +846,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       name,
       args,
       output: output || undefined,
+      outputImages: outputImages?.length ? outputImages : undefined,
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       updatedAt: now,
       message: {},
@@ -815,6 +860,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
     if (output !== undefined) {
       entry.output = output || undefined;
+    }
+    if (outputImages?.length) {
+      entry.outputImages = outputImages;
     }
     entry.updatedAt = now;
   }

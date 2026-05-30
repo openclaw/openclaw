@@ -1613,6 +1613,51 @@ describe("grouped chat rendering", () => {
     expectSameOriginGet(fetchInit);
   });
 
+  it("renders streamed tool result images exactly once when tool details are expanded", () => {
+    const container = document.createElement("div");
+
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        toolCallId: "call-image",
+        content: [
+          {
+            type: "toolcall",
+            id: "call-image",
+            name: "image_gen.generate",
+            arguments: { prompt: "chart" },
+          },
+          {
+            type: "toolresult",
+            id: "call-image",
+            name: "image_gen.generate",
+            text: "Generated image",
+          },
+          {
+            type: "image",
+            url: "https://example.com/generated.png",
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        isToolMessageExpanded: () => true,
+        isToolExpanded: () => true,
+      },
+    );
+
+    const messageImages = container.querySelectorAll<HTMLImageElement>(".chat-message-image");
+    expect(messageImages).toHaveLength(1);
+    expect(messageImages[0]?.getAttribute("src")).toBe("https://example.com/generated.png");
+    expect(container.querySelectorAll(".chat-tool-card__image")).toHaveLength(0);
+    expect(
+      [...container.querySelectorAll<HTMLImageElement>("img")].filter(
+        (image) => image.getAttribute("src") === "https://example.com/generated.png",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("does not send auth to cross-origin managed-image-looking URLs", () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("cross-origin image URL should not be fetched with Control UI auth");

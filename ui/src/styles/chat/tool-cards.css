@@ -1073,6 +1073,22 @@
   }
 }
 
+.chat-tool-card__images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chat-tool-card__image {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color, #e0e0e0);
+  object-fit: contain;
+  background: #fff;
+}
+
 @media (max-width: 480px) {
   .chat-tool-card {
     padding: 6px 8px;
