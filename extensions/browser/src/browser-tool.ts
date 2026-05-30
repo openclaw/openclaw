@@ -817,21 +817,13 @@ export function createBrowserTool(opts?: {
               // Vision model descriptions contain web page content which is
               // untrusted external input — wrap it the same way snapshot and
               // tabs results are wrapped to mitigate prompt injection.
-              //
-              // SECURITY: Neutralize any `MEDIA:` directives in the vision
-              // text before wrapping. `splitMediaFromOutput` (called on every
-              // browser tool-result text block by the agent media extractor)
-              // treats line-start `MEDIA:` as a trusted local-media delivery
-              // directive, and `browser` is on the trusted-media tool
-              // allowlist. Without this guard, a page or vision-provider
-              // response containing `MEDIA:/tmp/secret.png` would synthesize
-              // a channel-deliverable media artifact from untrusted content.
-              // `wrapExternalContent` does not strip line-start directives.
-              const neutralizedDescription = neutralizeMediaDirectives(described.text.trim());
-              const wrappedDescription = wrapExternalContent(neutralizedDescription, {
-                source: "browser",
-                includeWarning: true,
-              });
+              const wrappedDescription = wrapExternalContent(
+                neutralizeMediaDirectives(described.text.trim()),
+                {
+                  source: "browser",
+                  includeWarning: true,
+                },
+              );
               const text = `${headerLines.join("\n")}\n${wrappedDescription}`;
               return {
                 content: [{ type: "text", text }],
@@ -853,8 +845,7 @@ export function createBrowserTool(opts?: {
           } catch (err) {
             // Fall back to returning the raw image block so the agent loop can
             // still recover. Provider/runtime error messages are untrusted
-            // input too, so defang line-start `MEDIA:` directives before
-            // `imageResultFromFile` emits the diagnostic text.
+            // input too, so defang line-start final-reply media directives.
             const rawReason = err instanceof Error ? err.message : String(err);
             const reason = neutralizeMediaDirectives(rawReason);
             const extraText = `[browser screenshot vision failed: ${reason}]`;

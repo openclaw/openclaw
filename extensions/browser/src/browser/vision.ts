@@ -104,23 +104,8 @@ export async function describeBrowserScreenshot(
   };
 }
 
-/**
- * Defang line-start `MEDIA:` directives in vision-provider descriptions before
- * the text is returned as a browser tool-result text block.
- *
- * The agent media extractor (`splitMediaFromOutput`) treats any text content
- * block whose line starts with `MEDIA:` (case-insensitive, after trimming
- * leading whitespace) as a local-media delivery directive, and the `browser`
- * tool is on the trusted-media tool allowlist. Vision descriptions reflect
- * untrusted page content plus untrusted model output, so a page like
- * `MEDIA:/tmp/secret.png` could otherwise synthesize a channel-deliverable
- * media artifact from outside content.
- */
 export function neutralizeMediaDirectives(text: string): string {
-  if (!text) {
-    return text;
-  }
-  if (!/media:/i.test(text)) {
+  if (!text || !/media:/i.test(text)) {
     return text;
   }
   const lines = text.split("\n");

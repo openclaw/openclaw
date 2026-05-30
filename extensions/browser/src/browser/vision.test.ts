@@ -152,19 +152,15 @@ describe("describeBrowserScreenshot", () => {
 });
 
 describe("neutralizeMediaDirectives", () => {
-  it("neutralizes line-start MEDIA directives while preserving text", () => {
-    const input = "before\nMEDIA:/tmp/secret.png\n  media:/tmp/other.png\na MEDIA: mid-line";
-    const output = neutralizeMediaDirectives(input);
-
-    expect(output).toContain("/tmp/secret.png");
-    expect(output).toContain("/tmp/other.png");
-    expect(output).toContain("a MEDIA: mid-line");
-    for (const line of output.split("\n")) {
-      expect(/^\s*MEDIA:/i.test(line)).toBe(false);
-    }
+  it("defangs line-start final-reply media directives", () => {
+    expect(neutralizeMediaDirectives("ok\n  MEDIA:/tmp/secret.png\nMEDIA:http://x/y.png")).toBe(
+      "ok\n  [neutralized] MEDIA:/tmp/secret.png\n[neutralized] MEDIA:http://x/y.png",
+    );
   });
 
-  it("keeps strings without media directives unchanged", () => {
-    expect(neutralizeMediaDirectives("plain text")).toBe("plain text");
+  it("leaves prose mentions alone", () => {
+    expect(neutralizeMediaDirectives("see MEDIA: as plain prose")).toBe(
+      "see MEDIA: as plain prose",
+    );
   });
 });

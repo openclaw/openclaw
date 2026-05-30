@@ -956,7 +956,7 @@ describe("browser tool snapshot maxChars", () => {
     expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
   });
 
-  it("neutralizes MEDIA: directives in vision text and does not attach media", async () => {
+  it("defangs vision MEDIA-looking text and does not attach media", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
@@ -983,14 +983,7 @@ describe("browser tool snapshot maxChars", () => {
     );
     expect(textBlocks.length).toBeGreaterThan(0);
     const joined = textBlocks.map((entry) => entry.text).join("\n");
-    // The directive must not survive at a line-start position. The agent
-    // media extractor scans every text block for line-start `MEDIA:` and
-    // browser tool-result text is on the trusted media-delivery path.
-    for (const line of joined.split("\n")) {
-      expect(/^\s*MEDIA:/i.test(line)).toBe(false);
-    }
-    // The secret path must still appear verbatim somewhere so reviewers can
-    // see the original page content was preserved, just defanged.
+    expect(joined).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(joined).toContain("/tmp/secret.png");
     // The vision-success path must not surface raw screenshot media via
     // details.media so channel auto-delivery cannot grab the screenshot.
@@ -1000,7 +993,7 @@ describe("browser tool snapshot maxChars", () => {
     expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
   });
 
-  it("neutralizes MEDIA directives in vision failure fallback text", async () => {
+  it("defangs vision failure fallback text", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       tools: { media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } } },
@@ -1029,10 +1022,8 @@ describe("browser tool snapshot maxChars", () => {
       extraText?: string;
     }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.path).toBe("/tmp/screen.png");
+    expect(imageParams.extraText).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(imageParams.extraText).toContain("/tmp/secret.png");
-    for (const line of (imageParams.extraText ?? "").split("\n")) {
-      expect(/^\s*MEDIA:/i.test(line)).toBe(false);
-    }
   });
 
   it("preserves screenshot image sanitization on vision failure fallback", async () => {

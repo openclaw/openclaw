@@ -166,7 +166,7 @@ interface FirstClosedMediaTag {
   textBefore: string;
   /** 标签类型（小写，如 "qqvoice"） */
   tagName: string;
-  /** 标签内的媒体路径（已 trim、去 MEDIA: 前缀、修复编码） */
+  /** 标签内的媒体路径（已 trim、修复编码） */
   mediaPath: string;
   /** 标签在输入文本中的结束索引（紧接标签后的第一个字符位置） */
   tagEndIndex: number;
@@ -207,10 +207,6 @@ export function findFirstClosedMediaTag(
     const tagName = match[1].toLowerCase();
     let mediaPath = match[2]?.trim() ?? "";
 
-    // 剥离 MEDIA: 前缀
-    if (mediaPath.startsWith("MEDIA:")) {
-      mediaPath = mediaPath.slice("MEDIA:".length);
-    }
     mediaPath = normalizePath(mediaPath);
     mediaPath = fixPathEncoding(mediaPath, log);
 
