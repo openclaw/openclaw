@@ -277,7 +277,7 @@ describe("resolveProviderAuths plugin boundary", () => {
   });
 
   it("does not fall back to standard Anthropic API keys for usage auth", async () => {
-    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({ token: "" });
+    resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({ handled: true });
     await withTempHome(async (homeDir) => {
       await expect(
         resolveProviderAuthsForTest({

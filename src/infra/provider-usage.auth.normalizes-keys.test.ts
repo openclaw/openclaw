@@ -173,7 +173,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
           providerIds: ["anthropic"],
           envDirect: [params.context.env?.ANTHROPIC_API_KEY],
         });
-        return token?.startsWith("sk-ant-oat01-") ? { token } : { token: "" };
+        return token?.startsWith("sk-ant-oat01-") ? { token } : { handled: true };
       }
 
       if (params.provider === "minimax") {

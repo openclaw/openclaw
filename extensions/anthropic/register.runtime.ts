@@ -689,7 +689,7 @@ async function resolveAnthropicUsageAuth(ctx: ProviderResolveUsageAuthContext) {
     return { token: apiKey };
   }
 
-  return { token: "" };
+  return { handled: true };
 }
 
 export function buildAnthropicProvider(): ProviderPlugin {
