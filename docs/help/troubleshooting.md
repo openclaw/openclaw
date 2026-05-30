@@ -313,6 +313,7 @@ flowchart TD
 
     - `cron: scheduler disabled; jobs will not run automatically` → cron is disabled.
     - `heartbeat skipped` with `reason=quiet-hours` → outside configured active hours.
+    - `heartbeat skipped` with `reason=missing-heartbeat-file` → default idle heartbeat is enabled, but the workspace has no `HEARTBEAT.md`; add the file or explicit heartbeat config to opt into periodic runs.
     - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank/header-only scaffolding.
     - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` task mode is active but none of the task intervals are due yet.
     - `heartbeat skipped` with `reason=alerts-disabled` → all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off).

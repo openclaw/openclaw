@@ -387,7 +387,9 @@ On normal runs, `HEARTBEAT.md` is only injected when heartbeat guidance is enabl
 
 On the native Codex harness, `HEARTBEAT.md` content is not injected into the turn. If the file exists and has non-whitespace content, the heartbeat collaboration-mode instructions point Codex at the file and tell it to read before proceeding.
 
-If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`. If the file is missing, the heartbeat still runs and the model decides what to do.
+If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls. That skip is reported as `reason=empty-heartbeat-file`.
+
+If `HEARTBEAT.md` is missing and the agent only has the default heartbeat cadence, OpenClaw skips idle interval heartbeats as `reason=missing-heartbeat-file` so an unconfigured workspace does not spend model tokens while idle. Add `HEARTBEAT.md` or configure `agents.defaults.heartbeat` / `agents.<id>.heartbeat` explicitly to opt back into periodic heartbeat runs without the file. Manual wake, cron, exec-triggered, due commitment, and other event-backed heartbeat runs still proceed without `HEARTBEAT.md`.
 
 Keep it tiny (short checklist or reminders) to avoid prompt bloat.
 
@@ -478,6 +480,7 @@ When enabled, heartbeats will also deliver a separate message prefixed `Thinking
 
 Heartbeats run full agent turns. Shorter intervals burn more tokens. To reduce cost:
 
+- Leave `HEARTBEAT.md` absent if you do not want default idle interval heartbeats to call the model.
 - Use `isolatedSession: true` to avoid sending full conversation history (~100K tokens down to ~2-5K per run).
 - Use `lightContext: true` to limit bootstrap files to just `HEARTBEAT.md`.
 - Set a cheaper `model` (e.g. `ollama/llama3.2:1b`).
