@@ -10,7 +10,10 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import WebSocket from "ws";
 
@@ -77,8 +80,9 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
+  const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), safeTimeoutMs);
   try {
     return await fetchImpl(url, { ...init, signal: controller.signal });
   } finally {
@@ -142,12 +146,13 @@ function containerReceiveCheck(
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const wsUrl = `${normalizedBaseUrl.replace(/^http/, "ws")}/v1/receive/${encodeURIComponent(account)}`;
   return new Promise((resolve) => {
+    const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
     let settled = false;
     let ws: WebSocket | undefined;
     const timer = setTimeout(() => {
       settle({ ok: false, status: null, error: "Signal container receive WebSocket timed out" });
       ws?.terminate();
-    }, timeoutMs);
+    }, safeTimeoutMs);
     timer.unref?.();
     const settle = (result: { ok: boolean; status?: number | null; error?: string | null }) => {
       if (settled) {

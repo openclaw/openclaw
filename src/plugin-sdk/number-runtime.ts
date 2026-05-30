@@ -2,7 +2,15 @@
 
 export {
   asFiniteNumberInRange,
+  asSafeIntegerInRange,
   parseFiniteNumber,
+  clampTimerTimeoutMs,
+  clampPositiveTimerTimeoutMs,
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
@@ -10,5 +18,10 @@ export {
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
+  positiveSecondsToSafeMilliseconds,
+  nonNegativeSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromEpochSeconds,
 } from "../shared/number-coercion.js";
 export { MAX_TCP_PORT, parseTcpPort } from "../infra/tcp-port.js";

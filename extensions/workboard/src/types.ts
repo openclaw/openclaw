@@ -1,6 +1,9 @@
 export const WORKBOARD_STATUSES = [
+  "triage",
   "backlog",
   "todo",
+  "scheduled",
+  "ready",
   "running",
   "review",
   "blocked",
@@ -22,12 +25,18 @@ export const WORKBOARD_EVENT_KINDS = [
   "edited",
   "moved",
   "linked",
+  "claimed",
+  "heartbeat",
   "execution_updated",
   "attempt_started",
   "attempt_updated",
   "comment_added",
   "link_added",
   "proof_added",
+  "artifact_added",
+  "diagnostic",
+  "notification",
+  "dispatch",
   "archived",
   "unarchived",
   "stale",
@@ -39,9 +48,25 @@ export const WORKBOARD_ATTEMPT_STATUSES = [
   "blocked",
   "stopped",
 ] as const;
-export const WORKBOARD_LINK_TYPES = ["blocks", "blocked_by", "relates_to"] as const;
+export const WORKBOARD_LINK_TYPES = [
+  "parent",
+  "child",
+  "blocks",
+  "blocked_by",
+  "relates_to",
+] as const;
 export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
+export const WORKBOARD_DIAGNOSTIC_KINDS = [
+  "stranded_ready",
+  "running_without_heartbeat",
+  "blocked_too_long",
+  "repeated_failures",
+  "missing_proof",
+  "orphaned_session",
+] as const;
+export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
+export const WORKBOARD_NOTIFICATION_KINDS = ["completed", "failed", "stale"] as const;
 
 export type WorkboardStatus = (typeof WORKBOARD_STATUSES)[number];
 export type WorkboardPriority = (typeof WORKBOARD_PRIORITIES)[number];
@@ -53,6 +78,9 @@ export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number]
 export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
 export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
 export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
+export type WorkboardDiagnosticKind = (typeof WORKBOARD_DIAGNOSTIC_KINDS)[number];
+export type WorkboardDiagnosticSeverity = (typeof WORKBOARD_DIAGNOSTIC_SEVERITIES)[number];
+export type WorkboardNotificationKind = (typeof WORKBOARD_NOTIFICATION_KINDS)[number];
 
 export type WorkboardExecution = {
   id: string;
@@ -116,10 +144,72 @@ export type WorkboardProof = {
   note?: string;
 };
 
+export type WorkboardArtifact = {
+  id: string;
+  createdAt: number;
+  label?: string;
+  url?: string;
+  path?: string;
+  mimeType?: string;
+};
+
 export type WorkboardStaleState = {
   detectedAt: number;
   lastSessionUpdatedAt?: number;
   reason: string;
+};
+
+export type WorkboardClaim = {
+  ownerId: string;
+  token: string;
+  claimedAt: number;
+  lastHeartbeatAt: number;
+  expiresAt?: number;
+};
+
+export type WorkboardDiagnosticAction = {
+  kind: "claim" | "unblock" | "reassign" | "add_proof" | "open_session";
+  label: string;
+};
+
+export type WorkboardDiagnostic = {
+  kind: WorkboardDiagnosticKind;
+  severity: WorkboardDiagnosticSeverity;
+  title: string;
+  detail: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  count: number;
+  actions: WorkboardDiagnosticAction[];
+};
+
+export type WorkboardNotification = {
+  id: string;
+  kind: WorkboardNotificationKind;
+  createdAt: number;
+  message: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type WorkboardWorkspace = {
+  kind: "scratch" | "dir" | "worktree";
+  path?: string;
+  branch?: string;
+};
+
+export type WorkboardAutomation = {
+  tenant?: string;
+  idempotencyKey?: string;
+  skills?: string[];
+  workspace?: WorkboardWorkspace;
+  maxRuntimeSeconds?: number;
+  maxRetries?: number;
+  scheduledAt?: number;
+  summary?: string;
+  createdCardIds?: string[];
+  dispatchCount?: number;
+  lastDispatchAt?: number;
 };
 
 export type WorkboardMetadata = {
@@ -127,6 +217,11 @@ export type WorkboardMetadata = {
   comments?: WorkboardComment[];
   links?: WorkboardLink[];
   proof?: WorkboardProof[];
+  artifacts?: WorkboardArtifact[];
+  automation?: WorkboardAutomation;
+  claim?: WorkboardClaim;
+  diagnostics?: WorkboardDiagnostic[];
+  notifications?: WorkboardNotification[];
   templateId?: WorkboardTemplateId;
   archivedAt?: number;
   stale?: WorkboardStaleState;

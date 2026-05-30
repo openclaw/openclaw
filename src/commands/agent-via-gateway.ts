@@ -4,11 +4,11 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   callGateway,
@@ -150,6 +150,12 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   return raw;
 }
 
+function getGatewayDispatchConfig(): OpenClawConfig {
+  // Scoped gateway turns need core agent/session/gateway fields only. The
+  // running gateway owns plugin validation and plugin metadata freshness.
+  return getRuntimeConfig({ skipPluginValidation: true, pin: false });
+}
+
 function formatPayloadForLog(payload: {
   text?: string;
   mediaUrls?: string[];
@@ -231,7 +237,9 @@ function normalizeSessionKeyOptsForDispatch(opts: AgentCliOpts): AgentCliOpts {
     isLegacySessionKey && !agentIdRaw && !isUnscopedSessionKeySentinel(rawSessionKey);
   const cfg =
     isLegacySessionKey && (agentIdRaw || shouldScopeDefaultAgentKey)
-      ? getRuntimeConfig()
+      ? opts.local === true
+        ? getRuntimeConfig()
+        : getGatewayDispatchConfig()
       : undefined;
   const sessionKey = scopeLegacySessionKeyToAgent({
     agentId: agentIdRaw ?? (shouldScopeDefaultAgentKey ? resolveDefaultAgentId(cfg!) : undefined),
@@ -401,6 +409,7 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
   signal: AgentCliSignal | undefined;
   runtime: RuntimeEnv;
   gatewayIdentity: AgentGatewayCallIdentity;
+  config: OpenClawConfig;
 }): Promise<void> {
   const request: GatewayRequestFunction = async <T = Record<string, unknown>>(
     method: string,
@@ -412,6 +421,7 @@ async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
       params: requestParams,
       timeoutMs: opts?.timeoutMs ?? undefined,
       expectFinal: opts?.expectFinal,
+      config: params.config,
       ...params.gatewayIdentity,
     });
   for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
@@ -495,7 +505,7 @@ async function resolveAgentIdForGatewayTimeoutFallback(
     return resolveAgentIdFromSessionKey(explicitSessionKey);
   }
   if (isUnscopedSessionKeySentinel(explicitSessionKey)) {
-    return resolveDefaultAgentId(getRuntimeConfig());
+    return resolveDefaultAgentId(getGatewayDispatchConfig());
   }
 
   const agentIdRaw = opts.agent?.trim();
@@ -506,7 +516,7 @@ async function resolveAgentIdForGatewayTimeoutFallback(
   if (!opts.to && !opts.sessionId) {
     return undefined;
   }
-  const cfg = getRuntimeConfig();
+  const cfg = getGatewayDispatchConfig();
   const { resolveSessionKeyForRequest } = await loadAgentSessionModule();
   const resolvedSessionKey = resolveSessionKeyForRequest({
     cfg,
@@ -558,7 +568,7 @@ async function agentViaGatewayCommand(
     );
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = getGatewayDispatchConfig();
   const agentIdRaw = opts.agent?.trim();
   const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
   if (agentId) {
@@ -638,6 +648,7 @@ async function agentViaGatewayCommand(
           },
           expectFinal: true,
           timeoutMs: gatewayTimeoutMs,
+          config: cfg,
           signal: signalBridge.signal,
           onAccepted: (payload) => {
             acceptedGatewayRun = true;
@@ -670,6 +681,7 @@ async function agentViaGatewayCommand(
         signal: signalBridge.getReceivedSignal(),
         runtime,
         gatewayIdentity,
+        config: cfg,
       });
     }
     throw err;

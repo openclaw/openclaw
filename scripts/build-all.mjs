@@ -42,6 +42,11 @@ export const BUILD_ALL_STEPS = [
     windowsNodeOptions: `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`,
     cache: {
       inputs: [
+        "package.json",
+        "pnpm-lock.yaml",
+        "npm-shrinkwrap.json",
+        "packages/plugin-sdk/package.json",
+        "packages/memory-host-sdk/package.json",
         "tsconfig.json",
         "tsconfig.plugin-sdk.dts.json",
         "src/plugin-sdk",
@@ -72,19 +77,6 @@ export const BUILD_ALL_STEPS = [
     label: "copy-hook-metadata",
     kind: "node",
     args: ["--experimental-strip-types", "scripts/copy-hook-metadata.ts"],
-  },
-  {
-    label: "copy-copilot-sdk-manifest",
-    kind: "node",
-    args: ["--experimental-strip-types", "scripts/copy-copilot-sdk-manifest.ts"],
-    cache: {
-      inputs: [
-        "scripts/copy-copilot-sdk-manifest.ts",
-        "scripts/lib/copy-assets.ts",
-        "src/commands/copilot-sdk-install-manifest",
-      ],
-      outputs: ["dist/commands/copilot-sdk-install-manifest"],
-    },
   },
   {
     label: "copy-export-html-templates",
@@ -140,7 +132,6 @@ export const BUILD_ALL_PROFILES = {
     "check-plugin-sdk-exports",
     "plugins:assets:copy",
     "copy-hook-metadata",
-    "copy-copilot-sdk-manifest",
     "copy-export-html-templates",
     "ui:build",
     "write-build-info",
@@ -165,6 +156,14 @@ export const BUILD_ALL_PROFILES = {
   ],
 };
 
+export const BUILD_ALL_PROFILE_STEP_ENV = {
+  ciArtifacts: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
+};
+
 export function resolveBuildAllSteps(profile = "full") {
   const labels = BUILD_ALL_PROFILES[profile];
   if (!labels) {
@@ -175,19 +174,28 @@ export function resolveBuildAllSteps(profile = "full") {
     const missing = labels.filter((label) => !BUILD_ALL_STEPS.some((step) => step.label === label));
     throw new Error(`Build profile ${profile} references unknown steps: ${missing.join(", ")}`);
   }
-  return selected;
+  const envOverrides = BUILD_ALL_PROFILE_STEP_ENV[profile] ?? {};
+  return selected.map((step) => {
+    const env = envOverrides[step.label];
+    if (!env) {
+      return step;
+    }
+    const mergedEnv = Object.assign({}, step.env, env);
+    return Object.assign({}, step, { env: mergedEnv });
+  });
 }
 
 function resolveStepEnv(step, env, platform) {
+  const stepEnv = step.env ? Object.assign({}, env, step.env) : env;
   if (platform !== "win32" || !step.windowsNodeOptions) {
-    return env;
+    return stepEnv;
   }
-  const currentNodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  const currentNodeOptions = stepEnv.NODE_OPTIONS?.trim() ?? "";
   if (currentNodeOptions.includes(step.windowsNodeOptions)) {
-    return env;
+    return stepEnv;
   }
   return {
-    ...env,
+    ...stepEnv,
     NODE_OPTIONS: currentNodeOptions
       ? `${currentNodeOptions} ${step.windowsNodeOptions}`
       : step.windowsNodeOptions,

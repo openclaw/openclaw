@@ -21,6 +21,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -70,7 +71,6 @@ import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import { createCodingTools, createReadTool } from "./sessions/index.js";
-import type { SkillSnapshot } from "./skills/types.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,

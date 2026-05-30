@@ -959,6 +959,19 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes fake-timer unit-fast tests to the serial fake-timer lane", () => {
+    const plans = buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/manager.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes changed commands source allowlist files to sibling light tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/commands/status-overview-values.ts",
@@ -1444,6 +1457,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     }
     expect(leafShardPlans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.unit-fast-fake-timers.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
       "test/vitest/vitest.unit-security.config.ts",
       "test/vitest/vitest.unit-ui.config.ts",

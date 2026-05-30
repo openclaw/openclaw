@@ -4,6 +4,7 @@ import {
   isAssistantCompletionReleaseNotification,
   isCodexTurnAbortMarkerNotification,
   isNativeToolProgressNotification,
+  isNativeResponseStreamDeltaNotification,
   isPendingOpenClawDynamicToolCompletionNotification,
   isRawAssistantCompletionNotification,
   isRawReasoningCompletionNotification,
@@ -99,9 +100,10 @@ export function applyCodexTurnNotificationState(params: {
     params.turnId,
   );
   const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
+  const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
-  if (isCurrentTurnNotification) {
+  if (isCurrentTurnNotification && !isNativeResponseStreamDelta) {
     turnWatches.touchActivity(`notification:${notification.method}`, {
       details: describeNotificationActivity(notification),
       attemptProgress: true,
@@ -174,6 +176,9 @@ export function applyCodexTurnNotificationState(params: {
   } else if (isCurrentTurnNotification && assistantCompletionCanRelease) {
     turnWatches.armAssistantCompletionIdleWatch(describeNotificationActivity(notification));
   } else if (postToolRawAssistantCompletionNeedsTerminalGuard) {
+    // A post-tool assistant status can be followed by native Codex streaming a
+    // large custom tool input. Forwarded raw deltas refresh activity at enqueue
+    // time; keep this guard conservative for versions that do not forward them.
     turnWatches.armCompletionIdleWatch({
       timeoutMs: params.postToolRawAssistantCompletionIdleTimeoutMs,
     });
@@ -203,6 +208,7 @@ export function applyCodexTurnNotificationState(params: {
     !turnWatches.isCompletionIdleWatchPinnedByTerminalError() &&
     notification.method !== "turn/completed" &&
     isCurrentTurnNotification &&
+    !isNativeResponseStreamDelta &&
     !trackedDynamicToolCompletion &&
     !rawToolOutputCompletion &&
     !postToolRawAssistantCompletionNeedsTerminalGuard &&

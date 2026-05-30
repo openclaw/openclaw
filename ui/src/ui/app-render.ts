@@ -6,6 +6,7 @@ import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
+  scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
@@ -2907,7 +2908,10 @@ export function renderApp(state: AppViewState) {
                     }
                     const hadActiveRun = hasAbortableSessionRun(state);
                     try {
-                      await state.client.request("sessions.reset", { key: state.sessionKey });
+                      await state.client.request("sessions.reset", {
+                        key: state.sessionKey,
+                        ...scopedAgentParamsForSession(state, state.sessionKey),
+                      });
                       state.chatMessages = [];
                       state.chatSideResult = null;
                       reconcileChatRunLifecycle(

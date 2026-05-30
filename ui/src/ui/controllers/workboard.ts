@@ -2,8 +2,11 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow } from "../types.ts";
 
 export const WORKBOARD_STATUSES = [
+  "triage",
   "backlog",
   "todo",
+  "scheduled",
+  "ready",
   "running",
   "review",
   "blocked",
@@ -25,12 +28,18 @@ export const WORKBOARD_EVENT_KINDS = [
   "edited",
   "moved",
   "linked",
+  "claimed",
+  "heartbeat",
   "execution_updated",
   "attempt_started",
   "attempt_updated",
   "comment_added",
   "link_added",
   "proof_added",
+  "artifact_added",
+  "diagnostic",
+  "notification",
+  "dispatch",
   "archived",
   "unarchived",
   "stale",
@@ -42,9 +51,16 @@ export const WORKBOARD_ATTEMPT_STATUSES = [
   "blocked",
   "stopped",
 ] as const;
-export const WORKBOARD_LINK_TYPES = ["blocks", "blocked_by", "relates_to"] as const;
+export const WORKBOARD_LINK_TYPES = [
+  "parent",
+  "child",
+  "blocks",
+  "blocked_by",
+  "relates_to",
+] as const;
 export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
+export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 
 export const WORKBOARD_ENGINE_MODELS = {
   codex: "openai/gpt-5.5",
@@ -61,6 +77,7 @@ export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number]
 export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
 export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
 export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
+export type WorkboardDiagnosticSeverity = (typeof WORKBOARD_DIAGNOSTIC_SEVERITIES)[number];
 
 export type WorkboardExecution = {
   id: string;
@@ -130,11 +147,72 @@ export type WorkboardStaleState = {
   reason: string;
 };
 
+export type WorkboardClaim = {
+  ownerId: string;
+  token?: string;
+  claimedAt: number;
+  lastHeartbeatAt: number;
+  expiresAt?: number;
+};
+
+export type WorkboardArtifact = {
+  id: string;
+  createdAt: number;
+  label?: string;
+  url?: string;
+  path?: string;
+  mimeType?: string;
+};
+
+export type WorkboardDiagnostic = {
+  kind: string;
+  severity: WorkboardDiagnosticSeverity;
+  title: string;
+  detail: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  count: number;
+};
+
+export type WorkboardNotification = {
+  id: string;
+  kind: string;
+  createdAt: number;
+  message: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type WorkboardWorkspace = {
+  kind: "scratch" | "dir" | "worktree";
+  path?: string;
+  branch?: string;
+};
+
+export type WorkboardAutomation = {
+  tenant?: string;
+  idempotencyKey?: string;
+  skills?: string[];
+  workspace?: WorkboardWorkspace;
+  maxRuntimeSeconds?: number;
+  maxRetries?: number;
+  scheduledAt?: number;
+  summary?: string;
+  createdCardIds?: string[];
+  dispatchCount?: number;
+  lastDispatchAt?: number;
+};
+
 export type WorkboardMetadata = {
   attempts?: WorkboardRunAttempt[];
   comments?: WorkboardComment[];
   links?: WorkboardLink[];
   proof?: WorkboardProof[];
+  artifacts?: WorkboardArtifact[];
+  automation?: WorkboardAutomation;
+  claim?: WorkboardClaim;
+  diagnostics?: WorkboardDiagnostic[];
+  notifications?: WorkboardNotification[];
   templateId?: WorkboardTemplateId;
   archivedAt?: number;
   stale?: WorkboardStaleState;
@@ -346,6 +424,50 @@ function normalizeEvents(value: unknown): WorkboardEvent[] {
     : [];
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    : [];
+}
+
+function normalizeAutomation(value: unknown): WorkboardAutomation | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const workspace = isRecord(value.workspace)
+    ? {
+        kind:
+          value.workspace.kind === "scratch" ||
+          value.workspace.kind === "dir" ||
+          value.workspace.kind === "worktree"
+            ? value.workspace.kind
+            : undefined,
+        ...(typeof value.workspace.path === "string" ? { path: value.workspace.path } : {}),
+        ...(typeof value.workspace.branch === "string" ? { branch: value.workspace.branch } : {}),
+      }
+    : undefined;
+  const automation: WorkboardAutomation = {
+    ...(typeof value.tenant === "string" ? { tenant: value.tenant } : {}),
+    ...(typeof value.idempotencyKey === "string" ? { idempotencyKey: value.idempotencyKey } : {}),
+    ...(normalizeStringArray(value.skills).length
+      ? { skills: normalizeStringArray(value.skills) }
+      : {}),
+    ...(workspace?.kind ? { workspace: workspace as WorkboardWorkspace } : {}),
+    ...(typeof value.maxRuntimeSeconds === "number"
+      ? { maxRuntimeSeconds: value.maxRuntimeSeconds }
+      : {}),
+    ...(typeof value.maxRetries === "number" ? { maxRetries: value.maxRetries } : {}),
+    ...(typeof value.scheduledAt === "number" ? { scheduledAt: value.scheduledAt } : {}),
+    ...(typeof value.summary === "string" ? { summary: value.summary } : {}),
+    ...(normalizeStringArray(value.createdCardIds).length
+      ? { createdCardIds: normalizeStringArray(value.createdCardIds) }
+      : {}),
+    ...(typeof value.dispatchCount === "number" ? { dispatchCount: value.dispatchCount } : {}),
+    ...(typeof value.lastDispatchAt === "number" ? { lastDispatchAt: value.lastDispatchAt } : {}),
+  };
+  return Object.keys(automation).length ? automation : undefined;
+}
+
 function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -449,6 +571,82 @@ function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
         ];
       })
     : [];
+  const artifacts = Array.isArray(value.artifacts)
+    ? value.artifacts.flatMap((entry): WorkboardArtifact[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.createdAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: entry.id,
+            createdAt: entry.createdAt,
+            ...(typeof entry.label === "string" ? { label: entry.label } : {}),
+            ...(typeof entry.url === "string" ? { url: entry.url } : {}),
+            ...(typeof entry.path === "string" ? { path: entry.path } : {}),
+            ...(typeof entry.mimeType === "string" ? { mimeType: entry.mimeType } : {}),
+          },
+        ];
+      })
+    : [];
+  const claim = isRecord(value.claim)
+    ? {
+        ownerId: typeof value.claim.ownerId === "string" ? value.claim.ownerId : "",
+        ...(typeof value.claim.token === "string" ? { token: value.claim.token } : {}),
+        claimedAt: typeof value.claim.claimedAt === "number" ? value.claim.claimedAt : 0,
+        lastHeartbeatAt:
+          typeof value.claim.lastHeartbeatAt === "number" ? value.claim.lastHeartbeatAt : 0,
+        ...(typeof value.claim.expiresAt === "number" ? { expiresAt: value.claim.expiresAt } : {}),
+      }
+    : undefined;
+  const diagnostics = Array.isArray(value.diagnostics)
+    ? value.diagnostics.flatMap((entry): WorkboardDiagnostic[] => {
+        if (!isRecord(entry) || typeof entry.kind !== "string" || typeof entry.title !== "string") {
+          return [];
+        }
+        return [
+          {
+            kind: entry.kind,
+            severity: WORKBOARD_DIAGNOSTIC_SEVERITIES.includes(
+              entry.severity as WorkboardDiagnosticSeverity,
+            )
+              ? (entry.severity as WorkboardDiagnosticSeverity)
+              : "warning",
+            title: entry.title,
+            detail: typeof entry.detail === "string" ? entry.detail : entry.title,
+            firstSeenAt: typeof entry.firstSeenAt === "number" ? entry.firstSeenAt : Date.now(),
+            lastSeenAt: typeof entry.lastSeenAt === "number" ? entry.lastSeenAt : Date.now(),
+            count: typeof entry.count === "number" ? entry.count : 1,
+          },
+        ];
+      })
+    : [];
+  const notifications = Array.isArray(value.notifications)
+    ? value.notifications.flatMap((entry): WorkboardNotification[] => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.id !== "string" ||
+          typeof entry.kind !== "string" ||
+          typeof entry.message !== "string" ||
+          typeof entry.createdAt !== "number"
+        ) {
+          return [];
+        }
+        return [
+          {
+            id: entry.id,
+            kind: entry.kind,
+            message: entry.message,
+            createdAt: entry.createdAt,
+            ...(typeof entry.sessionKey === "string" ? { sessionKey: entry.sessionKey } : {}),
+            ...(typeof entry.runId === "string" ? { runId: entry.runId } : {}),
+          },
+        ];
+      })
+    : [];
   const stale = isRecord(value.stale)
     ? {
         detectedAt:
@@ -462,11 +660,17 @@ function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
             : "Session has not reported recent activity.",
       }
     : undefined;
+  const automation = normalizeAutomation(value.automation);
   const metadata: WorkboardMetadata = {
     ...(attempts.length ? { attempts } : {}),
     ...(comments.length ? { comments } : {}),
     ...(links.length ? { links } : {}),
     ...(proof.length ? { proof } : {}),
+    ...(artifacts.length ? { artifacts } : {}),
+    ...(automation ? { automation } : {}),
+    ...(claim?.ownerId && claim.claimedAt ? { claim } : {}),
+    ...(diagnostics.length ? { diagnostics } : {}),
+    ...(notifications.length ? { notifications } : {}),
     ...(WORKBOARD_TEMPLATE_IDS.includes(value.templateId as WorkboardTemplateId)
       ? { templateId: value.templateId as WorkboardTemplateId }
       : {}),
@@ -591,6 +795,29 @@ function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   state.cards = next.toSorted((left, right) => left.position - right.position);
 }
 
+function removeCardAndReferences(cards: readonly WorkboardCard[], cardId: string): WorkboardCard[] {
+  const nextCards: WorkboardCard[] = [];
+  for (const card of cards) {
+    if (card.id === cardId) {
+      continue;
+    }
+    const links = card.metadata?.links;
+    if (!links?.some((link) => link.targetCardId === cardId)) {
+      nextCards.push(card);
+      continue;
+    }
+    const nextLinks = links.filter((link) => link.targetCardId !== cardId);
+    const metadata: WorkboardMetadata = { ...card.metadata, links: nextLinks };
+    if (nextLinks.length === 0) {
+      delete metadata.links;
+    }
+    nextCards.push(
+      Object.keys(metadata).length ? { ...card, metadata } : { ...card, metadata: undefined },
+    );
+  }
+  return nextCards;
+}
+
 function resetDraftState(state: WorkboardUiState) {
   state.draftOpen = false;
   state.editingCardId = null;
@@ -694,10 +921,10 @@ function shouldSyncCardStatus(card: WorkboardCard, targetStatus: WorkboardStatus
     return false;
   }
   if (targetStatus === "running") {
-    return card.status === "backlog" || card.status === "todo";
+    return card.status === "backlog" || card.status === "todo" || card.status === "ready";
   }
   if (targetStatus === "blocked" || targetStatus === "review") {
-    return card.status === "running" || card.status === "todo";
+    return card.status === "running" || card.status === "todo" || card.status === "ready";
   }
   return false;
 }
@@ -1119,7 +1346,7 @@ export async function deleteWorkboardCard(params: {
   params.requestUpdate?.();
   try {
     await params.client.request("workboard.cards.delete", { id: params.cardId });
-    state.cards = state.cards.filter((card) => card.id !== params.cardId);
+    state.cards = removeCardAndReferences(state.cards, params.cardId);
   } catch (error) {
     state.error = formatError(error);
   } finally {
@@ -1163,6 +1390,19 @@ function buildCardPrompt(card: WorkboardCard): string {
   if (card.labels.length > 0) {
     lines.push("", `Labels: ${card.labels.join(", ")}`);
   }
+  const parents = card.metadata?.links
+    ?.filter((link) => link.type === "parent" && link.targetCardId)
+    .map((link) => link.targetCardId);
+  if (parents?.length) {
+    lines.push("", `Parents: ${parents.join(", ")}`);
+  }
+  if (card.metadata?.automation?.skills?.length) {
+    lines.push("", `Suggested skills: ${card.metadata.automation.skills.join(", ")}`);
+  }
+  if (card.metadata?.automation?.workspace) {
+    const workspace = card.metadata.automation.workspace;
+    lines.push("", `Workspace: ${workspace.kind}${workspace.path ? ` ${workspace.path}` : ""}`);
+  }
   lines.push("", "When done, summarize what changed and what remains.");
   return lines.join("\n");
 }
@@ -1176,6 +1416,14 @@ function buildCardSessionLabel(card: WorkboardCard): string {
   }
   const titleMax = WORKBOARD_SESSION_LABEL_MAX_CHARS - suffixText.length;
   return `${title.slice(0, titleMax - 3).trimEnd()}...${suffixText}`;
+}
+
+function isScheduledForLater(card: WorkboardCard, now = Date.now()): boolean {
+  const scheduledAt = card.metadata?.automation?.scheduledAt;
+  if (typeof scheduledAt === "number") {
+    return scheduledAt > now;
+  }
+  return card.status === "scheduled";
 }
 
 function buildWorkboardExecution(params: {
@@ -1201,6 +1449,31 @@ function buildWorkboardExecution(params: {
   };
 }
 
+async function abortWorkboardSessionRun(params: {
+  client: GatewayBrowserClient;
+  sessionKey: string;
+  runId?: string;
+}): Promise<boolean> {
+  let abortResult = await params.client.request("chat.abort", {
+    sessionKey: params.sessionKey,
+    ...(params.runId ? { runId: params.runId } : {}),
+  });
+  let aborted =
+    isRecord(abortResult) &&
+    (abortResult.aborted === true ||
+      (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
+  if (!aborted && params.runId) {
+    abortResult = await params.client.request("chat.abort", {
+      sessionKey: params.sessionKey,
+    });
+    aborted =
+      isRecord(abortResult) &&
+      (abortResult.aborted === true ||
+        (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
+  }
+  return aborted;
+}
+
 export async function startWorkboardCard(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
@@ -1213,17 +1486,43 @@ export async function startWorkboardCard(params: {
   if (!params.client) {
     return null;
   }
-  state.busyCardId = params.card.id;
-  state.error = null;
-  params.requestUpdate?.();
   const engine = params.engine;
   const mode = params.mode ?? "autonomous";
+  state.error = null;
+  if (mode === "autonomous" && isScheduledForLater(params.card)) {
+    state.error = "Scheduled cards cannot start before their scheduled time.";
+    params.requestUpdate?.();
+    return null;
+  }
+  state.busyCardId = params.card.id;
+  params.requestUpdate?.();
+  let preflightCard: WorkboardCard | null = null;
+  let createdSessionKey: string | null = null;
+  let createdRunId: string | undefined;
   try {
+    const shouldClearManualSchedule =
+      mode === "manual" && params.card.metadata?.automation?.scheduledAt !== undefined;
+    const shouldUnscheduleManual = mode === "manual" && params.card.status === "scheduled";
+    const nextCardStatus =
+      mode === "autonomous" ? "running" : shouldUnscheduleManual ? "todo" : params.card.status;
+    const nextExecutionStatus = mode === "autonomous" ? "running" : "idle";
+    let card = params.card;
+    if (mode === "autonomous") {
+      const preflightPayload = await params.client.request("workboard.cards.update", {
+        id: params.card.id,
+        patch: { status: nextCardStatus },
+      });
+      preflightCard = normalizeCardPayload(preflightPayload);
+      if (preflightCard) {
+        replaceCard(state, preflightCard);
+        card = preflightCard;
+      }
+    }
     const created = await params.client.request("sessions.create", {
-      ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
-      label: buildCardSessionLabel(params.card),
+      ...(card.agentId ? { agentId: card.agentId } : {}),
+      label: buildCardSessionLabel(card),
       ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
-      ...(mode === "autonomous" ? { message: buildCardPrompt(params.card) } : {}),
+      ...(mode === "autonomous" ? { message: buildCardPrompt(card) } : {}),
     });
     const sessionKey =
       isRecord(created) && typeof created.key === "string" && created.key.trim()
@@ -1233,6 +1532,8 @@ export async function startWorkboardCard(params: {
       isRecord(created) && typeof created.runId === "string" && created.runId.trim()
         ? created.runId.trim()
         : undefined;
+    createdSessionKey = sessionKey;
+    createdRunId = runId;
     const initialRunFailed =
       mode === "autonomous" && isRecord(created) && created.runStarted === false;
     if (initialRunFailed) {
@@ -1244,7 +1545,7 @@ export async function startWorkboardCard(params: {
           ...(engine
             ? {
                 execution: buildWorkboardExecution({
-                  card: params.card,
+                  card,
                   engine,
                   mode,
                   sessionKey,
@@ -1263,18 +1564,17 @@ export async function startWorkboardCard(params: {
           : "Agent run did not start.";
       return sessionKey;
     }
-    const nextCardStatus = mode === "autonomous" ? "running" : params.card.status;
-    const nextExecutionStatus = mode === "autonomous" ? "running" : "idle";
     const payload = await params.client.request("workboard.cards.update", {
       id: params.card.id,
       patch: {
         status: nextCardStatus,
+        ...(shouldClearManualSchedule ? { scheduledAt: null } : {}),
         ...(sessionKey ? { sessionKey } : {}),
         ...(runId ? { runId } : {}),
         ...(engine
           ? {
               execution: buildWorkboardExecution({
-                card: params.card,
+                card,
                 engine,
                 mode,
                 sessionKey,
@@ -1288,6 +1588,33 @@ export async function startWorkboardCard(params: {
     replaceCard(state, normalizeCardPayload(payload));
     return sessionKey;
   } catch (error) {
+    if (mode === "autonomous" && createdSessionKey) {
+      try {
+        await abortWorkboardSessionRun({
+          client: params.client,
+          sessionKey: createdSessionKey,
+          runId: createdRunId,
+        });
+      } catch {
+        // Preserve the card-start failure; the user-facing repair is the rollback below.
+      }
+    }
+    if (preflightCard) {
+      try {
+        const rollbackPayload = await params.client.request("workboard.cards.update", {
+          id: params.card.id,
+          patch: {
+            status: params.card.status,
+            startedAt: params.card.startedAt ?? null,
+            completedAt: params.card.completedAt ?? null,
+            ...(params.card.execution !== undefined ? { execution: params.card.execution } : {}),
+          },
+        });
+        replaceCard(state, normalizeCardPayload(rollbackPayload) ?? params.card);
+      } catch {
+        replaceCard(state, params.card);
+      }
+    }
     state.error = formatError(error);
     return null;
   } finally {
@@ -1311,23 +1638,11 @@ export async function stopWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    let abortResult = await params.client.request("chat.abort", {
+    const aborted = await abortWorkboardSessionRun({
+      client: params.client,
       sessionKey,
-      ...(workboardCardRunId(params.card) ? { runId: workboardCardRunId(params.card) } : {}),
+      runId: workboardCardRunId(params.card),
     });
-    let aborted =
-      isRecord(abortResult) &&
-      (abortResult.aborted === true ||
-        (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
-    if (!aborted && workboardCardRunId(params.card)) {
-      abortResult = await params.client.request("chat.abort", {
-        sessionKey,
-      });
-      aborted =
-        isRecord(abortResult) &&
-        (abortResult.aborted === true ||
-          (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
-    }
     if (!aborted) {
       return;
     }

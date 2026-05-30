@@ -80,6 +80,7 @@ import {
   isCurrentApprovalTurnRequestParams,
   isCurrentThreadOptionalTurnRequestParams,
   isCurrentThreadTurnRequestParams,
+  isNativeResponseStreamDeltaNotification,
   isTerminalTurnStatus,
 } from "./attempt-notifications.js";
 import {
@@ -99,7 +100,10 @@ import {
   resolveCodexTurnTerminalIdleTimeoutMs,
   withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
-import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
+import {
+  createCodexAttemptTurnWatchController,
+  type CodexAttemptTurnWatchTimeoutKind,
+} from "./attempt-turn-watches.js";
 import {
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
@@ -202,6 +206,7 @@ import {
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   clearCodexAppServerBinding,
+  clearCodexAppServerBindingForThread,
   readCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -941,6 +946,7 @@ export async function runCodexAppServerAttempt(
   let terminalTurnNotificationQueued = false;
   let timedOut = false;
   let turnCompletionIdleTimedOut = false;
+  let turnWatchTimeoutKind: CodexAttemptTurnWatchTimeoutKind | undefined;
   let turnCompletionIdleTimeoutMessage: string | undefined;
   let clientClosedPromptError: string | undefined;
   let clientClosedAbort = false;
@@ -1019,9 +1025,10 @@ export async function runCodexAppServerAttempt(
     turnTerminalIdleTimeoutMs,
     interruptTimeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
     onInterruptTurn: (input) => interruptCodexTurnBestEffort(client, input),
-    onTimeout: () => {
+    onTimeout: (timeout) => {
       timedOut = true;
       turnCompletionIdleTimedOut = true;
+      turnWatchTimeoutKind = timeout.kind;
       turnCompletionIdleTimeoutMessage =
         "codex app-server turn idle timed out waiting for turn/completed";
     },
@@ -1276,8 +1283,29 @@ export async function runCodexAppServerAttempt(
     // Touch idle-watch timestamps at receive time, not just after queued
     // projection.  A queued terminal event should suppress short false-idle
     // guards, while the full attempt watchdog still releases a wedged queue.
-    if (correlation.matchesActiveTurn !== false) {
-      turnWatches.noteNotificationReceived(notification.method);
+    const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
+    const nativeResponseStreamDeltaMatchesActiveTurn =
+      isNativeResponseStreamDelta &&
+      (correlation.matchesActiveTurn === true ||
+        (isUnscopedCodexNotification(correlation) &&
+          canAttributeUnscopedNativeResponseDeltaToThisTurn(client)));
+    const notificationMatchesActiveTurn =
+      correlation.matchesActiveTurn === true ||
+      (!isNativeResponseStreamDelta && correlation.matchesActiveTurn !== false) ||
+      nativeResponseStreamDeltaMatchesActiveTurn;
+    if (notificationMatchesActiveTurn) {
+      // If a future Codex app-server exposes raw response deltas, treat them as
+      // activity only when scoped to this turn or attributable to a single lease.
+      // Today the durable app-server raw-event surface is rawResponseItem/completed.
+      turnWatches.noteNotificationReceived(
+        notification.method,
+        isNativeResponseStreamDelta
+          ? {
+              attemptProgress: true,
+              details: { lastNotificationMethod: notification.method },
+            }
+          : undefined,
+      );
     }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
@@ -1881,11 +1909,15 @@ export async function runCodexAppServerAttempt(
   const abortListener = () => {
     const shouldRetireClient = timedOut;
     if (shouldRetireClient) {
-      void retireCodexAppServerClientAfterTimedOutTurn(client, {
-        threadId: thread.threadId,
-        turnId: activeTurnId,
-        reason: String(runAbortController.signal.reason ?? "timeout"),
-      }).finally(() => {
+      void (async () => {
+        // Timed-out native turns cannot be safely resumed on the same thread.
+        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
+        await retireCodexAppServerClientAfterTimedOutTurn(client, {
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          reason: String(runAbortController.signal.reason ?? "timeout"),
+        });
+      })().finally(() => {
         resolveCompletion?.();
       });
       return;
@@ -2095,6 +2127,10 @@ export async function runCodexAppServerAttempt(
         ? {
             codexAppServerFailure: {
               kind: codexAppServerFailureKind,
+              ...(codexAppServerFailureKind === "turn_completion_idle_timeout" &&
+              turnWatchTimeoutKind
+                ? { turnWatchTimeoutKind }
+                : {}),
               transport: appServer.start.transport,
               threadId: thread.threadId,
               turnId: activeTurnId,
@@ -2200,6 +2236,22 @@ async function clearCodexBindingAfterInvalidImagePayload(
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function canAttributeUnscopedNativeResponseDeltaToThisTurn(client: CodexAppServerClient): boolean {
+  const activeLeases = client.getActiveSharedLeaseCountForUnscopedNotifications?.();
+  return activeLeases === undefined || activeLeases <= 1;
+}
+
+function isUnscopedCodexNotification(
+  correlation: ReturnType<typeof describeCodexNotificationCorrelation>,
+): boolean {
+  return (
+    !correlation.threadId &&
+    !correlation.turnId &&
+    !correlation.nestedTurnThreadId &&
+    !correlation.nestedTurnId
+  );
 }
 
 function shouldRetryContextEngineTurnOnFreshCodexThread(params: {

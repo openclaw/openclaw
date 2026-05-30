@@ -21,6 +21,7 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
+import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
@@ -54,7 +55,6 @@ import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { resolveSkillsPromptForRun } from "../skills.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -375,6 +375,7 @@ export async function prepareCliRunContext(
     isClaudeCliProvider(params.provider) &&
     !(await prepareDeps.claudeCliSessionTranscriptHasContent({
       sessionId: candidateClaudeCliSessionId,
+      workspaceDir: cwd,
     }));
   const reusableCliSession: CliReusableSession = claudeCliTranscriptMissing
     ? { invalidatedReason: "missing-transcript" }

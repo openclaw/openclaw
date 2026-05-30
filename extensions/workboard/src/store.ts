@@ -1,18 +1,28 @@
 import { randomUUID } from "node:crypto";
 import {
+  WORKBOARD_DIAGNOSTIC_KINDS,
+  WORKBOARD_DIAGNOSTIC_SEVERITIES,
   WORKBOARD_EXECUTION_ENGINES,
   WORKBOARD_EXECUTION_MODES,
   WORKBOARD_EXECUTION_STATUSES,
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_EVENT_KINDS,
   WORKBOARD_LINK_TYPES,
+  WORKBOARD_NOTIFICATION_KINDS,
   WORKBOARD_PRIORITIES,
   WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
   WORKBOARD_TEMPLATE_IDS,
   type WorkboardCard,
+  type WorkboardArtifact,
   type WorkboardAttemptStatus,
+  type WorkboardAutomation,
+  type WorkboardClaim,
   type WorkboardComment,
+  type WorkboardDiagnostic,
+  type WorkboardDiagnosticAction,
+  type WorkboardDiagnosticKind,
+  type WorkboardDiagnosticSeverity,
   type WorkboardEvent,
   type WorkboardEventKind,
   type WorkboardExecution,
@@ -22,12 +32,15 @@ import {
   type WorkboardLink,
   type WorkboardLinkType,
   type WorkboardMetadata,
+  type WorkboardNotification,
+  type WorkboardNotificationKind,
   type WorkboardPriority,
   type WorkboardProof,
   type WorkboardProofStatus,
   type WorkboardRunAttempt,
   type WorkboardStatus,
   type WorkboardTemplateId,
+  type WorkboardWorkspace,
 } from "./types.js";
 
 const POSITION_STEP = 1000;
@@ -37,7 +50,15 @@ const MAX_CARD_ATTEMPTS = 30;
 const MAX_CARD_COMMENTS = 50;
 const MAX_CARD_LINKS = 50;
 const MAX_CARD_PROOF = 40;
+const MAX_CARD_ARTIFACTS = 40;
+const MAX_CARD_DIAGNOSTICS = 12;
+const MAX_CARD_NOTIFICATIONS = 20;
 const MAX_CARD_METADATA_BYTES = 24 * 1024;
+const DEFAULT_CLAIM_TTL_MS = 30 * 60 * 1000;
+const READY_STRANDED_MS = 60 * 60 * 1000;
+const RUNNING_HEARTBEAT_STALE_MS = 20 * 60 * 1000;
+const BLOCKED_TOO_LONG_MS = 24 * 60 * 60 * 1000;
+const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
 
 export type PersistedWorkboardCard = {
   version: 1;
@@ -66,6 +87,16 @@ export type WorkboardCardInput = {
   metadata?: unknown;
   templateId?: unknown;
   position?: unknown;
+  tenant?: unknown;
+  idempotencyKey?: unknown;
+  skills?: unknown;
+  workspace?: unknown;
+  maxRuntimeSeconds?: unknown;
+  maxRetries?: unknown;
+  scheduledAt?: unknown;
+  startedAt?: unknown;
+  completedAt?: unknown;
+  parents?: unknown;
 };
 
 export type WorkboardCardPatch = Partial<WorkboardCardInput>;
@@ -76,12 +107,67 @@ export type WorkboardLinkInput = {
   title?: unknown;
   url?: unknown;
 };
+export type WorkboardLinkedCreateInput = WorkboardCardInput & {
+  parents?: unknown;
+};
 export type WorkboardProofInput = {
   status?: unknown;
   label?: unknown;
   command?: unknown;
   url?: unknown;
   note?: unknown;
+};
+export type WorkboardArtifactInput = {
+  label?: unknown;
+  url?: unknown;
+  path?: unknown;
+  mimeType?: unknown;
+};
+export type WorkboardClaimInput = {
+  ownerId?: unknown;
+  token?: unknown;
+  ttlSeconds?: unknown;
+};
+export type WorkboardHeartbeatInput = {
+  token?: unknown;
+  ownerId?: unknown;
+  note?: unknown;
+};
+export type WorkboardBulkInput = {
+  ids?: unknown;
+  patch?: unknown;
+  archived?: unknown;
+};
+export type WorkboardCompleteInput = {
+  ownerId?: unknown;
+  token?: unknown;
+  summary?: unknown;
+  proof?: unknown;
+  artifacts?: unknown;
+  createdCardIds?: unknown;
+};
+export type WorkboardBlockInput = {
+  ownerId?: unknown;
+  token?: unknown;
+  reason?: unknown;
+};
+export type WorkboardDispatchResult = {
+  promoted: WorkboardCard[];
+  reclaimed: WorkboardCard[];
+  blocked: WorkboardCard[];
+  count: number;
+};
+export type WorkboardMutationScope = {
+  ownerId?: unknown;
+  token?: unknown;
+};
+
+export type WorkboardDiagnosticsResult = {
+  diagnostics: Array<{
+    card: WorkboardCard;
+    diagnostics: WorkboardDiagnostic[];
+  }>;
+  count: number;
 };
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -172,11 +258,135 @@ function normalizeLabels(value: unknown, fallback: string[] = []): string[] {
   return labels;
 }
 
+function normalizeStringList(value: unknown, fieldName: string, maxLength = 80): string[] {
+  if (value == null) {
+    return [];
+  }
+  const entries =
+    typeof value === "string" ? value.split(",") : Array.isArray(value) ? value : undefined;
+  if (!entries) {
+    throw new Error(`${fieldName} must be an array or comma-separated string.`);
+  }
+  const values: string[] = [];
+  for (const entry of entries) {
+    if (Array.isArray(value) && typeof entry !== "string") {
+      throw new Error(`${fieldName} entries must be strings.`);
+    }
+    const normalized = normalizeBoundedString(entry, undefined, maxLength, fieldName);
+    if (normalized && !values.includes(normalized)) {
+      values.push(normalized);
+    }
+    if (values.length > 20) {
+      throw new Error(`${fieldName} supports at most 20 entries.`);
+    }
+  }
+  return values;
+}
+
 function normalizePosition(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
   }
   return Math.max(0, Math.trunc(value));
+}
+
+function normalizePositiveInteger(value: unknown, fieldName: string): number | undefined {
+  if (value == null || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`${fieldName} must be a number.`);
+  }
+  return Math.max(1, Math.trunc(value));
+}
+
+function isAbsoluteWorkspacePath(value: string): boolean {
+  return (
+    value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value)
+  );
+}
+
+function normalizeWorkspace(
+  value: unknown,
+  fallback?: WorkboardWorkspace,
+): WorkboardWorkspace | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const record = value as Record<string, unknown>;
+  const kind =
+    record.kind === "scratch" || record.kind === "dir" || record.kind === "worktree"
+      ? record.kind
+      : fallback?.kind;
+  if (!kind) {
+    throw new Error("workspace kind must be scratch, dir, or worktree.");
+  }
+  const workspacePath = normalizeBoundedString(record.path, fallback?.path, 2000, "workspace path");
+  if (kind === "dir" && (!workspacePath || !isAbsoluteWorkspacePath(workspacePath))) {
+    throw new Error("dir workspace path must be absolute.");
+  }
+  const branch = normalizeBoundedString(record.branch, fallback?.branch, 160, "workspace branch");
+  return {
+    kind,
+    ...(workspacePath ? { path: workspacePath } : {}),
+    ...(branch ? { branch } : {}),
+  };
+}
+
+function normalizeAutomation(
+  value: unknown,
+  fallback: WorkboardAutomation = {},
+): WorkboardAutomation | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return Object.keys(fallback).length ? fallback : undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const tenant = normalizeBoundedString(record.tenant, fallback.tenant, 80, "tenant");
+  const idempotencyKey = normalizeBoundedString(
+    record.idempotencyKey,
+    fallback.idempotencyKey,
+    160,
+    "idempotency key",
+  );
+  const summary = normalizeBoundedString(record.summary, fallback.summary, 2000, "summary");
+  const skills = Object.hasOwn(record, "skills")
+    ? normalizeStringList(record.skills, "skills")
+    : fallback.skills;
+  const createdCardIds = Object.hasOwn(record, "createdCardIds")
+    ? normalizeStringList(record.createdCardIds, "created card ids", 120)
+    : fallback.createdCardIds;
+  const scheduledAt = Object.hasOwn(record, "scheduledAt")
+    ? normalizeTimestamp(record.scheduledAt, 0) || undefined
+    : fallback.scheduledAt;
+  const maxRuntimeSeconds = Object.hasOwn(record, "maxRuntimeSeconds")
+    ? normalizePositiveInteger(record.maxRuntimeSeconds, "max runtime seconds")
+    : fallback.maxRuntimeSeconds;
+  const maxRetries = Object.hasOwn(record, "maxRetries")
+    ? normalizePositiveInteger(record.maxRetries, "max retries")
+    : fallback.maxRetries;
+  const dispatchCount = Object.hasOwn(record, "dispatchCount")
+    ? normalizeTimestamp(record.dispatchCount, 0) || undefined
+    : fallback.dispatchCount;
+  const lastDispatchAt = Object.hasOwn(record, "lastDispatchAt")
+    ? normalizeTimestamp(record.lastDispatchAt, 0) || undefined
+    : fallback.lastDispatchAt;
+  const workspace = Object.hasOwn(record, "workspace")
+    ? normalizeWorkspace(record.workspace, fallback.workspace)
+    : fallback.workspace;
+  const next = removeUndefinedAutomationFields({
+    ...(tenant ? { tenant } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(skills?.length ? { skills } : {}),
+    ...(workspace ? { workspace } : {}),
+    ...(maxRuntimeSeconds ? { maxRuntimeSeconds } : {}),
+    ...(maxRetries ? { maxRetries } : {}),
+    ...(scheduledAt ? { scheduledAt } : {}),
+    ...(summary ? { summary } : {}),
+    ...(createdCardIds?.length ? { createdCardIds } : {}),
+    ...(dispatchCount ? { dispatchCount } : {}),
+    ...(lastDispatchAt ? { lastDispatchAt } : {}),
+  });
+  return Object.keys(next).length ? next : undefined;
 }
 
 function normalizeExecutionEngine(
@@ -385,6 +595,10 @@ function normalizeLink(value: unknown): WorkboardLink | null {
   };
 }
 
+function isDependencyLink(link: WorkboardLink): boolean {
+  return link.type === "parent" || link.type === "child";
+}
+
 function normalizeProof(value: unknown): WorkboardProof | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -410,7 +624,159 @@ function normalizeProof(value: unknown): WorkboardProof | null {
   };
 }
 
-function normalizeMetadata(value: unknown, fallback: WorkboardMetadata = {}): WorkboardMetadata {
+function normalizeArtifact(value: unknown): WorkboardArtifact | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = normalizeOptionalString(record.id) ?? randomUUID();
+  const createdAt = normalizeTimestamp(record.createdAt, Date.now());
+  const label = normalizeBoundedString(record.label, undefined, 160, "artifact label");
+  const url = normalizeBoundedString(record.url, undefined, 2000, "artifact URL");
+  const artifactPath = normalizeBoundedString(record.path, undefined, 2000, "artifact path");
+  const mimeType = normalizeBoundedString(record.mimeType, undefined, 160, "artifact MIME type");
+  if (!url && !artifactPath) {
+    return null;
+  }
+  return {
+    id,
+    createdAt,
+    ...(label ? { label } : {}),
+    ...(url ? { url } : {}),
+    ...(artifactPath ? { path: artifactPath } : {}),
+    ...(mimeType ? { mimeType } : {}),
+  };
+}
+
+function normalizeClaim(value: unknown, fallback?: WorkboardClaim): WorkboardClaim | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const record = value as Record<string, unknown>;
+  const ownerId = normalizeBoundedString(record.ownerId, fallback?.ownerId, 120, "claim owner");
+  const token = normalizeBoundedString(record.token, fallback?.token, 160, "claim token");
+  const claimedAt = normalizeTimestamp(record.claimedAt, fallback?.claimedAt ?? Date.now());
+  const lastHeartbeatAt = normalizeTimestamp(
+    record.lastHeartbeatAt,
+    fallback?.lastHeartbeatAt ?? claimedAt,
+  );
+  const expiresAt = normalizeTimestamp(record.expiresAt, fallback?.expiresAt ?? 0);
+  if (!ownerId || !token || !claimedAt || !lastHeartbeatAt) {
+    return undefined;
+  }
+  return {
+    ownerId,
+    token,
+    claimedAt,
+    lastHeartbeatAt,
+    ...(expiresAt ? { expiresAt } : {}),
+  };
+}
+
+function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAction | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const kind =
+    record.kind === "claim" ||
+    record.kind === "unblock" ||
+    record.kind === "reassign" ||
+    record.kind === "add_proof" ||
+    record.kind === "open_session"
+      ? record.kind
+      : undefined;
+  const label = normalizeBoundedString(record.label, undefined, 120, "diagnostic action label");
+  return kind && label ? { kind, label } : null;
+}
+
+function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const kind = WORKBOARD_DIAGNOSTIC_KINDS.includes(record.kind as WorkboardDiagnosticKind)
+    ? (record.kind as WorkboardDiagnosticKind)
+    : undefined;
+  const severity = WORKBOARD_DIAGNOSTIC_SEVERITIES.includes(
+    record.severity as WorkboardDiagnosticSeverity,
+  )
+    ? (record.severity as WorkboardDiagnosticSeverity)
+    : "warning";
+  const title = normalizeBoundedString(record.title, undefined, 160, "diagnostic title");
+  const detail = normalizeBoundedString(record.detail, undefined, 800, "diagnostic detail");
+  const firstSeenAt = normalizeTimestamp(record.firstSeenAt, Date.now());
+  const lastSeenAt = normalizeTimestamp(record.lastSeenAt, firstSeenAt);
+  if (!kind || !title || !detail) {
+    return null;
+  }
+  return {
+    kind,
+    severity,
+    title,
+    detail,
+    firstSeenAt,
+    lastSeenAt,
+    count:
+      typeof record.count === "number" && Number.isFinite(record.count)
+        ? Math.max(1, Math.trunc(record.count))
+        : 1,
+    actions: Array.isArray(record.actions)
+      ? record.actions
+          .map(normalizeDiagnosticAction)
+          .filter((action): action is WorkboardDiagnosticAction => action !== null)
+          .slice(0, 4)
+      : [],
+  };
+}
+
+function normalizeNotification(value: unknown): WorkboardNotification | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = normalizeOptionalString(record.id) ?? randomUUID();
+  const kind = WORKBOARD_NOTIFICATION_KINDS.includes(record.kind as WorkboardNotificationKind)
+    ? (record.kind as WorkboardNotificationKind)
+    : undefined;
+  const createdAt = normalizeTimestamp(record.createdAt, Date.now());
+  const message = normalizeBoundedString(record.message, undefined, 240, "notification message");
+  if (!kind || !message) {
+    return null;
+  }
+  const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");
+  const runId = normalizeBoundedString(record.runId, undefined, 120, "run id");
+  return {
+    id,
+    kind,
+    createdAt,
+    message,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  };
+}
+
+function normalizeProofInput(input: WorkboardProofInput, now: number): WorkboardProof {
+  const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
+  const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
+  const url = normalizeBoundedString(input.url, undefined, 2000, "proof URL");
+  const note = normalizeBoundedString(input.note, undefined, 2000, "proof note");
+  return {
+    id: randomUUID(),
+    status: normalizeProofStatus(input.status, "unknown"),
+    createdAt: now,
+    ...(label ? { label } : {}),
+    ...(command ? { command } : {}),
+    ...(url ? { url } : {}),
+    ...(note ? { note } : {}),
+  };
+}
+
+function normalizeMetadata(
+  value: unknown,
+  fallback: WorkboardMetadata = {},
+  options: { allowDependencyLinks?: boolean } = {},
+): WorkboardMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return trimMetadataToBudget(fallback);
   }
@@ -421,6 +787,24 @@ function normalizeMetadata(value: unknown, fallback: WorkboardMetadata = {}): Wo
       : null;
   const hasArchivedAt = Object.hasOwn(record, "archivedAt");
   const hasStale = Object.hasOwn(record, "stale");
+  const links = Array.isArray(record.links)
+    ? record.links.map(normalizeLink).filter((link): link is WorkboardLink => link !== null)
+    : undefined;
+  const normalizedLinks =
+    links === undefined
+      ? fallback.links
+      : options.allowDependencyLinks === false
+        ? (() => {
+            const dependencyLinks = (fallback.links ?? []).filter(isDependencyLink);
+            const ordinaryCapacity = Math.max(0, MAX_CARD_LINKS - dependencyLinks.length);
+            return [
+              ...dependencyLinks.slice(-MAX_CARD_LINKS),
+              ...(ordinaryCapacity > 0
+                ? links.filter((link) => !isDependencyLink(link)).slice(-ordinaryCapacity)
+                : []),
+            ];
+          })()
+        : links.slice(-MAX_CARD_LINKS);
   return trimMetadataToBudget({
     attempts: Array.isArray(record.attempts)
       ? record.attempts
@@ -434,18 +818,39 @@ function normalizeMetadata(value: unknown, fallback: WorkboardMetadata = {}): Wo
           .filter((comment): comment is WorkboardComment => comment !== null)
           .slice(-MAX_CARD_COMMENTS)
       : fallback.comments,
-    links: Array.isArray(record.links)
-      ? record.links
-          .map(normalizeLink)
-          .filter((link): link is WorkboardLink => link !== null)
-          .slice(-MAX_CARD_LINKS)
-      : fallback.links,
+    links: normalizedLinks,
     proof: Array.isArray(record.proof)
       ? record.proof
           .map(normalizeProof)
           .filter((proof): proof is WorkboardProof => proof !== null)
           .slice(-MAX_CARD_PROOF)
       : fallback.proof,
+    artifacts: Array.isArray(record.artifacts)
+      ? record.artifacts
+          .map(normalizeArtifact)
+          .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
+          .slice(-MAX_CARD_ARTIFACTS)
+      : fallback.artifacts,
+    automation: Object.hasOwn(record, "automation")
+      ? normalizeAutomation(record.automation, fallback.automation)
+      : fallback.automation,
+    claim: Object.hasOwn(record, "claim")
+      ? record.claim
+        ? normalizeClaim(record.claim, fallback.claim)
+        : undefined
+      : fallback.claim,
+    diagnostics: Array.isArray(record.diagnostics)
+      ? record.diagnostics
+          .map(normalizeDiagnostic)
+          .filter((diagnostic): diagnostic is WorkboardDiagnostic => diagnostic !== null)
+          .slice(-MAX_CARD_DIAGNOSTICS)
+      : fallback.diagnostics,
+    notifications: Array.isArray(record.notifications)
+      ? record.notifications
+          .map(normalizeNotification)
+          .filter((notification): notification is WorkboardNotification => notification !== null)
+          .slice(-MAX_CARD_NOTIFICATIONS)
+      : fallback.notifications,
     templateId: normalizeTemplateId(record.templateId) ?? fallback.templateId,
     archivedAt: hasArchivedAt
       ? normalizeTimestamp(record.archivedAt, 0) || undefined
@@ -522,6 +927,33 @@ function removeUndefinedExecutionFields(execution: WorkboardExecution): Workboar
   return next;
 }
 
+function removeUndefinedAutomationFields(automation: WorkboardAutomation): WorkboardAutomation {
+  const next = { ...automation };
+  for (const key of [
+    "tenant",
+    "idempotencyKey",
+    "skills",
+    "workspace",
+    "maxRuntimeSeconds",
+    "maxRetries",
+    "scheduledAt",
+    "summary",
+    "createdCardIds",
+    "dispatchCount",
+    "lastDispatchAt",
+  ] as const) {
+    const value = next[key];
+    if (
+      value === undefined ||
+      (Array.isArray(value) && value.length === 0) ||
+      (typeof value === "object" && value !== null && Object.keys(value).length === 0)
+    ) {
+      delete next[key];
+    }
+  }
+  return next;
+}
+
 function removeUndefinedMetadataFields(metadata: WorkboardMetadata): WorkboardMetadata {
   const next = { ...metadata };
   for (const key of [
@@ -529,6 +961,11 @@ function removeUndefinedMetadataFields(metadata: WorkboardMetadata): WorkboardMe
     "comments",
     "links",
     "proof",
+    "artifacts",
+    "automation",
+    "claim",
+    "diagnostics",
+    "notifications",
     "templateId",
     "archivedAt",
     "stale",
@@ -544,6 +981,19 @@ function removeUndefinedMetadataFields(metadata: WorkboardMetadata): WorkboardMe
     }
   }
   return next;
+}
+
+function clearDiagnostics(
+  metadata: WorkboardMetadata | undefined,
+  kinds: readonly WorkboardDiagnosticKind[],
+): WorkboardMetadata {
+  if (!metadata?.diagnostics) {
+    return metadata ?? {};
+  }
+  return {
+    ...metadata,
+    diagnostics: metadata.diagnostics.filter((entry) => !kinds.includes(entry.kind)),
+  };
 }
 
 function metadataIsEmpty(metadata: WorkboardMetadata | undefined): boolean {
@@ -562,16 +1012,59 @@ function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
   return next.length ? next : undefined;
 }
 
+function dropFirstNonDependencyLink(
+  items: readonly WorkboardLink[] | undefined,
+): WorkboardLink[] | undefined {
+  if (!items?.length) {
+    return undefined;
+  }
+  const index = items.findIndex((link) => !isDependencyLink(link));
+  if (index < 0) {
+    return items.slice();
+  }
+  const next = items.filter((_, itemIndex) => itemIndex !== index);
+  return next.length ? next : undefined;
+}
+
+function appendLinkPreservingDependencies(
+  links: readonly WorkboardLink[],
+  link: WorkboardLink,
+): WorkboardLink[] {
+  const next = [...links, link];
+  if (next.length <= MAX_CARD_LINKS) {
+    return next;
+  }
+  const dropIndex = next.findIndex((entry) => !isDependencyLink(entry));
+  if (dropIndex < 0 || dropIndex === next.length - 1) {
+    throw new Error("card link limit reached.");
+  }
+  return next.filter((_, index) => index !== dropIndex);
+}
+
 function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMetadata {
   let next = removeUndefinedMetadataFields(metadata);
   while (metadataByteSize(next) > MAX_CARD_METADATA_BYTES) {
     const currentSize = metadataByteSize(next);
     if (next.attempts?.length) {
       next = removeUndefinedMetadataFields({ ...next, attempts: dropFirst(next.attempts) });
+    } else if (next.diagnostics?.length) {
+      next = removeUndefinedMetadataFields({ ...next, diagnostics: dropFirst(next.diagnostics) });
+    } else if (next.notifications?.length) {
+      next = removeUndefinedMetadataFields({
+        ...next,
+        notifications: dropFirst(next.notifications),
+      });
     } else if (next.proof?.length) {
       next = removeUndefinedMetadataFields({ ...next, proof: dropFirst(next.proof) });
+    } else if (next.artifacts?.length) {
+      next = removeUndefinedMetadataFields({ ...next, artifacts: dropFirst(next.artifacts) });
     } else if (next.links?.length) {
-      next = removeUndefinedMetadataFields({ ...next, links: dropFirst(next.links) });
+      const links = dropFirstNonDependencyLink(next.links);
+      if (links?.length === next.links.length) {
+        next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
+      } else {
+        next = removeUndefinedMetadataFields({ ...next, links });
+      }
     } else if (next.comments?.length) {
       next = removeUndefinedMetadataFields({ ...next, comments: dropFirst(next.comments) });
     }
@@ -640,6 +1133,9 @@ function syncExecutionAttemptMetadata(
     ...(execution.sessionKey ? { sessionKey: execution.sessionKey } : {}),
     ...(execution.runId ? { runId: execution.runId } : {}),
     ...(attemptStatus !== "running" && { endedAt: execution.updatedAt || now }),
+    ...(attemptStatus !== "succeeded" && existingAttempt?.error
+      ? { error: existingAttempt.error }
+      : {}),
   };
   if (existingIndex >= 0) {
     attempts[existingIndex] = nextAttempt;
@@ -703,6 +1199,12 @@ function updateEvent(
       ...(cardSessionKey(next) ? { sessionKey: cardSessionKey(next) } : {}),
     };
   }
+  if (existing.metadata?.claim?.token !== next.metadata?.claim?.token) {
+    return { kind: "claimed" };
+  }
+  if (existing.metadata?.claim?.lastHeartbeatAt !== next.metadata?.claim?.lastHeartbeatAt) {
+    return { kind: "heartbeat" };
+  }
   if (
     existing.execution?.status !== next.execution?.status ||
     existing.execution?.engine !== next.execution?.engine ||
@@ -752,6 +1254,28 @@ function updateEvent(
   ) {
     return { kind: "proof_added" };
   }
+  if (
+    (existing.metadata?.artifacts?.length ?? 0) !== (next.metadata?.artifacts?.length ?? 0) ||
+    latestMetadataIdChanged(existing.metadata?.artifacts, next.metadata?.artifacts)
+  ) {
+    return { kind: "artifact_added" };
+  }
+  if ((existing.metadata?.diagnostics?.length ?? 0) !== (next.metadata?.diagnostics?.length ?? 0)) {
+    return { kind: "diagnostic" };
+  }
+  if (
+    (existing.metadata?.notifications?.length ?? 0) !==
+      (next.metadata?.notifications?.length ?? 0) ||
+    latestMetadataIdChanged(existing.metadata?.notifications, next.metadata?.notifications)
+  ) {
+    return { kind: "notification" };
+  }
+  if (
+    existing.metadata?.automation?.dispatchCount !== next.metadata?.automation?.dispatchCount ||
+    existing.metadata?.automation?.lastDispatchAt !== next.metadata?.automation?.lastDispatchAt
+  ) {
+    return { kind: "dispatch" };
+  }
   if (!existing.metadata?.archivedAt && next.metadata?.archivedAt) {
     return { kind: "archived" };
   }
@@ -786,6 +1310,300 @@ function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
     delete next.metadata;
   }
   return next;
+}
+
+function assertCanMutateClaimedCard(
+  card: WorkboardCard,
+  scope: WorkboardMutationScope | undefined,
+) {
+  if (!scope) {
+    return;
+  }
+  const claim = card.metadata?.claim;
+  if (!claim) {
+    return;
+  }
+  const ownerId = normalizeOptionalString(scope.ownerId);
+  const token = normalizeOptionalString(scope.token);
+  if (claim.ownerId === ownerId || (token && claim.token === token)) {
+    return;
+  }
+  throw new Error(`card is claimed by ${claim.ownerId}.`);
+}
+
+function retryBudgetExhausted(card: WorkboardCard): boolean {
+  const maxRetries = card.metadata?.automation?.maxRetries;
+  return Boolean(maxRetries && (card.metadata?.failureCount ?? 0) > maxRetries);
+}
+
+function diagnostic(
+  params: {
+    kind: WorkboardDiagnosticKind;
+    severity: WorkboardDiagnosticSeverity;
+    title: string;
+    detail: string;
+    actions: WorkboardDiagnosticAction[];
+  },
+  now: number,
+): WorkboardDiagnostic {
+  return {
+    ...params,
+    firstSeenAt: now,
+    lastSeenAt: now,
+    count: 1,
+  };
+}
+
+function mergeDiagnostics(
+  previous: readonly WorkboardDiagnostic[] | undefined,
+  next: WorkboardDiagnostic[],
+): WorkboardDiagnostic[] {
+  const byKind = new Map(previous?.map((entry) => [entry.kind, entry]));
+  return next.map((entry) => {
+    const prior = byKind.get(entry.kind);
+    return prior
+      ? {
+          ...entry,
+          firstSeenAt: prior.firstSeenAt,
+          count: prior.count + 1,
+        }
+      : entry;
+  });
+}
+
+function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
+  const diagnostics: WorkboardDiagnostic[] = [];
+  const claim = card.metadata?.claim;
+  const lastHeartbeatAt = claim?.lastHeartbeatAt ?? card.execution?.updatedAt ?? card.updatedAt;
+  if (
+    (card.status === "todo" || card.status === "backlog" || card.status === "ready") &&
+    card.agentId &&
+    now - card.updatedAt > READY_STRANDED_MS
+  ) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "stranded_ready",
+          severity: "warning",
+          title: "Assigned card is waiting",
+          detail: "The card has an assigned agent but has not been claimed recently.",
+          actions: [{ kind: "claim", label: "Claim card" }],
+        },
+        now,
+      ),
+    );
+  }
+  if (card.status === "running" && now - lastHeartbeatAt > RUNNING_HEARTBEAT_STALE_MS) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "running_without_heartbeat",
+          severity: "error",
+          title: "Running card has no recent heartbeat",
+          detail: "The linked run or claim has not reported recent activity.",
+          actions: [
+            { kind: "open_session", label: "Open session" },
+            { kind: "reassign", label: "Reassign card" },
+          ],
+        },
+        now,
+      ),
+    );
+  }
+  if (card.status === "blocked" && now - card.updatedAt > BLOCKED_TOO_LONG_MS) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "blocked_too_long",
+          severity: "warning",
+          title: "Blocked card needs attention",
+          detail: "The card has been blocked for more than a day.",
+          actions: [{ kind: "unblock", label: "Move to todo" }],
+        },
+        now,
+      ),
+    );
+  }
+  if ((card.metadata?.failureCount ?? 0) >= 2) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "repeated_failures",
+          severity: "error",
+          title: "Repeated run failures",
+          detail: "Multiple attempts failed or blocked on this card.",
+          actions: [{ kind: "reassign", label: "Reassign card" }],
+        },
+        now,
+      ),
+    );
+  }
+  if (
+    card.status === "done" &&
+    !(card.metadata?.proof?.length || card.metadata?.artifacts?.length)
+  ) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "missing_proof",
+          severity: "warning",
+          title: "Done card has no proof",
+          detail: "The card is marked done without proof or an attached artifact.",
+          actions: [{ kind: "add_proof", label: "Add proof" }],
+        },
+        now,
+      ),
+    );
+  }
+  if (card.sessionKey && !card.execution && card.status === "running") {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "orphaned_session",
+          severity: "warning",
+          title: "Running card has only a loose session link",
+          detail: "The card is running but has no execution record for lifecycle handoff.",
+          actions: [{ kind: "open_session", label: "Open session" }],
+        },
+        now,
+      ),
+    );
+  }
+  return diagnostics;
+}
+
+function capText(value: string | undefined, max: number): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function buildWorkerContext(card: WorkboardCard): string {
+  const lines = [
+    `# Workboard card ${card.id}`,
+    `Title: ${card.title}`,
+    `Status: ${card.status}`,
+    `Priority: ${card.priority}`,
+    `Agent: ${card.agentId ?? "(default)"}`,
+  ];
+  if (card.notes) {
+    lines.push("", "## Notes", capText(card.notes, 4000) ?? "");
+  }
+  const attempts = card.metadata?.attempts?.slice(-8) ?? [];
+  if (attempts.length) {
+    lines.push("", "## Recent attempts");
+    for (const attempt of attempts) {
+      lines.push(
+        `- ${attempt.status} ${attempt.model ?? ""} ${attempt.error ? `error=${capText(attempt.error, 240)}` : ""}`.trim(),
+      );
+    }
+  }
+  const comments = card.metadata?.comments?.slice(-12) ?? [];
+  if (comments.length) {
+    lines.push("", "## Recent comments");
+    for (const comment of comments) {
+      lines.push(`- ${capText(comment.body, 400)}`);
+    }
+  }
+  const proof = card.metadata?.proof?.slice(-8) ?? [];
+  if (proof.length) {
+    lines.push("", "## Proof");
+    for (const entry of proof) {
+      lines.push(
+        `- ${entry.status}: ${capText(entry.label ?? entry.command ?? entry.url ?? entry.note, 400)}`,
+      );
+    }
+  }
+  const artifacts = card.metadata?.artifacts?.slice(-8) ?? [];
+  if (artifacts.length) {
+    lines.push("", "## Artifacts");
+    for (const artifact of artifacts) {
+      lines.push(`- ${capText(artifact.label ?? artifact.url ?? artifact.path, 400)}`);
+    }
+  }
+  const links = card.metadata?.links?.slice(-8) ?? [];
+  if (links.length) {
+    lines.push("", "## Links");
+    for (const link of links) {
+      lines.push(`- ${link.type}: ${link.title ?? link.url ?? link.targetCardId ?? ""}`);
+    }
+  }
+  const automation = card.metadata?.automation;
+  if (automation) {
+    lines.push("", "## Automation");
+    if (automation.tenant) {
+      lines.push(`Tenant: ${automation.tenant}`);
+    }
+    if (automation.skills?.length) {
+      lines.push(`Skills: ${automation.skills.join(", ")}`);
+    }
+    if (automation.workspace) {
+      lines.push(
+        `Workspace: ${automation.workspace.kind}${automation.workspace.path ? ` ${automation.workspace.path}` : ""}`,
+      );
+    }
+    if (automation.summary) {
+      lines.push(`Summary: ${capText(automation.summary, 400)}`);
+    }
+  }
+  const diagnostics = computeCardDiagnostics(card, Date.now());
+  if (diagnostics.length) {
+    lines.push("", "## Active diagnostics");
+    for (const entry of diagnostics) {
+      lines.push(`- ${entry.severity}: ${entry.title}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function cardParentIds(card: WorkboardCard): string[] {
+  return (card.metadata?.links ?? [])
+    .filter((link) => link.type === "parent" && link.targetCardId)
+    .map((link) => link.targetCardId!)
+    .filter((id, index, ids) => ids.indexOf(id) === index);
+}
+
+function latestRunningAttempt(card: WorkboardCard): WorkboardRunAttempt | undefined {
+  return card.metadata?.attempts?.findLast((attempt) => attempt.status === "running");
+}
+
+function isDependencyPromotableStatus(status: WorkboardStatus): boolean {
+  return (
+    status === "backlog" ||
+    status === "triage" ||
+    status === "todo" ||
+    status === "scheduled" ||
+    status === "ready"
+  );
+}
+
+function isActiveDependencyTarget(
+  card: WorkboardCard,
+  options: { allowStatusOnly?: boolean } = {},
+): boolean {
+  return (
+    Boolean(card.metadata?.claim) ||
+    card.execution?.status === "running" ||
+    Boolean(latestRunningAttempt(card)) ||
+    (!options.allowStatusOnly && (card.status === "running" || card.status === "review"))
+  );
+}
+
+function closeRunningAttempts(
+  attempts: WorkboardRunAttempt[] | undefined,
+  now: number,
+  status: WorkboardAttemptStatus,
+  reason?: string,
+): WorkboardRunAttempt[] | undefined {
+  if (!attempts?.some((attempt) => attempt.status === "running")) {
+    return attempts;
+  }
+  return attempts.map((attempt) =>
+    attempt.status === "running"
+      ? { ...attempt, status, endedAt: now, ...(reason ? { error: reason } : {}) }
+      : attempt,
+  );
 }
 
 export class WorkboardStore {
@@ -831,75 +1649,187 @@ export class WorkboardStore {
     return entry?.version === 1 ? entry.card : undefined;
   }
 
-  async create(input: WorkboardCardInput): Promise<WorkboardCard> {
-    const now = Date.now();
-    const status = normalizeStatus(input.status, "todo");
-    const cards = await this.list();
-    const normalizedPosition = normalizePosition(input.position, Number.NaN);
-    const position = Number.isFinite(normalizedPosition)
-      ? normalizedPosition
-      : Math.max(
-          0,
-          ...cards.filter((card) => card.status === status).map((card) => card.position),
-        ) + POSITION_STEP;
-    const notes = normalizeNotes(input.notes);
-    const agentId = normalizeOptionalString(input.agentId);
-    const sessionKey = normalizeOptionalString(input.sessionKey);
-    const runId = normalizeOptionalString(input.runId);
-    const taskId = normalizeOptionalString(input.taskId);
-    const sourceUrl = normalizeOptionalString(input.sourceUrl);
-    const execution = normalizeExecution(input.execution);
-    const metadata = normalizeMetadata(input.metadata, {
-      templateId: normalizeTemplateId(input.templateId),
-    });
-    const syncedMetadata = trimMetadataToBudget(
-      syncExecutionAttemptMetadata(metadata, execution, now),
-    );
-    const card: WorkboardCard = {
-      id: randomUUID(),
-      title: normalizeTitle(input.title),
-      status,
-      priority: normalizePriority(input.priority, "normal"),
-      labels: normalizeLabels(input.labels),
-      position,
-      createdAt: now,
-      updatedAt: now,
-      events: [
-        {
-          id: randomUUID(),
-          kind: "created",
-          at: now,
-          toStatus: status,
-          ...(sessionKey ? { sessionKey } : {}),
-          ...(runId ? { runId } : {}),
+  private async removeReferencesToCard(cardId: string): Promise<void> {
+    for (const card of await this.list()) {
+      const links = card.metadata?.links;
+      if (!links?.some((link) => link.targetCardId === cardId)) {
+        continue;
+      }
+      await this.updateCard(card.id, {
+        metadata: {
+          ...card.metadata,
+          links: links.filter((link) => link.targetCardId !== cardId),
         },
-      ],
-      ...(notes ? { notes } : {}),
-      ...(agentId ? { agentId } : {}),
-      ...(sessionKey ? { sessionKey } : {}),
-      ...(runId ? { runId } : {}),
-      ...(taskId ? { taskId } : {}),
-      ...(sourceUrl ? { sourceUrl } : {}),
-      ...(execution ? { execution } : {}),
-      ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
-    };
-    await this.store.register(card.id, { version: 1, card });
-    return card;
+      });
+    }
+  }
+
+  async create(
+    input: WorkboardLinkedCreateInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const now = Date.now();
+      const requestedStatus = normalizeStatus(input.status, "todo");
+      const cards = await this.list();
+      const parents = normalizeStringList(input.parents, "parents", 120);
+      const automation = normalizeAutomation({
+        tenant: input.tenant,
+        idempotencyKey: input.idempotencyKey,
+        skills: input.skills,
+        workspace: input.workspace,
+        maxRuntimeSeconds: input.maxRuntimeSeconds,
+        maxRetries: input.maxRetries,
+        scheduledAt: input.scheduledAt,
+      });
+      const heldBySchedule =
+        Boolean(automation?.scheduledAt && automation.scheduledAt > now) &&
+        requestedStatus !== "blocked";
+      let status: WorkboardStatus = heldBySchedule ? "scheduled" : requestedStatus;
+      let heldByDependencies = false;
+      if (parents.length > 0 && (status === "running" || status === "review")) {
+        status = "todo";
+        heldByDependencies = true;
+      }
+      if (automation?.idempotencyKey) {
+        const existing = cards.find(
+          (card) =>
+            card.metadata?.automation?.idempotencyKey === automation.idempotencyKey &&
+            card.metadata?.automation?.tenant === automation.tenant,
+        );
+        if (existing) {
+          return existing;
+        }
+      }
+      const cardsById = new Map(cards.map((card) => [card.id, card]));
+      const parentCards = parents.map((parentId) => {
+        const parent = cardsById.get(parentId);
+        if (!parent) {
+          throw new Error(`card not found: ${parentId}`);
+        }
+        return parent;
+      });
+      const normalizedPosition = normalizePosition(input.position, Number.NaN);
+      const position = Number.isFinite(normalizedPosition)
+        ? normalizedPosition
+        : Math.max(
+            0,
+            ...cards.filter((card) => card.status === status).map((card) => card.position),
+          ) + POSITION_STEP;
+      const notes = normalizeNotes(input.notes);
+      const agentId = normalizeOptionalString(input.agentId);
+      const sessionKey = normalizeOptionalString(input.sessionKey);
+      const runId = normalizeOptionalString(input.runId);
+      const taskId = normalizeOptionalString(input.taskId);
+      const sourceUrl = normalizeOptionalString(input.sourceUrl);
+      const normalizedExecution = normalizeExecution(input.execution);
+      const execution =
+        normalizedExecution?.status === "running" && (heldBySchedule || heldByDependencies)
+          ? undefined
+          : normalizedExecution;
+      const startedAt =
+        input.startedAt === undefined
+          ? status === "running"
+            ? now
+            : undefined
+          : normalizeTimestamp(input.startedAt, 0) || undefined;
+      const completedAt =
+        input.completedAt === undefined
+          ? status === "done"
+            ? now
+            : undefined
+          : normalizeTimestamp(input.completedAt, 0) || undefined;
+      const metadata = normalizeMetadata(
+        input.metadata,
+        {
+          templateId: normalizeTemplateId(input.templateId),
+          ...(automation ? { automation } : {}),
+        },
+        { allowDependencyLinks: false },
+      );
+      const syncedMetadata = trimMetadataToBudget(
+        syncExecutionAttemptMetadata(metadata, execution, now),
+      );
+      let card: WorkboardCard = {
+        id: randomUUID(),
+        title: normalizeTitle(input.title),
+        status,
+        priority: normalizePriority(input.priority, "normal"),
+        labels: normalizeLabels(input.labels),
+        position,
+        createdAt: now,
+        updatedAt: now,
+        events: [
+          {
+            id: randomUUID(),
+            kind: "created",
+            at: now,
+            toStatus: status,
+            ...(sessionKey ? { sessionKey } : {}),
+            ...(runId ? { runId } : {}),
+          },
+        ],
+        ...(notes ? { notes } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(sessionKey ? { sessionKey } : {}),
+        ...(runId ? { runId } : {}),
+        ...(taskId ? { taskId } : {}),
+        ...(sourceUrl ? { sourceUrl } : {}),
+        ...(execution ? { execution } : {}),
+        ...(startedAt ? { startedAt } : {}),
+        ...(completedAt ? { completedAt } : {}),
+        ...(!metadataIsEmpty(syncedMetadata) ? { metadata: syncedMetadata } : {}),
+      };
+      await this.store.register(card.id, { version: 1, card });
+      try {
+        for (const parent of parentCards) {
+          card = await this.linkCardsDirect(parent.id, card.id, now, {
+            allowStatusOnlyActiveChild: true,
+            scope,
+          });
+        }
+      } catch (error) {
+        await this.store.delete(card.id);
+        await this.removeReferencesToCard(card.id);
+        throw error;
+      }
+      return card;
+    });
   }
 
   async update(id: string, patch: WorkboardCardPatch): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => await this.updateCard(id, patch));
+    return await this.enqueueMutation(
+      async () =>
+        await this.updateCard(id, patch, {
+          allowMetadataDependencyLinks: false,
+          enforceStatusHolds: true,
+        }),
+    );
   }
 
-  private async updateCard(id: string, patch: WorkboardCardPatch): Promise<WorkboardCard> {
+  private async updateCard(
+    id: string,
+    patch: WorkboardCardPatch,
+    options: { allowMetadataDependencyLinks?: boolean; enforceStatusHolds?: boolean } = {},
+  ): Promise<WorkboardCard> {
     const existing = await this.get(id);
     if (!existing) {
       throw new Error(`card not found: ${id}`);
     }
     const status = normalizeStatus(patch.status, existing.status);
     const now = Date.now();
-    const completedAt = status === "done" ? (existing.completedAt ?? now) : undefined;
-    const startedAt = status === "running" ? (existing.startedAt ?? now) : existing.startedAt;
+    const startedAt =
+      patch.startedAt === undefined
+        ? status === "running"
+          ? (existing.startedAt ?? now)
+          : existing.startedAt
+        : normalizeTimestamp(patch.startedAt, 0) || undefined;
+    const completedAt =
+      patch.completedAt === undefined
+        ? status === "done"
+          ? (existing.completedAt ?? now)
+          : undefined
+        : normalizeTimestamp(patch.completedAt, 0) || undefined;
     const sessionKey =
       patch.sessionKey === undefined
         ? existing.sessionKey
@@ -910,7 +1840,29 @@ export class WorkboardStore {
           ? existing.execution
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(patch.execution);
-    const metadata = normalizeMetadata(patch.metadata, existing.metadata);
+    let metadata = normalizeMetadata(patch.metadata, existing.metadata, {
+      allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
+    });
+    const automationPatch: Record<string, unknown> = {};
+    for (const key of [
+      "tenant",
+      "idempotencyKey",
+      "skills",
+      "workspace",
+      "maxRuntimeSeconds",
+      "maxRetries",
+      "scheduledAt",
+    ] as const) {
+      if (Object.hasOwn(patch, key) && patch[key] !== undefined) {
+        automationPatch[key] = patch[key];
+      }
+    }
+    if (Object.keys(automationPatch).length > 0) {
+      metadata = trimMetadataToBudget({
+        ...metadata,
+        automation: normalizeAutomation(automationPatch, metadata.automation),
+      });
+    }
     const next = removeUndefinedCardFields({
       ...existing,
       title: patch.title === undefined ? existing.title : normalizeTitle(patch.title),
@@ -947,7 +1899,16 @@ export class WorkboardStore {
       syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
     );
     next.events = appendEvent(next, updateEvent(existing, next), now);
+    if (options.enforceStatusHolds && patch.status !== undefined) {
+      await this.assertActiveStatusAllowed(existing, next, now);
+    }
     if (status !== "done") {
+      delete next.completedAt;
+    }
+    if (patch.startedAt !== undefined && !startedAt) {
+      delete next.startedAt;
+    }
+    if (patch.completedAt !== undefined && !completedAt) {
       delete next.completedAt;
     }
     if (metadataIsEmpty(next.metadata)) {
@@ -955,6 +1916,37 @@ export class WorkboardStore {
     }
     await this.store.register(next.id, { version: 1, card: next });
     return next;
+  }
+
+  private async assertActiveStatusAllowed(
+    existing: WorkboardCard,
+    next: WorkboardCard,
+    now: number,
+  ): Promise<void> {
+    if (
+      next.status !== "ready" &&
+      next.status !== "running" &&
+      next.status !== "review" &&
+      next.status !== "done"
+    ) {
+      return;
+    }
+    const parents = cardParentIds(next);
+    const cards =
+      parents.length > 0 ? new Map((await this.list()).map((card) => [card.id, card])) : undefined;
+    if (
+      parents.length > 0 &&
+      !parents.every((parentId) => cards?.get(parentId)?.status === "done")
+    ) {
+      throw new Error("card dependencies are not done.");
+    }
+    if (next.status === "done") {
+      return;
+    }
+    const scheduledAt = next.metadata?.automation?.scheduledAt;
+    if ((scheduledAt && scheduledAt > now) || (existing.status === "scheduled" && !scheduledAt)) {
+      throw new Error("card is scheduled for later.");
+    }
   }
 
   async move(id: string, status: unknown, position: unknown): Promise<WorkboardCard> {
@@ -965,20 +1957,35 @@ export class WorkboardStore {
   }
 
   async delete(id: string): Promise<{ deleted: boolean }> {
-    return { deleted: await this.store.delete(id.trim()) };
+    return await this.enqueueMutation(async () => {
+      const cardId = id.trim();
+      const deleted = await this.store.delete(cardId);
+      if (!deleted) {
+        return { deleted: false };
+      }
+      await this.removeReferencesToCard(cardId);
+      return { deleted: true };
+    });
   }
 
-  async addComment(id: string, input: WorkboardCommentInput): Promise<WorkboardCard> {
+  async addComment(
+    id: string,
+    input: WorkboardCommentInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
     const now = Date.now();
     const body = normalizeBoundedString(input.body, undefined, 2000, "comment body");
     if (!body) {
       throw new Error("comment body is required.");
     }
     const comment = { id: randomUUID(), body, createdAt: now };
-    return await this.updateMetadata(id, (existing) => ({
-      ...existing.metadata,
-      comments: [...(existing.metadata?.comments ?? []), comment].slice(-MAX_CARD_COMMENTS),
-    }));
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      return {
+        ...existing.metadata,
+        comments: [...(existing.metadata?.comments ?? []), comment].slice(-MAX_CARD_COMMENTS),
+      };
+    });
   }
 
   async addLink(id: string, input: WorkboardLinkInput): Promise<WorkboardCard> {
@@ -989,9 +1996,13 @@ export class WorkboardStore {
     if (!targetCardId && !url) {
       throw new Error("link targetCardId or url is required.");
     }
+    const type = normalizeLinkType(input.type, "relates_to");
+    if (type === "parent" || type === "child") {
+      throw new Error("parent and child dependency links must use linkDependency.");
+    }
     const link: WorkboardLink = {
       id: randomUUID(),
-      type: normalizeLinkType(input.type, "relates_to"),
+      type,
       createdAt: now,
       ...(targetCardId ? { targetCardId } : {}),
       ...(title ? { title } : {}),
@@ -999,29 +2010,638 @@ export class WorkboardStore {
     };
     return await this.updateMetadata(id, (existing) => ({
       ...existing.metadata,
-      links: [...(existing.metadata?.links ?? []), link].slice(-MAX_CARD_LINKS),
+      links: appendLinkPreservingDependencies(existing.metadata?.links ?? [], link),
     }));
   }
 
-  async addProof(id: string, input: WorkboardProofInput): Promise<WorkboardCard> {
-    const now = Date.now();
-    const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
-    const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
-    const url = normalizeBoundedString(input.url, undefined, 2000, "proof URL");
-    const note = normalizeBoundedString(input.note, undefined, 2000, "proof note");
-    const proof: WorkboardProof = {
-      id: randomUUID(),
-      status: normalizeProofStatus(input.status, "unknown"),
-      createdAt: now,
-      ...(label ? { label } : {}),
-      ...(command ? { command } : {}),
-      ...(url ? { url } : {}),
-      ...(note ? { note } : {}),
+  async linkCards(
+    parentId: string,
+    childId: string,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(
+      async () => await this.linkCardsDirect(parentId, childId, Date.now(), { scope }),
+    );
+  }
+
+  private async linkCardsDirect(
+    parentId: string,
+    childId: string,
+    now = Date.now(),
+    options: { allowStatusOnlyActiveChild?: boolean; scope?: WorkboardMutationScope } = {},
+  ): Promise<WorkboardCard> {
+    if (parentId.trim() === childId.trim()) {
+      throw new Error("parent and child cards must differ.");
+    }
+    const parent = await this.get(parentId);
+    const child = await this.get(childId);
+    if (!parent) {
+      throw new Error(`card not found: ${parentId}`);
+    }
+    if (!child) {
+      throw new Error(`card not found: ${childId}`);
+    }
+    assertCanMutateClaimedCard(parent, options.scope);
+    assertCanMutateClaimedCard(child, options.scope);
+    if (child.status === "done" || child.status === "blocked") {
+      const cardsById = new Map((await this.list()).map((card) => [card.id, card]));
+      const parentIds = [...cardParentIds(child), parent.id].filter(
+        (id, index, ids) => ids.indexOf(id) === index,
+      );
+      if (parentIds.some((id) => cardsById.get(id)?.status !== "done")) {
+        throw new Error("terminal child cards cannot gain incomplete parent dependencies.");
+      }
+    }
+    if (isActiveDependencyTarget(child, { allowStatusOnly: options.allowStatusOnlyActiveChild })) {
+      throw new Error("active child cards cannot gain parent dependencies.");
+    }
+    if (await this.dependsOn(parent.id, child.id)) {
+      throw new Error("dependency link would create a cycle.");
+    }
+    const parentLinks = parent.metadata?.links ?? [];
+    const childLinks = child.metadata?.links ?? [];
+    const nextParentLinks = parentLinks.some(
+      (link) => link.type === "child" && link.targetCardId === child.id,
+    )
+      ? parentLinks
+      : appendLinkPreservingDependencies(parentLinks, {
+          id: randomUUID(),
+          type: "child" as const,
+          targetCardId: child.id,
+          createdAt: now,
+        });
+    const nextChildLinks = childLinks.some(
+      (link) => link.type === "parent" && link.targetCardId === parent.id,
+    )
+      ? childLinks
+      : appendLinkPreservingDependencies(childLinks, {
+          id: randomUUID(),
+          type: "parent" as const,
+          targetCardId: parent.id,
+          createdAt: now,
+        });
+    await this.updateCard(parent.id, {
+      metadata: { ...parent.metadata, links: nextParentLinks },
+    });
+    const nextChild = await this.updateCard(child.id, {
+      metadata: { ...child.metadata, links: nextChildLinks },
+    });
+    return await this.promoteDependencyReady(nextChild.id);
+  }
+
+  async linkParents(childId: string, parentIds: readonly string[]): Promise<WorkboardCard> {
+    let child = await this.get(childId);
+    if (!child) {
+      throw new Error(`card not found: ${childId}`);
+    }
+    for (const parentId of parentIds) {
+      child = await this.linkCards(parentId, child.id);
+    }
+    return child;
+  }
+
+  private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {
+    const scheduledAt = card.metadata?.automation?.scheduledAt;
+    const parents = cardParentIds(card);
+    if (card.status === "scheduled" && !scheduledAt) {
+      return "scheduled";
+    }
+    if (parents.length === 0) {
+      if (scheduledAt && scheduledAt > now && isDependencyPromotableStatus(card.status)) {
+        return "scheduled";
+      }
+      return card.status === "scheduled" ? "ready" : card.status;
+    }
+    const cards = new Map((await this.list()).map((entry) => [entry.id, entry]));
+    const parentsDone = parents.every((parentId) => cards.get(parentId)?.status === "done");
+    if (
+      !parentsDone &&
+      scheduledAt &&
+      scheduledAt > now &&
+      isDependencyPromotableStatus(card.status)
+    ) {
+      return "scheduled";
+    }
+    if (!parentsDone && isDependencyPromotableStatus(card.status)) {
+      return "todo";
+    }
+    if (
+      parentsDone &&
+      scheduledAt &&
+      scheduledAt > now &&
+      isDependencyPromotableStatus(card.status)
+    ) {
+      return "scheduled";
+    }
+    return parentsDone && isDependencyPromotableStatus(card.status) ? "ready" : card.status;
+  }
+
+  private async dependsOn(cardId: string, targetParentId: string): Promise<boolean> {
+    const cards = new Map((await this.list()).map((entry) => [entry.id, entry]));
+    const seen = new Set<string>();
+    const visit = (id: string): boolean => {
+      if (id === targetParentId) {
+        return true;
+      }
+      if (seen.has(id)) {
+        return false;
+      }
+      seen.add(id);
+      const card = cards.get(id);
+      return Boolean(card && cardParentIds(card).some(visit));
     };
-    return await this.updateMetadata(id, (existing) => ({
-      ...existing.metadata,
-      proof: [...(existing.metadata?.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-    }));
+    return visit(cardId);
+  }
+
+  private async recordDispatch(card: WorkboardCard, now: number): Promise<WorkboardCard> {
+    const metadata = trimMetadataToBudget(
+      normalizeMetadata(
+        {
+          ...card.metadata,
+          automation: normalizeAutomation(
+            {
+              ...card.metadata?.automation,
+              dispatchCount: (card.metadata?.automation?.dispatchCount ?? 0) + 1,
+              lastDispatchAt: now,
+            },
+            card.metadata?.automation,
+          ),
+        },
+        card.metadata,
+      ),
+    );
+    const next = removeUndefinedCardFields({
+      ...card,
+      ...(!metadataIsEmpty(metadata) ? { metadata } : { metadata: undefined }),
+      events: appendEvent(card, { kind: "dispatch" }, now),
+    });
+    await this.store.register(card.id, { version: 1, card: next });
+    return next;
+  }
+
+  private async promoteDependencyReady(id: string, now = Date.now()): Promise<WorkboardCard> {
+    const card = await this.get(id);
+    if (!card) {
+      throw new Error(`card not found: ${id}`);
+    }
+    const target = await this.dependencyTargetStatus(card, now);
+    if (target === card.status) {
+      return card;
+    }
+    return await this.updateCard(card.id, { status: target });
+  }
+
+  async promoteReady(now = Date.now()): Promise<{ cards: WorkboardCard[]; count: number }> {
+    return await this.enqueueMutation(async () => {
+      const promoted: WorkboardCard[] = [];
+      for (const card of await this.list()) {
+        const next = await this.promoteDependencyReady(card.id, now);
+        if (next.status !== card.status) {
+          promoted.push(next);
+        }
+      }
+      return { cards: promoted, count: promoted.length };
+    });
+  }
+
+  async addProof(
+    id: string,
+    input: WorkboardProofInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    const now = Date.now();
+    const proof = normalizeProofInput(input, now);
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+      return {
+        ...metadata,
+        proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
+      };
+    });
+  }
+
+  async addProofWithArtifact(
+    id: string,
+    proofInput: WorkboardProofInput,
+    artifactInput: WorkboardArtifactInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    const now = Date.now();
+    const proof = normalizeProofInput(proofInput, now);
+    const artifact = normalizeArtifact({ ...artifactInput, createdAt: now });
+    if (!artifact) {
+      throw new Error("artifact url or path is required.");
+    }
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+      return {
+        ...metadata,
+        proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
+        artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
+      };
+    });
+  }
+
+  async addArtifact(
+    id: string,
+    input: WorkboardArtifactInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    const artifact = normalizeArtifact({ ...input, createdAt: Date.now() });
+    if (!artifact) {
+      throw new Error("artifact url or path is required.");
+    }
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+      return {
+        ...metadata,
+        artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
+      };
+    });
+  }
+
+  async claim(
+    id: string,
+    input: WorkboardClaimInput,
+  ): Promise<{ card: WorkboardCard; token: string }> {
+    const ownerId = normalizeBoundedString(input.ownerId, undefined, 120, "claim owner");
+    if (!ownerId) {
+      throw new Error("claim ownerId is required.");
+    }
+    const ttlSeconds =
+      typeof input.ttlSeconds === "number" && Number.isFinite(input.ttlSeconds)
+        ? Math.max(1, Math.trunc(input.ttlSeconds))
+        : undefined;
+    const token =
+      normalizeBoundedString(input.token, undefined, 160, "claim token") ?? randomUUID();
+    return await this.enqueueMutation(async () => {
+      const now = Date.now();
+      const expiresAt = now + (ttlSeconds ? ttlSeconds * 1000 : DEFAULT_CLAIM_TTL_MS);
+      const guarded = await this.promoteDependencyReady(id, now);
+      if (cardParentIds(guarded).length > 0 && guarded.status !== "ready") {
+        throw new Error("card dependencies are not done.");
+      }
+      if (guarded.status === "scheduled") {
+        throw new Error("card is scheduled for later.");
+      }
+      if (retryBudgetExhausted(guarded)) {
+        throw new Error("card exhausted its retry budget.");
+      }
+      const existingClaim = guarded.metadata?.claim;
+      if (existingClaim && existingClaim.expiresAt && existingClaim.expiresAt > now) {
+        throw new Error(`card already claimed by ${existingClaim.ownerId}.`);
+      }
+      const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
+      const card = await this.updateCard(id, {
+        metadata: {
+          ...metadata,
+          claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+        },
+      });
+      const next = await this.updateCard(card.id, {
+        status:
+          card.status === "backlog" || card.status === "todo" || card.status === "ready"
+            ? "running"
+            : card.status,
+        agentId: card.agentId ?? ownerId,
+      });
+      return { card: next, token };
+    });
+  }
+
+  async heartbeat(id: string, input: WorkboardHeartbeatInput): Promise<WorkboardCard> {
+    const note = normalizeBoundedString(input.note, undefined, 400, "heartbeat note");
+    const card = await this.updateMetadata(id, (existing) => {
+      const claim = existing.metadata?.claim;
+      if (!claim) {
+        throw new Error("card is not claimed.");
+      }
+      const now = Math.max(Date.now(), claim.lastHeartbeatAt + 1);
+      const token = normalizeOptionalString(input.token);
+      const ownerId = normalizeOptionalString(input.ownerId);
+      if (token && token !== claim.token) {
+        throw new Error("claim token does not match.");
+      }
+      if (!token && ownerId && ownerId !== claim.ownerId) {
+        throw new Error("claim owner does not match.");
+      }
+      const nextClaim = {
+        ...claim,
+        lastHeartbeatAt: now,
+        expiresAt: claim.expiresAt
+          ? now +
+            Math.max(
+              1,
+              claim.expiresAt > claim.claimedAt
+                ? claim.expiresAt - claim.lastHeartbeatAt
+                : DEFAULT_CLAIM_TTL_MS,
+            )
+          : undefined,
+      };
+      const metadata = clearDiagnostics(existing.metadata, ["running_without_heartbeat"]);
+      return {
+        ...metadata,
+        claim: removeUndefinedMetadataFields({ claim: nextClaim }).claim,
+        comments: note
+          ? [...(metadata.comments ?? []), { id: randomUUID(), body: note, createdAt: now }].slice(
+              -MAX_CARD_COMMENTS,
+            )
+          : metadata.comments,
+      };
+    });
+    return card;
+  }
+
+  async releaseClaim(
+    id: string,
+    input: WorkboardHeartbeatInput & { status?: unknown } = {},
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      const status =
+        input.status === undefined
+          ? existing.status
+          : normalizeStatus(input.status, existing.status);
+      const claim = existing.metadata?.claim;
+      if (claim) {
+        const token = normalizeOptionalString(input.token);
+        const ownerId = normalizeOptionalString(input.ownerId);
+        if (token && token !== claim.token) {
+          throw new Error("claim token does not match.");
+        }
+        if (!token && ownerId && ownerId !== claim.ownerId) {
+          throw new Error("claim owner does not match.");
+        }
+      }
+      return await this.updateCard(
+        id,
+        {
+          status,
+          metadata: { ...existing.metadata, claim: undefined },
+        },
+        { enforceStatusHolds: input.status !== undefined },
+      );
+    });
+  }
+
+  async complete(
+    id: string,
+    input: WorkboardCompleteInput = {},
+    scope: WorkboardMutationScope | null | undefined = input,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
+      const now = Date.now();
+      const createdCardIds = normalizeStringList(input.createdCardIds, "created card ids", 120);
+      for (const createdCardId of createdCardIds) {
+        if (!(await this.get(createdCardId))) {
+          throw new Error(`created card not found: ${createdCardId}`);
+        }
+      }
+      const summary = normalizeBoundedString(input.summary, undefined, 2000, "summary");
+      const proofInput =
+        input.proof && typeof input.proof === "object" && !Array.isArray(input.proof)
+          ? (input.proof as WorkboardProofInput)
+          : undefined;
+      const proof = proofInput ? normalizeProofInput(proofInput, now) : undefined;
+      const artifacts = Array.isArray(input.artifacts)
+        ? input.artifacts
+            .map((artifact) => normalizeArtifact({ ...artifact, createdAt: now }))
+            .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
+            .slice(-MAX_CARD_ARTIFACTS)
+        : [];
+      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+      const notification: WorkboardNotification = {
+        id: randomUUID(),
+        kind: "completed",
+        createdAt: now,
+        message: capText(summary, 240) ?? "Workboard card completed.",
+        ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
+        ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
+      };
+      const execution =
+        existing.execution?.status === "running"
+          ? { ...existing.execution, status: "done" as const, updatedAt: now }
+          : existing.execution;
+      return await this.updateCard(
+        id,
+        {
+          status: "done",
+          ...(execution ? { execution } : {}),
+          metadata: {
+            ...metadata,
+            claim: undefined,
+            attempts: closeRunningAttempts(metadata.attempts, now, "succeeded"),
+            failureCount: 0,
+            automation: normalizeAutomation(
+              {
+                ...metadata.automation,
+                summary,
+                createdCardIds,
+              },
+              metadata.automation,
+            ),
+            comments: summary
+              ? [
+                  ...(metadata.comments ?? []),
+                  { id: randomUUID(), body: summary, createdAt: now },
+                ].slice(-MAX_CARD_COMMENTS)
+              : metadata.comments,
+            proof: proof
+              ? [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF)
+              : metadata.proof,
+            artifacts: artifacts.length
+              ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
+              : metadata.artifacts,
+            notifications: [...(metadata.notifications ?? []), notification].slice(
+              -MAX_CARD_NOTIFICATIONS,
+            ),
+          },
+        },
+        { enforceStatusHolds: true },
+      );
+    });
+  }
+
+  async block(
+    id: string,
+    input: WorkboardBlockInput = {},
+    scope: WorkboardMutationScope | null | undefined = input,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
+      const now = Date.now();
+      const reason =
+        normalizeBoundedString(input.reason, undefined, 2000, "block reason") ??
+        "Workboard card blocked.";
+      const metadata = existing.metadata ?? {};
+      const notification: WorkboardNotification = {
+        id: randomUUID(),
+        kind: "failed",
+        createdAt: now,
+        message: capText(reason, 240) ?? "Workboard card blocked.",
+        ...(cardSessionKey(existing) ? { sessionKey: cardSessionKey(existing) } : {}),
+        ...(cardRunId(existing) ? { runId: cardRunId(existing) } : {}),
+      };
+      const execution =
+        existing.execution?.status === "running"
+          ? { ...existing.execution, status: "blocked" as const, updatedAt: now }
+          : existing.execution;
+      return await this.updateCard(id, {
+        status: "blocked",
+        ...(execution ? { execution } : {}),
+        metadata: {
+          ...metadata,
+          claim: undefined,
+          attempts: closeRunningAttempts(metadata.attempts, now, "blocked", reason),
+          failureCount: (metadata.failureCount ?? 0) + 1,
+          comments: [
+            ...(metadata.comments ?? []),
+            { id: randomUUID(), body: reason, createdAt: now },
+          ].slice(-MAX_CARD_COMMENTS),
+          notifications: [...(metadata.notifications ?? []), notification].slice(
+            -MAX_CARD_NOTIFICATIONS,
+          ),
+        },
+      });
+    });
+  }
+
+  async unblock(id: string, scope?: WorkboardMutationScope): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["blocked_too_long"]);
+      return await this.updateCard(id, { status: "todo", metadata: { ...metadata, stale: null } });
+    });
+  }
+
+  async dispatch(now = Date.now()): Promise<WorkboardDispatchResult> {
+    return await this.enqueueMutation(async () => {
+      const promoted: WorkboardCard[] = [];
+      const reclaimed: WorkboardCard[] = [];
+      const blocked: WorkboardCard[] = [];
+      for (const card of await this.list()) {
+        let latest = await this.promoteDependencyReady(card.id, now);
+        const wasPromoted = latest.status !== card.status;
+        const claim = latest.metadata?.claim;
+        const latestAttempt = latestRunningAttempt(latest);
+        const maxRuntimeSeconds = latest.metadata?.automation?.maxRuntimeSeconds;
+        const runtimeStartedAt = latestAttempt?.startedAt ?? claim?.claimedAt ?? latest.startedAt;
+        const timedOut =
+          Boolean(maxRuntimeSeconds && runtimeStartedAt) &&
+          now - runtimeStartedAt! > maxRuntimeSeconds! * 1000;
+        const claimExpired = Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
+        const retriesExhausted = retryBudgetExhausted(latest);
+        if (latest.status === "running" && (timedOut || claimExpired)) {
+          const reason = timedOut
+            ? "Run exceeded the card max runtime."
+            : "Claim expired without a recent heartbeat.";
+          const execution =
+            latest.execution?.status === "running"
+              ? { ...latest.execution, status: "blocked" as const, updatedAt: now }
+              : latest.execution;
+          latest = await this.updateCard(latest.id, {
+            status: "blocked",
+            ...(execution ? { execution } : {}),
+            metadata: {
+              ...latest.metadata,
+              claim: undefined,
+              attempts: closeRunningAttempts(latest.metadata?.attempts, now, "blocked", reason),
+              failureCount: (latest.metadata?.failureCount ?? 0) + 1,
+              notifications: [
+                ...(latest.metadata?.notifications ?? []),
+                {
+                  id: randomUUID(),
+                  kind: "failed" as const,
+                  createdAt: now,
+                  message: reason,
+                },
+              ].slice(-MAX_CARD_NOTIFICATIONS),
+            },
+          });
+          blocked.push(latest);
+        } else if (claimExpired) {
+          latest = await this.updateCard(latest.id, {
+            metadata: { ...latest.metadata, claim: undefined },
+          });
+          reclaimed.push(latest);
+        }
+        if (
+          !latest.metadata?.claim &&
+          retriesExhausted &&
+          isDependencyPromotableStatus(latest.status)
+        ) {
+          latest = await this.updateCard(latest.id, {
+            status: "blocked",
+            metadata: {
+              ...latest.metadata,
+              notifications: [
+                ...(latest.metadata?.notifications ?? []),
+                {
+                  id: randomUUID(),
+                  kind: "failed" as const,
+                  createdAt: now,
+                  message: "Card exhausted its retry budget.",
+                },
+              ].slice(-MAX_CARD_NOTIFICATIONS),
+            },
+          });
+          blocked.push(latest);
+        }
+        if (latest.status === "ready") {
+          latest = await this.recordDispatch(latest, now);
+        }
+        if (wasPromoted && latest.status !== "blocked") {
+          promoted.push(latest);
+        }
+      }
+      return {
+        promoted,
+        reclaimed,
+        blocked,
+        count: promoted.length + reclaimed.length + blocked.length,
+      };
+    });
+  }
+
+  async bulkUpdate(input: WorkboardBulkInput): Promise<{ cards: WorkboardCard[] }> {
+    const ids = Array.isArray(input.ids)
+      ? input.ids.filter((id): id is string => typeof id === "string" && id.trim() !== "")
+      : [];
+    if (ids.length === 0) {
+      throw new Error("ids are required.");
+    }
+    const patch =
+      input.patch && typeof input.patch === "object" && !Array.isArray(input.patch)
+        ? (input.patch as WorkboardCardPatch)
+        : {};
+    const cards: WorkboardCard[] = [];
+    for (const id of ids) {
+      const updated =
+        input.archived === undefined
+          ? await this.update(id, patch)
+          : await this.archive(id, input.archived);
+      cards.push(updated);
+    }
+    return { cards };
   }
 
   async archive(id: string, archived: unknown): Promise<WorkboardCard> {
@@ -1034,6 +2654,59 @@ export class WorkboardStore {
 
   async exportCards(): Promise<{ cards: WorkboardCard[]; exportedAt: number }> {
     return { cards: await this.list(), exportedAt: Date.now() };
+  }
+
+  async diagnostics(now = Date.now()): Promise<WorkboardDiagnosticsResult> {
+    const cards = await this.list();
+    const rows = cards.flatMap((card) => {
+      const diagnostics = computeCardDiagnostics(card, now);
+      return diagnostics.length ? [{ card, diagnostics }] : [];
+    });
+    return {
+      diagnostics: rows,
+      count: rows.reduce((total, row) => total + row.diagnostics.length, 0),
+    };
+  }
+
+  async refreshDiagnostics(now = Date.now()): Promise<WorkboardDiagnosticsResult> {
+    return await this.enqueueMutation(async () => {
+      const cards = await this.list();
+      const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
+      for (const card of cards) {
+        const latest = await this.get(card.id);
+        if (!latest) {
+          continue;
+        }
+        const diagnostics = mergeDiagnostics(
+          latest.metadata?.diagnostics,
+          computeCardDiagnostics(latest, now),
+        );
+        if (diagnostics.length === 0 && !latest.metadata?.diagnostics?.length) {
+          continue;
+        }
+        const metadata = trimMetadataToBudget({ ...latest.metadata, diagnostics });
+        const next = removeUndefinedCardFields({
+          ...latest,
+          metadata: metadataIsEmpty(metadata) ? undefined : metadata,
+        });
+        await this.store.register(next.id, { version: 1, card: next });
+        if (diagnostics.length > 0) {
+          rows.push({ card: next, diagnostics });
+        }
+      }
+      return {
+        diagnostics: rows,
+        count: rows.reduce((total, row) => total + row.diagnostics.length, 0),
+      };
+    });
+  }
+
+  async buildWorkerContext(id: string): Promise<string> {
+    const card = await this.get(id);
+    if (!card) {
+      throw new Error(`card not found: ${id}`);
+    }
+    return buildWorkerContext(card);
   }
 
   static open(

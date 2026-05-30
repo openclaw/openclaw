@@ -379,13 +379,16 @@ vi.mock("../../bootstrap-files.js", async () => {
   };
 });
 
-vi.mock("../../skills.js", () => ({
+vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},
+}));
+
+vi.mock("../../../skills/loading/workspace.js", () => ({
   resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
 }));
 
-vi.mock("../skills-runtime.js", () => ({
+vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
   resolveEmbeddedRunSkillEntries: (...args: unknown[]) =>
     hoisted.resolveEmbeddedRunSkillEntriesMock(...args),
 }));
@@ -924,6 +927,7 @@ export function resetEmbeddedAttemptHarness(
   }
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
+  hoisted.defaultResourceLoaderInitMock.mockReset();
   hoisted.resolveSandboxContextMock.mockReset();
   hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();

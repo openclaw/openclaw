@@ -8,6 +8,7 @@ import {
   abortChatRun,
   handleChatEvent,
   loadChatHistory,
+  requestChatSend,
   sendChatMessage,
   type ChatEventPayload,
   type ChatState,
@@ -111,6 +112,77 @@ describe("handleChatEvent", () => {
       state: "final",
     };
     expect(handleChatEvent(state, payload)).toBe(null);
+  });
+
+  it("ignores selected-agent global events for another agent", () => {
+    const state = createState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("ignores canonical global events for another selected agent main alias", () => {
+    const state = createState({
+      sessionKey: "agent:work:main",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("treats unscoped global events as default-agent events only", () => {
+    const state = createState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-default-global",
+      sessionKey: "global",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBeNull();
+  });
+
+  it("adopts canonical global deltas for the selected agent main alias", () => {
+    const state = createState({
+      sessionKey: "agent:work:main",
+      chatRunId: null,
+      chatStream: null,
+      chatStreamStartedAt: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-work-global",
+      sessionKey: "global",
+      agentId: "work",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Work reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatRunId).toBe("run-work-global");
+    expect(state.chatStream).toBe("Work reply");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
   });
 
   it("accepts delta events for the active run when gateway emits a canonical session key", () => {
@@ -994,6 +1066,44 @@ describe("loadChatHistory filtering", () => {
 
     expect(state.chatMessages).toEqual(messages);
   });
+
+  it("omits literal global agentId until selected/default agent is known", async () => {
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    const state = createState({
+      sessionKey: "global",
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.not.objectContaining({ agentId: expect.anything() }),
+    );
+  });
+
+  it("uses hello default agent for literal global history before agents list loads", async () => {
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    const state = createState({
+      sessionKey: "global",
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+      },
+      client: { request } as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.history",
+      expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    );
+  });
 });
 
 describe("sendChatMessage", () => {
@@ -1043,6 +1153,81 @@ describe("sendChatMessage", () => {
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
     expect(sendParams.message).toBe("continue");
+  });
+
+  it("does not reuse another global agent's visible session id for queued sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-work", status: "started" });
+    const state = createState({
+      assistantAgentId: "main",
+      currentSessionId: "session-main-visible",
+      sessionKey: "global",
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await requestChatSend(state, {
+      message: "queued",
+      runId: "run-work",
+      sessionKey: "global",
+      agentId: "work",
+    });
+
+    expect(result).toEqual({ runId: "run-work", status: "started" });
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+        message: "queued",
+        idempotencyKey: "run-work",
+      }),
+    );
+    const sendParams = requireRecord(request.mock.calls[0]?.[1]);
+    expect(sendParams.sessionId).toBeUndefined();
+  });
+
+  it("omits literal global send agentId until selected/default agent is known", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-global", status: "started" });
+    const state = createState({
+      sessionKey: "global",
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await requestChatSend(state, {
+      message: "queued",
+      runId: "run-global",
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.not.objectContaining({ agentId: expect.anything() }),
+    );
+  });
+
+  it("uses hello default agent for literal global sends before agents list loads", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-global", status: "started" });
+    const state = createState({
+      sessionKey: "global",
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+      },
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await requestChatSend(state, {
+      message: "queued",
+      runId: "run-global",
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
+    );
   });
 
   it("adopts the run id and terminal status from the chat.send ack", async () => {
@@ -1554,5 +1739,37 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "other history" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("low");
+  });
+
+  it("ignores stale global history responses after switching selected agents", async () => {
+    const workRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn((_method: string, params?: { agentId?: string; sessionKey?: string }) => {
+      if (params?.sessionKey === "global" && params.agentId === "work") {
+        return workRequest.promise;
+      }
+      throw new Error(`Unexpected request: ${JSON.stringify(params)}`);
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "visible old" }] }],
+    });
+
+    const load = loadChatHistory(state);
+    state.assistantAgentId = "main";
+    workRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "work history" }] }],
+      thinkingLevel: "high",
+    });
+    await load;
+
+    expect(state.chatLoading).toBe(false);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible old" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBeNull();
   });
 });
