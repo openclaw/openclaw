@@ -361,6 +361,158 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
   });
 
+  describe("input-default scoping by provider ownership", () => {
+    it("defaults vision model input to [text, image] for a built-in provider with no discovery data", () => {
+      const merged = mergeProviderModels(
+        { models: [] } as unknown as ProviderConfig,
+        {
+          api: "anthropic-messages",
+          models: [
+            {
+              id: "claude-3-5-sonnet-20241022",
+              name: "Claude 3.5 Sonnet",
+              cost: { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            },
+          ],
+        } as unknown as ProviderConfig,
+        { providerKey: "anthropic" },
+      );
+
+      expect(merged.models?.[0]).toMatchObject({
+        id: "claude-3-5-sonnet-20241022",
+        input: ["text", "image"],
+      });
+    });
+
+    it("does NOT default vision model input for a custom provider with no discovery data", () => {
+      const merged = mergeProviderModels(
+        { models: [] } as unknown as ProviderConfig,
+        {
+          api: "anthropic-messages",
+          models: [
+            {
+              id: "claude-3-5-sonnet-20241022",
+              name: "Claude 3.5 Sonnet (proxy)",
+              cost: { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            },
+          ],
+        } as unknown as ProviderConfig,
+        { providerKey: "my-company-proxy" },
+      );
+
+      expect(merged.models?.[0]).not.toHaveProperty("input");
+    });
+
+    it("respects explicit input declaration on a custom provider model", () => {
+      const merged = mergeProviderModels(
+        { models: [] } as unknown as ProviderConfig,
+        {
+          api: "anthropic-messages",
+          models: [
+            {
+              id: "claude-3-5-sonnet-20241022",
+              name: "Claude 3.5 Sonnet (proxy)",
+              input: ["text", "image"],
+              cost: { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            },
+          ],
+        } as unknown as ProviderConfig,
+        { providerKey: "my-company-proxy" },
+      );
+
+      expect(merged.models?.[0]).toMatchObject({
+        id: "claude-3-5-sonnet-20241022",
+        input: ["text", "image"],
+      });
+    });
+
+    it("does NOT default vision model input for custom provider even when stale (not in implicit catalog)", () => {
+      // Custom proxy has some implicit models (from its own discovery) but
+      // claude-opus-4 is not in that discovery list — the stale-catalog path
+      // also must not infer image capability for custom providers.
+      const merged = mergeProviderModels(
+        {
+          models: [
+            {
+              id: "text-only-model",
+              name: "Text Only",
+              input: ["text"],
+              contextWindow: 8192,
+              maxTokens: 2048,
+            },
+          ],
+        } as unknown as ProviderConfig,
+        {
+          api: "anthropic-messages",
+          models: [
+            {
+              id: "claude-opus-4-5",
+              name: "Claude Opus 4.5 (proxy)",
+              cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 32_000,
+            },
+          ],
+        } as unknown as ProviderConfig,
+        { providerKey: "acme-corp-gateway" },
+      );
+
+      expect(merged.models?.[0]).not.toHaveProperty("input");
+    });
+
+    it("mergeProviders passes providerKey so built-in anthropic gets input defaulted", () => {
+      const merged = mergeProviders({
+        implicit: {},
+        explicit: {
+          anthropic: {
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "claude-3-5-sonnet-20241022",
+                name: "Claude 3.5 Sonnet",
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          } as unknown as ProviderConfig,
+        },
+      });
+
+      expect(merged.anthropic?.models?.[0]).toMatchObject({
+        id: "claude-3-5-sonnet-20241022",
+        input: ["text", "image"],
+      });
+    });
+
+    it("mergeProviders does NOT default input for user-defined custom providers", () => {
+      const merged = mergeProviders({
+        implicit: {},
+        explicit: {
+          "my-proxy": {
+            api: "anthropic-messages",
+            baseUrl: "https://proxy.example.com/v1",
+            models: [
+              {
+                id: "claude-3-5-sonnet-20241022",
+                name: "Claude 3.5 Sonnet",
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          } as unknown as ProviderConfig,
+        },
+      });
+
+      expect(merged["my-proxy"]?.models?.[0]).not.toHaveProperty("input");
+    });
+  });
+
   it("uses config apiKey/baseUrl when existing values are empty", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
