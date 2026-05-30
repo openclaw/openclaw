@@ -125,11 +125,29 @@ describe("skills workshop cli", () => {
     await runCommand(["skills", "workshop", "inspect", proposalId!]);
     expect(mocks.runtimeStdout.at(-1)).toContain("status: proposal");
 
+    const revisedPath = path.join(mocks.workspaceDir, "revised-proposal.md");
+    await fs.writeFile(
+      revisedPath,
+      "# Paris Weather\n\nCheck current weather and alerts before advice.\n",
+      "utf8",
+    );
+    await runCommand([
+      "skills",
+      "workshop",
+      "revise",
+      proposalId!,
+      "--description",
+      "Revised weather lookup workflow",
+      "--proposal",
+      revisedPath,
+    ]);
+    expect(mocks.runtimeStdout.at(-1)).toContain(`Revised ${proposalId} v2`);
+
     await runCommand(["skills", "workshop", "apply", proposalId!]);
     expect(mocks.runtimeStdout.at(-1)).toContain("Applied");
     await expect(
       fs.readFile(path.join(mocks.workspaceDir, "skills", "paris-weather", "SKILL.md"), "utf8"),
-    ).resolves.toContain("# Paris Weather");
+    ).resolves.toContain("Check current weather and alerts");
     await expect(
       fs.readFile(
         path.join(mocks.workspaceDir, "skills", "paris-weather", "references", "weather.md"),

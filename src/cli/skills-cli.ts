@@ -35,6 +35,7 @@ import {
   readSkillProposalDraftDirectory,
   readSkillProposalDraftFile,
   rejectSkillProposal,
+  reviseSkillProposal,
 } from "../skills/workshop/service.js";
 import type {
   SkillProposalManifest,
@@ -629,6 +630,59 @@ export function registerSkillsCli(program: Command) {
             return;
           }
           defaultRuntime.writeStdout(`${proposal.record.id}\n`);
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
+    .command("revise")
+    .description("Revise a pending skill proposal")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--proposal <path>", "Path to revised PROPOSAL.md draft content")
+    .option(
+      "--proposal-dir <path>",
+      "Path to revised proposal directory with PROPOSAL.md and support files",
+    )
+    .option("--description <description>", "Replacement proposal description")
+    .option("--goal <text>", "Replacement research or improvement goal")
+    .option("--evidence <text>", "Replacement evidence or notes for the proposal")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (
+        proposalId: string,
+        opts: {
+          proposal?: string;
+          proposalDir?: string;
+          description?: string;
+          goal?: string;
+          evidence?: string;
+          json?: boolean;
+          agent?: string;
+        },
+        command: Command,
+      ) => {
+        try {
+          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const draft = await readSkillProposalInput(opts);
+          const proposal = await reviseSkillProposal({
+            workspaceDir,
+            proposalId,
+            content: draft.content,
+            supportFiles: draft.supportFiles,
+            description: opts.description,
+            goal: opts.goal,
+            evidence: opts.evidence,
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson(proposal);
+            return;
+          }
+          defaultRuntime.writeStdout(
+            `Revised ${proposal.record.id} ${proposal.record.proposedVersion}\n`,
+          );
         } catch (err) {
           defaultRuntime.error(String(err));
           defaultRuntime.exit(1);

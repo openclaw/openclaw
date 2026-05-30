@@ -124,12 +124,14 @@ Support files can be included under `assets/`, `examples/`, `references/`,
 
 ```bash
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
 openclaw skills workshop apply <proposal-id>
 ```
 
 When applied, OpenClaw writes the final `SKILL.md` into the workspace `skills/`
 root, writes approved support files beside it, and removes proposal-only
-frontmatter such as `status: proposal`.
+frontmatter such as `status: proposal`, proposal `version`, and proposal
+`date`.
 
 ## Skill metadata reference
 

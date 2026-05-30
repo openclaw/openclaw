@@ -655,6 +655,19 @@ export const SkillsProposalUpdateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SkillsProposalReviseParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    proposalId: NonEmptyString,
+    content: SkillProposalContentString,
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
+    description: Type.Optional(NonEmptyString),
+    goal: Type.Optional(Type.String()),
+    evidence: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsProposalActionParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),

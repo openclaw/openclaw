@@ -193,6 +193,7 @@ export type SkillsProposalInspectParams = SchemaType<"SkillsProposalInspectParam
 export type SkillsProposalInspectResult = SchemaType<"SkillsProposalInspectResult">;
 export type SkillsProposalCreateParams = SchemaType<"SkillsProposalCreateParams">;
 export type SkillsProposalUpdateParams = SchemaType<"SkillsProposalUpdateParams">;
+export type SkillsProposalReviseParams = SchemaType<"SkillsProposalReviseParams">;
 export type SkillsProposalActionParams = SchemaType<"SkillsProposalActionParams">;
 export type SkillsProposalApplyResult = SchemaType<"SkillsProposalApplyResult">;
 export type SkillsProposalRecordResult = SchemaType<"SkillsProposalRecordResult">;

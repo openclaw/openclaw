@@ -437,6 +437,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.proposals.inspect",
       "skills.proposals.create",
       "skills.proposals.update",
+      "skills.proposals.revise",
       "skills.proposals.apply",
       "skills.proposals.reject",
       "skills.proposals.quarantine",

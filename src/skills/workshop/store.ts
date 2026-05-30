@@ -233,6 +233,39 @@ export async function writeSkillProposal(params: {
   await refreshSkillProposalManifest(params.store);
 }
 
+export async function replaceSkillProposalDraft(params: {
+  record: SkillProposalRecord;
+  previousSupportFiles?: readonly SkillProposalSupportFile[];
+  content: string;
+  supportFiles?: readonly PreparedSkillProposalSupportFile[];
+  store?: SkillWorkshopStoreOptions;
+}): Promise<void> {
+  assertProposalId(params.record.id);
+  const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
+  const relativeDir = proposalRelativeDir(params.record.id);
+  await stateRoot.write(path.join(relativeDir, PROPOSAL_DRAFT_FILE), params.content, {
+    encoding: "utf8",
+  });
+  const nextSupportPaths = new Set<string>();
+  for (const file of params.supportFiles ?? []) {
+    nextSupportPaths.add(file.path);
+    await stateRoot.write(path.join(relativeDir, file.path), file.content, {
+      encoding: "utf8",
+      mkdir: true,
+    });
+  }
+  await stateRoot.writeJson(path.join(relativeDir, PROPOSAL_RECORD_FILE), params.record, {
+    trailingNewline: true,
+  });
+  for (const file of params.previousSupportFiles ?? []) {
+    const filePath = normalizeSkillProposalSupportPath(file.path);
+    if (!nextSupportPaths.has(filePath)) {
+      await stateRoot.remove(path.join(relativeDir, filePath)).catch(() => undefined);
+    }
+  }
+  await refreshSkillProposalManifest(params.store);
+}
+
 export async function updateSkillProposalRecord(params: {
   record: SkillProposalRecord;
   store?: SkillWorkshopStoreOptions;

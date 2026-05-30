@@ -119,13 +119,26 @@ describe("skills proposal gateway handlers", () => {
     expect(inspect.ok).toBe(true);
     expect((inspect.response as { content: string }).content).toContain("status: proposal");
 
+    const revise = await callHandler("skills.proposals.revise", {
+      proposalId: created.record.id,
+      description: "Plan with current weather",
+      content: "# Weather Planner\n\nUse current weather and alerts.\n",
+    });
+    expect(revise.ok).toBe(true);
+    expect(
+      (revise.response as { record: { id: string; proposedVersion: string } }).record,
+    ).toMatchObject({
+      id: created.record.id,
+      proposedVersion: "v2",
+    });
+
     const apply = await callHandler("skills.proposals.apply", {
       proposalId: created.record.id,
     });
     expect(apply.ok).toBe(true);
     await expect(
       fs.readFile(path.join(mocks.workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
-    ).resolves.toContain("# Weather Planner");
+    ).resolves.toContain("Use current weather and alerts.");
     await expect(
       fs.readFile(
         path.join(mocks.workspaceDir, "skills", "weather-planner", "references", "weather.md"),

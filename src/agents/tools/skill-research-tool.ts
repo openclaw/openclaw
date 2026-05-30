@@ -1,6 +1,10 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { proposeCreateSkill, proposeUpdateSkill } from "../../skills/workshop/service.js";
+import {
+  proposeCreateSkill,
+  proposeUpdateSkill,
+  reviseSkillProposal,
+} from "../../skills/workshop/service.js";
 import type {
   SkillProposalReadResult,
   SkillProposalSupportFileInput,
@@ -13,16 +17,20 @@ import {
   type AnyAgentTool,
 } from "./common.js";
 
-const SKILL_RESEARCH_ACTIONS = ["create", "update"] as const;
+const SKILL_RESEARCH_ACTIONS = ["create", "update", "revise"] as const;
 
 const SkillResearchToolSchema = Type.Object(
   {
     action: stringEnum(SKILL_RESEARCH_ACTIONS, {
-      description: "create for a new skill proposal, update for an existing skill proposal.",
+      description:
+        "create for a new skill proposal, update for an existing skill, revise for a pending proposal.",
     }),
+    proposal_id: Type.Optional(
+      Type.String({ description: "Existing pending proposal id for action=revise." }),
+    ),
     name: Type.Optional(Type.String({ description: "New skill name for action=create." })),
     description: Type.Optional(
-      Type.String({ description: "New skill description for action=create." }),
+      Type.String({ description: "Skill description for action=create or action=revise." }),
     ),
     skill_name: Type.Optional(
       Type.String({ description: "Existing skill name or key for action=update." }),
@@ -100,6 +108,19 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
           content: proposalContent,
           supportFiles,
           createdBy: "skill-research",
+          goal,
+          evidence,
+        });
+      } else if (action === "revise") {
+        proposal = await reviseSkillProposal({
+          workspaceDir: options.workspaceDir,
+          proposalId: readStringParam(params, "proposal_id", {
+            required: true,
+            label: "proposal_id",
+          }),
+          content: proposalContent,
+          supportFiles,
+          description: readStringParam(params, "description"),
           goal,
           evidence,
         });

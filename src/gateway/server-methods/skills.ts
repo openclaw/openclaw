@@ -7,6 +7,7 @@ import {
   validateSkillsProposalActionParams,
   validateSkillsProposalCreateParams,
   validateSkillsProposalInspectParams,
+  validateSkillsProposalReviseParams,
   validateSkillsProposalsListParams,
   validateSkillsProposalUpdateParams,
   validateSkillsSearchParams,
@@ -52,6 +53,7 @@ import {
   proposeUpdateSkill,
   quarantineSkillProposal,
   rejectSkillProposal,
+  reviseSkillProposal,
 } from "../../skills/workshop/service.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -344,6 +346,38 @@ export const skillsHandlers: GatewayRequestHandlers = {
           content: params.content,
           supportFiles: params.supportFiles,
           createdBy: "gateway",
+          goal: params.goal,
+          evidence: params.evidence,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.revise": async ({ params, respond, context }) => {
+    if (!validateSkillsProposalReviseParams(params)) {
+      respondInvalidParams(
+        respond,
+        "skills.proposals.revise",
+        validateSkillsProposalReviseParams.errors,
+      );
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await reviseSkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          proposalId: params.proposalId,
+          content: params.content,
+          supportFiles: params.supportFiles,
+          description: params.description,
           goal: params.goal,
           evidence: params.evidence,
         }),

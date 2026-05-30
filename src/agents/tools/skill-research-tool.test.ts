@@ -85,5 +85,38 @@ describe("skill_research tool", () => {
     await expect(
       fs.access(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md")),
     ).rejects.toThrow();
+
+    const revised = await tool.execute("call-2", {
+      action: "revise",
+      proposal_id: (result.details as { id: string }).id,
+      proposal_content: "# Weather Planner\n\nCheck weather, alerts, and timing.\n",
+      support_files: [
+        {
+          path: "references/weather.md",
+          content: "Use weather API details and current alerts.\n",
+        },
+      ],
+      evidence: "User asked for more precise planning.",
+    });
+
+    expect(revised.details).toMatchObject({
+      id: (result.details as { id: string }).id,
+      status: "pending",
+      kind: "create",
+      skillKey: "weather-planner",
+      supportFileCount: 1,
+    });
+    await expect(
+      fs.readFile(
+        path.join(
+          stateDir,
+          "skill-workshop",
+          "proposals",
+          (result.details as { id: string }).id,
+          "PROPOSAL.md",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain('version: "v2"');
   });
 });

@@ -13,6 +13,7 @@ import {
   proposeUpdateSkill,
   quarantineSkillProposal,
   rejectSkillProposal,
+  reviseSkillProposal,
 } from "./service.js";
 import { readSkillProposalManifest, resolveProposalDraftPath } from "./store.js";
 
@@ -69,7 +70,7 @@ describe("skill workshop proposals", () => {
     );
     await expect(
       fs.readFile(resolveProposalDraftPath(proposal.record.id), "utf8"),
-    ).resolves.toContain("status: proposal");
+    ).resolves.toContain("date: ");
 
     const listed = await listSkillProposals();
     expect(listed.proposals).toHaveLength(1);
@@ -108,6 +109,72 @@ describe("skill workshop proposals", () => {
       filePath: applied.targetSkillFile,
     });
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
+  });
+
+  it("revises pending proposals in place before approval", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Draftable Skill",
+      description: "Original proposal",
+      content: "# Draftable\n\nOriginal body.\n",
+      supportFiles: [
+        {
+          path: "references/original.md",
+          content: "Original support file.\n",
+        },
+      ],
+      goal: "Original goal",
+      evidence: "Original evidence",
+    });
+
+    const revised = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      description: "Revised proposal",
+      content: "# Draftable\n\nRevised body.\n",
+      evidence: "",
+    });
+
+    expect(revised.record.id).toBe(proposal.record.id);
+    expect(revised.record.proposedVersion).toBe("v2");
+    expect(revised.record.description).toBe("Revised proposal");
+    expect(revised.record.goal).toBe("Original goal");
+    expect(revised.record.evidence).toBeUndefined();
+    expect(revised.record.supportFiles?.map((file) => file.path)).toEqual([
+      "references/original.md",
+    ]);
+    expect(revised.content).toContain('version: "v2"');
+    expect(revised.content).toContain("date: ");
+
+    const removedSupport = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      content: "# Draftable\n\nFinal body.\n",
+      supportFiles: [],
+    });
+
+    expect(removedSupport.record.proposedVersion).toBe("v3");
+    expect(removedSupport.record.supportFiles).toBeUndefined();
+    await expect(
+      fs.access(
+        path.join(
+          stateDir,
+          "skill-workshop",
+          "proposals",
+          proposal.record.id,
+          "references",
+          "original.md",
+        ),
+      ),
+    ).rejects.toThrow();
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "draftable-skill", "SKILL.md"), "utf8"),
+    ).resolves.toBe(
+      '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nFinal body.\n',
+    );
   });
 
   it("updates only writable workspace skills and marks stale proposals when the target changes", async () => {

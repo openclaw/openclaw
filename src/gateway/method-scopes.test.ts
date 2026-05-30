@@ -403,6 +403,7 @@ describe("core gateway method classification", () => {
     for (const method of [
       "skills.proposals.create",
       "skills.proposals.update",
+      "skills.proposals.revise",
       "skills.proposals.apply",
       "skills.proposals.reject",
       "skills.proposals.quarantine",

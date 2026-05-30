@@ -139,9 +139,9 @@ The default state directory is `~/.openclaw`.
 
 `proposal.json` is the canonical proposal record. `proposals.json` is the fast
 listing manifest and can be rebuilt from proposal folders when missing or stale.
-`PROPOSAL.md` marks draft content explicitly with `status: proposal` and
-`version: v1`; those proposal-only fields are stripped when the proposal is
-applied as an active `SKILL.md`.
+`PROPOSAL.md` marks draft content explicitly with `status: proposal`,
+`version: v1`, and `date`; those proposal-only fields are stripped when the
+proposal is applied as an active `SKILL.md`.
 
 Proposal folders can also carry support files under `assets/`, `examples/`,
 `references/`, `scripts/`, or `templates/`. OpenClaw records support file
@@ -149,25 +149,29 @@ metadata in `proposal.json`, stores the file contents beside `PROPOSAL.md`,
 scans them with the proposal, and verifies their hashes before apply. Approved
 support files are written into the active skill directory beside `SKILL.md`.
 
-Only pending proposals can be applied. Apply writes to the selected workspace
-`skills/` root, runs the skill scanner, writes rollback metadata, refuses to
-overwrite an existing create target, and marks update proposals stale when the
-target skill changed since proposal creation. Reject and quarantine update only
-proposal metadata; they do not touch active skills.
+Only pending proposals can be revised or applied. Revision keeps the same
+proposal id, increments the proposal version, refreshes the proposal date,
+reruns scanner metadata, and preserves existing support files unless a new
+support-file list is supplied. Apply writes to the selected workspace `skills/`
+root, runs the skill scanner, writes rollback metadata, refuses to overwrite an
+existing create target, and marks update proposals stale when the target skill
+changed since proposal creation. Reject and quarantine update only proposal
+metadata; they do not touch active skills.
 
 Use the CLI for operator review:
 
 ```bash
 openclaw skills workshop list
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
 openclaw skills workshop apply <proposal-id>
 openclaw skills workshop reject <proposal-id>
 openclaw skills workshop quarantine <proposal-id>
 ```
 
 Agents can draft proposals through the `skill_research` tool when they identify
-work worth reusing. The tool creates pending proposals only; it cannot apply or
-delete skills.
+work worth reusing and can revise pending proposals during review. The tool
+creates or revises pending proposals only; it cannot apply or delete skills.
 
 ## ClawHub (install and sync)
 

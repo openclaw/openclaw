@@ -57,6 +57,7 @@ openclaw skills workshop propose-create --name "qa-check" --description "QA chec
 openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
 openclaw skills workshop list
 openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
 openclaw skills workshop apply <proposal-id>
 openclaw skills workshop reject <proposal-id> --reason "Not reusable"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
@@ -154,6 +155,12 @@ Update an existing workspace skill through the same pending path:
 openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
 ```
 
+Revise a pending proposal before approval:
+
+```bash
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+```
+
 The supplied draft is stored as `PROPOSAL.md` with proposal-only frontmatter:
 
 ```markdown
@@ -162,13 +169,14 @@ name: qa-check
 description: Repeatable QA checklist
 status: proposal
 version: v1
+date: "2026-05-30T00:00:00.000Z"
 ---
 ```
 
 Applying a proposal writes the active `SKILL.md` into the workspace `skills/`
-root, strips `status` and proposal `version` from the frontmatter, scans the
-draft, writes rollback metadata, and refuses stale updates when the target skill
-changed after the proposal was created.
+root, strips `status`, proposal `version`, and proposal `date` from the
+frontmatter, scans the draft, writes rollback metadata, and refuses stale
+updates when the target skill changed after the proposal was created.
 
 When `--proposal-dir` is used, the directory must contain `PROPOSAL.md`.
 Support files can be included under `assets/`, `examples/`, `references/`,
@@ -176,9 +184,9 @@ Support files can be included under `assets/`, `examples/`, `references/`,
 scans them, verifies their hashes before apply, and writes them beside the
 active `SKILL.md` only after the proposal is applied.
 
-Agents can create pending proposals through the `skill_research` tool when they
-identify reusable work, but applying, rejecting, or quarantining remains an
-explicit operator action through the CLI or Gateway.
+Agents can create or revise pending proposals through the `skill_research` tool
+when they identify reusable work, but applying, rejecting, or quarantining
+remains an explicit operator action through the CLI or Gateway.
 
 ## Related
 

@@ -27,6 +27,7 @@ import {
   readSkillProposalManifest,
   readWorkspaceSupportFile,
   readWorkspaceSkillFile,
+  replaceSkillProposalDraft,
   refreshSkillProposalManifest,
   resolveSkillProposalTarget,
   updateSkillProposalRecord,
@@ -44,6 +45,7 @@ import {
   type SkillProposalManifest,
   type SkillProposalReadResult,
   type SkillProposalRecord,
+  type SkillProposalReviseInput,
   type SkillProposalScan,
   type SkillProposalSupportFileInput,
   type SkillProposalUpdateInput,
@@ -134,12 +136,13 @@ export async function proposeCreateSkill(
   }
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
+  const now = new Date().toISOString();
   const proposalContent = renderProposalMarkdown({
     name: target.skillKey,
     description,
     content: input.content,
+    date: now,
   });
-  const now = new Date().toISOString();
   const id = createSkillProposalId(name);
   const goal = normalizeOptionalString(input.goal);
   const evidence = normalizeOptionalString(input.evidence);
@@ -191,12 +194,13 @@ export async function proposeUpdateSkill(
   }
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
+  const now = new Date().toISOString();
   const proposalContent = renderProposalMarkdown({
     name: targetSkill.skillKey,
     description: targetSkill.description,
     content: input.content,
+    date: now,
   });
-  const now = new Date().toISOString();
   const id = createSkillProposalId(targetSkill.skillKey || targetSkill.name);
   const goal = normalizeOptionalString(input.goal);
   const evidence = normalizeOptionalString(input.evidence);
@@ -228,6 +232,92 @@ export async function proposeUpdateSkill(
   };
   await writeSkillProposal({ record, content: proposalContent, supportFiles });
   return { record, content: proposalContent };
+}
+
+export async function reviseSkillProposal(
+  input: SkillProposalReviseInput,
+): Promise<SkillProposalReadResult> {
+  const read = await readRequiredProposal(input.proposalId);
+  const { record } = read;
+  if (record.status !== "pending") {
+    throw new Error(`Only pending proposals can be revised. Current status: ${record.status}.`);
+  }
+  assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
+  assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+
+  if (record.kind === "create") {
+    const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
+    if (currentContent !== null) {
+      await markProposalStale(record, "Target skill was created after proposal creation.");
+      throw new Error("Target skill was created after proposal creation; proposal marked stale.");
+    }
+  } else {
+    const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
+    if (currentContent === null) {
+      throw new Error(`Target skill is missing: ${record.target.skillFile}`);
+    }
+    if (
+      record.target.currentContentHash &&
+      hashSkillProposalContent(currentContent) !== record.target.currentContentHash
+    ) {
+      await markProposalStale(record, "Target skill changed after proposal creation.");
+      throw new Error("Target skill changed after proposal creation; proposal marked stale.");
+    }
+  }
+
+  const supportFiles =
+    input.supportFiles === undefined
+      ? await readProposalSupportFiles(record)
+      : prepareSkillProposalSupportFiles(input.supportFiles);
+  const nextVersion = nextProposalVersion(record.proposedVersion);
+  const description = normalizeOptionalString(input.description) ?? record.description;
+  const now = new Date().toISOString();
+  const proposalContent = renderProposalMarkdown({
+    name: record.target.skillKey,
+    description,
+    content: input.content,
+    version: nextVersion,
+    date: now,
+  });
+  const goal =
+    input.goal === undefined
+      ? normalizeOptionalString(record.goal)
+      : normalizeOptionalString(input.goal);
+  const evidence =
+    input.evidence === undefined
+      ? normalizeOptionalString(record.evidence)
+      : normalizeOptionalString(input.evidence);
+  const previousSupportFiles = record.supportFiles;
+  const revised: SkillProposalRecord = {
+    ...record,
+    description,
+    updatedAt: now,
+    proposedVersion: nextVersion,
+    draftHash: hashSkillProposalContent(proposalContent),
+    scan: scanProposalBundle(proposalContent, supportFiles),
+  };
+  if (supportFiles.length > 0) {
+    revised.supportFiles = supportFileMetadata(supportFiles);
+  } else {
+    delete revised.supportFiles;
+  }
+  if (goal) {
+    revised.goal = goal;
+  } else {
+    delete revised.goal;
+  }
+  if (evidence) {
+    revised.evidence = evidence;
+  } else {
+    delete revised.evidence;
+  }
+  await replaceSkillProposalDraft({
+    record: revised,
+    previousSupportFiles,
+    content: proposalContent,
+    supportFiles,
+  });
+  return { record: revised, content: proposalContent };
 }
 
 export async function rejectSkillProposal(
@@ -406,6 +496,15 @@ function supportFileMetadata(files: readonly PreparedSkillProposalSupportFile[])
   }));
 }
 
+function nextProposalVersion(version: string): string {
+  const match = /^v(\d+)$/.exec(version.trim());
+  if (!match) {
+    return "v2";
+  }
+  const current = Number.parseInt(match[1] ?? "1", 10);
+  return `v${Number.isSafeInteger(current) && current > 0 ? current + 1 : 2}`;
+}
+
 async function markProposal(
   input: SkillProposalActionInput,
   status: "rejected",
@@ -429,6 +528,17 @@ async function readRequiredProposal(proposalId: string): Promise<SkillProposalRe
     throw new Error(`Skill proposal not found: ${proposalId}`);
   }
   return read;
+}
+
+async function markProposalStale(record: SkillProposalRecord, reason: string): Promise<void> {
+  const stale = {
+    ...record,
+    status: "stale" as const,
+    updatedAt: new Date().toISOString(),
+    staleAt: new Date().toISOString(),
+    statusReason: reason,
+  };
+  await updateSkillProposalRecord({ record: stale });
 }
 
 function assertWritableSkillTarget(workspaceDir: string, skill: SkillStatusEntry): void {

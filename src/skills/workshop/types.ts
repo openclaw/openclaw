@@ -120,6 +120,16 @@ export type SkillProposalUpdateInput = {
   evidence?: string;
 };
 
+export type SkillProposalReviseInput = {
+  workspaceDir: string;
+  proposalId: string;
+  content: string;
+  supportFiles?: SkillProposalSupportFileInput[];
+  description?: string;
+  goal?: string;
+  evidence?: string;
+};
+
 export type SkillProposalActionInput = {
   workspaceDir: string;
   proposalId: string;

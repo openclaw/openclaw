@@ -14,10 +14,12 @@ export function renderProposalMarkdown(params: {
   description: string;
   content: string;
   version?: string;
+  date?: string;
 }): string {
   const body = stripFrontmatterBlock(params.content).trimStart();
   const version = params.version ?? "v1";
-  return `---\nname: ${yamlScalar(params.name)}\ndescription: ${yamlScalar(params.description)}\nstatus: proposal\nversion: ${yamlScalar(version)}\n---\n\n${body}`;
+  const date = params.date ?? new Date().toISOString();
+  return `---\nname: ${yamlScalar(params.name)}\ndescription: ${yamlScalar(params.description)}\nstatus: proposal\nversion: ${yamlScalar(version)}\ndate: ${yamlScalar(date)}\n---\n\n${body}`;
 }
 
 export function readProposalFrontmatter(content: string): ProposalFrontmatter | null {
@@ -48,7 +50,7 @@ export function stripProposalFrontmatterForSkill(content: string): string {
     .split("\n")
     .filter((line) => {
       const key = line.match(/^([\w-]+):/)?.[1]?.toLowerCase();
-      return key !== "status" && key !== "version";
+      return key !== "status" && key !== "version" && key !== "date";
     })
     .join("\n")
     .trim();
