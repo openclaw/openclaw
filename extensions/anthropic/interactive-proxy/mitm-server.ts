@@ -42,6 +42,15 @@ export function isAllowedConnectHost(host: string): boolean {
   return normalized === UPSTREAM_HOST || normalized.endsWith(".anthropic.com");
 }
 
+// Whether a CONNECT host is the Anthropic API host we MITM (vs an allowed
+// pass-through tunnel). Normalizes the host the same way isAllowedConnectHost
+// does, so a mixed-case host like "API.Anthropic.Com" is still routed through
+// the MITM path (and its SSE events captured) instead of being treated as a raw
+// pass-through tunnel — which would silently stop the backend from streaming.
+export function isApiConnectHost(host: string): boolean {
+  return host.trim().toLowerCase() === UPSTREAM_HOST;
+}
+
 export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle> {
   const eventHandlers: Array<(evt: Record<string, unknown>) => void> = [];
   // Monotonic per-request identifier. claude-code can hold multiple
@@ -331,7 +340,7 @@ export async function startMitmProxy(certs: CertPaths): Promise<MitmProxyHandle>
         return;
       }
 
-      const isApiHost = host === UPSTREAM_HOST;
+      const isApiHost = isApiConnectHost(host);
       const destHost = isApiHost ? "127.0.0.1" : host;
       const destPort = isApiHost ? tlsPort : targetPort;
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isAllowedConnectHost } from "./mitm-server.js";
+import { isAllowedConnectHost, isApiConnectHost } from "./mitm-server.js";
 
 describe("isAllowedConnectHost", () => {
   it("allows the MITM upstream host", () => {
@@ -30,5 +30,27 @@ describe("isAllowedConnectHost", () => {
     expect(isAllowedConnectHost("notanthropic.com")).toBe(false);
     // bare apex (no subdomain) is not a host claude connects to → refused
     expect(isAllowedConnectHost("anthropic.com")).toBe(false);
+  });
+});
+
+describe("isApiConnectHost", () => {
+  it("matches the API host so it routes through the MITM path", () => {
+    expect(isApiConnectHost("api.anthropic.com")).toBe(true);
+  });
+
+  // Regression: a mixed-case API host passes the (normalized) allowlist, so the
+  // routing decision must ALSO normalize — otherwise the tunnel is treated as
+  // pass-through and the backend silently stops capturing SSE events.
+  it("normalizes case and whitespace (mixed-case API host still MITM'd)", () => {
+    expect(isApiConnectHost("API.Anthropic.Com")).toBe(true);
+    expect(isApiConnectHost("  api.anthropic.com  ")).toBe(true);
+    expect(isApiConnectHost("API.ANTHROPIC.COM:443".split(":")[0] ?? "")).toBe(true);
+  });
+
+  it("does NOT match allowed pass-through subdomains (only the API host is MITM'd)", () => {
+    expect(isApiConnectHost("statsig.anthropic.com")).toBe(false);
+    expect(isApiConnectHost("console.anthropic.com")).toBe(false);
+    expect(isApiConnectHost("example.com")).toBe(false);
+    expect(isApiConnectHost("")).toBe(false);
   });
 });
