@@ -118,7 +118,7 @@ export async function proposeUpdateSkill(
   input: SkillProposalUpdateInput & SkillWorkshopWorkspaceOptions,
 ): Promise<SkillProposalReadResult> {
   const skillName = normalizeRequired(input.skillName, "Skill name");
-  const status = await buildWorkspaceSkillStatus(input.workspaceDir, {
+  const status = buildWorkspaceSkillStatus(input.workspaceDir, {
     config: input.config,
     agentId: input.agentId,
   });

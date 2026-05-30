@@ -47,7 +47,7 @@ describe("skill_research tool", () => {
           ".openclaw",
           "skill-workshop",
           "proposals",
-          String((result.details as { id: string }).id),
+          (result.details as { id: string }).id,
           "PROPOSAL.md",
         ),
         "utf8",
