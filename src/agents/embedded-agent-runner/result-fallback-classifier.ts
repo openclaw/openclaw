@@ -1,9 +1,5 @@
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
-import {
-  isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
-  isBillingErrorMessage,
-} from "../embedded-agent-helpers/failover-matches.js";
+import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { isGpt5ModelId } from "../gpt5-prompt-overlay.js";
 import type { ModelFallbackResultClassification } from "../model-fallback.js";
@@ -63,20 +59,20 @@ function classifyHarnessResult(params: {
 
 function classifyBusinessDenialErrorPayloadReason(
   errorText: string,
+  provider: string,
 ): Extract<FailoverReason, "auth" | "auth_permanent" | "billing"> | null {
   if (!errorText.trim()) {
     return null;
   }
-  if (isBillingErrorMessage(errorText)) {
-    return "billing";
+  const failoverReason = classifyFailoverReason(errorText, { provider });
+  switch (failoverReason) {
+    case "auth":
+    case "auth_permanent":
+    case "billing":
+      return failoverReason;
+    default:
+      return null;
   }
-  if (isAuthPermanentErrorMessage(errorText)) {
-    return "auth_permanent";
-  }
-  if (isAuthErrorMessage(errorText)) {
-    return "auth";
-  }
-  return null;
 }
 
 export function classifyEmbeddedAgentRunResultForModelFallback(params: {
@@ -128,7 +124,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       code: "incomplete_result",
     };
   }
-  const failoverReason = classifyBusinessDenialErrorPayloadReason(errorText);
+  const failoverReason = classifyBusinessDenialErrorPayloadReason(errorText, params.provider);
   if (failoverReason) {
     return {
       message: `${params.provider}/${params.model} ended with a provider error: ${errorText}`,
