@@ -1,5 +1,6 @@
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 let clearDiscordComponentEntries: typeof import("./components-registry.js").clearDiscordComponentEntries;
 let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
@@ -496,49 +497,62 @@ describe("discord component registry", () => {
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
 
-    const spec = readDiscordComponentSpec({
-      blocks: [
-        {
-          type: "actions",
-          buttons: [{ label: "Approve", callbackData: "approve" }],
-        },
-      ],
-      modal: {
+    const componentEntry = Object.assign(
+      {
+        id: "btn_undefined",
+        kind: "button",
+        label: "Approve",
+        callbackData: "approve",
+      } satisfies DiscordComponentEntry,
+      { modalId: undefined, sessionKey: undefined },
+    );
+    const modalEntry = Object.assign(
+      {
+        id: "mdl_undefined",
         title: "Details",
-        fields: [{ type: "text", label: "Reason" }],
-      },
-    });
-    if (!spec) {
-      throw new Error("Expected component spec to be parsed");
-    }
+        fields: [
+          Object.assign(
+            {
+              id: "fld_undefined",
+              name: "reason",
+              label: "Reason",
+              type: "text",
+            } satisfies DiscordModalEntry["fields"][number],
+            { description: undefined, placeholder: undefined },
+          ),
+        ],
+      } satisfies DiscordModalEntry,
+      { sessionKey: undefined },
+    );
 
-    const built = buildDiscordComponentMessage({ spec });
     registerDiscordComponentEntries({
-      entries: built.entries,
-      modals: built.modals,
+      entries: [componentEntry],
+      modals: [modalEntry],
       ttlMs: 1000,
     });
 
-    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
     expect(modalRegister).toHaveBeenCalledTimes(1);
 
-    const componentPayloads = componentRegister.mock.calls.map(
-      (call) => call[1] as { entry: Record<string, unknown> },
-    );
-    const ordinaryButton = componentPayloads.find((payload) => payload.entry.kind === "button");
-    const modalTrigger = componentPayloads.find(
-      (payload) => payload.entry.kind === "modal-trigger",
-    );
-    expect(ordinaryButton?.entry.callbackData).toBe("approve");
-    expect(ordinaryButton?.entry).not.toHaveProperty("modalId");
-    expect(ordinaryButton?.entry).not.toHaveProperty("sessionKey");
-    expect(modalTrigger?.entry.modalId).toEqual(expect.any(String));
+    const persistedComponent = componentRegister.mock.calls[0]?.[1] as
+      | { entry: Record<string, unknown> }
+      | undefined;
+    expect(persistedComponent?.entry.callbackData).toBe("approve");
+    expect(persistedComponent?.entry).not.toHaveProperty("modalId");
+    expect(persistedComponent?.entry).not.toHaveProperty("sessionKey");
+    expect(persistedComponent?.entry).not.toHaveProperty("messageId");
 
     const modalPayload = modalRegister.mock.calls[0]?.[1] as
       | { entry: { fields?: Array<Record<string, unknown>> } }
       | undefined;
     expect(modalPayload?.entry.fields?.[0]).not.toHaveProperty("description");
     expect(modalPayload?.entry.fields?.[0]).not.toHaveProperty("placeholder");
+    expect(modalPayload?.entry).not.toHaveProperty("sessionKey");
+    expect(modalPayload?.entry).not.toHaveProperty("messageId");
+
+    const inMemoryComponent = resolveDiscordComponentEntry({ id: "btn_undefined", consume: false });
+    expect(inMemoryComponent).toHaveProperty("modalId", undefined);
+    expect(inMemoryComponent).toHaveProperty("sessionKey", undefined);
   });
 
   it("deletes sibling persistent component entries when a group entry is consumed", async () => {
