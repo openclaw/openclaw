@@ -202,6 +202,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       const evidence = readStringParam(params, "evidence");
 
       let proposal: SkillProposalReadResult;
+      let contentText: string;
       if (action === "create") {
         proposal = await proposeCreateSkill({
           workspaceDir: options.workspaceDir,
@@ -214,6 +215,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           goal,
           evidence,
         });
+        contentText = proposalMutationText("Created skill proposal", proposal.record);
       } else if (action === "update") {
         proposal = await proposeUpdateSkill({
           workspaceDir: options.workspaceDir,
@@ -229,6 +231,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           goal,
           evidence,
         });
+        contentText = proposalMutationText("Created skill update proposal", proposal.record);
       } else if (action === "revise") {
         const pendingProposal = await resolvePendingSkillProposal({
           proposalId: readStringParam(params, "proposal_id", {
@@ -247,13 +250,18 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           goal,
           evidence,
         });
+        contentText = proposalMutationText("Revised skill proposal", proposal.record);
       } else {
         throw new ToolInputError(`action must be one of ${SKILL_WORKSHOP_ACTIONS.join(", ")}`);
       }
 
-      return proposalResult(proposal);
+      return proposalResult(proposal, { contentText });
     },
   };
+}
+
+function proposalMutationText(action: string, record: SkillProposalRecord): string {
+  return `${action} ${record.id} (${record.status}) for ${record.target.skillKey}.`;
 }
 
 function actionResult(

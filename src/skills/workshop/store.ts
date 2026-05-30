@@ -25,6 +25,7 @@ const WORKSHOP_REL_DIR = "skill-workshop";
 const PROPOSALS_REL_DIR = path.join(WORKSHOP_REL_DIR, "proposals");
 const TARGET_LOCKS_REL_DIR = path.join(WORKSHOP_REL_DIR, "locks");
 const MANIFEST_REL_PATH = path.join(WORKSHOP_REL_DIR, "proposals.json");
+const MANIFEST_LOCK_REL_PATH = path.join(TARGET_LOCKS_REL_DIR, "proposals-manifest");
 const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
@@ -40,7 +41,7 @@ const ALLOWED_SUPPORT_FILE_ROOTS = new Set([
   "templates",
 ]);
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
-const SKILL_WORKSHOP_TARGET_LOCK_OPTIONS: FileLockOptions = {
+const SKILL_WORKSHOP_LOCK_OPTIONS: FileLockOptions = {
   retries: {
     retries: 8,
     factor: 1.35,
@@ -332,7 +333,7 @@ export async function withSkillProposalTargetLock<T>(
     `${hashSkillProposalContent(record.target.skillFile)}.target`,
   );
   await fs.mkdir(path.dirname(lockFile), { recursive: true });
-  return await withFileLock(lockFile, SKILL_WORKSHOP_TARGET_LOCK_OPTIONS, fn);
+  return await withFileLock(lockFile, SKILL_WORKSHOP_LOCK_OPTIONS, fn);
 }
 
 export async function writeSkillProposalRollback(params: {
@@ -362,6 +363,14 @@ export async function readSkillProposalManifest(
 export async function refreshSkillProposalManifest(
   options: SkillWorkshopStoreOptions = {},
 ): Promise<SkillProposalManifest> {
+  return await withSkillProposalManifestLock(options, async () => {
+    return await refreshSkillProposalManifestUnlocked(options);
+  });
+}
+
+async function refreshSkillProposalManifestUnlocked(
+  options: SkillWorkshopStoreOptions = {},
+): Promise<SkillProposalManifest> {
   const stateRoot = await root(resolveSkillWorkshopStateDir(options));
   await stateRoot.mkdir(PROPOSALS_REL_DIR);
   const entries = await stateRoot.list(PROPOSALS_REL_DIR, { withFileTypes: true });
@@ -388,6 +397,15 @@ export async function refreshSkillProposalManifest(
     trailingNewline: true,
   });
   return manifest;
+}
+
+async function withSkillProposalManifestLock<T>(
+  options: SkillWorkshopStoreOptions,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const lockFile = path.join(resolveSkillWorkshopStateDir(options), MANIFEST_LOCK_REL_PATH);
+  await fs.mkdir(path.dirname(lockFile), { recursive: true });
+  return await withFileLock(lockFile, SKILL_WORKSHOP_LOCK_OPTIONS, fn);
 }
 
 export async function readWorkspaceSkillFile(filePath: string): Promise<string | null> {

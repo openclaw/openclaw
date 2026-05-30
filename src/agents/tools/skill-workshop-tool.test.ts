@@ -87,6 +87,9 @@ describe("skill_workshop tool", () => {
       scanState: "clean",
       supportFileCount: 1,
     });
+    expect((result.content[0] as { text: string }).text).toBe(
+      `Created skill proposal ${(result.details as { id: string }).id} (pending) for weather-planner.`,
+    );
     await expect(
       fs.readFile(
         path.join(
@@ -136,6 +139,9 @@ describe("skill_workshop tool", () => {
       skillKey: "weather-planner",
       supportFileCount: 1,
     });
+    expect((revised.content[0] as { text: string }).text).toBe(
+      `Revised skill proposal ${(result.details as { id: string }).id} (pending) for weather-planner.`,
+    );
     await expect(
       fs.readFile(
         path.join(
@@ -203,6 +209,9 @@ describe("skill_workshop tool", () => {
       proposedVersion: "v3",
       scanState: "clean",
     });
+    expect((revisedByName.content[0] as { text: string }).text).toBe(
+      `Revised skill proposal ${(result.details as { id: string }).id} (pending) for weather-planner.`,
+    );
   });
 
   it("applies, rejects, and quarantines proposals through the workshop service", async () => {
