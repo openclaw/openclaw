@@ -68,7 +68,7 @@ export class OrCondition extends TerminationCondition {
     return [false, null];
   }
 
-  reset(): void {
+  override reset(): void {
     for (const cond of this.conditions) {
       cond.reset();
     }
@@ -94,7 +94,7 @@ export class AndCondition extends TerminationCondition {
     return [true, reasons.join(" AND ") || "all_conditions_met"];
   }
 
-  reset(): void {
+  override reset(): void {
     for (const cond of this.conditions) {
       cond.reset();
     }
@@ -131,7 +131,7 @@ export class TimeLimit extends TerminationCondition {
       : [false, null];
   }
 
-  reset(): void {
+  override reset(): void {
     this.startedAt = null;
   }
 }
