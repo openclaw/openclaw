@@ -104,6 +104,13 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     chatRunId: null,
     chatSideResult: null,
     chatSideResultTerminalRuns: new Set(),
+    chatSessionPickerOpen: false,
+    chatSessionPickerSurface: null,
+    chatSessionPickerQuery: "",
+    chatSessionPickerAppliedQuery: "",
+    chatSessionPickerLoading: false,
+    chatSessionPickerError: null,
+    chatSessionPickerResult: null,
     compactionStatus: null,
     fallbackStatus: null,
     chatAvatarUrl: null,
@@ -135,6 +142,8 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     sidebarError: null,
     splitRatio: 0.6,
     scrollToBottom: vi.fn(),
+    resetChatInputHistoryNavigation: vi.fn(),
+    resetChatScroll: vi.fn(),
     presenceEntries: [],
     sessionsResult: null,
     cronStatus: null,
@@ -241,6 +250,59 @@ describe("renderApp assistant avatar routing", () => {
 
     const shell = container.querySelector<HTMLElement>(".shell");
     expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
+  });
+
+  it("switches chat sessions from the header session picker", async () => {
+    const container = document.createElement("div");
+    const sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        { key: "main", kind: "direct", label: "Main", updatedAt: 2 },
+        { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
+      ],
+    } as NonNullable<AppViewState["sessionsResult"]>;
+    const request = vi.fn((method: string) => {
+      if (method === "sessions.list") {
+        return Promise.resolve(sessionsResult);
+      }
+      if (method === "chat.history") {
+        return Promise.resolve({ messages: [] });
+      }
+      if (method === "commands.list") {
+        return Promise.resolve({ commands: [] });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const state = createState({
+      client: { request } as unknown as AppViewState["client"],
+      tab: "chat",
+      sessionsResult,
+    });
+
+    render(renderApp(state), container);
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    await vi.waitFor(() => expect(state.chatSessionPickerResult).not.toBeNull());
+    render(renderApp(state), container);
+
+    const workOption = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ].find((button) => button.dataset.sessionKey === "agent:main:work");
+    expect(workOption).toBeInstanceOf(HTMLButtonElement);
+
+    workOption!.click();
+
+    expect(state.sessionKey).toBe("agent:main:work");
+    expect(state.applySettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastActiveSessionKey: "agent:main:work",
+        sessionKey: "agent:main:work",
+      }),
+    );
   });
 
   it("marks the logs route so the page can hand scroll ownership to the log stream", () => {
