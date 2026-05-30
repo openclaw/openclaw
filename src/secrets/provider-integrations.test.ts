@@ -430,7 +430,7 @@ describe("secret provider integration presets", () => {
   it("exposes bundled presets enabled by platform default", () => {
     const rootDir = makeTempDir();
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
-    fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
+    writeSecureFile(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n");
     fs.writeFileSync(
       path.join(rootDir, "openclaw.plugin.json"),
       JSON.stringify({
