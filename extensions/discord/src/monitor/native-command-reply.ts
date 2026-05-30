@@ -6,12 +6,19 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { chunkDiscordTextWithMode } from "../chunk.js";
+import {
+  buildDiscordComponentMessage,
+  buildDiscordComponentMessageFlags,
+  readDiscordComponentSpec,
+  type DiscordComponentMessageSpec,
+} from "../components.js";
 import type {
   ButtonInteraction,
   CommandInteraction,
   StringSelectMenuInteraction,
   TopLevelComponents,
 } from "../internal/discord.js";
+import { registerBuiltDiscordComponentMessage } from "../send.components.js";
 
 export const DISCORD_EMPTY_VISIBLE_REPLY_WARNING = "⚠️ Command produced no visible reply.";
 
@@ -42,12 +49,26 @@ export function hasRenderableReplyPayload(payload: ReplyPayload): boolean {
     return true;
   }
   const discordData = payload.channelData?.discord as
-    | { components?: TopLevelComponents[] }
+    | { components?: TopLevelComponents[] | DiscordComponentMessageSpec }
     | undefined;
   if (Array.isArray(discordData?.components) && discordData.components.length > 0) {
     return true;
   }
+  if (readDiscordInteractionComponentSpec(payload)) {
+    return true;
+  }
   return false;
+}
+
+function readDiscordInteractionComponentSpec(
+  payload: ReplyPayload,
+): DiscordComponentMessageSpec | undefined {
+  const discordData = payload.channelData?.discord as { components?: unknown } | undefined;
+  return discordData?.components &&
+    typeof discordData.components === "object" &&
+    !Array.isArray(discordData.components)
+    ? (readDiscordComponentSpec(discordData.components) ?? undefined)
+    : undefined;
 }
 
 export async function safeDiscordInteractionCall<T>(
@@ -78,12 +99,57 @@ export async function deliverDiscordInteractionReply(params: {
   const { interaction, payload, textLimit, maxLinesPerMessage, preferFollowUp, chunkMode } = params;
   const reply = resolveSendableOutboundReplyParts(payload);
   const discordData = payload.channelData?.discord as
-    | { components?: TopLevelComponents[] }
+    | { components?: TopLevelComponents[] | DiscordComponentMessageSpec }
     | undefined;
-  let firstMessageComponents =
-    Array.isArray(discordData?.components) && discordData.components.length > 0
+  const componentSpec = readDiscordInteractionComponentSpec(payload);
+  const componentBuildResult = componentSpec
+    ? buildDiscordComponentMessage({
+        spec: {
+          ...componentSpec,
+          text: componentSpec.text ?? (reply.text?.trim() ? reply.text : undefined),
+        },
+      })
+    : undefined;
+  let firstMessageComponents = componentBuildResult
+    ? componentBuildResult.components
+    : Array.isArray(discordData?.components) && discordData.components.length > 0
       ? discordData.components
       : undefined;
+  const componentFlags = componentBuildResult
+    ? buildDiscordComponentMessageFlags(componentBuildResult.components)
+    : undefined;
+  const chunkSourceText = componentBuildResult ? "" : reply.text;
+
+  let firstMessageRegistered = false;
+  const registerFirstMessageComponents = async (sendResult: unknown) => {
+    if (firstMessageRegistered || !componentBuildResult) {
+      return;
+    }
+    const messageId =
+      sendResult &&
+      typeof sendResult === "object" &&
+      typeof (sendResult as { id?: unknown }).id === "string"
+        ? (sendResult as { id: string }).id
+        : typeof interaction.fetchReply === "function"
+          ? await interaction
+              .fetchReply()
+              .then((replyResult) =>
+                replyResult &&
+                typeof replyResult === "object" &&
+                typeof (replyResult as { id?: unknown }).id === "string"
+                  ? (replyResult as { id: string }).id
+                  : undefined,
+              )
+          : undefined;
+    if (!messageId) {
+      return;
+    }
+    registerBuiltDiscordComponentMessage({
+      buildResult: componentBuildResult,
+      messageId,
+    });
+    firstMessageRegistered = true;
+  };
 
   let hasReplied = false;
   const sendMessage = async (
@@ -92,11 +158,13 @@ export async function deliverDiscordInteractionReply(params: {
     components?: TopLevelComponents[],
   ) => {
     const contentPayload = content ? { content } : {};
+    const messageComponentFlags = components ? componentFlags : undefined;
     const payload =
       files && files.length > 0
         ? {
             ...contentPayload,
             ...(components ? { components } : {}),
+            ...(messageComponentFlags ? { flags: messageComponentFlags } : {}),
             ...(params.responseEphemeral !== undefined
               ? { ephemeral: params.responseEphemeral }
               : {}),
@@ -111,18 +179,21 @@ export async function deliverDiscordInteractionReply(params: {
         : {
             ...contentPayload,
             ...(components ? { components } : {}),
+            ...(messageComponentFlags ? { flags: messageComponentFlags } : {}),
             ...(params.responseEphemeral !== undefined
               ? { ephemeral: params.responseEphemeral }
               : {}),
           };
     await safeDiscordInteractionCall("interaction send", async () => {
       if (!preferFollowUp && !hasReplied) {
-        await interaction.reply(payload);
+        const sendResult = await interaction.reply(payload);
+        await registerFirstMessageComponents(sendResult);
         hasReplied = true;
         firstMessageComponents = undefined;
         return;
       }
-      await interaction.followUp(payload);
+      const sendResult = await interaction.followUp(payload);
+      await registerFirstMessageComponents(sendResult);
       hasReplied = true;
       firstMessageComponents = undefined;
     });
@@ -141,8 +212,8 @@ export async function deliverDiscordInteractionReply(params: {
       }),
     );
     const chunks = resolveTextChunksWithFallback(
-      reply.text,
-      chunkDiscordTextWithMode(reply.text, {
+      chunkSourceText,
+      chunkDiscordTextWithMode(chunkSourceText, {
         maxChars: textLimit,
         maxLines: maxLinesPerMessage,
         chunkMode,
@@ -163,10 +234,10 @@ export async function deliverDiscordInteractionReply(params: {
     return;
   }
   let chunks =
-    reply.text || firstMessageComponents
+    chunkSourceText || firstMessageComponents
       ? resolveTextChunksWithFallback(
-          reply.text,
-          chunkDiscordTextWithMode(reply.text, {
+          chunkSourceText,
+          chunkDiscordTextWithMode(chunkSourceText, {
             maxChars: textLimit,
             maxLines: maxLinesPerMessage,
             chunkMode,

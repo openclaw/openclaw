@@ -1,0 +1,13 @@
+{
+  "id": "ask",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Ask",
+  "description": "Minimal Discord HITL question UI. Captures answers only; execution requires a separate GO.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

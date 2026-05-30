@@ -41,6 +41,7 @@ export const reservedBundledPluginSdkEntrypoints = ["codex-mcp-projection"] as c
 // until they move to generic, plugin-neutral contracts.
 export const supportedBundledFacadeSdkEntrypoints = [
   "discord",
+  "discord-interactions",
   "lmstudio",
   "lmstudio-runtime",
   "matrix",

@@ -761,6 +761,10 @@
       "types": "./dist/plugin-sdk/discord.d.ts",
       "default": "./dist/plugin-sdk/discord.js"
     },
+    "./plugin-sdk/discord-interactions": {
+      "types": "./dist/plugin-sdk/discord-interactions.d.ts",
+      "default": "./dist/plugin-sdk/discord-interactions.js"
+    },
     "./plugin-sdk/mattermost": {
       "types": "./dist/plugin-sdk/mattermost.d.ts",
       "default": "./dist/plugin-sdk/mattermost.js"

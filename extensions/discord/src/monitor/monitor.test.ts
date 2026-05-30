@@ -859,6 +859,71 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });
 
+  it("registers plugin Discord interaction component specs returned from editMessage", async () => {
+    registerDiscordComponentEntries({
+      entries: [createButtonEntry({ callbackData: "ask:ask_test" })],
+      modals: [],
+    });
+    dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+      const typedParams = params as {
+        respond: {
+          editMessage: (payload: {
+            text: string;
+            components: {
+              blocks: Array<{
+                type: "actions";
+                buttons: Array<{ label: string; callbackData: string }>;
+              }>;
+            };
+          }) => Promise<void>;
+        };
+      };
+      await typedParams.respond.editMessage({
+        text: "Next question",
+        components: {
+          blocks: [
+            {
+              type: "actions",
+              buttons: [{ label: "Answer", callbackData: "ask:ask_test_next" }],
+            },
+          ],
+        },
+      });
+      return {
+        matched: true,
+        handled: true,
+        duplicate: false,
+      };
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const update = vi.fn().mockResolvedValue({ id: "msg-2" });
+    const baseInteraction = createComponentButtonInteraction().interaction as unknown as Record<
+      string,
+      unknown
+    >;
+    const interaction = {
+      ...baseInteraction,
+      update,
+    } as unknown as ButtonInteraction;
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    const sent = update.mock.calls[0]?.[0] as {
+      components?: Array<{ serialize: () => unknown }>;
+    };
+    const serialized = sent.components?.[0]?.serialize() as {
+      components?: Array<{ components?: Array<{ custom_id?: string }> }>;
+    };
+    const buttonCustomId = serialized.components?.[1]?.components?.[0]?.custom_id;
+    const componentId = buttonCustomId?.match(/cid=([^;]+)/)?.[1];
+    expect(componentId).toBeTruthy();
+    const entry = resolveDiscordComponentEntry({ id: componentId ?? "", consume: false });
+    expect(entry?.callbackData).toBe("ask:ask_test_next");
+    expect(entry?.messageId).toBe("msg-2");
+    expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
   it("falls through to built-in Discord component routing when a plugin declines handling", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ callbackData: "codex:approve" })],

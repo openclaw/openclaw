@@ -1,11 +1,19 @@
 import { ChannelType } from "discord-api-types/v10";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
+  buildDiscordComponentMessage,
+  buildDiscordComponentMessageFlags,
+  readDiscordComponentSpec,
+} from "../components.js";
+import {
   dispatchDiscordPluginInteractiveHandler,
   type DiscordInteractiveHandlerContext,
 } from "../interactive-dispatch.js";
 import type { TopLevelComponents } from "../internal/discord.js";
-import { editDiscordComponentMessage } from "../send.components.js";
+import {
+  editDiscordComponentMessage,
+  registerBuiltDiscordComponentMessage,
+} from "../send.components.js";
 import {
   resolveDiscordInteractionId,
   type AgentComponentContext,
@@ -39,22 +47,89 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       : `user:${params.interactionCtx.userId}`;
   let responded = false;
   let acknowledged = false;
+  const resolveComponentPayload = (input: {
+    text?: string;
+    components?: DiscordInteractiveHandlerContext["respond"]["editMessage"] extends (
+      params: infer Params,
+    ) => Promise<void>
+      ? Params extends { components?: infer Components }
+        ? Components
+        : never
+      : never;
+  }) => {
+    if (input.components === undefined) {
+      return {
+        text: input.text,
+        components: undefined,
+        flags: undefined,
+        register: async (_sendResult: unknown, _fallbackMessageId?: string) => {},
+      };
+    }
+    if (Array.isArray(input.components)) {
+      return {
+        text: input.text,
+        components: input.components as TopLevelComponents[],
+        flags: undefined,
+        register: async (_sendResult: unknown, _fallbackMessageId?: string) => {},
+      };
+    }
+    const spec = readDiscordComponentSpec(input.components);
+    if (!spec) {
+      return {
+        text: input.text,
+        components: undefined,
+        flags: undefined,
+        register: async (_sendResult: unknown, _fallbackMessageId?: string) => {},
+      };
+    }
+    const buildResult = buildDiscordComponentMessage({
+      spec: {
+        ...spec,
+        text: spec.text ?? input.text,
+      },
+    });
+    return {
+      text: input.text ?? spec.text,
+      components: buildResult.components,
+      flags: buildDiscordComponentMessageFlags(buildResult.components),
+      register: async (sendResult: unknown, fallbackMessageId?: string) => {
+        const messageId =
+          sendResult &&
+          typeof sendResult === "object" &&
+          typeof (sendResult as { id?: unknown }).id === "string"
+            ? (sendResult as { id: string }).id
+            : fallbackMessageId;
+        if (!messageId) {
+          return;
+        }
+        registerBuiltDiscordComponentMessage({ buildResult, messageId });
+      },
+    };
+  };
   const updateOriginalMessage = async (input: {
     text?: string;
-    components?: TopLevelComponents[];
+    components?: Parameters<
+      DiscordInteractiveHandlerContext["respond"]["editMessage"]
+    >[0]["components"];
   }) => {
+    const componentPayload = resolveComponentPayload(input);
     const payload = {
-      ...(input.text !== undefined ? { content: input.text } : {}),
-      ...(input.components !== undefined ? { components: input.components } : {}),
+      ...(componentPayload.text !== undefined ? { content: componentPayload.text } : {}),
+      ...(componentPayload.components !== undefined
+        ? { components: componentPayload.components }
+        : {}),
+      ...(componentPayload.flags !== undefined ? { flags: componentPayload.flags } : {}),
     };
     if (acknowledged) {
-      await params.interaction.reply(payload);
+      const sendResult = await params.interaction.reply(payload);
+      await componentPayload.register(sendResult);
       return;
     }
     if (!("update" in params.interaction) || typeof params.interaction.update !== "function") {
       throw new Error("Discord interaction cannot update the source message");
     }
-    await params.interaction.update(payload);
+    const sendResult = await params.interaction.update(payload);
+    await componentPayload.register(sendResult, params.messageId ?? params.interaction.message?.id);
   };
   const respond: DiscordInteractiveHandlerContext["respond"] = {
     acknowledge: async () => {
@@ -65,19 +140,31 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       acknowledged = true;
       responded = true;
     },
-    reply: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
+    reply: async ({ text, ephemeral = true, components }) => {
+      const componentPayload = resolveComponentPayload({ text, components });
       responded = true;
-      await params.interaction.reply({
-        content: text,
+      const sendResult = await params.interaction.reply({
+        content: componentPayload.text ?? text,
         ephemeral,
+        ...(componentPayload.components !== undefined
+          ? { components: componentPayload.components }
+          : {}),
+        ...(componentPayload.flags !== undefined ? { flags: componentPayload.flags } : {}),
       });
+      await componentPayload.register(sendResult);
     },
-    followUp: async ({ text, ephemeral = true }: { text: string; ephemeral?: boolean }) => {
+    followUp: async ({ text, ephemeral = true, components }) => {
+      const componentPayload = resolveComponentPayload({ text, components });
       responded = true;
-      await params.interaction.followUp({
-        content: text,
+      const sendResult = await params.interaction.followUp({
+        content: componentPayload.text ?? text,
         ephemeral,
+        ...(componentPayload.components !== undefined
+          ? { components: componentPayload.components }
+          : {}),
+        ...(componentPayload.flags !== undefined ? { flags: componentPayload.flags } : {}),
       });
+      await componentPayload.register(sendResult);
     },
     editMessage: async (
       input: Parameters<DiscordInteractiveHandlerContext["respond"]["editMessage"]>[0],
