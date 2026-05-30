@@ -460,14 +460,16 @@ export function abortEmbeddedAgentRun(
     return true;
   }
 
-  const mode = opts?.mode;
-  if (mode === "compacting") {
+  const abortActiveEmbeddedRunHandles = (params: {
+    shouldAbort: (handle: EmbeddedAgentQueueHandle) => boolean;
+    formatDebugMessage: (sessionId: string) => string;
+  }): boolean => {
     let aborted = false;
     for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-      if (!handle.isCompacting()) {
+      if (!params.shouldAbort(handle)) {
         continue;
       }
-      diag.debug(`aborting compacting run: sessionId=${id}`);
+      diag.debug(params.formatDebugMessage(id));
       try {
         handle.abort();
         aborted = true;
@@ -475,20 +477,23 @@ export function abortEmbeddedAgentRun(
         diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
       }
     }
+    return aborted;
+  };
+
+  const mode = opts?.mode;
+  if (mode === "compacting") {
+    const aborted = abortActiveEmbeddedRunHandles({
+      shouldAbort: (handle) => handle.isCompacting(),
+      formatDebugMessage: (id) => `aborting compacting run: sessionId=${id}`,
+    });
     return abortActiveReplyRuns({ mode }) || aborted;
   }
 
   if (mode === "all") {
-    let aborted = false;
-    for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
-      diag.debug(`aborting run: sessionId=${id}`);
-      try {
-        handle.abort();
-        aborted = true;
-      } catch (err) {
-        diag.warn(`abort failed: sessionId=${id} err=${String(err)}`);
-      }
-    }
+    const aborted = abortActiveEmbeddedRunHandles({
+      shouldAbort: () => true,
+      formatDebugMessage: (id) => `aborting run: sessionId=${id}`,
+    });
     return abortActiveReplyRuns({ mode }) || aborted;
   }
 

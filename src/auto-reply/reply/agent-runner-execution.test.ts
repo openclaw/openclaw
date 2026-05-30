@@ -3158,7 +3158,7 @@ describe("runAgentTurnWithFallback", () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const failedResult = await params.run("openai-codex", "gpt-5.4");
-      expect(sessionEntry.providerOverride).toBe("openai-codex");
+      expect(sessionEntry.providerOverride).toBe("openai");
       expect(sessionEntry.modelOverride).toBe("gpt-5.4");
       const classification = await params.classifyResult?.({
         result: failedResult as { payloads?: [] },
@@ -5524,7 +5524,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai-codex. Re-auth with `openclaw models auth login --provider openai-codex`, then try again.",
+        "⚠️ Model login expired on the gateway for openai. Re-auth with `openclaw models auth login --provider openai`, then try again.",
       );
     }
   });
@@ -5579,7 +5579,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai-codex` or run `openclaw configure`.",
+        "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.",
       );
     }
   });
@@ -6125,12 +6125,12 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-5.4");
     expect(sessionEntry.modelOverrideSource).toBe("auto");
     expect(sessionEntry.authProfileOverride).toBeUndefined();
@@ -6262,7 +6262,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-5.4");
     expect(sessionEntry.modelOverrideSource).toBe("auto");
     expect(sessionEntry.modelOverrideFallbackOriginProvider).toBe("minimax");

@@ -23,9 +23,3 @@ export function registerFeishuSubagentHooks(api: OpenClawPluginApi): void {
     handleFeishuSubagentEnded(event);
   });
 }
-
-export {
-  handleFeishuSubagentDeliveryTarget,
-  handleFeishuSubagentEnded,
-  handleFeishuSubagentSpawning,
-} from "./src/subagent-hooks.js";

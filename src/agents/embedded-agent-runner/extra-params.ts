@@ -295,6 +295,7 @@ export function resolvePreparedExtraParams(params: {
         workspaceDir: params.workspaceDir,
         provider: params.provider,
         modelId: params.modelId,
+        model: params.model,
         extraParams: merged,
         thinkingLevel: params.thinkingLevel,
       },

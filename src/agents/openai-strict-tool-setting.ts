@@ -31,7 +31,6 @@ function resolvesToNativeOpenAIStrictTools(
   }
   return (
     capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
     capabilities.provider === "azure-openai" ||
     capabilities.provider === "azure-openai-responses"
   );

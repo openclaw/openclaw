@@ -356,6 +356,35 @@ describe("cli credentials", () => {
     });
   });
 
+  it("falls back when Codex keychain JWT expiry is outside Date range", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
+    process.env.CODEX_HOME = tempHome;
+    const lastRefresh = Date.parse("2026-01-01T00:00:00Z");
+    const fallbackExpiry = lastRefresh + 60 * 60 * 1000;
+    const accountHash = "cli|";
+
+    execSyncMock.mockImplementation((command: unknown) => {
+      const cmd = String(command);
+      expect(cmd).toContain("Codex Auth");
+      expect(cmd).toContain(accountHash);
+      return JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(8_700_000_000_000),
+          refresh_token: "keychain-refresh",
+        },
+        last_refresh: "2026-01-01T00:00:00Z",
+      });
+    });
+
+    const creds = readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock });
+
+    expectFields(creds, {
+      refresh: "keychain-refresh",
+      provider: "openai-codex",
+      expires: fallbackExpiry,
+    });
+  });
+
   it("falls back to Codex auth.json when keychain is unavailable", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;

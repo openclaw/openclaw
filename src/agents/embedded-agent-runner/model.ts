@@ -15,6 +15,8 @@ import {
 import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
+import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
+import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
@@ -25,6 +27,7 @@ import {
   shouldSuppressBuiltInModel,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-codex-routing.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
   attachModelProviderRequestTransport,
@@ -153,7 +156,7 @@ function discoverCachedAgentStoresForAgent(
 
 function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
   if (
-    normalizeProviderId(params.provider) !== "openai-codex" ||
+    !["openai", "openai-codex"].includes(normalizeProviderId(params.provider)) ||
     params.model.id.trim().toLowerCase() !== "gpt-5.4-codex"
   ) {
     return params.model;
@@ -849,6 +852,59 @@ function resolveExplicitModelWithRegistry(params: {
   return undefined;
 }
 
+function resolveDynamicModelAuthProfile(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  authProfileId?: string;
+  preferredProfile?: string;
+}): {
+  authProfileId?: string;
+  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
+} {
+  const explicitProfileId = params.authProfileId?.trim() || undefined;
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  if (explicitProfileId) {
+    const credential = store.profiles[explicitProfileId];
+    const configuredMode = params.cfg?.auth?.profiles?.[explicitProfileId]?.mode;
+    return {
+      authProfileId: explicitProfileId,
+      ...(credential?.type || configuredMode
+        ? { authProfileMode: credential?.type ?? configuredMode }
+        : {}),
+    };
+  }
+  const order = [
+    ...new Set(
+      listOpenAIAuthProfileProvidersForAgentRuntime({
+        provider: params.provider,
+        config: params.cfg,
+      }).flatMap((provider) =>
+        resolveAuthProfileOrder({
+          cfg: params.cfg,
+          store,
+          provider,
+          preferredProfile: params.preferredProfile,
+        }),
+      ),
+    ),
+  ];
+  const profileId = order[0];
+  if (!profileId) {
+    return {};
+  }
+  const credential = store.profiles[profileId];
+  const configuredMode = params.cfg?.auth?.profiles?.[profileId]?.mode;
+  return {
+    authProfileId: profileId,
+    ...(credential?.type || configuredMode
+      ? { authProfileMode: credential?.type ?? configuredMode }
+      : {}),
+  };
+}
+
 function resolvePluginDynamicModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -856,11 +912,20 @@ function resolvePluginDynamicModelWithRegistry(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  authProfileId?: string;
+  preferredProfile?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const authProfile = resolveDynamicModelAuthProfile({
+    provider,
+    cfg,
+    agentDir,
+    authProfileId: params.authProfileId,
+    preferredProfile: params.preferredProfile,
+  });
   const preferDiscoveredModelMetadata = shouldCompareProviderRuntimeResolvedModel({
     provider,
     modelId,
@@ -881,6 +946,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
       modelId,
       modelRegistry,
       providerConfig,
+      ...authProfile,
     },
   }) as Model | undefined;
   if (!pluginDynamicModel) {
@@ -1134,6 +1200,8 @@ export function resolveModelWithRegistry(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  authProfileId?: string;
+  preferredProfile?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model | undefined {
   const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
@@ -1190,6 +1258,8 @@ export function resolveModel(
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
     workspaceDir?: string;
+    authProfileId?: string;
+    preferredProfile?: string;
   },
 ): {
   model?: Model;
@@ -1218,6 +1288,8 @@ export function resolveModel(
     cfg,
     agentDir: resolvedAgentDir,
     workspaceDir,
+    authProfileId: options?.authProfileId,
+    preferredProfile: options?.preferredProfile,
     runtimeHooks,
   });
   if (model) {
@@ -1252,6 +1324,8 @@ export async function resolveModelAsync(
     skipProviderRuntimeHooks?: boolean;
     skipAgentDiscovery?: boolean;
     workspaceDir?: string;
+    authProfileId?: string;
+    preferredProfile?: string;
   },
 ): Promise<{
   model?: Model;
@@ -1305,6 +1379,13 @@ export async function resolveModelAsync(
     };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, normalizedRef.provider);
+  const authProfile = resolveDynamicModelAuthProfile({
+    provider: normalizedRef.provider,
+    cfg,
+    agentDir: resolvedAgentDir,
+    authProfileId: options?.authProfileId,
+    preferredProfile: options?.preferredProfile,
+  });
   const resolveDynamicAttempt = async () => {
     await runtimeHooks.prepareProviderDynamicModel({
       provider: normalizedRef.provider,
@@ -1318,6 +1399,7 @@ export async function resolveModelAsync(
         modelId: normalizedRef.model,
         modelRegistry,
         providerConfig,
+        ...authProfile,
       },
     });
     return resolveModelWithRegistry({
@@ -1327,6 +1409,8 @@ export async function resolveModelAsync(
       cfg,
       agentDir: resolvedAgentDir,
       workspaceDir,
+      authProfileId: options?.authProfileId,
+      preferredProfile: options?.preferredProfile,
       runtimeHooks,
     });
   };

@@ -345,15 +345,15 @@ describe("createVideoGenerateTool", () => {
     expect(emptyConfigTool).toBeNull();
   });
 
-  it("does not treat model aliases as video-generation auth profiles", () => {
+  it("treats legacy OpenAI-Codex auth profiles as canonical OpenAI video auth", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
 
-    expect(
+    expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({}),
         authProfileStore: createAuthStore(["openai-codex"]),
       }),
-    ).toBeNull();
+    );
   });
 
   it("registers when video-generation config is present", () => {

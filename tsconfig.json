@@ -65,6 +65,12 @@
         "./packages/media-generation-core/src/normalization.ts"
       ],
       "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
+      "@openclaw/media-understanding-common": [
+        "./packages/media-understanding-common/src/index.ts"
+      ],
+      "@openclaw/media-understanding-common/*": [
+        "./packages/media-understanding-common/src/*"
+      ],
       "@openclaw/markdown-core": ["./packages/markdown-core/src/index.ts"],
       "@openclaw/markdown-core/code-spans": ["./packages/markdown-core/src/code-spans.ts"],
       "@openclaw/markdown-core/fences": ["./packages/markdown-core/src/fences.ts"],
@@ -77,6 +83,41 @@
       "@openclaw/markdown-core/tables": ["./packages/markdown-core/src/tables.ts"],
       "@openclaw/markdown-core/types": ["./packages/markdown-core/src/types.ts"],
       "@openclaw/markdown-core/*": ["./packages/markdown-core/src/*"],
+      "@openclaw/terminal-core": ["./packages/terminal-core/src/index.ts"],
+      "@openclaw/terminal-core/ansi": ["./packages/terminal-core/src/ansi.ts"],
+      "@openclaw/terminal-core/decorative-emoji": [
+        "./packages/terminal-core/src/decorative-emoji.ts"
+      ],
+      "@openclaw/terminal-core/health-style": [
+        "./packages/terminal-core/src/health-style.ts"
+      ],
+      "@openclaw/terminal-core/links": ["./packages/terminal-core/src/links.ts"],
+      "@openclaw/terminal-core/note": ["./packages/terminal-core/src/note.ts"],
+      "@openclaw/terminal-core/osc-progress": ["./packages/terminal-core/src/osc-progress.ts"],
+      "@openclaw/terminal-core/palette": ["./packages/terminal-core/src/palette.ts"],
+      "@openclaw/terminal-core/progress-line": [
+        "./packages/terminal-core/src/progress-line.ts"
+      ],
+      "@openclaw/terminal-core/prompt-select-styled": [
+        "./packages/terminal-core/src/prompt-select-styled.ts"
+      ],
+      "@openclaw/terminal-core/prompt-select-styled-params": [
+        "./packages/terminal-core/src/prompt-select-styled-params.ts"
+      ],
+      "@openclaw/terminal-core/prompt-style": [
+        "./packages/terminal-core/src/prompt-style.ts"
+      ],
+      "@openclaw/terminal-core/restore": ["./packages/terminal-core/src/restore.ts"],
+      "@openclaw/terminal-core/safe-text": ["./packages/terminal-core/src/safe-text.ts"],
+      "@openclaw/terminal-core/stream-writer": [
+        "./packages/terminal-core/src/stream-writer.ts"
+      ],
+      "@openclaw/terminal-core/table": ["./packages/terminal-core/src/table.ts"],
+      "@openclaw/terminal-core/terminal-link": [
+        "./packages/terminal-core/src/terminal-link.ts"
+      ],
+      "@openclaw/terminal-core/theme": ["./packages/terminal-core/src/theme.ts"],
+      "@openclaw/terminal-core/*": ["./packages/terminal-core/src/*"],
       "@openclaw/net-policy": ["./packages/net-policy/src/index.ts"],
       "@openclaw/net-policy/ip": ["./packages/net-policy/src/ip.ts"],
       "@openclaw/net-policy/ipv4": ["./packages/net-policy/src/ipv4.ts"],

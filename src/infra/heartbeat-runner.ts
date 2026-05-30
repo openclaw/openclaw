@@ -89,6 +89,7 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { timestampMsToIsoString } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -894,8 +895,8 @@ function buildCommitmentHeartbeatPrompt(params: {
     reason: commitment.reason,
     suggestedText: commitment.suggestedText,
     due: {
-      earliest: new Date(commitment.dueWindow.earliestMs).toISOString(),
-      latest: new Date(commitment.dueWindow.latestMs).toISOString(),
+      earliest: timestampMsToIsoString(commitment.dueWindow.earliestMs) ?? "n/a",
+      latest: timestampMsToIsoString(commitment.dueWindow.latestMs) ?? "n/a",
       timezone: commitment.dueWindow.timezone,
     },
     sourceMessageId: commitment.sourceMessageId,

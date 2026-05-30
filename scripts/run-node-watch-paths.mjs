@@ -12,6 +12,8 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/gateway-protocol/src",
   "packages/markdown-core/src",
   "packages/media-generation-core/src",
+  "packages/media-understanding-common/src",
+  "packages/terminal-core/src",
   "packages/net-policy/src",
 ];
 

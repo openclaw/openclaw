@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI: keep `plugins list --json` on the snapshot-only path so plugin sweeps avoid loading the full runtime status graph.
 - Plugins: make PixVerse external-plugin ClawHub metadata explicit and keep it out of bundled dist builds.
 - Providers: bound generated media downloads from OpenAI, Runway, xAI, MiniMax, BytePlus, DashScope-compatible, FAL, OpenRouter, Google, Vydra, and Comfy providers.
 - Providers: cap GitHub Copilot OAuth request timeouts before creating abort signals.
@@ -33,6 +34,14 @@ Docs: https://docs.openclaw.ai
 - Security/config parsing: reject unsafe OAuth/token lifetimes, retry-after delays, inbound timestamps, response body sizes, command timeout config, sandbox observer token TTLs, and gateway WebSocket calls after close.
 - Providers/media: cap local service, model, usage, queue, generated media, TTS, music, workflow polling, and provider OAuth request timers across hosted and local providers.
 - Release/CI/E2E: bound release candidate reads, beta smoke REST calls, changelog restore, kitchen-sink and bundled plugin readiness probes, secret-provider probes, Vitest routing, and mainline test flakes. (#88127, #88137, #88155, #88160)
+- CI/Crabbox: keep default runner capacity spot-only and provider-neutral so OpenClaw remote validation does not silently fall back to on-demand leases or stale AWS region hints.
+- CI/Crabbox: route Crabbox wrapper and Testbox workflow edits to their regression tests so changed-test gates do not silently run zero specs.
+- CI/workflows: route workflow sanity helper edits to their guard tests and cover composite-action input interpolation checks.
+- CI/tooling: route CI scope, dependency, changelog, and docs helper edits to their owner tests instead of silently skipping changed-test coverage.
+- CI/tooling: route package, release, and install helper edits to their owner tests so changed-test gates cover publish and installer script changes.
+- CI/tooling: route shared script library edits through their owner tests so lock, process, safety, and scan helpers do not skip changed-test coverage.
+- CI/tooling: skip expensive import-graph scans once a changed diff already requires broad fallback, keeping local changed-test planning fast while still collecting explicit owner tests.
+- CI/tooling: route script edits through conventional owner tests when matching `test/scripts` or `src/scripts` coverage already exists.
 - Performance: reuse prepared provider handles, strict tool schemas, gateway runtime metadata, session maintenance config, plugin metadata, bundled skill allowlists, package-local plugin artifacts, and single-entry store writes.
 
 ## 2026.5.28

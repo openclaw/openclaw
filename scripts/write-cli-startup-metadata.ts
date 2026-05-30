@@ -162,8 +162,8 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
       path.join(sourceRootDir, "src/cli/gateway-cli/run-command.ts"),
       path.join(sourceRootDir, "src/cli/models-cli.ts"),
       path.join(sourceRootDir, "src/cli/plugins-cli.ts"),
-      path.join(sourceRootDir, "src/terminal/links.ts"),
-      path.join(sourceRootDir, "src/terminal/theme.ts"),
+      path.join(sourceRootDir, "packages/terminal-core/src/links.ts"),
+      path.join(sourceRootDir, "packages/terminal-core/src/theme.ts"),
     ],
     sourceRootDir,
   );

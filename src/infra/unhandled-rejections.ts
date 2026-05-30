@@ -1,6 +1,6 @@
 import process from "node:process";
+import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { restoreTerminalState } from "../terminal/restore.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,

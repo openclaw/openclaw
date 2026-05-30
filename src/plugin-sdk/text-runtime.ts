@@ -23,7 +23,7 @@ export * from "../shared/text/auto-linked-file-ref.js";
 export * from "../shared/text/code-regions.js";
 export * from "../shared/text/reasoning-tags.js";
 export * from "../shared/text/strip-markdown.js";
-export * from "../terminal/safe-text.js";
+export * from "../../packages/terminal-core/src/safe-text.js";
 export * from "../infra/system-message.ts";
 export * from "../utils/directive-tags.js";
 export * from "../utils/chunk-items.js";

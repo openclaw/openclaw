@@ -1402,6 +1402,18 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "model-ref.ts",
       distFile: "model-ref.mjs",
     });
+    const terminalCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "terminal-core",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const terminalCoreTheme = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "terminal-core",
+      srcFile: "theme.ts",
+      distFile: "theme.mjs",
+    });
     const netPolicyIp = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "net-policy",
@@ -1416,6 +1428,8 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(markdownCoreTables.distFile);
     fs.rmSync(mediaGenerationCore.distFile);
     fs.rmSync(mediaGenerationModelRef.distFile);
+    fs.rmSync(terminalCore.distFile);
+    fs.rmSync(terminalCoreTheme.distFile);
     fs.rmSync(netPolicy.distFile);
     fs.rmSync(netPolicyIp.distFile);
     const sourcePluginEntry = writePluginEntry(
@@ -1451,6 +1465,12 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/media-generation-core/model-ref"] ?? "")).toBe(
       fs.realpathSync(mediaGenerationModelRef.srcFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/terminal-core"] ?? "")).toBe(
+      fs.realpathSync(terminalCore.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/terminal-core/theme"] ?? "")).toBe(
+      fs.realpathSync(terminalCoreTheme.srcFile),
+    );
     expect(fs.realpathSync(aliases["@openclaw/net-policy"] ?? "")).toBe(
       fs.realpathSync(netPolicy.srcFile),
     );
@@ -1485,6 +1505,15 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "render.ts",
       distFile: "render.mjs",
     });
+    const terminalCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "terminal-core",
+      srcFile: "links.ts",
+      distFile: "links.mjs",
+    });
+    const terminalCoreRootDistFile = path.join(fixture.root, "dist", "terminal-core", "links.js");
+    mkdirSafeDir(path.dirname(terminalCoreRootDistFile));
+    fs.writeFileSync(terminalCoreRootDistFile, "export {};\n", "utf-8");
     const netPolicy = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "net-policy",
@@ -1511,6 +1540,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/media-generation-core/catalog"] ?? "")).toBe(
       fs.realpathSync(mediaGenerationCore.distFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/terminal-core/links"] ?? "")).toBe(
+      fs.realpathSync(terminalCoreRootDistFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/net-policy/redact-sensitive-url"] ?? "")).toBe(
       fs.realpathSync(netPolicy.distFile),
