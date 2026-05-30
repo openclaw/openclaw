@@ -19,7 +19,7 @@ const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
-type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
+type OpenClawExecMode = "deny" | "allowlist" | "denylist" | "ask" | "auto" | "full";
 type OpenClawExecSecurity = "deny" | "allowlist" | "denylist" | "full";
 type OpenClawExecAsk = "off" | "on-miss" | "always";
 type OpenClawExecApprovalFloorsForCodexAppServer = {
@@ -1306,6 +1306,8 @@ function resolveOpenClawExecPolicyForMode(
       return { mode, security: "deny", ask: "off" };
     case "allowlist":
       return { mode, security: "allowlist", ask: "off" };
+    case "denylist":
+      return { mode, security: "denylist", ask: "off" };
     case "ask":
     case "auto":
       return { mode, security: "allowlist", ask: "on-miss" };
@@ -1325,6 +1327,9 @@ function resolveOpenClawExecModeFromPolicy(params: {
   }
   if (params.security === "allowlist" && params.ask === "off") {
     return "allowlist";
+  }
+  if (params.security === "denylist" && params.ask === "off") {
+    return "denylist";
   }
   if (params.security === "full" && params.ask !== "always") {
     return "full";
@@ -1353,6 +1358,7 @@ function maxOpenClawExecAsk(left: OpenClawExecAsk, right: OpenClawExecAsk): Open
 function readExecMode(value: unknown): OpenClawExecMode | undefined {
   return value === "deny" ||
     value === "allowlist" ||
+    value === "denylist" ||
     value === "ask" ||
     value === "auto" ||
     value === "full"

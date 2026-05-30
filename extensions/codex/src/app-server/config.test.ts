@@ -851,6 +851,26 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     },
   );
 
+  it("maps normalized OpenClaw denylist exec mode to guardian-reviewed local execution", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          mode: "yolo",
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+          approvalsReviewer: "auto_review",
+        },
+      },
+      execMode: "denylist",
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      approvalsReviewer: "user",
+    });
+  });
+
   it("maps normalized OpenClaw ask exec mode away from Codex yolo", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {},
@@ -1200,6 +1220,39 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expectRuntimePolicy(resolveRuntimeForTest({ execPolicy }), {
       approvalPolicy: "never",
       sandbox: "danger-full-access",
+      approvalsReviewer: "user",
+    });
+  });
+
+  it("resolves normalized and legacy denylist exec config for Codex app-server mapping", () => {
+    const normalizedConfig = {
+      tools: {
+        exec: {
+          mode: "denylist",
+        },
+      },
+    };
+    const legacyConfig = {
+      tools: {
+        exec: {
+          security: "denylist",
+          ask: "off",
+        },
+      },
+    };
+    const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({ config: normalizedConfig });
+
+    expect(resolveOpenClawExecModeForCodexAppServer({ config: normalizedConfig })).toBe("denylist");
+    expect(resolveOpenClawExecModeForCodexAppServer({ config: legacyConfig })).toBe("denylist");
+    expect(execPolicy).toMatchObject({
+      mode: "denylist",
+      security: "denylist",
+      ask: "off",
+      touched: true,
+    });
+    expectRuntimePolicy(resolveRuntimeForTest({ execPolicy }), {
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
       approvalsReviewer: "user",
     });
   });
