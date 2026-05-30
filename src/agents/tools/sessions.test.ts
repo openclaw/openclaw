@@ -793,16 +793,17 @@ describe("sessions_send gating", () => {
 
       // Pass the body only under the alias (no canonical `message`). If the
       // alias were not normalized, the required-`message` read would throw
-      // before target validation; reaching the target error proves the body
-      // was populated from the alias.
-      const result = await tool.execute("call-alias", {
+      // `message required`; the call instead reaching normal target validation
+      // (without that throw) proves the body was populated from the alias.
+      const run = tool.execute("call-alias", {
         [alias]: "hi",
         timeoutSeconds: 5,
       });
 
-      const details = requireDetails(result);
+      await expect(run).resolves.toBeDefined();
+      const details = requireDetails(await run);
       expect(details.status).toBe("error");
-      expect(details.error).toBe("Either sessionKey or label is required");
+      expect(details.error).not.toContain("message required");
       expect(callGatewayMock).not.toHaveBeenCalled();
     },
   );
@@ -830,6 +831,25 @@ describe("sessions_send gating", () => {
     await expect(
       tool.execute("call-no-body", {
         sessionKey: MAIN_AGENT_SESSION_KEY,
+        timeoutSeconds: 5,
+      }),
+    ).rejects.toThrow("message required");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("throws when message and all body aliases are whitespace-only", async () => {
+    const tool = createMainSessionsSendTool();
+
+    // Guards the edge case where normalization finds no non-empty alias and the
+    // canonical message is blank: the required read must still reject rather
+    // than letting an empty body through.
+    await expect(
+      tool.execute("call-blank-body", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message: "   ",
+        SendMessage: "  ",
+        content: "",
+        text: "\n",
         timeoutSeconds: 5,
       }),
     ).rejects.toThrow("message required");
