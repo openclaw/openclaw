@@ -744,9 +744,7 @@ async function runModelRun(params: {
       );
     }
     const localModelRunSystemPrompt =
-      prepared.selection.provider === "openai" || prepared.model.api === "openai-chatgpt-responses"
-        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
-        : undefined;
+      prepared.model.api === "openai-chatgpt-responses" ? LOCAL_MODEL_RUN_SYSTEM_PROMPT : undefined;
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,

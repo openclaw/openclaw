@@ -15,14 +15,13 @@ const manifestAuthChoices = vi.hoisted(() => [
     methodId: "oauth",
     choiceId: "openai",
     choiceLabel: "ChatGPT Login",
-    deprecatedChoiceIds: ["openai", "codex-cli"],
   },
 ]);
 
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoices: () => manifestAuthChoices,
   resolveManifestDeprecatedProviderAuthChoice: (choiceId: string) =>
-    manifestAuthChoices.find((choice) => choice.deprecatedChoiceIds.includes(choiceId)),
+    manifestAuthChoices.find((choice) => choice.deprecatedChoiceIds?.includes(choiceId) === true),
 }));
 
 import {
@@ -55,33 +54,27 @@ describe("auth choice legacy aliases", () => {
   });
 
   it("sources deprecated cli aliases from plugin manifests", () => {
-    const legacyChoice = ["openai", "codex"].join("-");
     expect(resolveLegacyAuthChoiceAliasesForCli({ env: authChoiceManifestEnv() })).toEqual([
       "claude-cli",
-      "codex-cli",
-      legacyChoice,
-      `${legacyChoice}-device-code`,
-      `${legacyChoice}-api-key`,
     ]);
   });
 
-  it("maps the old OpenAI Codex setup choice to OpenAI login", () => {
+  it("does not keep old OpenAI Codex setup choices alive outside doctor", () => {
     const legacyChoice = ["openai", "codex"].join("-");
     expect(normalizeLegacyOnboardAuthChoice(legacyChoice, { env: authChoiceManifestEnv() })).toBe(
-      "openai",
+      legacyChoice,
     );
     expect(normalizeLegacyOnboardAuthChoice("codex-cli", { env: authChoiceManifestEnv() })).toBe(
-      "openai",
+      "codex-cli",
     );
     expect(
       resolveDeprecatedAuthChoiceReplacement(legacyChoice, { env: authChoiceManifestEnv() }),
-    ).toEqual({
-      normalized: "openai",
-      message: `Auth choice "${legacyChoice}" is deprecated; using ChatGPT Login setup instead.`,
-    });
+    ).toBeUndefined();
     expect(normalizeLegacyOnboardAuthChoice(`${legacyChoice}-device-code`)).toBe(
-      "openai-device-code",
+      `${legacyChoice}-device-code`,
     );
-    expect(normalizeLegacyOnboardAuthChoice(`${legacyChoice}-api-key`)).toBe("openai-api-key");
+    expect(normalizeLegacyOnboardAuthChoice(`${legacyChoice}-api-key`)).toBe(
+      `${legacyChoice}-api-key`,
+    );
   });
 });

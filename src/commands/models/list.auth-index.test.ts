@@ -242,7 +242,7 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("custom-openai")).toBe(true);
   });
 
-  it("treats OpenAI Codex auth as usable for canonical OpenAI agent routes", () => {
+  it("treats OpenAI OAuth auth as usable for canonical OpenAI agent routes", () => {
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: {
@@ -255,6 +255,11 @@ describe("createModelListAuthIndex", () => {
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
           },
+          "openai:token": {
+            type: "token",
+            provider: "openai",
+            token: "token",
+          },
         },
       },
       env: {},
@@ -263,7 +268,26 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("openai")).toBe(true);
   });
 
-  it("does not treat OpenAI Codex auth as usable for custom OpenAI-compatible routes", () => {
+  it("treats OpenAI token auth as usable for canonical OpenAI agent routes", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:token": {
+            type: "token",
+            provider: "openai",
+            token: "token",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(index.hasProviderAuth("openai")).toBe(true);
+  });
+
+  it("does not treat OpenAI OAuth auth as usable for custom OpenAI-compatible routes", () => {
     const index = createModelListAuthIndex({
       cfg: {
         models: {

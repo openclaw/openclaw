@@ -39,7 +39,7 @@ describe("overlayRuntimeExternalOAuthProfiles", () => {
         throw new Error("expected overlaid Codex OAuth profile");
       }
       expect(overlaidCodexProfile.access).toBe("access-1");
-      expect(store.profiles["openai:default"]).toBeUndefined();
+      expect(store.profiles["openai:default"]?.type).toBe("api_key");
 
       overlaid.profiles["openai:default"].provider = "mutated";
       overlaid.order!.openai.push("mutated");

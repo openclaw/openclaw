@@ -1,5 +1,6 @@
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvAuthLookupMaps,
@@ -92,6 +93,22 @@ export function createModelListAuthIndex(
   const authenticatedProviders = new Set<string>();
   const syntheticAuthProviders = new Set<string>();
   const envProviderAuthCache = new Map<string, boolean>();
+  const credentialAuthsProvider = (credential: AuthProfileCredential): boolean => {
+    const normalizedProvider = normalizeStoredAuthProvider(credential.provider, aliasMap);
+    if (normalizedProvider !== OPENAI_PROVIDER_ID) {
+      return true;
+    }
+    if (credential.type === "api_key") {
+      return true;
+    }
+    if (credential.type !== "oauth" && credential.type !== "token") {
+      return false;
+    }
+    return openAIProviderUsesCodexRuntimeByDefault({
+      provider: normalizedProvider,
+      config: params.cfg,
+    });
+  };
   const addProvider = (provider: string | undefined) => {
     if (!provider?.trim()) {
       return;
@@ -107,7 +124,9 @@ export function createModelListAuthIndex(
   };
 
   for (const credential of Object.values(params.authStore.profiles ?? {})) {
-    addProvider(credential.provider);
+    if (credentialAuthsProvider(credential)) {
+      addProvider(credential.provider);
+    }
   }
 
   for (const provider of listProviderEnvAuthLookupKeys({ envCandidateMap, authEvidenceMap })) {

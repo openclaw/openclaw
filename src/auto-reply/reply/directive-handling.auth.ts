@@ -5,6 +5,7 @@ import {
   resolveAuthProfileDisplayLabel,
   resolveAuthStorePathForDisplay,
 } from "../../agents/auth-profiles.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import {
   ensureAuthProfileStore,
   resolveAuthProfileOrder,
@@ -51,6 +52,10 @@ function formatFlagsSuffix(flags: string[]) {
   return flags.length > 0 ? ` (${flags.join(", ")})` : "";
 }
 
+function isStoredAuthProfileType(value: unknown): value is AuthProfileCredential["type"] {
+  return value === "api_key" || value === "oauth" || value === "token";
+}
+
 export const resolveAuthLabel = async (
   provider: string,
   cfg: OpenClawConfig,
@@ -58,12 +63,28 @@ export const resolveAuthLabel = async (
   agentDir?: string,
   mode: ModelAuthDetailMode = "compact",
   workspaceDir?: string,
+  options?: { acceptedProfileTypes?: readonly AuthProfileCredential["type"][] },
 ): Promise<{ label: string; source: string }> => {
   const formatPath = (value: string) => shortenHomePath(value);
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
-  const order = resolveAuthProfileOrder({ cfg, store, provider });
+  const rawOrder = resolveAuthProfileOrder({ cfg, store, provider });
+  const acceptedProfileTypes = options?.acceptedProfileTypes
+    ? new Set(options.acceptedProfileTypes)
+    : undefined;
+  const order = acceptedProfileTypes
+    ? rawOrder.filter((profileId) => {
+        const profile = store.profiles[profileId];
+        if (profile) {
+          return acceptedProfileTypes.has(profile.type);
+        }
+        const configuredMode = cfg.auth?.profiles?.[profileId]?.mode;
+        return isStoredAuthProfileType(configuredMode)
+          ? acceptedProfileTypes.has(configuredMode)
+          : true;
+      })
+    : rawOrder;
   const providerKey = normalizeProviderId(provider);
   const lastGood = findNormalizedProviderValue(store.lastGood, providerKey);
   const nextProfileId = order[0];

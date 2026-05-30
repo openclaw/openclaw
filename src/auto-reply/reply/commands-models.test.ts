@@ -803,7 +803,7 @@ describe("handleModelsCommand", () => {
     expect(authLabelParams.workspaceDir).toBe("/tmp");
   });
 
-  it("labels OpenAI provider pages with canonical and legacy auth provider ids", async () => {
+  it("labels OpenAI provider pages with the canonical auth provider id", async () => {
     modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue("oauth (openai:user@example.com)");
 
     const result = await handleModelsCommand(
@@ -823,7 +823,7 @@ describe("handleModelsCommand", () => {
     );
     expect(openaiAuthCall?.[0]).toMatchObject({
       provider: "openai",
-      acceptedProviderIds: ["openai", "openai"],
+      acceptedProviderIds: ["openai"],
     });
   });
 
