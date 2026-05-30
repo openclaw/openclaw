@@ -1248,6 +1248,7 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "none",
+        reason: "requester_abandoned",
         error: "requester session abandoned after timeout",
       };
     }
@@ -1454,6 +1455,7 @@ async function sendSubagentAnnounceDirectly(params: {
         return {
           delivered: false,
           path: "direct",
+          reason: "completion_handoff_pending",
           error: "completion agent handoff is still pending",
         };
       }
@@ -1493,6 +1495,7 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "direct",
+        reason: "generated_media_missing",
         error: "completion agent did not deliver generated media",
       };
     }
@@ -1525,6 +1528,7 @@ async function sendSubagentAnnounceDirectly(params: {
         return {
           delivered: false,
           path: "direct",
+          reason: "visible_reply_missing",
           error: "completion agent did not produce a visible reply",
         };
       }
@@ -1539,6 +1543,7 @@ async function sendSubagentAnnounceDirectly(params: {
         return {
           delivered: false,
           path: "direct",
+          reason: "visible_reply_missing",
           error: "completion agent did not produce a visible reply",
         };
       }
@@ -1557,6 +1562,7 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "direct",
+        reason: "message_tool_delivery_missing",
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
@@ -1569,6 +1575,7 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "direct",
+        reason: "visible_reply_missing",
         error: "completion agent did not produce a visible reply",
       };
     }
