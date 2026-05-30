@@ -9,7 +9,7 @@ import {
   resolveSkillStatusEntry,
   type SkillStatusEntry,
 } from "../discovery/status.js";
-import { scanSource } from "../security/scanner.js";
+import { scanSkillContent, scanSource } from "../security/scanner.js";
 import {
   readProposalFrontmatter,
   renderProposalMarkdown,
@@ -676,8 +676,12 @@ function scanProposalBundle(
 ): SkillProposalScan {
   const scannedAt = new Date().toISOString();
   const findings = [
+    ...scanSkillContent(content, "PROPOSAL.md"),
     ...scanSource(content, "PROPOSAL.md"),
-    ...supportFiles.flatMap((file) => scanSource(file.content, file.path)),
+    ...supportFiles.flatMap((file) => [
+      ...scanSkillContent(file.content, file.path),
+      ...scanSource(file.content, file.path),
+    ]),
   ];
   const critical = findings.filter((finding) => finding.severity === "critical").length;
   const warn = findings.filter((finding) => finding.severity === "warn").length;
