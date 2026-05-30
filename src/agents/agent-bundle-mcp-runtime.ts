@@ -195,6 +195,8 @@ function redactErrorUrls(error: unknown): string {
   return redactSensitiveUrlLikeString(String(error));
 }
 
+const MCP_CONNECTION_CLOSED_ERROR_CODE: number = ErrorCode.ConnectionClosed;
+
 function getMcpErrorCode(error: unknown): number | undefined {
   if (error instanceof McpError) {
     return error.code;
@@ -496,12 +498,12 @@ export function createSessionMcpRuntime(params: {
         // One SDK-generated exception is ErrorCode.ConnectionClosed, which is
         // raised when the transport closes while a request is in flight.
         const mcpErrorCode = getMcpErrorCode(error);
-        if (mcpErrorCode !== undefined && mcpErrorCode !== ErrorCode.ConnectionClosed) {
+        if (mcpErrorCode !== undefined && mcpErrorCode !== MCP_CONNECTION_CLOSED_ERROR_CODE) {
           throw error;
         }
         const msg = error instanceof Error ? error.message : String(error);
         const isTransportDead =
-          mcpErrorCode === ErrorCode.ConnectionClosed ||
+          mcpErrorCode === MCP_CONNECTION_CLOSED_ERROR_CODE ||
           msg.includes("Not connected") ||
           msg.includes("EPIPE") ||
           msg.includes("ERR_STREAM_DESTROYED") ||
