@@ -73,7 +73,8 @@ const POLL_MIGRATIONS_NAMESPACE = "poll-migrations";
 const LEGACY_POLLS_MIGRATION_KEY = "msteams-polls-json-v1";
 const MAX_POLLS = 1000;
 const SQLITE_MAX_POLL_ROWS = MAX_POLLS + 1000;
-const POLL_VOTE_BUCKET_COUNT = 1024;
+// Keep worst-case retained vote buckets below plugin-state's per-plugin live row cap.
+const POLL_VOTE_BUCKET_COUNT = 32;
 const MAX_POLL_VOTE_BUCKET_ROWS = MAX_POLLS * POLL_VOTE_BUCKET_COUNT;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const POLL_LOCK_FILENAME = "msteams-polls.sqlite.lock";

@@ -263,7 +263,7 @@ describe("state poll store", () => {
       .update("\0")
       .update("user-legacy")
       .digest("hex");
-    const bucket = String(Number.parseInt(voterHash.slice(0, 8), 16) % 1024).padStart(4, "0");
+    const bucket = String(Number.parseInt(voterHash.slice(0, 8), 16) % 32).padStart(4, "0");
     const pollHash = crypto.createHash("sha256").update("poll-partial").digest("hex");
     const voteBucketStore = createPluginStateKeyedStoreForTests<{
       pollId: string;
@@ -272,7 +272,7 @@ describe("state poll store", () => {
       updatedAt: string;
     }>("msteams", {
       namespace: "poll-vote-buckets",
-      maxEntries: 1_024_000,
+      maxEntries: 32_000,
       env,
     });
     await voteBucketStore.register(`${pollHash}:${bucket}`, {
