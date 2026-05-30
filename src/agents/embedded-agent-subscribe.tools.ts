@@ -8,7 +8,6 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
-import { splitMediaFromOutput } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessageToolSendActionName } from "./embedded-agent-messaging.js";
