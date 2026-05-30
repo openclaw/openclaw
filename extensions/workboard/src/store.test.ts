@@ -1,5 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   WorkboardStore,
   type PersistedWorkboardAttachment,
@@ -31,6 +36,109 @@ function createMemoryStore<T = PersistedWorkboardCard>(options?: {
 }
 
 describe("WorkboardStore", () => {
+  it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    if (process.platform !== "win32") {
+      fs.chmodSync(dir, 0o755);
+    }
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      const store = new WorkboardStore(stores.cards, {
+        boards: stores.boards,
+        subscriptions: stores.subscriptions,
+        attachments: stores.attachments,
+      });
+      const board = await store.upsertBoard({ id: "planning", name: "Planning" });
+      const card = await store.create({
+        title: "Persist it",
+        boardId: board.id,
+        labels: ["sqlite", "doctor"],
+        execution: {
+          id: "exec-1",
+          kind: "agent-session",
+          engine: "codex",
+          mode: "autonomous",
+          status: "running",
+          model: "gpt-5.5",
+          sessionKey: "agent:main:test",
+          runId: "run-1",
+          startedAt: 1,
+          updatedAt: 2,
+        },
+      });
+      await store.addComment(card.id, { body: "round trip" });
+      const attached = await store.addAttachment(card.id, {
+        fileName: "proof.txt",
+        contentBase64: Buffer.from("ok").toString("base64"),
+      });
+      expect(attached.events?.at(-1)).toMatchObject({ kind: "attachment_added" });
+      await store.addAttachment(card.id, {
+        fileName: "large-proof.bin",
+        contentBase64: Buffer.alloc(70 * 1024).toString("base64"),
+      });
+      const attachmentId = attached.metadata?.attachments?.[0]?.id;
+      const subscription = await store.subscribeNotifications({
+        boardId: board.id,
+        target: "agent:main:test",
+        eventKinds: ["completed"],
+      });
+      if (process.platform !== "win32") {
+        expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+        expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
+        for (const sidecarPath of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+          if (fs.existsSync(sidecarPath)) {
+            expect(fs.statSync(sidecarPath).mode & 0o777).toBe(0o600);
+          }
+        }
+      }
+      stores.close();
+
+      const rawDb = new DatabaseSync(dbPath);
+      expect(rawDb.prepare("PRAGMA journal_mode").get()).toMatchObject({
+        journal_mode: "wal",
+      });
+      rawDb.close();
+
+      const reopenedStores = createWorkboardSqliteStores({ dbPath });
+      const reopened = new WorkboardStore(reopenedStores.cards, {
+        boards: reopenedStores.boards,
+        subscriptions: reopenedStores.subscriptions,
+        attachments: reopenedStores.attachments,
+      });
+
+      expect(await reopened.listBoards()).toMatchObject({
+        boards: [
+          expect.objectContaining({ id: "default" }),
+          expect.objectContaining({ id: board.id, name: "Planning" }),
+        ],
+      });
+      expect(await reopened.get(card.id)).toMatchObject({
+        id: card.id,
+        labels: ["sqlite", "doctor"],
+        metadata: {
+          automation: { boardId: "planning" },
+          comments: [expect.objectContaining({ body: "round trip" })],
+          attachments: expect.arrayContaining([
+            expect.objectContaining({ fileName: "proof.txt" }),
+            expect.objectContaining({ fileName: "large-proof.bin" }),
+          ]),
+        },
+      });
+      expect(await reopened.getAttachment(attachmentId ?? "")).toMatchObject({
+        contentBase64: Buffer.from("ok").toString("base64"),
+      });
+      await reopened.delete(card.id);
+      expect(await reopened.getAttachment(attachmentId ?? "")).toBeUndefined();
+      expect(await reopened.listNotificationSubscriptions({ boardId: board.id })).toMatchObject({
+        subscriptions: [expect.objectContaining({ id: subscription.id })],
+      });
+      reopenedStores.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("creates and lists cards by status order and position", async () => {
     const store = new WorkboardStore(createMemoryStore());
 
@@ -427,10 +535,16 @@ describe("WorkboardStore", () => {
     ).rejects.toThrow(/attachment must be/);
     await expect(
       store.addAttachment(card.id, {
-        fileName: "state-limit.bin",
-        contentBase64: Buffer.alloc(49 * 1024).toString("base64"),
+        fileName: "sqlite-sized.bin",
+        contentBase64: Buffer.alloc(70 * 1024).toString("base64"),
       }),
-    ).rejects.toThrow(/plugin state value/);
+    ).resolves.toMatchObject({
+      metadata: {
+        attachments: expect.arrayContaining([
+          expect.objectContaining({ fileName: "sqlite-sized.bin" }),
+        ]),
+      },
+    });
     await expect(
       store.addAttachment(card.id, {
         fileName: "padded.txt",
@@ -442,7 +556,9 @@ describe("WorkboardStore", () => {
     expect(context).toContain("failure.log");
 
     const deleted = await store.deleteAttachment(card.id, attachment.id);
-    expect(deleted.metadata?.attachments).toBeUndefined();
+    expect(deleted.metadata?.attachments).toEqual([
+      expect.objectContaining({ fileName: "sqlite-sized.bin" }),
+    ]);
     expect(deleted.events?.at(-1)).toMatchObject({ kind: "edited" });
     expect(await store.getAttachment(attachment.id)).toBeUndefined();
   });

@@ -4,6 +4,7 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   WORKBOARD_DIAGNOSTIC_KINDS,
   WORKBOARD_DIAGNOSTIC_SEVERITIES,
@@ -66,7 +67,6 @@ const MAX_CARD_ATTACHMENTS = 20;
 const MAX_ATTACHMENT_ENTRIES = MAX_CARDS * (MAX_CARD_ATTACHMENTS + 1);
 const MAX_CARD_WORKER_LOGS = 40;
 const MAX_ATTACHMENT_BYTES = 256 * 1024;
-const MAX_ATTACHMENT_STATE_VALUE_BYTES = 65_536;
 const MAX_CARD_DIAGNOSTICS = 12;
 const MAX_CARD_NOTIFICATIONS = 20;
 const MAX_CARD_METADATA_BYTES = 24 * 1024;
@@ -75,7 +75,6 @@ const READY_STRANDED_MS = 60 * 60 * 1000;
 const RUNNING_HEARTBEAT_STALE_MS = 20 * 60 * 1000;
 const BLOCKED_TOO_LONG_MS = 24 * 60 * 60 * 1000;
 const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
-const textEncoder = new TextEncoder();
 
 function secondsToDurationMs(seconds: number): number {
   const ms = Math.trunc(seconds) * 1000;
@@ -1086,12 +1085,6 @@ function normalizeAttachmentInput(
     ...(mimeType ? { mimeType } : {}),
     ...(note ? { note } : {}),
   };
-  const valueJson = JSON.stringify({ version: 1, attachment, contentBase64 });
-  if (textEncoder.encode(valueJson).byteLength > MAX_ATTACHMENT_STATE_VALUE_BYTES) {
-    throw new Error(
-      `attachment content plus metadata must fit one plugin state value (${MAX_ATTACHMENT_STATE_VALUE_BYTES} bytes).`,
-    );
-  }
   return { attachment, contentBase64 };
 }
 
@@ -4248,5 +4241,14 @@ export class WorkboardStore {
         }) as WorkboardKeyedStore<PersistedWorkboardAttachment>,
       },
     );
+  }
+
+  static openSqlite() {
+    const stores = createWorkboardSqliteStores();
+    return new WorkboardStore(stores.cards, {
+      boards: stores.boards,
+      subscriptions: stores.subscriptions,
+      attachments: stores.attachments,
+    });
   }
 }
