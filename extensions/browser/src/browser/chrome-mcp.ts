@@ -80,6 +80,19 @@ type ChromeMcpSessionFactory = (
   options?: NormalizedChromeMcpProfileOptions,
 ) => Promise<ChromeMcpSession>;
 
+type PendingChromeMcpSession = {
+  cacheKey: string;
+  promise: Promise<ChromeMcpSession>;
+  abortController: AbortController;
+  waiters: number;
+  settled: boolean;
+};
+
+type PendingChromeMcpSessionLease = {
+  session: ChromeMcpSession;
+  release: (closeIfLastWaiter: boolean) => Promise<boolean>;
+};
+
 export type ChromeMcpProcessInfo = {
   pid: number;
   ppid: number;
@@ -123,7 +136,7 @@ const STALE_SELECTED_PAGE_ERROR =
 
 const execFileAsync = promisify(execFile);
 const sessions = new Map<string, ChromeMcpSession>();
-const pendingSessions = new Map<string, Promise<ChromeMcpSession>>();
+const pendingSessions = new Map<string, PendingChromeMcpSession>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 let chromeMcpProcessCleanupDepsForTest: ChromeMcpProcessCleanupDeps | null = null;
 
@@ -362,9 +375,10 @@ async function closeChromeMcpSessionsForProfile(
 ): Promise<boolean> {
   let closed = false;
 
-  for (const key of Array.from(pendingSessions.keys())) {
+  for (const [key, pending] of Array.from(pendingSessions.entries())) {
     if (key !== keepKey && cacheKeyMatchesProfileName(key, profileName)) {
       pendingSessions.delete(key);
+      abortPendingChromeMcpSession(pending, new Error("Chrome MCP profile session was replaced"));
       closed = true;
     }
   }
@@ -812,17 +826,100 @@ async function createChromeMcpSession(
   signal?: AbortSignal,
 ): Promise<ChromeMcpSession> {
   const created = (sessionFactory ?? createRealSession)(profileName, options);
+  let closedAfterAbort = false;
   try {
     const session = await waitForChromeMcpPendingSession(created, signal);
     if (signal?.aborted) {
+      closedAfterAbort = true;
       await closeChromeMcpSessionHandle(session);
       throw signal.reason ?? new Error("aborted");
     }
     return session;
   } catch (err) {
-    if (signal?.aborted) {
+    if (signal?.aborted && !closedAfterAbort) {
       void created.then((session) => closeChromeMcpSessionHandle(session)).catch(() => {});
     }
+    throw err;
+  }
+}
+
+function abortPendingChromeMcpSession(
+  pending: PendingChromeMcpSession,
+  reason: unknown = new Error("Chrome MCP session attach no longer has active waiters"),
+): void {
+  if (!pending.settled && !pending.abortController.signal.aborted) {
+    pending.abortController.abort(reason);
+  }
+}
+
+function createSharedPendingChromeMcpSession(
+  cacheKey: string,
+  profileName: string,
+  options: NormalizedChromeMcpProfileOptions,
+): PendingChromeMcpSession {
+  let pending!: PendingChromeMcpSession;
+  const abortController = new AbortController();
+  const promise = (async () => {
+    try {
+      const created = await createChromeMcpSession(profileName, options, abortController.signal);
+      if (pendingSessions.get(cacheKey) === pending) {
+        sessions.set(cacheKey, created);
+      } else {
+        await closeChromeMcpSessionHandle(created);
+      }
+      return created;
+    } finally {
+      pending.settled = true;
+      if (pending.waiters === 0 && pendingSessions.get(cacheKey) === pending) {
+        pendingSessions.delete(cacheKey);
+      }
+    }
+  })();
+  pending = {
+    cacheKey,
+    promise,
+    abortController,
+    waiters: 0,
+    settled: false,
+  };
+  void promise.catch(() => {});
+  return pending;
+}
+
+async function waitForSharedPendingChromeMcpSession(
+  pending: PendingChromeMcpSession,
+  signal?: AbortSignal,
+): Promise<PendingChromeMcpSessionLease> {
+  pending.waiters += 1;
+  let released = false;
+  let leaseSession: ChromeMcpSession | undefined;
+  const release = async (closeIfLastWaiter: boolean) => {
+    if (released) {
+      return false;
+    }
+    released = true;
+    pending.waiters = Math.max(0, pending.waiters - 1);
+    if (pending.waiters !== 0) {
+      return false;
+    }
+    if (pendingSessions.get(pending.cacheKey) === pending) {
+      pendingSessions.delete(pending.cacheKey);
+    }
+    if (!pending.settled) {
+      abortPendingChromeMcpSession(pending, signal?.reason);
+    } else if (closeIfLastWaiter && leaseSession) {
+      await closeChromeMcpSessionHandle(leaseSession);
+    }
+    return true;
+  };
+  try {
+    leaseSession = await waitForChromeMcpPendingSession(pending.promise, signal);
+    return {
+      session: leaseSession,
+      release,
+    };
+  } catch (err) {
+    await release(signal?.aborted === true);
     throw err;
   }
 }
@@ -842,37 +939,41 @@ async function getSession(
     sessions.delete(cacheKey);
     session = undefined;
   }
-  if (!session) {
-    let pending = pendingSessions.get(cacheKey);
-    if (!pending) {
-      pending = (async () => {
-        const created = await createChromeMcpSession(profileName, options, signal);
-        if (pendingSessions.get(cacheKey) === pending) {
-          sessions.set(cacheKey, created);
-        } else {
-          await closeChromeMcpSessionHandle(created);
-        }
-        return created;
-      })();
-      pendingSessions.set(cacheKey, pending);
-    }
-    try {
-      session = await pending;
-    } finally {
-      if (pendingSessions.get(cacheKey) === pending) {
-        pendingSessions.delete(cacheKey);
-      }
-    }
+  let pendingLease: PendingChromeMcpSessionLease | undefined;
+  let pending = pendingSessions.get(cacheKey);
+  if (pending) {
+    pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
+    session = pendingLease.session;
+  } else if (!session) {
+    pending = createSharedPendingChromeMcpSession(cacheKey, profileName, options);
+    pendingSessions.set(cacheKey, pending);
+    pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
+    session = pendingLease.session;
   }
   try {
     await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
     return session;
   } catch (err) {
-    const current = sessions.get(cacheKey);
-    if (current?.transport === session.transport) {
-      sessions.delete(cacheKey);
+    if (signal?.aborted) {
+      const isLastWaiter = await pendingLease?.release(true);
+      if (isLastWaiter !== false) {
+        const current = sessions.get(cacheKey);
+        if (current?.transport === session.transport) {
+          sessions.delete(cacheKey);
+        }
+      }
+      if (pendingLease) {
+        pendingLease = undefined;
+      }
+    } else {
+      const current = sessions.get(cacheKey);
+      if (current?.transport === session.transport) {
+        sessions.delete(cacheKey);
+      }
     }
     throw err;
+  } finally {
+    await pendingLease?.release(false);
   }
 }
 
@@ -887,6 +988,37 @@ async function getExistingSession(
     sessions.delete(cacheKey);
     session = undefined;
   }
+
+  const pending = pendingSessions.get(cacheKey);
+  if (pending) {
+    let pendingLease: PendingChromeMcpSessionLease | undefined;
+    pendingLease = await waitForSharedPendingChromeMcpSession(pending, signal);
+    session = pendingLease.session;
+    try {
+      await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
+      return session;
+    } catch (err) {
+      if (signal?.aborted) {
+        const isLastWaiter = await pendingLease.release(true);
+        if (isLastWaiter) {
+          const current = sessions.get(cacheKey);
+          if (current?.transport === session.transport) {
+            sessions.delete(cacheKey);
+          }
+        }
+        pendingLease = undefined;
+      } else {
+        const current = sessions.get(cacheKey);
+        if (current?.transport === session.transport) {
+          sessions.delete(cacheKey);
+        }
+      }
+      throw err;
+    } finally {
+      await pendingLease?.release(false);
+    }
+  }
+
   if (session) {
     try {
       await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
@@ -900,22 +1032,7 @@ async function getExistingSession(
     }
   }
 
-  const pending = pendingSessions.get(cacheKey);
-  if (!pending) {
-    return null;
-  }
-
-  session = await waitForChromeMcpPendingSession(pending, signal);
-  try {
-    await waitForChromeMcpReady(session, profileName, timeoutMs, signal);
-    return session;
-  } catch (err) {
-    const current = sessions.get(cacheKey);
-    if (current?.transport === session.transport) {
-      sessions.delete(cacheKey);
-    }
-    throw err;
-  }
+  return null;
 }
 
 async function createEphemeralSession(
@@ -1539,6 +1656,9 @@ export function setChromeMcpProcessCleanupDepsForTest(
 
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   sessionFactory = null;
+  for (const pending of pendingSessions.values()) {
+    abortPendingChromeMcpSession(pending, new Error("Chrome MCP sessions reset for test"));
+  }
   pendingSessions.clear();
   await stopAllChromeMcpSessions();
   chromeMcpProcessCleanupDepsForTest = null;
