@@ -59,6 +59,7 @@ describe("skill workshop proposals", () => {
 
     expect(proposal.record.status).toBe("pending");
     expect(proposal.record.scan.state).toBe("clean");
+    expect(proposal.content).toContain('name: "weather-helper"');
     expect(proposal.record.supportFiles?.map((file) => file.path)).toEqual([
       "references/weather-api.md",
       "scripts/check-weather.js",
@@ -85,7 +86,7 @@ describe("skill workshop proposals", () => {
     });
     expect(applied.targetSkillFile).toBe(proposal.record.target.skillFile);
     await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toBe(
-      '---\nname: "Weather Helper"\ndescription: "Check weather before planning outdoor tasks"\n---\n\n# Weather Helper\n\nUse the weather provider before answering.\n',
+      '---\nname: "weather-helper"\ndescription: "Check weather before planning outdoor tasks"\n---\n\n# Weather Helper\n\nUse the weather provider before answering.\n',
     );
     await expect(
       fs.readFile(
@@ -101,8 +102,8 @@ describe("skill workshop proposals", () => {
     ).resolves.toContain("parseWeather");
 
     const status = buildWorkspaceSkillStatus(workspaceDir);
-    expect(status.skills.find((skill) => skill.name === "Weather Helper")).toMatchObject({
-      name: "Weather Helper",
+    expect(status.skills.find((skill) => skill.name === "weather-helper")).toMatchObject({
+      name: "weather-helper",
       source: "openclaw-workspace",
       filePath: applied.targetSkillFile,
     });

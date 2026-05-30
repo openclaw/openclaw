@@ -135,7 +135,7 @@ export async function proposeCreateSkill(
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
   const proposalContent = renderProposalMarkdown({
-    name,
+    name: target.skillKey,
     description,
     content: input.content,
   });
@@ -192,7 +192,7 @@ export async function proposeUpdateSkill(
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
   const proposalContent = renderProposalMarkdown({
-    name: targetSkill.name,
+    name: targetSkill.skillKey,
     description: targetSkill.description,
     content: input.content,
   });
