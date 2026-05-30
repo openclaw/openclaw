@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const MIRROR_PATH = path.resolve(__dirname, "doctor-cron-dreaming-payload-migration.ts");
-const SOURCE_PATH = path.resolve(__dirname, "..", "..", "src", "memory-host-sdk", "dreaming.ts");
+const MIRROR_PATH = path.resolve(__dirname, "dreaming-payload-migration.ts");
+const SOURCE_PATH = path.resolve(__dirname, "..", "..", "..", "memory-host-sdk", "dreaming.ts");
 
 const NAMES = [
   "MANAGED_MEMORY_DREAMING_CRON_NAME",

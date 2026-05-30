@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { migrateLegacyCronRunLogsToSqlite } from "../commands/doctor/cron/legacy-run-log-migration.js";
 import {
   appendCronRunLog,
   DEFAULT_CRON_RUN_LOG_KEEP_LINES,
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
-  migrateLegacyCronRunLogsToSqlite,
   readCronRunLogEntries,
   readCronRunLogEntriesPage,
   readCronRunLogEntriesSync,
@@ -317,6 +317,35 @@ describe("cron run log", () => {
         fallbackUsed: false,
         delivered: true,
       });
+    });
+  });
+
+  it("dedupes legacy migration against all existing SQLite rows when archive is blocked", async () => {
+    await withRunLogDir("openclaw-cron-log-large-migration-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      const lines = Array.from({ length: 5001 }, (_value, index) =>
+        JSON.stringify({
+          ts: index + 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          runId: `run-${index + 1}`,
+        }),
+      );
+      await fs.writeFile(logPath, `${lines.join("\n")}\n`, "utf-8");
+      await fs.writeFile(`${logPath}.migrated`, "", "utf-8");
+
+      const storePath = storePathForDir(dir);
+      await migrateLegacyCronRunLogsToSqlite(storePath);
+      await migrateLegacyCronRunLogsToSqlite(storePath);
+
+      const page = await readCronRunLogEntriesPage({
+        storePath,
+        jobId: "job-1",
+        limit: 1,
+      });
+      expect(page.total).toBe(5001);
     });
   });
 

@@ -2,20 +2,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { readCronRunLogEntriesSync } from "../cron/run-log.js";
-import { loadCronStore, resolveCronQuarantinePath, saveCronStore } from "../cron/store.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import { readCronRunLogEntriesSync } from "../../../cron/run-log.js";
+import { loadCronStore, resolveCronQuarantinePath, saveCronStore } from "../../../cron/store.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
   noteLegacyWhatsAppCrontabHealthCheck,
-} from "./doctor-cron.js";
+} from "./index.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
 const noteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../../../../packages/terminal-core/src/note.js", () => ({
   note: noteMock,
 }));
 

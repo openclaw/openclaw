@@ -1,15 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { tryCronScheduleIdentity } from "../cron/schedule-identity.js";
+import { tryCronScheduleIdentity } from "../../../cron/schedule-identity.js";
 import type {
   CronConfigJobRuntimeEntry,
   LoadedCronStore,
   QuarantinedCronConfigJob,
-} from "../cron/store.js";
-import type { CronStoreFile } from "../cron/types.js";
-import { isRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+} from "../../../cron/store.js";
+import type { CronStoreFile } from "../../../cron/types.js";
+import { isRecord } from "../../../shared/record-coerce.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 const LEGACY_CRON_ARCHIVE_SUFFIX = ".migrated";
 
