@@ -1672,6 +1672,7 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_timeout_seconds=90
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
@@ -1680,7 +1681,7 @@ jobs:
             local fetch_pid="$!"
             local elapsed=0
             while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge 30 ]; then
+              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
                 kill -TERM "$fetch_pid" 2>/dev/null || true
                 sleep 10
                 kill -KILL "$fetch_pid" 2>/dev/null || true
@@ -1792,6 +1793,7 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_timeout_seconds=90
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
@@ -1800,7 +1802,7 @@ jobs:
             local fetch_pid="$!"
             local elapsed=0
             while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge 30 ]; then
+              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
                 kill -TERM "$fetch_pid" 2>/dev/null || true
                 sleep 10
                 kill -KILL "$fetch_pid" 2>/dev/null || true
@@ -1858,6 +1860,7 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_timeout_seconds=90
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
@@ -1866,7 +1869,7 @@ jobs:
             local fetch_pid="$!"
             local elapsed=0
             while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge 30 ]; then
+              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
                 kill -TERM "$fetch_pid" 2>/dev/null || true
                 sleep 10
                 kill -KILL "$fetch_pid" 2>/dev/null || true

@@ -728,6 +728,12 @@ export function createFollowupRunner(params: {
                   model,
                   startedAt: cliLifecycleStartedAt,
                 };
+                const isRestartSentinelFollowup =
+                  run.inputProvenance?.kind === "internal_system" &&
+                  run.inputProvenance.sourceTool === "restart-sentinel";
+                const followupCurrentMessageId = isRestartSentinelFollowup
+                  ? queued.originatingReplyToId
+                  : queued.messageId;
                 const result = await runCliAgentWithLifecycle({
                   runId,
                   provider: cliExecutionProvider,
@@ -803,6 +809,12 @@ export function createFollowupRunner(params: {
                       originatingChannel: queued.originatingChannel,
                       provider: run.messageProvider,
                     }),
+                    currentChannelId: queued.originatingTo,
+                    currentThreadTs:
+                      queued.originatingThreadId != null
+                        ? String(queued.originatingThreadId)
+                        : undefined,
+                    currentMessageId: followupCurrentMessageId,
                     agentAccountId: run.agentAccountId,
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
@@ -823,6 +835,12 @@ export function createFollowupRunner(params: {
                 return result;
               }
               pendingDeferredCliTerminal = undefined;
+              const isRestartSentinelFollowup =
+                run.inputProvenance?.kind === "internal_system" &&
+                run.inputProvenance.sourceTool === "restart-sentinel";
+              const followupCurrentMessageId = isRestartSentinelFollowup
+                ? queued.originatingReplyToId
+                : queued.messageId;
               const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
@@ -840,6 +858,7 @@ export function createFollowupRunner(params: {
                   queued.originatingThreadId != null
                     ? String(queued.originatingThreadId)
                     : undefined,
+                currentMessageId: followupCurrentMessageId,
                 groupId: run.groupId,
                 groupChannel: run.groupChannel,
                 groupSpace: run.groupSpace,
