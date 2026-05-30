@@ -711,7 +711,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain("keep `description` under 160 bytes");
     expect(withTool).toContain("`proposal_content` within the configured body limit");
     expect(withTool).toContain(
-      "Use `action=list` or `action=inspect` only when you need to find or read pending proposals before revising.",
+      "Use `action=list` or `action=inspect` only for pending proposal discovery/inspection. Do not use filesystem search for proposal discovery.",
     );
     expect(withTool).toContain("`action=revise` for an existing pending proposal");
     expect(withTool).toContain("pass the proposal or skill name in `name`");

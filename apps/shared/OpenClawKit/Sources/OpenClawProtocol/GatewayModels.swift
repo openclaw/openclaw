@@ -5393,6 +5393,7 @@ public struct SkillsProposalCreateParams: Codable, Sendable {
 public struct SkillsProposalUpdateParams: Codable, Sendable {
     public let agentid: String?
     public let skillname: String
+    public let description: String?
     public let content: String
     public let supportfiles: [[String: AnyCodable]]?
     public let goal: String?
@@ -5401,6 +5402,7 @@ public struct SkillsProposalUpdateParams: Codable, Sendable {
     public init(
         agentid: String? = nil,
         skillname: String,
+        description: String?,
         content: String,
         supportfiles: [[String: AnyCodable]]?,
         goal: String?,
@@ -5408,6 +5410,7 @@ public struct SkillsProposalUpdateParams: Codable, Sendable {
     {
         self.agentid = agentid
         self.skillname = skillname
+        self.description = description
         self.content = content
         self.supportfiles = supportfiles
         self.goal = goal
@@ -5417,6 +5420,7 @@ public struct SkillsProposalUpdateParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case agentid = "agentId"
         case skillname = "skillName"
+        case description
         case content
         case supportfiles = "supportFiles"
         case goal
