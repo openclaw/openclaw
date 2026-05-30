@@ -1139,7 +1139,7 @@ process.on("SIGINT", shutdown);`,
       });
       await waitForFileText(
         logPath,
-        "reject tools/list method not found",
+        "recv initialize",
         LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
     } finally {
