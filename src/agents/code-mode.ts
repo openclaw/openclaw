@@ -601,7 +601,11 @@ function failedCodeModeWorkerResult(
 }
 
 function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
-  if (result.status === "failed" && result.code === "timeout" && result.error === "interrupted") {
+  if (
+    result.status === "failed" &&
+    result.code === "timeout" &&
+    String(result.error) === "interrupted"
+  ) {
     return {
       ...result,
       error: "code mode timeout exceeded",
@@ -797,15 +801,17 @@ async function runExec(params: {
     };
   }
   try {
-    const result = await runCodeModeWorker(
-      {
-        kind: "exec",
-        source,
-        config,
-        catalog,
-        namespaces: namespaceRuntime.descriptors,
-      },
-      config.timeoutMs + 1000,
+    const result = normalizeCodeModeWorkerResult(
+      await runCodeModeWorker(
+        {
+          kind: "exec",
+          source,
+          config,
+          catalog,
+          namespaces: namespaceRuntime.descriptors,
+        },
+        config.timeoutMs + 1000,
+      ),
     );
     if (result.status === "waiting") {
       return snapshotState({
@@ -908,14 +914,16 @@ async function runWait(params: {
     for (const entry of state.pending) {
       settledRequests.push(entry.settled ?? (await entry.promise));
     }
-    const result = await runCodeModeWorker(
-      {
-        kind: "resume",
-        snapshotBytes: state.snapshotBytes,
-        config: state.config,
-        settledRequests,
-      },
-      state.config.timeoutMs + 1000,
+    const result = normalizeCodeModeWorkerResult(
+      await runCodeModeWorker(
+        {
+          kind: "resume",
+          snapshotBytes: state.snapshotBytes,
+          config: state.config,
+          settledRequests,
+        },
+        state.config.timeoutMs + 1000,
+      ),
     );
     const output = [...state.output, ...result.output];
     enforceOutputLimit(output, state.config);

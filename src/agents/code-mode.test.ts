@@ -1415,7 +1415,7 @@ describe("Code Mode", () => {
         config,
         catalog: [],
       },
-      1000,
+      5000,
     );
 
     expect(result.status).toBe("failed");
