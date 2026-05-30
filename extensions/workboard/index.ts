@@ -15,9 +15,14 @@ export default definePluginEntry({
     api.registerTool((context) => createWorkboardTools({ api, context, store }), {
       names: [
         "workboard_list",
+        "workboard_create",
+        "workboard_link",
         "workboard_read",
         "workboard_claim",
         "workboard_heartbeat",
+        "workboard_complete",
+        "workboard_block",
+        "workboard_dispatch",
         "workboard_release",
         "workboard_comment",
         "workboard_proof",

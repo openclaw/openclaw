@@ -125,6 +125,32 @@ describe("kitchen-sink RPC gateway teardown", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps stalled readiness probes inside the caller deadline", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-stalled-ready-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "booting\n");
+      let calls = 0;
+      const startedAt = Date.now();
+
+      await expect(
+        waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
+          fetchImpl: () => {
+            calls += 1;
+            return new Promise(() => {});
+          },
+          pollDelayMs: 1,
+          timeoutMs: 25,
+        }),
+      ).rejects.toThrow("gateway did not become ready");
+
+      expect(calls).toBe(1);
+      expect(Date.now() - startedAt).toBeLessThan(500);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("kitchen-sink RPC gateway readiness logs", () => {

@@ -144,11 +144,11 @@ and pairing-path families.
     | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers |
     | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth-runtime` | Runtime API-key resolution helpers for provider plugins |
-    | `plugin-sdk/provider-oauth-runtime` | Generic provider OAuth callback types, callback-page rendering, PKCE/state helpers, and abort helpers |
+    | `plugin-sdk/provider-oauth-runtime` | Generic provider OAuth callback types, callback-page rendering, PKCE/state helpers, authorization-input parsing, token-expiry helpers, and abort helpers |
     | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers such as `upsertApiKeyProfile` |
     | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
-    | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, deprecated `resolveOpenClawAgentDir` compatibility export |
+    | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, OpenAI Codex auth-import helpers, deprecated `resolveOpenClawAgentDir` compatibility export |
     | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and shared model-id normalization helpers |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |

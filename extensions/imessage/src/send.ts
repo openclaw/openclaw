@@ -236,6 +236,16 @@ function isNumericMessageRowId(value: string | null | undefined): value is strin
   return typeof value === "string" && /^\d+$/.test(value.trim());
 }
 
+function resolveTargetService(target: ParsedIMessageTarget): IMessageService | undefined {
+  if (target.kind !== "handle") {
+    return undefined;
+  }
+  if (target.serviceExplicit || target.service !== "auto") {
+    return target.service;
+  }
+  return undefined;
+}
+
 function normalizeResolvedMessageGuid(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -819,8 +829,9 @@ export async function sendMessageIMessage(
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
   const service =
     opts.service ??
-    (target.kind === "handle" ? target.service : undefined) ??
+    resolveTargetService(target) ??
     (account.config.service as IMessageService | undefined);
+  const timeoutMs = opts.timeoutMs ?? account.config.probeTimeoutMs;
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
   const maxBytes =
     typeof opts.maxBytes === "number"
@@ -872,7 +883,7 @@ export async function sendMessageIMessage(
   const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const runCliJson =
     opts.runCliJson ??
-    ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, opts.timeoutMs));
+    ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
 
   if (filePath && !resolvedReplyToId) {
     const attachmentResult = await trySendAttachmentForTarget({
@@ -945,7 +956,7 @@ export async function sendMessageIMessage(
   try {
     try {
       result = await client.request<Record<string, unknown>>("send", params, {
-        timeoutMs: opts.timeoutMs,
+        timeoutMs,
       });
     } catch (error) {
       if (filePath || resolvedReplyToId || !isIMessageRpcSendTimeout(error)) {

@@ -98,6 +98,9 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+          "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
+          "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
+          "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
           "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
           "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
         },
@@ -1147,6 +1150,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         cfg: expect.any(Object),
         sessionKey: "agent:main:test",
         messageProvider: undefined,
+        currentChannelId: undefined,
+        currentThreadTs: undefined,
+        currentMessageId: undefined,
         accountId: undefined,
         inboundEventKind: undefined,
         sourceReplyDeliveryMode: undefined,
@@ -1289,11 +1295,17 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: createCliBackendConfig(),
         currentInboundEventKind: "room_event",
         messageChannel: "telegram",
+        currentChannelId: "telegram:-100123:topic:42",
+        currentThreadTs: "42",
+        currentMessageId: "reply-message-1",
         sourceReplyDeliveryMode: "message_tool_only",
       });
 
       expect(context.preparedBackend.env).toMatchObject({
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
+        OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",
+        OPENCLAW_MCP_CURRENT_THREAD_TS: "42",
+        OPENCLAW_MCP_CURRENT_MESSAGE_ID: "reply-message-1",
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
         OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
       });

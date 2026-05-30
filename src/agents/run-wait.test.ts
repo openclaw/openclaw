@@ -268,7 +268,7 @@ describe("waitForAgentRun", () => {
     });
   });
 
-  it("preserves timing metadata from agent.wait", async () => {
+  it("preserves timing metadata on provider-attributed wait timeouts", async () => {
     callGatewayMock.mockResolvedValue({
       status: "ok",
       startedAt: 100,
@@ -280,9 +280,29 @@ describe("waitForAgentRun", () => {
     const result = await waitForAgentRun({ runId: "run-2", timeoutMs: 500 });
 
     expect(result).toEqual({
-      status: "ok",
+      status: "timeout",
       startedAt: 100,
       endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
+  it("keeps hard wait timeouts stronger than blocked liveness", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "error",
+      error: "model timed out",
+      livenessState: "blocked",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const result = await waitForAgentRun({ runId: "run-blocked-timeout", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "timeout",
+      error: "model timed out",
+      livenessState: "blocked",
       timeoutPhase: "provider",
       providerStarted: true,
     });

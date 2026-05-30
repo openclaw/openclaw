@@ -24,7 +24,11 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
@@ -41,6 +45,7 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
+import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
@@ -87,7 +92,6 @@ import {
 import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
-import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
@@ -489,7 +493,19 @@ async function compactEmbeddedAgentSessionDirectOnce(
     workspaceDir: resolvedWorkspace,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
-  const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+  const earlyAgentIds = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const agentDir =
+    params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
+  const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const runtimePolicyAgentId =
+    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+      ? undefined
+      : params.agentId;
+  const policyCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.model,
@@ -497,12 +513,47 @@ async function compactEmbeddedAgentSessionDirectOnce(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  const configuredHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: policyCompactionTarget.provider ?? DEFAULT_PROVIDER,
+    modelId: policyCompactionTarget.model ?? DEFAULT_MODEL,
+    config: params.config,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+  });
+  const configuredHarnessRuntime =
+    configuredHarnessPolicy.runtimeSource &&
+    configuredHarnessPolicy.runtimeSource !== "implicit" &&
+    !isDefaultAgentRuntimeId(configuredHarnessPolicy.runtime)
+      ? configuredHarnessPolicy.runtime
+      : undefined;
+  const selectedHarnessRuntime = params.agentHarnessId ?? configuredHarnessRuntime;
+  const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    harnessRuntime: selectedHarnessRuntime,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
   // Keep the configured provider for harness policy, while auth/model loading below can
   // route OpenAI compaction through Codex OAuth when that runtime owns the session credentials.
   const provider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
   const runtimeProvider = resolvedCompactionTarget.runtimeProvider ?? provider;
+  const contextConfigProvider = resolvedCompactionTarget.contextProvider ?? provider;
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const authProfileId = resolvedCompactionTarget.authProfileId;
+  if (runtimeProvider !== provider || selectedHarnessRuntime) {
+    await ensureSelectedAgentHarnessPlugin({
+      config: params.config,
+      provider,
+      modelId,
+      agentId: runtimePolicyAgentId,
+      sessionKey: runtimePolicySessionKey,
+      agentHarnessRuntimeOverride: selectedHarnessRuntime,
+      workspaceDir: resolvedWorkspace,
+    });
+  }
   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
@@ -531,13 +582,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
         : undefined,
     };
   };
-  const earlyAgentIds = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
-  const agentDir =
-    params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
   await ensureOpenClawModelsJson(params.config, agentDir, {
     workspaceDir: resolvedWorkspace,
   });
@@ -627,11 +671,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     sessionId: params.sessionId,
     cwd: effectiveCwd,
   });
-  const { sessionAgentId: effectiveSkillAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
+  const { sessionAgentId: effectiveSkillAgentId } = earlyAgentIds;
 
   let restoreSkillEnv: (() => void) | undefined;
   let compactionSessionManager: unknown = null;
@@ -683,19 +723,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
     // Apply contextTokens cap to model so session runtime's auto-compaction
     // threshold uses the effective limit, not the native context window.
     const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
-    const runtimeHarnessPolicy = resolveAgentHarnessPolicy({
-      provider,
-      modelId,
-      config: params.config,
-      agentId: effectiveSkillAgentId,
-      sessionKey: params.sessionKey,
-    });
     const ctxInfo = resolveContextWindowInfo({
       cfg: params.config,
-      provider: resolveContextConfigProviderForRuntime({
-        provider,
-        runtimeId: params.agentHarnessId ?? runtimeHarnessPolicy.runtime,
-      }),
+      provider: contextConfigProvider,
       modelId,
       modelContextTokens: readAgentModelContextTokens(runtimeModel),
       modelContextWindow: runtimeModelWithContext.contextWindow,
@@ -731,7 +761,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         model: effectiveModel,
         modelApi: effectiveModel.api,
         harnessId: params.agentHarnessId,
-        harnessRuntime: runtimeHarnessPolicy.runtime,
+        harnessRuntime: selectedHarnessRuntime,
         authProfileProvider: authProfileId?.split(":", 1)[0],
         sessionAuthProfileId: authProfileId,
         config: params.config,

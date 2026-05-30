@@ -2,7 +2,10 @@ import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import { parseFiniteNumber } from "../shared/number-coercion.js";
-import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "./agent-run-terminal-outcome.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
@@ -79,11 +82,7 @@ function normalizeAgentWaitResult(
           startedAt: wait?.startedAt,
           endedAt: wait?.endedAt,
         });
-  const normalized = normalizeBlockedLivenessWaitStatus({
-    status: terminalOutcome?.status ?? status,
-    livenessState: wait?.livenessState,
-    error: terminalOutcome?.error,
-  });
+  const normalized = normalizeTerminalOutcomeForWait(terminalOutcome, status, wait?.livenessState);
   return {
     status: normalized.status,
     error: normalized.error,
@@ -96,6 +95,21 @@ function normalizeAgentWaitResult(
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
   };
+}
+
+function normalizeTerminalOutcomeForWait(
+  outcome: AgentRunTerminalOutcome | undefined,
+  fallbackStatus: AgentWaitResult["status"],
+  livenessState?: unknown,
+): { status: AgentWaitResult["status"]; error?: string } {
+  if (outcome?.reason === "hard_timeout") {
+    return { status: outcome.status, error: outcome.error };
+  }
+  return normalizeBlockedLivenessWaitStatus({
+    status: outcome?.status ?? fallbackStatus,
+    livenessState,
+    error: outcome?.error,
+  });
 }
 
 const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [

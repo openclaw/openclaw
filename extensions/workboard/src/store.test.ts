@@ -107,6 +107,26 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("ignores dependency links from generic metadata writes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent" });
+    const child = await store.create({
+      title: "Child",
+      metadata: {
+        links: [{ id: "raw-parent", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    });
+
+    expect(child.metadata?.links).toBeUndefined();
+
+    const updated = await store.update(child.id, {
+      metadata: {
+        links: [{ id: "raw-parent-2", type: "parent", targetCardId: parent.id, createdAt: 2 }],
+      },
+    });
+    expect(updated.metadata?.links).toBeUndefined();
+  });
+
   it("stores card templates and metadata in the card record", async () => {
     const keyed = createMemoryStore();
     const store = new WorkboardStore(keyed);
@@ -134,6 +154,47 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("updates automation metadata from top-level patch fields", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Tune automation" });
+
+    const updated = await store.update(card.id, {
+      tenant: "release",
+      idempotencyKey: "release:1",
+      skills: ["testing", "docs"],
+      workspace: { kind: "scratch" },
+      maxRuntimeSeconds: 120,
+      maxRetries: 2,
+      scheduledAt: 10_000,
+    });
+
+    expect(updated.metadata?.automation).toMatchObject({
+      tenant: "release",
+      idempotencyKey: "release:1",
+      skills: ["testing", "docs"],
+      workspace: { kind: "scratch" },
+      maxRuntimeSeconds: 120,
+      maxRetries: 2,
+      scheduledAt: 10_000,
+    });
+
+    const cleared = await store.update(card.id, { scheduledAt: null });
+    expect(cleared.metadata?.automation?.scheduledAt).toBeUndefined();
+    expect(cleared.metadata?.automation).toMatchObject({
+      tenant: "release",
+      maxRetries: 2,
+    });
+
+    const preserved = await store.update(card.id, {
+      scheduledAt: 20_000,
+      maxRuntimeSeconds: undefined,
+    });
+    expect(preserved.metadata?.automation).toMatchObject({
+      scheduledAt: 20_000,
+      maxRuntimeSeconds: 120,
+    });
+  });
+
   it("moves cards and records lifecycle timestamps", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Ship workboard" });
@@ -150,6 +211,14 @@ describe("WorkboardStore", () => {
 
     const done = await store.update(card.id, { status: "done" });
     expect(done.completedAt).toBeGreaterThanOrEqual(done.startedAt ?? 0);
+
+    const rolledBack = await store.update(card.id, {
+      status: "todo",
+      startedAt: null,
+      completedAt: null,
+    });
+    expect(rolledBack.startedAt).toBeUndefined();
+    expect(rolledBack.completedAt).toBeUndefined();
   });
 
   it("keeps execution session links aligned with edited card links", async () => {
@@ -284,6 +353,9 @@ describe("WorkboardStore", () => {
       targetCardId: "card-upstream",
     });
     expect(linked.events?.at(-1)).toMatchObject({ kind: "link_added" });
+    await expect(
+      store.addLink(card.id, { type: "parent", targetCardId: "card-upstream" }),
+    ).rejects.toThrow(/linkDependency/);
 
     const proven = await store.addProof(card.id, {
       status: "passed",
@@ -422,6 +494,616 @@ describe("WorkboardStore", () => {
     const released = await store.releaseClaim(card.id, { ownerId: "main", status: "review" });
     expect(released.status).toBe("review");
     expect(released.metadata?.claim).toBeUndefined();
+  });
+
+  it("creates idempotent child cards and promotes them when parents finish", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "running" });
+    const child = await store.create({
+      title: "Child",
+      status: "todo",
+      parents: [parent.id],
+      tenant: "release",
+      idempotencyKey: "fanout:1",
+      skills: ["testing"],
+      workspace: { kind: "scratch" },
+    });
+
+    expect(child.status).toBe("todo");
+    expect(child.metadata?.links).toEqual([
+      expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+    ]);
+    await expect(store.get(parent.id)).resolves.toMatchObject({
+      metadata: { links: [expect.objectContaining({ type: "child", targetCardId: child.id })] },
+    });
+    await expect(
+      store.create({
+        title: "Duplicate child",
+        tenant: "release",
+        idempotencyKey: "fanout:1",
+      }),
+    ).resolves.toMatchObject({ id: child.id });
+    await expect(
+      store.create({
+        title: "Different tenant child",
+        tenant: "qa",
+        idempotencyKey: "fanout:1",
+      }),
+    ).resolves.toMatchObject({ title: "Different tenant child" });
+    await expect(
+      store.create({ title: "Unscoped child", idempotencyKey: "fanout:1" }),
+    ).resolves.toMatchObject({ title: "Unscoped child" });
+
+    await store.complete(parent.id, { summary: "Parent done." });
+    const promoted = await store.promoteReady();
+
+    expect(promoted.cards).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
+    await expect(store.get(child.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        automation: {
+          tenant: "release",
+          idempotencyKey: "fanout:1",
+          skills: ["testing"],
+          workspace: { kind: "scratch" },
+        },
+      },
+    });
+  });
+
+  it("returns an idempotent child retry when its original parent was deleted", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Ephemeral parent" });
+    const child = await store.create({
+      title: "Retryable child",
+      parents: [parent.id],
+      tenant: "release",
+      idempotencyKey: "fanout:deleted-parent",
+    });
+
+    await store.delete(parent.id);
+
+    await expect(
+      store.create({
+        title: "Retryable child",
+        parents: [parent.id],
+        tenant: "release",
+        idempotencyKey: "fanout:deleted-parent",
+      }),
+    ).resolves.toMatchObject({ id: child.id });
+  });
+
+  it("accepts POSIX and Windows absolute directory workspaces", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+
+    await expect(
+      store.create({
+        title: "POSIX workspace",
+        workspace: { kind: "dir", path: "/Users/me/repo" },
+      }),
+    ).resolves.toMatchObject({
+      metadata: { automation: { workspace: { kind: "dir", path: "/Users/me/repo" } } },
+    });
+    await expect(
+      store.create({
+        title: "Windows drive workspace",
+        workspace: { kind: "dir", path: String.raw`C:\Users\me\repo` },
+      }),
+    ).resolves.toMatchObject({
+      metadata: {
+        automation: { workspace: { kind: "dir", path: String.raw`C:\Users\me\repo` } },
+      },
+    });
+    await expect(
+      store.create({
+        title: "Windows UNC workspace",
+        workspace: { kind: "dir", path: String.raw`\\server\share\repo` },
+      }),
+    ).resolves.toMatchObject({
+      metadata: {
+        automation: { workspace: { kind: "dir", path: String.raw`\\server\share\repo` } },
+      },
+    });
+    await expect(
+      store.create({ title: "Relative workspace", workspace: { kind: "dir", path: "repo" } }),
+    ).rejects.toThrow(/absolute/);
+  });
+
+  it("keeps future scheduled cards scheduled until their time arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: "Later",
+        status: "scheduled",
+        scheduledAt: 10_000,
+      });
+      const manual = await store.create({
+        title: "Manual scheduled",
+        status: "scheduled",
+      });
+      const implicit = await store.create({
+        title: "Implicit later",
+        scheduledAt: 10_000,
+      });
+      const activeRequested = await store.create({
+        title: "Active requested later",
+        status: "running",
+        scheduledAt: 10_000,
+        execution: {
+          id: "exec-scheduled",
+          kind: "agent-session",
+          engine: "codex",
+          mode: "autonomous",
+          status: "running",
+          model: "openai/gpt-5.5",
+          startedAt: 0,
+          updatedAt: 0,
+        },
+      });
+      const parent = await store.create({ title: "Parent", status: "running" });
+      const dependent = await store.create({
+        title: "Dependent later",
+        status: "scheduled",
+        parents: [parent.id],
+        scheduledAt: 10_000,
+      });
+
+      expect((await store.dispatch(1_000)).promoted).toEqual([]);
+      await expect(store.get(card.id)).resolves.toMatchObject({ status: "scheduled" });
+      await expect(store.get(manual.id)).resolves.toMatchObject({ status: "scheduled" });
+      await expect(store.get(implicit.id)).resolves.toMatchObject({ status: "scheduled" });
+      await expect(store.get(activeRequested.id)).resolves.toMatchObject({ status: "scheduled" });
+      expect((await store.get(activeRequested.id))?.execution).toBeUndefined();
+      expect((await store.get(activeRequested.id))?.metadata?.attempts).toBeUndefined();
+      await expect(store.get(dependent.id)).resolves.toMatchObject({ status: "scheduled" });
+      await expect(store.claim(card.id, { ownerId: "main" })).rejects.toThrow(/scheduled/);
+      await expect(store.claim(manual.id, { ownerId: "main" })).rejects.toThrow(/scheduled/);
+      await expect(store.claim(implicit.id, { ownerId: "main" })).rejects.toThrow(/scheduled/);
+      await expect(store.move(manual.id, "running", manual.position)).rejects.toThrow(/scheduled/);
+
+      await store.complete(parent.id, { summary: "Parent done." });
+      expect((await store.dispatch(5_000)).promoted).toEqual([]);
+      await expect(store.get(dependent.id)).resolves.toMatchObject({ status: "scheduled" });
+
+      expect((await store.dispatch(20_000)).promoted).toEqual([
+        expect.objectContaining({ id: card.id, status: "ready" }),
+        expect.objectContaining({ id: implicit.id, status: "ready" }),
+        expect.objectContaining({ id: activeRequested.id, status: "ready" }),
+        expect.objectContaining({ id: dependent.id, status: "ready" }),
+      ]);
+      await expect(store.get(manual.id)).resolves.toMatchObject({ status: "scheduled" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds dependent cards out of runnable statuses until parents finish", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "running" });
+    const child = await store.create({
+      title: "Child",
+      status: "running",
+      parents: [parent.id],
+      execution: {
+        id: "exec-held",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    });
+
+    expect(child.status).toBe("todo");
+    expect(child.execution).toBeUndefined();
+    expect(child.metadata?.attempts).toBeUndefined();
+    await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(/dependencies/);
+    await expect(store.move(child.id, "ready", child.position)).rejects.toThrow(/dependencies/);
+    await expect(store.move(child.id, "running", child.position)).rejects.toThrow(/dependencies/);
+    await expect(store.move(child.id, "done", child.position)).rejects.toThrow(/dependencies/);
+    await expect(store.update(child.id, { status: "ready" })).rejects.toThrow(/dependencies/);
+    await expect(store.update(child.id, { status: "done" })).rejects.toThrow(/dependencies/);
+    await expect(store.complete(child.id, { summary: "Too early." })).rejects.toThrow(
+      /dependencies/,
+    );
+
+    const linked = await store.update(child.id, {
+      metadata: {
+        links: [
+          {
+            id: "ordinary-link",
+            type: "relates_to",
+            createdAt: Date.now(),
+            url: "https://example.com/work",
+          },
+        ],
+      },
+    });
+    expect(linked.metadata?.links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+        expect.objectContaining({ type: "relates_to", url: "https://example.com/work" }),
+      ]),
+    );
+    await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(/dependencies/);
+
+    await store.complete(parent.id, { summary: "Parent done." });
+    const dispatch = await store.dispatch();
+
+    expect(dispatch.promoted).toEqual([expect.objectContaining({ id: child.id, status: "ready" })]);
+    const claimed = await store.claim(child.id, { ownerId: "main" });
+    expect(claimed.card.status).toBe("running");
+
+    await store.update(parent.id, { status: "running" });
+    await store.dispatch();
+    await expect(store.get(child.id)).resolves.toMatchObject({
+      status: "running",
+      metadata: { claim: expect.objectContaining({ ownerId: "main" }) },
+    });
+    await expect(store.releaseClaim(child.id, { ownerId: "main", status: "done" })).rejects.toThrow(
+      /dependencies/,
+    );
+    await expect(store.get(child.id)).resolves.toMatchObject({
+      status: "running",
+      metadata: { claim: expect.objectContaining({ ownerId: "main" }) },
+    });
+
+    const lateParent = await store.create({ title: "Late parent" });
+    await expect(store.linkCards(lateParent.id, child.id)).rejects.toThrow(/active child/);
+  });
+
+  it("rejects terminal children with incomplete dependency parents", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const runningParent = await store.create({ title: "Running parent", status: "running" });
+    const doneChild = await store.create({ title: "Done child", status: "done" });
+
+    await expect(store.linkCards(runningParent.id, doneChild.id)).rejects.toThrow(/terminal child/);
+    await expect(
+      store.create({ title: "Already done", status: "done", parents: [runningParent.id] }),
+    ).rejects.toThrow(/terminal child/);
+
+    const doneParent = await store.create({ title: "Done parent", status: "done" });
+    await expect(store.linkCards(doneParent.id, doneChild.id)).resolves.toMatchObject({
+      id: doneChild.id,
+      status: "done",
+    });
+  });
+
+  it("preserves dependency links across link caps and parent deletion", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "running" });
+    const child = await store.create({ title: "Child", parents: [parent.id] });
+
+    for (let index = 0; index < 60; index += 1) {
+      await store.addLink(child.id, {
+        type: "relates_to",
+        url: `https://example.com/${index}`,
+      });
+    }
+
+    await expect(store.claim(child.id, { ownerId: "main" })).rejects.toThrow(/dependencies/);
+
+    await store.delete(parent.id);
+    const claimed = await store.claim(child.id, { ownerId: "main" });
+
+    expect(claimed.card.status).toBe("running");
+    expect(claimed.card.metadata?.links?.some((link) => link.targetCardId === parent.id)).toBe(
+      false,
+    );
+  });
+
+  it("rolls back card creation when dependency link capacity rejects the parent", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Fanout parent" });
+    for (let index = 0; index < 50; index += 1) {
+      await store.create({ title: `Child ${index}`, parents: [parent.id] });
+    }
+
+    await expect(
+      store.create({
+        title: "Overflow child",
+        parents: [parent.id],
+        idempotencyKey: "overflow",
+      }),
+    ).rejects.toThrow(/link limit/);
+
+    expect((await store.list()).some((card) => card.title === "Overflow child")).toBe(false);
+  });
+
+  it("rejects invalid parent creates without persisting partial cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parents: string[] = [];
+    for (let index = 0; index < 21; index += 1) {
+      parents.push((await store.create({ title: `Parent ${index}` })).id);
+    }
+
+    await expect(
+      store.create({
+        title: "Too many parents",
+        parents,
+      }),
+    ).rejects.toThrow(/parents supports at most 20 entries/);
+    await expect(
+      store.create({
+        title: "Malformed parents",
+        parents: [parents[0], 123],
+      }),
+    ).rejects.toThrow(/parents entries must be strings/);
+
+    await expect(
+      store.create({
+        title: "Orphan child",
+        parents: ["missing-parent"],
+        idempotencyKey: "fanout:missing",
+      }),
+    ).rejects.toThrow(/card not found: missing-parent/);
+
+    expect((await store.list()).some((card) => card.title === "Too many parents")).toBe(false);
+    expect((await store.list()).some((card) => card.title === "Malformed parents")).toBe(false);
+    expect((await store.list()).some((card) => card.title === "Orphan child")).toBe(false);
+  });
+
+  it("rejects dependency cycles", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const first = await store.create({ title: "First" });
+    const second = await store.create({ title: "Second", parents: [first.id] });
+
+    await expect(store.linkCards(second.id, first.id)).rejects.toThrow(/cycle/);
+  });
+
+  it("completes and blocks claimed cards with structured handoff metadata", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Ship child",
+      status: "running",
+      execution: {
+        id: "exec-complete",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        startedAt: 1_000,
+        updatedAt: 1_000,
+      },
+    });
+    const child = await store.create({ title: "Follow-up" });
+    const claimed = await store.claim(card.id, { ownerId: "main", token: "token-1" });
+
+    const completed = await store.complete(claimed.card.id, {
+      ownerId: "main",
+      token: "token-1",
+      summary: "Implemented and verified.",
+      proof: { status: "passed", command: "pnpm test extensions/workboard" },
+      artifacts: [{ path: "/tmp/log.txt", label: "log" }],
+      createdCardIds: [child.id],
+    });
+
+    expect(completed).toMatchObject({
+      status: "done",
+      execution: { status: "done" },
+      metadata: {
+        attempts: [expect.objectContaining({ status: "succeeded", endedAt: expect.any(Number) })],
+        comments: [expect.objectContaining({ body: "Implemented and verified." })],
+        proof: [expect.objectContaining({ status: "passed" })],
+        artifacts: [expect.objectContaining({ path: "/tmp/log.txt" })],
+        automation: { summary: "Implemented and verified.", createdCardIds: [child.id] },
+        notifications: [expect.objectContaining({ kind: "completed" })],
+      },
+    });
+    expect(completed.metadata?.claim).toBeUndefined();
+
+    const blockedCard = await store.create({
+      title: "Blocked work",
+      status: "running",
+      execution: {
+        id: "exec-block",
+        kind: "agent-session",
+        engine: "claude",
+        mode: "autonomous",
+        status: "running",
+        model: "anthropic/claude-sonnet-4.6",
+        startedAt: 1_000,
+        updatedAt: 1_000,
+      },
+    });
+    await store.claim(blockedCard.id, { ownerId: "main", token: "token-2" });
+    const blocked = await store.block(blockedCard.id, {
+      ownerId: "main",
+      token: "token-2",
+      reason: "Needs owner decision.",
+    });
+
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.execution?.status).toBe("blocked");
+    expect(blocked.metadata?.attempts).toEqual([
+      expect.objectContaining({
+        status: "blocked",
+        endedAt: expect.any(Number),
+        error: "Needs owner decision.",
+      }),
+    ]);
+    expect(blocked.metadata?.failureCount).toBe(1);
+    expect(blocked.metadata?.claim).toBeUndefined();
+    expect(blocked.metadata?.notifications).toEqual([
+      expect.objectContaining({ kind: "failed", message: "Needs owner decision." }),
+    ]);
+
+    const recovered = await store.complete(
+      (
+        await store.create({
+          title: "Recovered work",
+          status: "running",
+          metadata: { failureCount: 2 },
+        })
+      ).id,
+      { summary: "Recovered." },
+    );
+    expect(recovered.metadata?.failureCount).toBeUndefined();
+  });
+
+  it("keeps long lifecycle handoffs in comments while capping notifications", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const completeCard = await store.create({ title: "Long complete" });
+    const blockCard = await store.create({ title: "Long block" });
+    const longSummary = "x".repeat(1000);
+    const longReason = "y".repeat(1000);
+
+    const completed = await store.complete(completeCard.id, { summary: longSummary });
+    const blocked = await store.block(blockCard.id, { reason: longReason });
+
+    expect(completed.metadata?.comments?.[0]?.body).toBe(longSummary);
+    expect(completed.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
+    expect(blocked.metadata?.comments?.[0]?.body).toBe(longReason);
+    expect(blocked.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
+  });
+
+  it("dispatches ready cards and blocks expired or timed-out work", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const ready = await store.create({ title: "Ready", status: "ready" });
+      const readyUpdatedAt = ready.updatedAt;
+      const expired = await store.create({ title: "Expired", status: "running" });
+      await store.claim(expired.id, { ownerId: "main", token: "token-1", ttlSeconds: 1 });
+      const timed = await store.create({
+        title: "Timed",
+        status: "running",
+        maxRuntimeSeconds: 1,
+        execution: {
+          id: "exec-1",
+          kind: "agent-session",
+          engine: "codex",
+          mode: "autonomous",
+          status: "running",
+          model: "openai/gpt-5.5",
+          startedAt: 1_000,
+          updatedAt: 1_000,
+        },
+      });
+      const claimedTimed = await store.create({
+        title: "Claimed timed",
+        status: "ready",
+        maxRuntimeSeconds: 1,
+      });
+      await store.claim(claimedTimed.id, { ownerId: "main", token: "token-2", ttlSeconds: 60 });
+      const createdRunningTimed = await store.create({
+        title: "Created running timed",
+        status: "running",
+        maxRuntimeSeconds: 1,
+      });
+
+      const result = await store.dispatch(10 * 60 * 1000);
+
+      expect(createdRunningTimed.startedAt).toBe(1_000);
+      expect(result.count).toBe(4);
+      await expect(store.get(ready.id)).resolves.toMatchObject({
+        updatedAt: readyUpdatedAt,
+        metadata: { automation: { dispatchCount: 1, lastDispatchAt: 600_000 } },
+        events: expect.arrayContaining([expect.objectContaining({ kind: "dispatch" })]),
+      });
+      const blockedExpired = await store.get(expired.id);
+      expect(blockedExpired).toMatchObject({ status: "blocked" });
+      expect(blockedExpired?.metadata?.claim).toBeUndefined();
+      await expect(store.get(timed.id)).resolves.toMatchObject({
+        status: "blocked",
+        execution: { status: "blocked" },
+        metadata: {
+          attempts: [expect.objectContaining({ status: "blocked", endedAt: 600_000 })],
+        },
+      });
+      const blockedClaimed = await store.get(claimedTimed.id);
+      expect(blockedClaimed).toMatchObject({ status: "blocked" });
+      expect(blockedClaimed?.metadata?.claim).toBeUndefined();
+      expect(blockedClaimed?.metadata?.notifications).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ message: "Run exceeded the card max runtime." }),
+        ]),
+      );
+      await expect(store.get(createdRunningTimed.id)).resolves.toMatchObject({
+        status: "blocked",
+        metadata: {
+          notifications: expect.arrayContaining([
+            expect.objectContaining({ message: "Run exceeded the card max runtime." }),
+          ]),
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets in-flight retries finish before enforcing the retry budget", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const retrying = await store.create({
+      title: "Retrying",
+      status: "ready",
+      maxRetries: 1,
+      metadata: { failureCount: 1 },
+    });
+    await store.claim(retrying.id, { ownerId: "main", token: "token-1" });
+
+    const retryDispatch = await store.dispatch();
+
+    expect(retryDispatch.blocked).toEqual([]);
+    await expect(store.get(retrying.id)).resolves.toMatchObject({ status: "running" });
+
+    const exhausted = await store.create({
+      title: "Exhausted",
+      status: "ready",
+      maxRetries: 1,
+      metadata: { failureCount: 2 },
+    });
+    const exhaustedTodo = await store.create({
+      title: "Exhausted todo",
+      status: "todo",
+      maxRetries: 1,
+      metadata: { failureCount: 2 },
+    });
+    const exhaustedBacklog = await store.create({
+      title: "Exhausted backlog",
+      status: "backlog",
+      maxRetries: 1,
+      metadata: { failureCount: 2 },
+    });
+    await expect(store.claim(exhausted.id, { ownerId: "main" })).rejects.toThrow(/retry budget/);
+
+    const exhaustedDispatch = await store.dispatch();
+
+    expect(exhaustedDispatch.blocked).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: exhausted.id, status: "blocked" }),
+        expect.objectContaining({ id: exhaustedTodo.id, status: "blocked" }),
+        expect.objectContaining({ id: exhaustedBacklog.id, status: "blocked" }),
+      ]),
+    );
+    await expect(store.get(exhausted.id)).resolves.toMatchObject({
+      status: "blocked",
+      metadata: {
+        notifications: [expect.objectContaining({ message: "Card exhausted its retry budget." })],
+      },
+    });
+
+    const parent = await store.create({ title: "Parent retry gate", status: "running" });
+    const dependent = await store.create({
+      title: "Dependent exhausted",
+      parents: [parent.id],
+      maxRetries: 1,
+      metadata: { failureCount: 2 },
+    });
+    await store.complete(parent.id, { summary: "Parent done." });
+
+    const dependentDispatch = await store.dispatch();
+
+    expect(dependentDispatch.promoted.some((card) => card.id === dependent.id)).toBe(false);
+    expect(dependentDispatch.blocked).toEqual([
+      expect.objectContaining({ id: dependent.id, status: "blocked" }),
+    ]);
   });
 
   it("extends claim expiry by the original TTL on heartbeat", async () => {

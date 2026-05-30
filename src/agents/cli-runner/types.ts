@@ -70,6 +70,9 @@ export type RunCliAgentParams = {
   skillsSnapshot?: SkillSnapshot;
   messageChannel?: string;
   messageProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string | number;
   agentAccountId?: string;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;

@@ -543,7 +543,14 @@ async function requestDiscordJson<T>(params: {
         onTimeout: () => controller.abort(),
       })) as { retry_after?: number };
       const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
-      await sleepImpl(Math.min(Math.ceil(waitSeconds * 1000), remainingTimeoutMs(deadlineMs)));
+      const waitMs = Math.ceil(waitSeconds * 1000);
+      const remainingMs = remainingTimeoutMs(deadlineMs);
+      if (waitMs >= remainingMs) {
+        throw new Error(
+          `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} exceeded total timeout before retry.`,
+        );
+      }
+      await sleepImpl(waitMs);
       continue;
     }
 

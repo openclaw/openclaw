@@ -768,6 +768,7 @@ export async function runEmbeddedAgent(
         contextConfigProvider: resolveContextConfigProviderForRuntime({
           provider: modelConfigProvider,
           runtimeId: agentHarness.id,
+          config: params.config,
         }),
         modelId,
         runtimeModel,
@@ -1905,6 +1906,7 @@ export async function runEmbeddedAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
+                    harnessRuntime: agentHarness.id,
                     modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
@@ -2096,6 +2098,7 @@ export async function runEmbeddedAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
+                    harnessRuntime: agentHarness.id,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,

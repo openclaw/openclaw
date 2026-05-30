@@ -5,6 +5,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
@@ -300,10 +301,10 @@ async function withDockerProbeTimeout<T>(
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
-  let timeout: NodeJS.Timeout | undefined;
+  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
+    timeout = setNodeTimeout(() => {
       timedOut = true;
       controller.abort();
       reject(new DockerProbeTimeoutError(timeoutMs));
@@ -318,7 +319,7 @@ async function withDockerProbeTimeout<T>(
     throw err;
   } finally {
     if (timeout) {
-      clearTimeout(timeout);
+      clearNodeTimeout(timeout);
     }
   }
 }
