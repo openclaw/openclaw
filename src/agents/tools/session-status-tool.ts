@@ -284,6 +284,13 @@ function buildSessionStatusRouteDetails(params: {
   };
 }
 
+function formatSessionStatusRouteContext(details: SessionStatusRouteDetails): string | undefined {
+  if (Object.keys(details).length === 0) {
+    return undefined;
+  }
+  return `Route context:\n\`\`\`json\n${JSON.stringify(details, null, 2)}\n\`\`\``;
+}
+
 function resolveActiveStatusModelIdentity(params: {
   activeModelId?: string;
   activeModelProvider?: string;
@@ -873,6 +880,10 @@ export function createSessionStatusTool(opts?: {
             .filter((value): value is string => Boolean(value)),
         ).has(resolved.key.trim()),
       });
+      const routeContextText = formatSessionStatusRouteContext(routeDetails);
+      const visibleStatusText = routeContextText
+        ? `${fullStatusText}\n\n${routeContextText}`
+        : fullStatusText;
       const modelOverrideForResult =
         modelRaw === undefined
           ? undefined
@@ -883,7 +894,7 @@ export function createSessionStatusTool(opts?: {
             : null;
 
       return {
-        content: [{ type: "text", text: fullStatusText }],
+        content: [{ type: "text", text: visibleStatusText }],
         details: {
           ok: true,
           sessionKey: resolved.key,
@@ -897,7 +908,7 @@ export function createSessionStatusTool(opts?: {
                 modelOverride: modelOverrideForResult,
               }
             : {}),
-          statusText: fullStatusText,
+          statusText: visibleStatusText,
           ...routeDetails,
         },
       };

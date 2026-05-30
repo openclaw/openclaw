@@ -444,6 +444,16 @@ function getSessionStatusTool(
   return tool;
 }
 
+function resultText(result: { content?: unknown }) {
+  const content = Array.isArray(result.content) ? result.content : [];
+  const first = content[0];
+  if (!first || typeof first !== "object") {
+    return "";
+  }
+  const text = (first as { text?: unknown }).text;
+  return typeof text === "string" ? text : "";
+}
+
 describe("session_status tool", () => {
   beforeEach(() => {
     buildStatusMessageMock.mockClear();
@@ -471,6 +481,7 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+    expect(resultText(result)).not.toContain("Route context:");
     expect(details.originChannel).toBeUndefined();
     expect(details.activeChannel).toBeUndefined();
   });
@@ -506,6 +517,7 @@ describe("session_status tool", () => {
       sessionKey?: string;
       originChannel?: string;
       activeChannel?: string;
+      statusText?: string;
       origin?: { channel?: string; provider?: string; accountId?: string };
       active?: { channel?: string; to?: string; accountId?: string };
       deliveryContext?: { channel?: string; to?: string; accountId?: string };
@@ -514,6 +526,11 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:discord:channel:1489550370136129537");
     expect(details.originChannel).toBe("discord");
     expect(details.activeChannel).toBe("webchat");
+    expect(resultText(result)).toContain("Route context:");
+    expect(resultText(result)).toContain('"originChannel": "discord"');
+    expect(resultText(result)).toContain('"activeChannel": "webchat"');
+    expect(resultText(result)).toContain('"deliveryContext"');
+    expect(details.statusText).toContain('"activeChannel": "webchat"');
     expect(details.origin).toEqual({
       channel: "discord",
       provider: "discord",
@@ -580,6 +597,10 @@ describe("session_status tool", () => {
     expect(details.ok).toBe(true);
     expect(details.originChannel).toBe("discord");
     expect(details.activeChannel).toBe("webchat");
+    expect(resultText(result)).toContain('"originChannel": "discord"');
+    expect(resultText(result)).toContain('"activeChannel": "webchat"');
+    expect(resultText(result)).toContain('"to": "control-ui-conversation"');
+    expect(resultText(result)).toContain('"threadId": "webchat-thread"');
     expect(details.active).toEqual({
       channel: "webchat",
       to: "control-ui-conversation",

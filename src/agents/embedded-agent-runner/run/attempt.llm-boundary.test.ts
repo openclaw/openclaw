@@ -151,6 +151,33 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(input[0]).toHaveProperty("details");
   });
 
+  it("preserves session route context in tool content while stripping details", () => {
+    const routeContext =
+      'Route context:\n```json\n{\n  "originChannel": "discord",\n  "activeChannel": "webchat"\n}\n```';
+    const input = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "session_status",
+        content: [{ type: "text", text: `OpenClaw\n\n${routeContext}` }],
+        details: {
+          originChannel: "discord",
+          activeChannel: "webchat",
+        },
+        isError: false,
+        timestamp: 1,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }>; details?: unknown }>;
+
+    expect(output[0]).not.toHaveProperty("details");
+    expect(output[0]?.content?.[0]?.text).toContain('"originChannel": "discord"');
+    expect(output[0]?.content?.[0]?.text).toContain('"activeChannel": "webchat"');
+  });
+
   it("keeps only pre-user current-turn runtime context at the LLM boundary", () => {
     const input = [
       {
