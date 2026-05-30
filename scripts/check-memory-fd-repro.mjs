@@ -109,7 +109,7 @@ export function parseArgs(argv) {
     allowNonDarwin: process.env.OPENCLAW_MEMORY_FD_REPRO_ALLOW_NON_DARWIN === "1",
   };
 
-  for (let i = 0; i < argv.length; i += 1) {
+  parseArgv: for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
     const readValue = () => {
@@ -122,7 +122,7 @@ export function parseArgs(argv) {
 
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--help":
         console.log(usage());
         process.exit(0);

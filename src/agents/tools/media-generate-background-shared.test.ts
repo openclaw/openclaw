@@ -440,6 +440,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
   it("direct-delivers generated media when the completion wake misses the requester", async () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: false,
+      reason: "generated_media_missing",
       error: "completion agent did not deliver generated media",
     });
     taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
@@ -489,6 +490,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: false,
       path: "none",
+      reason: "requester_abandoned",
       error: "requester session abandoned after timeout",
     });
     const lifecycle = createMediaGenerationTaskLifecycle({

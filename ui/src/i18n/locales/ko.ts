@@ -563,6 +563,8 @@ export const ko: TranslationMap = {
     eventMoved: "이동됨",
     eventMovedTo: "{status}(으)로 이동됨",
     eventLinked: "연결된 세션",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "할당됨",
     eventHeartbeat: "하트비트",
     eventExecutionUpdated: "Agent 업데이트됨",

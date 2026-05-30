@@ -248,6 +248,13 @@ describe("parseAt", () => {
   it("rejects out-of-range epoch milliseconds", () => {
     expect(parseAt(String(Number.MAX_SAFE_INTEGER))).toBeNull();
   });
+
+  it("rejects relative durations outside the Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    expect(parseAt("+999999999999999999d")).toBeNull();
+  });
 });
 
 describe("getCronChannelOptions", () => {

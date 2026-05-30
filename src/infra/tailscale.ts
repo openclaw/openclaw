@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
@@ -9,7 +10,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {

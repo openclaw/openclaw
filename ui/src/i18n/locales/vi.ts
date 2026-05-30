@@ -564,6 +564,8 @@ export const vi: TranslationMap = {
     eventMoved: "Đã di chuyển",
     eventMovedTo: "Đã di chuyển đến {status}",
     eventLinked: "Phiên đã liên kết",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "Đã nhận",
     eventHeartbeat: "Nhịp tim",
     eventExecutionUpdated: "Agent đã cập nhật",

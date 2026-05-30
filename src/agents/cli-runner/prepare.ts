@@ -40,7 +40,10 @@ import {
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
-import { claudeCliSessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
+import {
+  claudeCliSessionTranscriptHasContent,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
+} from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -83,9 +86,8 @@ const prepareDeps = {
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
   prepareClaudeCliSkillsPlugin,
-  // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
-  // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
 };
 
 const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
@@ -368,39 +370,46 @@ export async function prepareCliRunContext(
     bundleMcpEnabled && mcpLoopbackRuntime
       ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
       : undefined;
-  // Pre-flight: if a saved Claude CLI sessionId points at a transcript that no
-  // longer exists on disk (e.g. update.run aborted mid-swap, Claude CLI was
-  // reinstalled, or the projects tree was manually pruned), `claude --resume`
-  // hangs or fails outside the cli-runner session_expired path. The persisted
-  // binding then never gets refreshed, causing every subsequent turn to retry
-  // the same dead sessionId. Drop the binding here so this turn starts fresh
-  // and the post-run flow writes the new sessionId back via setCliSessionBinding.
-  const candidateClaudeCliSessionId =
-    params.cliSessionBinding?.sessionId?.trim() || params.cliSessionId?.trim() || undefined;
+  const reusableCliSessionCandidate: CliReusableSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: effectiveAuthProfileId,
+        authEpoch,
+        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+        extraSystemPromptHash,
+        promptToolNamesHash,
+        cwdHash,
+        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+        mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
+  const candidateClaudeCliSessionId = reusableCliSessionCandidate.sessionId?.trim() || undefined;
+  const hasClaudeCliCandidate =
+    candidateClaudeCliSessionId !== undefined && isClaudeCliProvider(params.provider);
   const claudeCliTranscriptMissing =
-    candidateClaudeCliSessionId !== undefined &&
-    isClaudeCliProvider(params.provider) &&
+    hasClaudeCliCandidate &&
     !(await prepareDeps.claudeCliSessionTranscriptHasContent({
       sessionId: candidateClaudeCliSessionId,
       workspaceDir: cwd,
     }));
-  const reusableCliSession: CliReusableSession = claudeCliTranscriptMissing
-    ? { invalidatedReason: "missing-transcript" }
-    : params.cliSessionBinding
-      ? resolveCliSessionReuse({
-          binding: params.cliSessionBinding,
-          authProfileId: effectiveAuthProfileId,
-          authEpoch,
-          authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-          extraSystemPromptHash,
-          promptToolNamesHash,
-          cwdHash,
-          mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-          mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-        })
-      : params.cliSessionId
-        ? { sessionId: params.cliSessionId }
-        : {};
+  const claudeCliTranscriptOrphanedToolUse =
+    hasClaudeCliCandidate &&
+    !claudeCliTranscriptMissing &&
+    (await prepareDeps.claudeCliSessionTranscriptHasOrphanedToolUse({
+      sessionId: candidateClaudeCliSessionId,
+      workspaceDir: cwd,
+    }));
+  const claudeCliInvalidatedReason: CliReusableSession["invalidatedReason"] | undefined =
+    claudeCliTranscriptMissing
+      ? "missing-transcript"
+      : claudeCliTranscriptOrphanedToolUse
+        ? "orphaned-tool-use"
+        : undefined;
+  const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
+    ? { invalidatedReason: claudeCliInvalidatedReason }
+    : reusableCliSessionCandidate;
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
@@ -507,11 +516,21 @@ export async function prepareCliRunContext(
   } catch (error) {
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
   }
-  preparedPrompt = buildCurrentInboundPrompt({
+  const fullCurrentInboundPrompt = buildCurrentInboundPrompt({
     context: params.currentInboundContext,
     prompt: preparedPrompt,
   });
-  preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
+  const runCurrentInboundPrompt = buildCurrentInboundPrompt({
+    context: params.currentInboundContext,
+    prompt: preparedPrompt,
+    preferResumableText:
+      params.currentInboundEventKind === "room_event" && Boolean(reusableCliSession.sessionId),
+  });
+  const historyPromptCurrentTurn = annotateInterSessionPromptText(
+    fullCurrentInboundPrompt,
+    params.inputProvenance,
+  );
+  preparedPrompt = annotateInterSessionPromptText(runCurrentInboundPrompt, params.inputProvenance);
   const allowRawTranscriptReseed =
     backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
   const rawTranscriptReseedReason = reusableCliSession.sessionId
@@ -530,7 +549,7 @@ export async function prepareCliRunContext(
           allowRawTranscriptReseed,
           rawTranscriptReseedReason,
         }),
-        prompt: preparedPrompt,
+        prompt: historyPromptCurrentTurn,
         maxHistoryChars: autoReseedHistoryChars,
       })
     : undefined;

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   isProviderApiKeyConfigured,
   type AuthProfileStore,
@@ -418,14 +419,15 @@ async function waitForLocalHistory(params: {
   dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<ComfyHistoryEntry> {
   const deadline = Date.now() + params.timeoutMs;
-  while (Date.now() <= deadline) {
+  for (;;) {
+    const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
     const history = await readJsonResponse<unknown>({
       url: `${params.baseUrl}/history/${params.promptId}`,
       init: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: params.timeoutMs,
+      timeoutMs: requestTimeoutMs,
       policy: params.policy,
       dispatcherPolicy: params.dispatcherPolicy,
       auditContext: "comfy-history",
@@ -437,10 +439,9 @@ async function waitForLocalHistory(params: {
       return entry;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
+    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
   }
-
-  throw new Error(`Comfy workflow did not finish within ${Math.ceil(params.timeoutMs / 1000)}s`);
 }
 
 async function waitForCloudCompletion(params: {
@@ -453,14 +454,15 @@ async function waitForCloudCompletion(params: {
   dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<void> {
   const deadline = Date.now() + params.timeoutMs;
-  while (Date.now() <= deadline) {
+  for (;;) {
+    const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
     const status = await readJsonResponse<ComfyStatusResponse>({
       url: `${params.baseUrl}/api/job/${params.promptId}/status`,
       init: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: params.timeoutMs,
+      timeoutMs: requestTimeoutMs,
       policy: params.policy,
       dispatcherPolicy: params.dispatcherPolicy,
       auditContext: "comfy-status",
@@ -476,10 +478,22 @@ async function waitForCloudCompletion(params: {
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
+    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
   }
+}
 
-  throw new Error(`Comfy workflow did not finish within ${Math.ceil(params.timeoutMs / 1000)}s`);
+function resolveComfyRemainingMs(
+  deadline: number,
+  timeoutMs: number,
+  defaultTimeoutMs = timeoutMs,
+) {
+  const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`Comfy workflow did not finish within ${Math.ceil(timeoutMs / 1000)}s`);
+  }
+  return Math.max(1, Math.min(defaultMs, remainingMs));
 }
 
 function collectOutputFiles(params: {
@@ -662,10 +676,14 @@ export async function runComfyWorkflow(params: {
   const inputImageInputName =
     normalizeOptionalString(capabilityConfig.inputImageInputName) ?? DEFAULT_INPUT_IMAGE_INPUT_NAME;
   const outputNodeId = normalizeOptionalString(capabilityConfig.outputNodeId);
-  const pollIntervalMs =
-    readConfigInteger(capabilityConfig, "pollIntervalMs") ?? DEFAULT_POLL_INTERVAL_MS;
-  const timeoutMs =
-    readConfigInteger(capabilityConfig, "timeoutMs") ?? params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const pollIntervalMs = resolvePositiveTimerTimeoutMs(
+    readConfigInteger(capabilityConfig, "pollIntervalMs"),
+    DEFAULT_POLL_INTERVAL_MS,
+  );
+  const timeoutMs = resolvePositiveTimerTimeoutMs(
+    readConfigInteger(capabilityConfig, "timeoutMs") ?? params.timeoutMs,
+    DEFAULT_TIMEOUT_MS,
+  );
   const providerModel = normalizeOptionalString(params.model) || DEFAULT_COMFY_MODEL;
 
   setWorkflowInput({

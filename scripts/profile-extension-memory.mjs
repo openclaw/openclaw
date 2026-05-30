@@ -52,7 +52,7 @@ function parsePositiveInt(raw, flagName) {
   return parsed;
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = {
     extensions: [],
     concurrency: DEFAULT_CONCURRENCY,
@@ -63,11 +63,11 @@ function parseArgs(argv) {
     skipCombined: false,
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
+  parseArgv: for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--extension":
       case "-e": {
         const next = argv[index + 1];

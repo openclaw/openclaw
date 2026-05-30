@@ -78,6 +78,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -116,6 +117,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },

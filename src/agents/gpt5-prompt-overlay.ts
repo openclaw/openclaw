@@ -7,9 +7,9 @@ const OPENAI_FAMILY_GPT5_PROMPT_OVERLAY_PROVIDERS = new Set([
   "codex",
   "codex-cli",
   "openai",
+  "openai-codex",
   "azure-openai",
   "azure-openai-responses",
-  "openai-codex",
 ]);
 
 /** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */

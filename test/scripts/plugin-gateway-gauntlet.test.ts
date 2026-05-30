@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createGauntletPrebuildCommand,
   hasGauntletWorkRows,
+  parseArgs,
   parseTimedMetrics,
   runMeasuredCommand,
   runMeasuredCommandLive,
@@ -39,6 +40,12 @@ describe("plugin gateway gauntlet helpers", () => {
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(path.join(dir, fileName), source, "utf8");
   }
+
+  it("stops parsing options after the argument terminator", () => {
+    expect(parseArgs(["--plugin", "telegram", "--", "--plugin", "discord"])).toMatchObject({
+      pluginIds: ["telegram"],
+    });
+  });
 
   it("discovers bundled plugin manifests into lifecycle matrix rows", async () => {
     await writeManifest(
@@ -230,6 +237,37 @@ describe("plugin gateway gauntlet helpers", () => {
       "phase-wall-anomaly",
       "phase-rss-high",
       "phase-rss-anomaly",
+    ]);
+  });
+
+  it("marks first work-row anomalies as cold-start observations", () => {
+    const observations = collectMetricObservations(
+      [
+        { phase: "prebuild", wallMs: 100, maxRssMb: 100 },
+        {
+          pluginId: "first-plugin",
+          phase: "lifecycle:install",
+          wallMs: 1_000,
+          cpuCoreRatio: 1.2,
+          maxRssMb: 500,
+        },
+        { pluginId: "second-plugin", phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
+        { pluginId: "third-plugin", phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
+      ],
+      {
+        cpuCoreWarn: 0.9,
+        hotWallWarnMs: 900,
+        maxRssWarnMb: 450,
+        wallAnomalyMultiplier: 3,
+        rssAnomalyMultiplier: 2.5,
+      },
+    );
+
+    expect(observations).toEqual([
+      expect.objectContaining({ kind: "phase-cpu-hot", coldStart: true }),
+      expect.objectContaining({ kind: "phase-wall-anomaly", coldStart: true }),
+      expect.objectContaining({ kind: "phase-rss-high", coldStart: true }),
+      expect.objectContaining({ kind: "phase-rss-anomaly", coldStart: true }),
     ]);
   });
 

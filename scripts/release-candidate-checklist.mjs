@@ -68,11 +68,11 @@ export function parseArgs(argv) {
     npmPreflightRunId: "",
     outputDir: "",
   };
-  for (let index = 0; index < argv.length; index += 1) {
+  parseArgv: for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--tag":
         options.tag = requireValue(argv, ++index, arg);
         break;

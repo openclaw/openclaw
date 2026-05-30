@@ -105,6 +105,18 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
+  it("stops parsing options after the argument terminator", () => {
+    expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
+      fileCount: 20,
+    });
+
+    expect(
+      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17" }, () => parseArgs(["--", "--unknown"])),
+    ).toMatchObject({
+      fileCount: 17,
+    });
+  });
+
   it("treats signaled gateway children as exited", () => {
     expect(hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
     expect(hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);

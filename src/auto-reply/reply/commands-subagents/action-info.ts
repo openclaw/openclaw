@@ -5,6 +5,7 @@ import { resolveStorePath } from "../../../config/sessions/paths.js";
 import { loadSessionStore } from "../../../config/sessions/store-load.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { timestampMsToIsoString } from "../../../shared/number-coercion.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
@@ -16,18 +17,15 @@ import {
   type SubagentsCommandContext,
 } from "./shared.js";
 
-function formatTimestamp(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  return new Date(valueMs).toISOString();
-}
-
 function formatTimestampWithAge(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
     return "n/a";
   }
-  return `${formatTimestamp(valueMs)} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
+  const timestamp = timestampMsToIsoString(valueMs);
+  if (!timestamp) {
+    return "n/a";
+  }
+  return `${timestamp} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
 function resolveDisplayStatus(

@@ -140,6 +140,7 @@ import {
 import { captureSessionToWorkboard, getWorkboardState } from "./controllers/workboard.ts";
 import { getCronJobPayload } from "./cron-payload.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
+import { formatTimeMs } from "./format.ts";
 import { formatRelativeTimestamp } from "./format.ts";
 import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
@@ -378,14 +379,17 @@ const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyL
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
-function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
-  if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
-    return null;
-  }
-  return new Date(nextRunAtMs).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
+  return (
+    formatTimeMs(
+      nextRunAtMs,
+      {
+        hour: "numeric",
+        minute: "2-digit",
+      },
+      "",
+    ) || null
+  );
 }
 
 function resolveDreamingNextCycle(

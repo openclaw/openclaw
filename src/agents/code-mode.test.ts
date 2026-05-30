@@ -500,7 +500,6 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
         },
       },
     } as never;
@@ -543,9 +542,18 @@ describe("Code Mode", () => {
     );
     expect(first.status).toBe("waiting");
     expect(first.pendingToolCalls).toHaveLength(2);
+    const runId = first.runId;
+    expect(typeof runId).toBe("string");
+    if (typeof runId !== "string") {
+      throw new Error("expected code mode run id");
+    }
+
+    const activeRun = testing.activeRuns.get(runId);
+    expect(activeRun).toBeDefined();
+    activeRun!.config.timeoutMs = 100;
 
     const second = resultDetails(
-      await codeModeTools[1].execute("code-wait-timeout", { runId: first.runId }),
+      await codeModeTools[1].execute("code-wait-timeout", { runId }),
     );
 
     expect(second.status).toBe("waiting");

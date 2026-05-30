@@ -1,6 +1,7 @@
 #!/usr/bin/env -S pnpm tsx
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
@@ -153,13 +154,13 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): MacosOptions {
+export function parseArgs(argv: string[]): MacosOptions {
   const options = defaultOptions();
-  for (let i = 0; i < argv.length; i++) {
+  parseArgv: for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--vm":
         options.vmName = ensureValue(argv, i, arg);
         i++;
@@ -491,6 +492,7 @@ class MacosSmoke {
     if (this.discordEnabled()) {
       this.status.freshDiscord = "fail";
       await this.phase("fresh.discord-config", 600, () => this.configureDiscord());
+      await this.phase("fresh.discord-gateway-ready", 180, () => this.ensureDiscordGatewayReady());
       await this.phase("fresh.discord-roundtrip", 180, () => this.runDiscordRoundtrip("fresh"));
       this.status.freshDiscord = "pass";
     }
@@ -542,6 +544,9 @@ class MacosSmoke {
     if (this.discordEnabled()) {
       this.status.upgradeDiscord = "fail";
       await this.phase("upgrade.discord-config", 600, () => this.configureDiscord());
+      await this.phase("upgrade.discord-gateway-ready", 180, () =>
+        this.ensureDiscordGatewayReady(),
+      );
       await this.phase("upgrade.discord-roundtrip", 180, () => this.runDiscordRoundtrip("upgrade"));
       this.status.upgradeDiscord = "pass";
     }
@@ -1069,6 +1074,15 @@ fi`,
     this.discord?.configure();
   }
 
+  private ensureDiscordGatewayReady(): void {
+    this.startManualGatewayIfNeeded();
+    this.verifyGateway();
+    const status = this.guestOpenClawEntryExec(["channels", "status", "--probe", "--json"]);
+    if (!status.includes('"discord"')) {
+      throw new Error("Discord channel unavailable after gateway restart");
+    }
+  }
+
   private async runDiscordRoundtrip(phase: "fresh" | "upgrade"): Promise<void> {
     if (!this.discord) {
       throw new Error("Discord smoke is not configured");
@@ -1176,6 +1190,8 @@ fi`,
   }
 }
 
-await new MacosSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
-  die(error instanceof Error ? error.message : String(error));
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await new MacosSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+    die(error instanceof Error ? error.message : String(error));
+  });
+}

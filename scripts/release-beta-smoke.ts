@@ -59,11 +59,11 @@ export function parseArgs(argv: string[]): Options {
     skipParallels: false,
     skipTelegram: false,
   };
-  for (let i = 0; i < argv.length; i++) {
+  parseArgv: for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--beta":
         options.beta = requireValue(argv, ++i, arg);
         break;

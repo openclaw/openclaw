@@ -561,6 +561,8 @@ export const zh_TW: TranslationMap = {
     eventMoved: "已移動",
     eventMovedTo: "已移動至 {status}",
     eventLinked: "已連結工作階段",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "已認領",
     eventHeartbeat: "心跳",
     eventExecutionUpdated: "代理程式已更新",

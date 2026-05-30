@@ -23,6 +23,7 @@ import {
   type WorkboardTemplateId,
   type WorkboardUiState,
 } from "../controllers/workboard.ts";
+import { formatDateMs } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { icons } from "../icons.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../types.ts";
@@ -94,10 +95,14 @@ function formatTime(value: number | undefined): string {
   if (!value) {
     return "";
   }
-  return new Date(value).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-  });
+  return formatDateMs(
+    value,
+    {
+      month: "short",
+      day: "numeric",
+    },
+    "",
+  );
 }
 
 function canMutate(props: WorkboardProps): boolean {
@@ -116,6 +121,10 @@ function formatEventLabel(event: WorkboardEvent): string {
         : t("workboard.eventMoved");
     case "linked":
       return t("workboard.eventLinked");
+    case "specified":
+      return t("workboard.eventSpecified");
+    case "decomposed":
+      return t("workboard.eventDecomposed");
     case "claimed":
       return t("workboard.eventClaimed");
     case "heartbeat":

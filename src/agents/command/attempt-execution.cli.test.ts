@@ -27,7 +27,9 @@ vi.mock("../model-selection.js", () => ({
 vi.mock("../provider-auth-aliases.js", () => ({
   resolveProviderAuthAliasMap: () => ({}),
   resolveProviderIdForAuth: (provider: string) =>
-    provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
+    ["codex-cli", "openai-codex"].includes(provider.trim().toLowerCase())
+      ? "openai"
+      : provider.trim().toLowerCase(),
 }));
 
 vi.mock("../model-runtime-aliases.js", async () => {
@@ -1817,7 +1819,7 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("routes explicit OpenAI native runs with Codex OAuth through OpenClaw and the legacy Codex auth transport", async () => {
+  it("routes explicit OpenAI native runs with legacy Codex OAuth through OpenClaw", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "explicit-agent-codex-oauth-session",
       updatedAt: Date.now(),
@@ -1867,7 +1869,7 @@ describe("embedded attempt harness pinning", () => {
     });
 
     expectMockArgFields(runEmbeddedAgentMock, {
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       agentHarnessId: "openclaw",
       agentHarnessRuntimeOverride: "openclaw",

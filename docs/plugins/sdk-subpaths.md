@@ -292,6 +292,7 @@ and pairing-path families.
     | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
+    | `plugin-sdk/inline-image-data-url-runtime` | Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
     | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |
     | `plugin-sdk/session-store-runtime` | Session-store helpers without broad config writes/maintenance imports |

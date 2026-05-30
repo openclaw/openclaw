@@ -25,6 +25,8 @@ export const WORKBOARD_EVENT_KINDS = [
   "edited",
   "moved",
   "linked",
+  "specified",
+  "decomposed",
   "claimed",
   "heartbeat",
   "execution_updated",
@@ -168,7 +170,7 @@ export type WorkboardClaim = {
 };
 
 export type WorkboardDiagnosticAction = {
-  kind: "claim" | "unblock" | "reassign" | "add_proof" | "open_session";
+  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
   label: string;
 };
 
@@ -200,6 +202,8 @@ export type WorkboardWorkspace = {
 
 export type WorkboardAutomation = {
   tenant?: string;
+  boardId?: string;
+  createdByCardId?: string;
   idempotencyKey?: string;
   skills?: string[];
   workspace?: WorkboardWorkspace;
@@ -210,6 +214,30 @@ export type WorkboardAutomation = {
   createdCardIds?: string[];
   dispatchCount?: number;
   lastDispatchAt?: number;
+};
+
+export type WorkboardBoardMetadata = {
+  id: string;
+  name?: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  defaultWorkspace?: WorkboardWorkspace;
+  createdAt: number;
+  updatedAt: number;
+  archivedAt?: number;
+};
+
+export type WorkboardNotificationSubscription = {
+  id: string;
+  boardId: string;
+  cardId?: string;
+  sessionKey?: string;
+  runId?: string;
+  target?: string;
+  eventKinds?: WorkboardNotificationKind[];
+  createdAt: number;
+  updatedAt: number;
 };
 
 export type WorkboardMetadata = {

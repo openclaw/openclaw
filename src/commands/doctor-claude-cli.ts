@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -23,7 +24,6 @@ import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";

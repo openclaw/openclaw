@@ -143,6 +143,7 @@ describe("music generate background helpers", () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
       path: "direct",
+      reason: "generated_media_missing",
       error: "completion agent did not deliver generated media",
     });
     const completion = createMediaCompletionFixture({

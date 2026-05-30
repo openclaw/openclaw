@@ -43,6 +43,35 @@ type TaskRegistryDatabase = {
   path: string;
 };
 
+const TASK_RUN_SELECT_COLUMNS = [
+  "task_id",
+  "runtime",
+  "task_kind",
+  "source_id",
+  "requester_session_key",
+  "owner_key",
+  "scope_kind",
+  "child_session_key",
+  "parent_flow_id",
+  "parent_task_id",
+  "agent_id",
+  "run_id",
+  "label",
+  "task",
+  "status",
+  "delivery_status",
+  "notify_policy",
+  "created_at",
+  "started_at",
+  "ended_at",
+  "last_event_at",
+  "cleanup_after",
+  "error",
+  "progress_summary",
+  "terminal_summary",
+  "terminal_outcome",
+] as const;
+
 let cachedDatabase: TaskRegistryDatabase | null = null;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
@@ -174,34 +203,7 @@ function pruneRowsNotInSnapshot(params: {
 function selectTaskRows(db: DatabaseSync): TaskRegistryRow[] {
   const query = getTaskRegistryKysely(db)
     .selectFrom("task_runs")
-    .select([
-      "task_id",
-      "runtime",
-      "task_kind",
-      "source_id",
-      "requester_session_key",
-      "owner_key",
-      "scope_kind",
-      "child_session_key",
-      "parent_flow_id",
-      "parent_task_id",
-      "agent_id",
-      "run_id",
-      "label",
-      "task",
-      "status",
-      "delivery_status",
-      "notify_policy",
-      "created_at",
-      "started_at",
-      "ended_at",
-      "last_event_at",
-      "cleanup_after",
-      "error",
-      "progress_summary",
-      "terminal_summary",
-      "terminal_outcome",
-    ])
+    .select(TASK_RUN_SELECT_COLUMNS)
     .orderBy("created_at", "asc")
     .orderBy("task_id", "asc");
   return executeSqliteQuerySync(db, query).rows;
@@ -271,6 +273,15 @@ function replaceTaskDeliveryStateRow(
   );
 }
 
+function deleteTaskRowsWithDeliveryState(db: DatabaseSync, taskId: string): void {
+  const kysely = getTaskRegistryKysely(db);
+  executeSqliteQuerySync(
+    db,
+    kysely.deleteFrom("task_delivery_state").where("task_id", "=", taskId),
+  );
+  executeSqliteQuerySync(db, kysely.deleteFrom("task_runs").where("task_id", "=", taskId));
+}
+
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
   const database = openOpenClawStateDatabase();
   const pathname = database.path;
@@ -312,34 +323,7 @@ export function listTaskRegistryRecordsByOwnerKeyFromSqlite(ownerKey: string): T
   const { db } = openTaskRegistryDatabase();
   const query = getTaskRegistryKysely(db)
     .selectFrom("task_runs")
-    .select([
-      "task_id",
-      "runtime",
-      "task_kind",
-      "source_id",
-      "requester_session_key",
-      "owner_key",
-      "scope_kind",
-      "child_session_key",
-      "parent_flow_id",
-      "parent_task_id",
-      "agent_id",
-      "run_id",
-      "label",
-      "task",
-      "status",
-      "delivery_status",
-      "notify_policy",
-      "created_at",
-      "started_at",
-      "ended_at",
-      "last_event_at",
-      "cleanup_after",
-      "error",
-      "progress_summary",
-      "terminal_summary",
-      "terminal_outcome",
-    ])
+    .select(TASK_RUN_SELECT_COLUMNS)
     .where("owner_key", "=", key)
     .orderBy("created_at", "asc")
     .orderBy("task_id", "asc");
@@ -411,23 +395,13 @@ export function upsertTaskWithDeliveryStateToSqlite(params: {
 
 export function deleteTaskRegistryRecordFromSqlite(taskId: string) {
   withWriteTransaction(({ db }) => {
-    const kysely = getTaskRegistryKysely(db);
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("task_delivery_state").where("task_id", "=", taskId),
-    );
-    executeSqliteQuerySync(db, kysely.deleteFrom("task_runs").where("task_id", "=", taskId));
+    deleteTaskRowsWithDeliveryState(db, taskId);
   });
 }
 
 export function deleteTaskAndDeliveryStateFromSqlite(taskId: string) {
   withWriteTransaction(({ db }) => {
-    const kysely = getTaskRegistryKysely(db);
-    executeSqliteQuerySync(
-      db,
-      kysely.deleteFrom("task_delivery_state").where("task_id", "=", taskId),
-    );
-    executeSqliteQuerySync(db, kysely.deleteFrom("task_runs").where("task_id", "=", taskId));
+    deleteTaskRowsWithDeliveryState(db, taskId);
   });
 }
 

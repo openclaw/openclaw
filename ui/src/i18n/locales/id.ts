@@ -564,6 +564,8 @@ export const id: TranslationMap = {
     eventMoved: "Dipindahkan",
     eventMovedTo: "Dipindahkan ke {status}",
     eventLinked: "Sesi ditautkan",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "Diklaim",
     eventHeartbeat: "Detak",
     eventExecutionUpdated: "Agen diperbarui",

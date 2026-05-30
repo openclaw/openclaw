@@ -14,7 +14,7 @@ import {
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
+import { tasksAuditCommand, tasksMaintenanceCommand, tasksShowCommand } from "./tasks.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -281,6 +281,30 @@ describe("tasks commands", () => {
       await tasksMaintenanceCommand({ json: false, apply: false }, runtime);
 
       expect(diagnosticsSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows tasks with Date-invalid optional timestamps without crashing", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-invalid-started-at",
+        status: "running",
+        task: "Inspect malformed task timestamp",
+        startedAt: 8_700_000_000_000_000,
+      });
+
+      const runtime = createRuntime();
+      await tasksShowCommand({ json: false, lookup: task.taskId }, runtime);
+
+      const joined = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(joined).toContain(`taskId: ${task.taskId}`);
+      expect(joined).toContain("startedAt: n/a");
     });
   });
 

@@ -33,7 +33,7 @@ const DEFAULT_QA_PLUGIN_CHUNK_SIZE = 12;
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = {
     repoRoot: process.cwd(),
     outputDir: path.join(
@@ -68,7 +68,7 @@ function parseArgs(argv) {
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
   options.pluginIds.push(...envIds);
-  for (let index = 0; index < argv.length; index += 1) {
+  parseArgv: for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const readValue = () => {
       const value = argv[index + 1];
@@ -80,7 +80,7 @@ function parseArgs(argv) {
     };
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--repo-root":
         options.repoRoot = path.resolve(readValue());
         break;

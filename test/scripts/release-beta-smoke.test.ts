@@ -15,6 +15,16 @@ describe("release-beta-smoke", () => {
     );
   });
 
+  it("stops parsing options after the argument terminator", () => {
+    expect(
+      parseArgs(["--beta", "beta-a", "--", "--skip-parallels", "--skip-telegram"]),
+    ).toMatchObject({
+      beta: "beta-a",
+      skipParallels: false,
+      skipTelegram: false,
+    });
+  });
+
   it("parses workflow run urls when gh includes them in dispatch output", () => {
     expect(
       parseWorkflowRunIdFromOutput(

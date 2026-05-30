@@ -567,6 +567,8 @@ export const ja_JP: TranslationMap = {
     eventMoved: "移動しました",
     eventMovedTo: "{status} に移動しました",
     eventLinked: "セッションをリンクしました",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "要求済み",
     eventHeartbeat: "ハートビート",
     eventExecutionUpdated: "Agent が更新されました",

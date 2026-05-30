@@ -565,6 +565,8 @@ export const uk: TranslationMap = {
     eventMoved: "Переміщено",
     eventMovedTo: "Переміщено до {status}",
     eventLinked: "Пов’язаний сеанс",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "Призначено",
     eventHeartbeat: "Heartbeat",
     eventExecutionUpdated: "Агент оновлено",

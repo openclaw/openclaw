@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   die,
   ensureValue,
@@ -126,7 +127,7 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): NpmUpdateOptions {
+export function parseArgs(argv: string[]): NpmUpdateOptions {
   const options: NpmUpdateOptions = {
     apiKeyEnv: undefined,
     betaValidation: undefined,
@@ -138,11 +139,11 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
     provider: "openai",
     updateTarget: "",
   };
-  for (let i = 0; i < argv.length; i++) {
+  parseArgv: for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--package-spec":
         options.packageSpec = ensureValue(argv, i, arg);
         i++;
@@ -1090,6 +1091,8 @@ class NpmUpdateSmoke {
   }
 }
 
-await new NpmUpdateSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
-  die(error instanceof Error ? error.message : String(error));
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await new NpmUpdateSmoke(parseArgs(process.argv.slice(2))).run().catch((error: unknown) => {
+    die(error instanceof Error ? error.message : String(error));
+  });
+}

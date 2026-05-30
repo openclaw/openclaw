@@ -15,7 +15,7 @@ import {
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
-const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
+const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];

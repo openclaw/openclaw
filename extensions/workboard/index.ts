@@ -1,6 +1,6 @@
 import { definePluginEntry } from "./api.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
-import { WorkboardStore, type PersistedWorkboardCard } from "./src/store.js";
+import { WorkboardStore } from "./src/store.js";
 import { createWorkboardTools } from "./src/tools.js";
 
 export default definePluginEntry({
@@ -8,9 +8,7 @@ export default definePluginEntry({
   name: "Workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
-    const store = WorkboardStore.open((options) =>
-      api.runtime.state.openKeyedStore<PersistedWorkboardCard>(options),
-    );
+    const store = WorkboardStore.open((options) => api.runtime.state.openKeyedStore(options));
     registerWorkboardGatewayMethods({ api, store });
     api.registerTool((context) => createWorkboardTools({ api, context, store }), {
       names: [
@@ -22,6 +20,20 @@ export default definePluginEntry({
         "workboard_heartbeat",
         "workboard_complete",
         "workboard_block",
+        "workboard_boards",
+        "workboard_board_create",
+        "workboard_board_archive",
+        "workboard_board_delete",
+        "workboard_stats",
+        "workboard_runs",
+        "workboard_specify",
+        "workboard_decompose",
+        "workboard_notify_subscribe",
+        "workboard_notify_list",
+        "workboard_notify_unsubscribe",
+        "workboard_promote",
+        "workboard_reassign",
+        "workboard_reclaim",
         "workboard_dispatch",
         "workboard_release",
         "workboard_comment",

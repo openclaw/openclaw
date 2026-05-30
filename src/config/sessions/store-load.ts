@@ -44,6 +44,11 @@ export type LoadSessionStoreOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
   clone?: boolean;
+  hydrateSkillPromptRefs?: boolean;
+};
+
+export type ReadSessionEntryOptions = {
+  hydrateSkillPromptRefs?: boolean;
 };
 
 const log = createSubsystemLogger("sessions/store");
@@ -355,6 +360,8 @@ export function loadSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
+  const shouldHydrateSkillPromptRefs = opts.hydrateSkillPromptRefs !== false;
+  const canWriteSessionStoreCache = shouldHydrateSkillPromptRefs;
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
@@ -400,7 +407,9 @@ export function loadSessionStore(
     }
   }
 
-  const hydratedPromptRefs = hydrateSessionStoreSkillPromptRefs({ storePath, store });
+  const hydratedPromptRefs = shouldHydrateSkillPromptRefs
+    ? hydrateSessionStoreSkillPromptRefs({ storePath, store })
+    : false;
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (hydratedPromptRefs || migrated || normalized) {
@@ -444,7 +453,7 @@ export function loadSessionStore(
 
   setSerializedSessionStore(storePath, serializedFromDisk);
 
-  if (!opts.skipCache && isSessionStoreCacheEnabled()) {
+  if (!opts.skipCache && canWriteSessionStoreCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({
       storePath,
       store,
@@ -488,8 +497,12 @@ export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapsho
 export function readSessionEntry(
   storePath: string,
   sessionKey: string,
+  opts: ReadSessionEntryOptions = {},
 ): SessionStoreSnapshotEntry | undefined {
-  const store = loadSessionStore(storePath, { clone: false });
+  const store = loadSessionStore(storePath, {
+    clone: false,
+    ...(opts.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
   const resolved = resolveSessionStoreEntry({
     store,
     sessionKey,

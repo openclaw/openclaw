@@ -381,6 +381,49 @@ describe("session store strips resolvedSkills from persistence", () => {
     expect(loaded["agent:main:test:1"]?.skillsSnapshot?.promptRef).toBeUndefined();
   });
 
+  it("can skip prompt ref hydration for metadata-only reads", async () => {
+    const prompt = `<available_skills>\n${"metadata-only prompt\n".repeat(200)}</available_skills>`;
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+      },
+      { skipMaintenance: true },
+    );
+
+    const loaded = loadSessionStore(storePath, {
+      hydrateSkillPromptRefs: false,
+      skipCache: true,
+    });
+    const snapshot = loaded["agent:main:test:1"]?.skillsSnapshot;
+
+    expect(snapshot?.prompt).toBeUndefined();
+    expect(snapshot?.promptRef?.hash).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("does not cache unhydrated prompt refs for later full reads", async () => {
+    process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "45000";
+    clearSessionStoreCacheForTest();
+    const prompt = `<available_skills>\n${"cache-safe prompt\n".repeat(200)}</available_skills>`;
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+      },
+      { skipMaintenance: true },
+    );
+    clearSessionStoreCacheForTest();
+
+    const metadataOnly = loadSessionStore(storePath, {
+      hydrateSkillPromptRefs: false,
+    });
+    const fullRead = loadSessionStore(storePath);
+
+    expect(metadataOnly["agent:main:test:1"]?.skillsSnapshot?.prompt).toBeUndefined();
+    expect(fullRead["agent:main:test:1"]?.skillsSnapshot?.prompt).toBe(prompt);
+    expect(fullRead["agent:main:test:1"]?.skillsSnapshot?.promptRef).toBeUndefined();
+  });
+
   it("keeps small skills prompts inline", async () => {
     const prompt = "short prompt";
     await saveSessionStore(

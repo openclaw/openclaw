@@ -1,4 +1,5 @@
 import { sanitizeAgentId } from "../routing/session-key.js";
+import { timestampMsToIsoString } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -104,10 +105,11 @@ function coerceSchedule(schedule: UnknownRecord) {
     }
   }
 
+  const parsedAtIso = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;
   if (atString) {
-    next.at = parsedAtMs !== null ? new Date(parsedAtMs).toISOString() : atString;
-  } else if (parsedAtMs !== null) {
-    next.at = new Date(parsedAtMs).toISOString();
+    next.at = parsedAtIso ?? atString;
+  } else if (parsedAtIso !== undefined) {
+    next.at = parsedAtIso;
   }
   if ("atMs" in next) {
     delete next.atMs;
