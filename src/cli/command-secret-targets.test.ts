@@ -249,6 +249,7 @@ import {
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
+  getStatusCommandSecretTargetIds,
 } from "./command-secret-targets.js";
 
 describe("command secret target ids", () => {
@@ -271,6 +272,18 @@ describe("command secret target ids", () => {
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("channels.discord.token")).toBe(false);
+  });
+
+  it("includes gateway auth targets for status commands so the embedded audit resolves them", () => {
+    const ids = getStatusCommandSecretTargetIds(undefined, undefined, {
+      includeChannelTargets: false,
+    });
+    // Regression for #87815: status --deep runs an embedded security audit that
+    // must see resolved gateway auth, so these must match the security-audit set.
+    expect(ids.has("gateway.auth.token")).toBe(true);
+    expect(ids.has("gateway.auth.password")).toBe(true);
+    // existing status targets stay covered
+    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
   });
 
   it("scopes capability web search commands to search credential surfaces only", () => {

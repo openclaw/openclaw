@@ -57,6 +57,12 @@ const STATIC_TTS_TARGET_IDS = [
 const STATIC_STATUS_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
+  // `status --deep` runs an embedded security audit that inspects gateway auth.
+  // Without these targets the audit sees unresolved SecretRefs and falsely
+  // reports gateway.auth.mode="none" (issue #87815). Mirrors
+  // STATIC_SECURITY_AUDIT_TARGET_IDS so both surfaces agree.
+  "gateway.auth.token",
+  "gateway.auth.password",
 ] as const;
 const STATIC_SECURITY_AUDIT_TARGET_IDS = [
   "gateway.auth.token",
