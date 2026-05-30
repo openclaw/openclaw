@@ -612,7 +612,7 @@ describe("ensureAuthProfileStore", () => {
     }
   });
 
-  it("rewrites invalidated per-agent Codex order to the main agent's healthy relogin profile", () => {
+  it("keeps an invalidated identity-specific agent profile when the main agent has a different identity", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-codex-relogin-"));
     const { mainDir, agentDir, previousStateDir, previousAgentDir } =
       configureMainAuthTestDirs(root);
@@ -682,10 +682,14 @@ describe("ensureAuthProfileStore", () => {
         provider: "openai",
         access: "healthy-access",
       });
-      expect(store.profiles[staleProfileId]).toBeUndefined();
-      expect(store.order?.["openai"]).toEqual([healthyProfileId]);
-      expect(store.lastGood?.["openai"]).toBe(healthyProfileId);
-      expect(store.usageStats?.[staleProfileId]).toBeUndefined();
+      expectRecordFields(store.profiles[staleProfileId], {
+        type: "oauth",
+        provider: "openai",
+        access: "stale-access",
+      });
+      expect(store.order?.["openai"]).toEqual([staleProfileId]);
+      expect(store.lastGood?.["openai"]).toBe(staleProfileId);
+      expect(store.usageStats?.[staleProfileId]?.cooldownReason).toBe("auth");
     } finally {
       restoreAgentDirEnv({ previousStateDir, previousAgentDir });
       fs.rmSync(root, { recursive: true, force: true });

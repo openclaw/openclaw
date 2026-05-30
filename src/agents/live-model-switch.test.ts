@@ -384,19 +384,6 @@ describe("live model switch", () => {
     expect(
       hasDifferentLiveSessionModelSelection(
         {
-          provider: "openai",
-          model: "gpt-5.5",
-        },
-        {
-          provider: "openai",
-          model: "gpt-5.5",
-        },
-      ),
-    ).toBe(true);
-
-    expect(
-      hasDifferentLiveSessionModelSelection(
-        {
           provider: "anthropic",
           model: "claude-sonnet-4-6",
         },

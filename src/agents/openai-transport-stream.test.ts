@@ -3639,7 +3639,7 @@ describe("openai transport stream", () => {
 
   it.each([
     {
-      label: "openai",
+      label: "openai-platform",
       model: {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -3649,7 +3649,7 @@ describe("openai transport stream", () => {
       },
     },
     {
-      label: "openai",
+      label: "openai-chatgpt",
       model: {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -3736,7 +3736,7 @@ describe("openai transport stream", () => {
       role: "assistant",
       phase: "commentary",
     });
-    if (label === "openai") {
+    if (model.api === "openai-chatgpt-responses") {
       expect(assistantItem?.id).toBeUndefined();
     } else {
       expect(assistantItem?.id).toBe("msg_commentary");
