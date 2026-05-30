@@ -422,6 +422,11 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(new Error("ERR_HTTP2_INVALID_SESSION"))).toBe(true);
     expect(isBenignUncaughtExceptionError(wsPreHandshakeClose)).toBe(true);
     expect(isBenignUncaughtExceptionError(wrappedWsPreHandshakeClose)).toBe(true);
+    expect(
+      isBenignUncaughtExceptionError(
+        new Error("WebSocket error: WebSocket was closed before the connection was established"),
+      ),
+    ).toBe(false);
     expect(isBenignUncaughtExceptionError(generic)).toBe(false);
   });
   it("returns true for transient SQLite errors", () => {
