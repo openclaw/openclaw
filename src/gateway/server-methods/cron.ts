@@ -632,10 +632,17 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const jobs = await context.cron.list({ includeDisabled: true });
+      const matchedJob = jobs.find((job) => job.id === jobId);
+      const jobNameById =
+        matchedJob && typeof matchedJob.name === "string"
+          ? { [jobId as string]: matchedJob.name }
+          : undefined;
       const page = await readCronRunLogEntriesPage({
         storePath: context.cronStorePath,
         jobId: jobId as string,
         ...cronRunLogPageFilters(p),
+        jobNameById,
       });
       respond(true, page, undefined);
     } catch (err) {
