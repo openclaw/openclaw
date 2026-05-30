@@ -1,5 +1,5 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runSkillWorkshopAutoCapture } from "../../skills/workshop/autocapture.js";
+import { runSkillResearchAutoCapture } from "../../skills/research/autocapture.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
@@ -11,13 +11,13 @@ type AgentEndSideEffectsParams = Parameters<typeof runAgentHarnessAgentEndHook>[
 
 async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Promise<void> {
   try {
-    await runSkillWorkshopAutoCapture({
+    await runSkillResearchAutoCapture({
       event: params.event,
       ctx: params.ctx,
       ...(params.ctx.config ? { config: params.ctx.config } : {}),
     });
   } catch (error) {
-    log.warn(`skill workshop auto-capture failed: ${String(error)}`);
+    log.warn(`skill research auto-capture failed: ${String(error)}`);
   }
 }
 

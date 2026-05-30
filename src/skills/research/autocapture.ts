@@ -1,25 +1,25 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveSkillWorkshopConfig } from "./config.js";
-import { listSkillProposals, proposeCreateSkill, proposeUpdateSkill } from "./service.js";
+import { resolveSkillWorkshopConfig } from "../workshop/config.js";
+import { listSkillProposals, proposeCreateSkill, proposeUpdateSkill } from "../workshop/service.js";
+import { readWorkspaceSkillFile, resolveSkillProposalTarget } from "../workshop/store.js";
 import { extractDurableInstructionProposal } from "./signals.js";
-import { readWorkspaceSkillFile, resolveSkillProposalTarget } from "./store.js";
 
-type SkillWorkshopAgentEndEvent = {
+type SkillResearchAgentEndEvent = {
   messages: unknown[];
   success?: boolean;
 };
 
-type SkillWorkshopAgentContext = {
+type SkillResearchAgentContext = {
   agentId?: string;
   workspaceDir?: string;
 };
 
-const log = createSubsystemLogger("skills/workshop");
+const log = createSubsystemLogger("skills/research");
 
-export async function runSkillWorkshopAutoCapture(params: {
-  event: SkillWorkshopAgentEndEvent;
-  ctx: SkillWorkshopAgentContext;
+export async function runSkillResearchAutoCapture(params: {
+  event: SkillResearchAgentEndEvent;
+  ctx: SkillResearchAgentContext;
   config?: OpenClawConfig;
 }): Promise<void> {
   const config = resolveSkillWorkshopConfig(params.config);
@@ -39,7 +39,7 @@ export async function runSkillWorkshopAutoCapture(params: {
     return;
   }
   if (Buffer.byteLength(proposal.content, "utf8") > config.maxSkillBytes) {
-    log.warn(`skill workshop auto-capture skipped oversized proposal: ${proposal.skillName}`);
+    log.warn(`skill research auto-capture skipped oversized proposal: ${proposal.skillName}`);
     return;
   }
 
@@ -48,7 +48,7 @@ export async function runSkillWorkshopAutoCapture(params: {
     (entry) => entry.status === "pending" || entry.status === "quarantined",
   );
   if (activeProposals.length >= config.maxPending) {
-    log.warn("skill workshop auto-capture skipped because pending proposal limit was reached");
+    log.warn("skill research auto-capture skipped because pending proposal limit was reached");
     return;
   }
   if (activeProposals.some((entry) => entry.skillKey === proposal.skillName)) {
@@ -82,8 +82,10 @@ export async function runSkillWorkshopAutoCapture(params: {
             goal: proposal.goal,
             evidence: proposal.evidence,
           });
-    log.info(`skill workshop auto-capture queued ${result.record.target.skillKey}`);
+    log.info(
+      `skill research auto-capture queued workshop proposal ${result.record.target.skillKey}`,
+    );
   } catch (error) {
-    log.warn(`skill workshop auto-capture skipped: ${String(error)}`);
+    log.warn(`skill research auto-capture skipped: ${String(error)}`);
   }
 }

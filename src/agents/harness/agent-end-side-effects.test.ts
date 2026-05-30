@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runSkillWorkshopAutoCapture } from "../../skills/workshop/autocapture.js";
+import { runSkillResearchAutoCapture } from "../../skills/research/autocapture.js";
 import { awaitAgentEndSideEffects, runAgentEndSideEffects } from "./agent-end-side-effects.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
 } from "./lifecycle-hook-helpers.js";
 
-vi.mock("../../skills/workshop/autocapture.js", () => ({
-  runSkillWorkshopAutoCapture: vi.fn(),
+vi.mock("../../skills/research/autocapture.js", () => ({
+  runSkillResearchAutoCapture: vi.fn(),
 }));
 
 vi.mock("./lifecycle-hook-helpers.js", () => ({
@@ -15,7 +15,7 @@ vi.mock("./lifecycle-hook-helpers.js", () => ({
   runAgentHarnessAgentEndHook: vi.fn(),
 }));
 
-const mockAutoCapture = vi.mocked(runSkillWorkshopAutoCapture);
+const mockAutoCapture = vi.mocked(runSkillResearchAutoCapture);
 const mockAwaitAgentEndHook = vi.mocked(awaitAgentHarnessAgentEndHook);
 const mockRunAgentEndHook = vi.mocked(runAgentHarnessAgentEndHook);
 
@@ -26,7 +26,7 @@ describe("agent end side effects", () => {
     mockRunAgentEndHook.mockReset();
   });
 
-  it("fires plugin agent_end hooks without waiting for Skill Workshop auto-capture", async () => {
+  it("fires plugin agent_end hooks without waiting for Skill Research auto-capture", async () => {
     let resolveCapture: (() => void) | undefined;
     mockAutoCapture.mockReturnValueOnce(
       new Promise<void>((resolve) => {
@@ -87,7 +87,7 @@ describe("agent end side effects", () => {
     resolveCapture?.();
   });
 
-  it("still runs agent_end hooks when Skill Workshop auto-capture fails", async () => {
+  it("still runs agent_end hooks when Skill Research auto-capture fails", async () => {
     mockAutoCapture.mockRejectedValueOnce(new Error("capture failed"));
 
     await awaitAgentEndSideEffects({

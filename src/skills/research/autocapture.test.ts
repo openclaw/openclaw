@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { runSkillWorkshopAutoCapture } from "./autocapture.js";
-import { inspectSkillProposal, listSkillProposals } from "./service.js";
+import { inspectSkillProposal, listSkillProposals } from "../workshop/service.js";
+import { runSkillResearchAutoCapture } from "./autocapture.js";
 
 const tempDirs = createTrackedTempDirs();
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -21,11 +21,11 @@ async function makeWorkspace(): Promise<string> {
   return await tempDirs.make("openclaw-skill-workshop-");
 }
 
-describe("skill workshop auto-capture", () => {
+describe("skill research auto-capture", () => {
   it("queues a pending proposal from durable user correction", async () => {
     const workspaceDir = await makeWorkspace();
 
-    await runSkillWorkshopAutoCapture({
+    await runSkillResearchAutoCapture({
       event: {
         success: true,
         messages: [
@@ -64,7 +64,7 @@ describe("skill workshop auto-capture", () => {
   it("stays inert when auto-capture is disabled", async () => {
     const workspaceDir = await makeWorkspace();
 
-    await runSkillWorkshopAutoCapture({
+    await runSkillResearchAutoCapture({
       event: {
         success: true,
         messages: [
