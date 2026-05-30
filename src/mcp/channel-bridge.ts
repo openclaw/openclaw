@@ -14,7 +14,6 @@ import type {
   ApprovalKind,
   ChatHistoryResult,
   ClaudeChannelMode,
-  ClaudePermissionRequest,
   ConversationDescriptor,
   PendingApproval,
   QueueEvent,
@@ -29,11 +28,6 @@ type PendingWaiter = {
   filter: WaitFilter;
   resolve: (value: QueueEvent | null) => void;
   timeout: NodeJS.Timeout | null;
-};
-
-type PendingClaudePermissionEntry = {
-  request: ClaudePermissionRequest;
-  createdAtMs: number;
 };
 
 type PendingApprovalEntry = {
@@ -58,7 +52,7 @@ export class OpenClawChannelBridge {
   private readonly claudeChannelMode: ClaudeChannelMode;
   private readonly queue: QueueEvent[] = [];
   private readonly pendingWaiters = new Set<PendingWaiter>();
-  private readonly pendingClaudePermissions = new Map<string, PendingClaudePermissionEntry>();
+  private readonly pendingClaudePermissions = new Map<string, number>();
   private readonly pendingApprovals = new Map<string, PendingApprovalEntry>();
   private pendingSweepInterval: NodeJS.Timeout | null = null;
   private server: McpServer | null = null;
@@ -268,6 +262,7 @@ export class OpenClawChannelBridge {
   }
 
   listPendingApprovals(): PendingApproval[] {
+    this.sweepPendingExpired();
     return [...this.pendingApprovals.values()]
       .map((entry) => entry.approval)
       .toSorted((a, b) => {
@@ -330,14 +325,7 @@ export class OpenClawChannelBridge {
     if (this.closed) {
       return;
     }
-    this.pendingClaudePermissions.set(params.requestId, {
-      request: {
-        toolName: params.toolName,
-        description: params.description,
-        inputPreview: params.inputPreview,
-      },
-      createdAtMs: Date.now(),
-    });
+    this.pendingClaudePermissions.set(params.requestId, Date.now());
     this.ensurePendingSweeper();
     this.enqueue({
       cursor: this.nextCursor(),
@@ -459,8 +447,8 @@ export class OpenClawChannelBridge {
   }
 
   private sweepPendingExpired(now: number = Date.now()): void {
-    for (const [id, entry] of this.pendingClaudePermissions) {
-      if (now - entry.createdAtMs >= PENDING_CLAUDE_PERMISSION_TTL_MS) {
+    for (const [id, createdAtMs] of this.pendingClaudePermissions) {
+      if (now - createdAtMs >= PENDING_CLAUDE_PERMISSION_TTL_MS) {
         this.pendingClaudePermissions.delete(id);
       }
     }

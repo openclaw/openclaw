@@ -489,17 +489,10 @@ describe("openclaw channel mcp server", () => {
 
       (
         bridge as unknown as {
-          pendingClaudePermissions: Map<string, Record<string, unknown>>;
+          pendingClaudePermissions: Map<string, number>;
           server: { server: { notification: ReturnType<typeof vi.fn> } };
         }
-      ).pendingClaudePermissions.set("abcde", {
-        request: {
-          toolName: "Bash",
-          description: "run npm test",
-          inputPreview: '{"cmd":"npm test"}',
-        },
-        createdAtMs: Date.now(),
-      });
+      ).pendingClaudePermissions.set("abcde", Date.now());
       (
         bridge as unknown as {
           server: { server: { notification: ReturnType<typeof vi.fn> } };

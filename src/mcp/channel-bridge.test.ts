@@ -23,6 +23,7 @@ type BridgeInternals = {
     event: string;
     payload?: Record<string, unknown>;
   }) => Promise<void>;
+  listPendingApprovals: () => unknown[];
   close: () => Promise<void>;
 };
 
@@ -121,6 +122,29 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
 
       vi.advanceTimersByTime(SWEEP_INTERVAL_MS + ONE_MINUTE_MS);
       expect(bridge.pendingApprovals.size).toBe(0);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  test("listPendingApprovals filters expired entries before the next sweep tick", async () => {
+    const bridge = makeBridge();
+    try {
+      await bridge.handleGatewayEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-early-expiry",
+          createdAtMs: 0,
+          expiresAtMs: ONE_MINUTE_MS,
+        },
+      });
+      expect(bridge.pendingApprovals.size).toBe(1);
+
+      vi.advanceTimersByTime(2 * ONE_MINUTE_MS);
+
+      expect(bridge.listPendingApprovals()).toHaveLength(0);
+      expect(bridge.pendingApprovals.size).toBe(0);
+      expect(bridge.pendingSweepInterval).toBeNull();
     } finally {
       await bridge.close();
     }
