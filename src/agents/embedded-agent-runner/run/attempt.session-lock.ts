@@ -114,6 +114,22 @@ function isTranscriptOnlyOpenClawAssistantLine(line: string): boolean {
   }
 }
 
+function isBenignSessionFenceAppendLine(line: string): boolean {
+  if (isTranscriptOnlyOpenClawAssistantLine(line)) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!isJsonRecord(parsed)) {
+      return false;
+    }
+    const message = parsed.message;
+    return isJsonRecord(message) && message.role === "user";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeTranscriptEntryId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
@@ -251,7 +267,7 @@ async function sessionFenceAdvanceIsBenign(params: {
     return false;
   }
   const lines = normalizeStringEntries(text.split("\n"));
-  return lines.length > 0 && lines.every(isTranscriptOnlyOpenClawAssistantLine);
+  return lines.length > 0 && lines.every(isBenignSessionFenceAppendLine);
 }
 
 async function sessionFenceRewriteIsBenign(params: {
@@ -278,9 +294,12 @@ async function sessionFenceRewriteIsBenign(params: {
   if (!currentText.endsWith("\n")) {
     return false;
   }
+  if (currentText === params.previous.text) {
+    return true;
+  }
   const previousLines = splitSessionFileLines(params.previous.text);
   const currentLines = splitSessionFileLines(currentText);
-  if (currentLines.length <= previousLines.length) {
+  if (currentLines.length < previousLines.length) {
     return false;
   }
   let expectedParentId: string | null = null;
@@ -295,8 +314,11 @@ async function sessionFenceRewriteIsBenign(params: {
     }
     expectedParentId = lineMatch.nextPreviousId ?? expectedParentId;
   }
+  if (currentLines.length === previousLines.length) {
+    return true;
+  }
   const appendedLines = currentLines.slice(previousLines.length);
-  return appendedLines.every(isTranscriptOnlyOpenClawAssistantLine);
+  return appendedLines.every(isBenignSessionFenceAppendLine);
 }
 
 type OwnedSessionFileWrite = {
@@ -926,15 +948,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
       }
       if (activeWriteLock.getStore()?.active === true) {
-        if (options?.publishOwnedWrite !== true) {
-          return await run();
-        }
-        const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-        try {
-          return await run();
-        } finally {
-          await publishOwnedSessionFileFence(beforeWrite);
-        }
+        return await run();
       }
       const { lock, owned, releaseRetainedUse } = await acquireWriteLock();
       try {

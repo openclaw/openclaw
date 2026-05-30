@@ -659,6 +659,37 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(release).toHaveBeenCalledTimes(3);
   });
 
+  it("allows queued user turn appends while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "[Queued user message that arrived while the previous turn was still active]",
+          },
+        ],
+      },
+    });
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(release).toHaveBeenCalledTimes(3);
+  });
+
   it("allows delivery mirror appends that migrate legacy linear transcripts", async () => {
     const sessionFile = await createTempSessionFile();
     await fs.appendFile(
@@ -693,6 +724,49 @@ describe("embedded attempt session lock lifecycle", () => {
     await cleanupLock.release();
 
     await expect(fs.readFile(sessionFile, "utf8")).resolves.toContain('"parentId"');
+    expect(controller.hasSessionTakeover()).toBe(false);
+  });
+
+  it("allows same-length linear transcript rewrites while the prompt lock is released", async () => {
+    const sessionFile = await createTempSessionFile();
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session" }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-user",
+          message: { role: "user", content: [{ type: "text", text: "hello" }] },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({ type: "session", version: 1 }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-user",
+          parentId: null,
+          message: { role: "user", content: [{ type: "text", text: "hello" }] },
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    await expect(controller.withSessionWriteLock(() => "late-write")).resolves.toBe("late-write");
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+
     expect(controller.hasSessionTakeover()).toBe(false);
   });
 
