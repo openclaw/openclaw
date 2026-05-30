@@ -65,7 +65,10 @@ import {
   isRecoverableMediaGroupError,
   resolveInboundMediaFileId,
 } from "./bot-handlers.media.js";
-import type { TelegramMediaRef } from "./bot-message-context.js";
+import type {
+  TelegramForwardedBatchContextEntry,
+  TelegramMediaRef,
+} from "./bot-message-context.js";
 import type {
   TelegramMessageContextOptions,
   TelegramPromptContextEntry,
@@ -84,6 +87,7 @@ import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   isTelegramCommandsAllowFromConfigured,
+  normalizeForwardedContext,
   resolveTelegramCommandAuthorization,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
@@ -332,15 +336,77 @@ export const registerTelegramHandlers = ({
     text: string;
     date?: number;
     from?: Message["from"];
-  }): Message => ({
-    ...params.base,
-    ...(params.from ? { from: params.from } : {}),
-    text: params.text,
-    caption: undefined,
-    caption_entities: undefined,
-    entities: undefined,
-    ...(params.date != null ? { date: params.date } : {}),
-  });
+    stripForwardMetadata?: boolean;
+  }): Message => {
+    const baseMessage = params.base as Message & {
+      forward_origin?: unknown;
+      forward_from?: unknown;
+      forward_from_chat?: unknown;
+      forward_sender_name?: unknown;
+      forward_date?: unknown;
+    };
+    if (!params.stripForwardMetadata) {
+      return {
+        ...baseMessage,
+        ...(params.from ? { from: params.from } : {}),
+        text: params.text,
+        caption: undefined,
+        caption_entities: undefined,
+        entities: undefined,
+        ...(params.date != null ? { date: params.date } : {}),
+      };
+    }
+    const {
+      forward_origin: _forwardOrigin,
+      forward_from: _forwardFrom,
+      forward_from_chat: _forwardFromChat,
+      forward_sender_name: _forwardSenderName,
+      forward_date: _forwardDate,
+      ...baseWithoutForwardMetadata
+    } = baseMessage;
+    return {
+      ...baseWithoutForwardMetadata,
+      ...(params.from ? { from: params.from } : {}),
+      text: params.text,
+      caption: undefined,
+      caption_entities: undefined,
+      entities: undefined,
+      ...(params.date != null ? { date: params.date } : {}),
+    };
+  };
+  const buildForwardedBatchContextEntry = (
+    entry: TelegramDebounceEntry,
+    index: number,
+    bodyLine?: number,
+  ): TelegramForwardedBatchContextEntry | null => {
+    const forwardOrigin = normalizeForwardedContext(entry.msg);
+    if (!forwardOrigin) {
+      return null;
+    }
+    return {
+      senderId: forwardOrigin.fromId,
+      senderUsername: forwardOrigin.fromUsername,
+      context: {
+        label: "Telegram forwarded batch item",
+        source: "telegram",
+        type: "forwarded_message",
+        payload: {
+          item_index: index + 1,
+          message_id: entry.msg.message_id,
+          ...(bodyLine !== undefined ? { body_line: bodyLine } : {}),
+          from: forwardOrigin.from,
+          from_type: forwardOrigin.fromType,
+          from_id: forwardOrigin.fromId,
+          username: forwardOrigin.fromUsername,
+          title: forwardOrigin.fromTitle,
+          signature: forwardOrigin.fromSignature,
+          chat_type: forwardOrigin.fromChatType,
+          forwarded_message_id: forwardOrigin.fromMessageId,
+          date_ms: forwardOrigin.date ? forwardOrigin.date * 1000 : undefined,
+        },
+      },
+    };
+  };
   const buildSyntheticContext = (
     ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
     message: Message,
@@ -522,10 +588,24 @@ export const registerTelegramHandlers = ({
         });
         return;
       }
-      const combinedText = entries
-        .map((entry) => getTelegramTextParts(entry.msg).text)
-        .filter(Boolean)
-        .join("\n");
+      const textEntries = entries.map((entry, index) => ({
+        entry,
+        index,
+        text: getTelegramTextParts(entry.msg).text,
+      }));
+      const emittedTextEntries = textEntries.filter((entry) => entry.text.trim() !== "");
+      const combinedText = emittedTextEntries.map((entry) => entry.text).join("\n");
+      let nextBodyLine = 1;
+      const bodyLineByEntryIndex = new Map<number, number>();
+      for (const entry of emittedTextEntries) {
+        bodyLineByEntryIndex.set(entry.index, nextBodyLine);
+        nextBodyLine += entry.text.split("\n").length;
+      }
+      const forwardedBatchContext = textEntries
+        .map(({ entry, index }) =>
+          buildForwardedBatchContextEntry(entry, index, bodyLineByEntryIndex.get(index)),
+        )
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
       const combinedMedia = entries.flatMap((entry) => entry.allMedia);
       if (!combinedText.trim() && combinedMedia.length === 0) {
         return;
@@ -539,6 +619,7 @@ export const registerTelegramHandlers = ({
         base: first.msg,
         text: combinedText,
         date: last.msg.date ?? first.msg.date,
+        stripForwardMetadata: true,
       });
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
       const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
@@ -552,6 +633,7 @@ export const registerTelegramHandlers = ({
           receivedAtMs: first.receivedAtMs,
           ingressBuffer: "inbound-debounce",
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
+          ...(forwardedBatchContext.length > 0 ? { forwardedBatchContext } : {}),
         },
         dispatchDedupeKeys: mergeDispatchDedupeKeys(
           ...entries.map((entry) => entry.dispatchDedupeKeys),
