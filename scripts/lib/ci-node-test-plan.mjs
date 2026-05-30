@@ -91,9 +91,6 @@ function resolveCommandShardName(file) {
     ) {
       return "agentic-commands-doctor-runtime";
     }
-    if (name.endsWith(".e2e.test.ts")) {
-      return "agentic-commands-doctor-misc-e2e";
-    }
     if (
       name.startsWith("doctor-platform-notes") ||
       name.startsWith("doctor-sandbox") ||
@@ -125,7 +122,7 @@ function createAgenticCommandSplitShards() {
   const commandsLightTests = new Set(commandsLightTestFiles);
   const groups = new Map();
   for (const file of listTestFiles("src/commands")) {
-    if (commandsLightTests.has(file)) {
+    if (commandsLightTests.has(file) || file.endsWith(".e2e.test.ts")) {
       continue;
     }
     const shardName = resolveCommandShardName(file);
@@ -138,7 +135,6 @@ function createAgenticCommandSplitShards() {
     "agentic-commands-doctor-config",
     "agentic-commands-doctor-cron",
     "agentic-commands-doctor-misc-core",
-    "agentic-commands-doctor-misc-e2e",
     "agentic-commands-doctor-misc-platform",
     "agentic-commands-doctor-runtime",
     "agentic-commands-doctor-shared",
