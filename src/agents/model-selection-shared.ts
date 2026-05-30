@@ -384,14 +384,7 @@ function parseModelRefWithCompatAlias(
   );
 }
 
-function resolveExactConfiguredProviderRef(
-  params: {
-    cfg?: OpenClawConfig;
-    raw: string;
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
-): ModelRef | null {
+function findExactConfiguredProviderRefParts(params: { cfg?: OpenClawConfig; raw: string }) {
   const slash = params.raw.indexOf("/");
   if (slash <= 0 || !params.cfg?.models?.providers) {
     return null;
@@ -415,6 +408,25 @@ function resolveExactConfiguredProviderRef(
   if (!apiOwner || apiOwner === normalizedConfiguredProvider) {
     return null;
   }
+  return { configuredProvider, modelRaw };
+}
+
+function resolveExactConfiguredProviderRef(
+  params: {
+    cfg?: OpenClawConfig;
+    raw: string;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelRef | null {
+  const exactConfigured = findExactConfiguredProviderRefParts({
+    cfg: params.cfg,
+    raw: params.raw,
+  });
+  if (!exactConfigured) {
+    return null;
+  }
+  const { configuredProvider, modelRaw } = exactConfigured;
   const provider = normalizeLowercaseStringOrEmpty(configuredProvider);
   return {
     provider,
@@ -686,6 +698,24 @@ export function resolveConfiguredModelRef(
     const trimmed = rawModel.trim();
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
     const manifestPluginContext = createModelManifestPluginContext(params);
+    const exactConfiguredPrimaryRaw = modelWithoutProfile || trimmed;
+    if (
+      findExactConfiguredProviderRefParts({
+        cfg: params.cfg,
+        raw: exactConfiguredPrimaryRaw,
+      })
+    ) {
+      const exactConfiguredPrimary = resolveExactConfiguredProviderRef({
+        cfg: params.cfg,
+        raw: exactConfiguredPrimaryRaw,
+        allowManifestNormalization: params.allowManifestNormalization,
+        allowPluginNormalization: params.allowPluginNormalization,
+        manifestPlugins: manifestPluginContext.get(),
+      });
+      if (exactConfiguredPrimary) {
+        return exactConfiguredPrimary;
+      }
+    }
     const aliasCandidate =
       findModelAliasCandidate(params.cfg, trimmed) ??
       (modelWithoutProfile && modelWithoutProfile !== trimmed
