@@ -2697,29 +2697,27 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         },
         messagesSnapshot: [
           {
-            message: {
-              role: "toolResult",
-              toolName: "web_search",
-              details: {
-                summary: {
-                  kind: "search_results",
-                  query: "funny cats",
-                  topResults: [
-                    {
-                      title: "Funny Cat Videos",
-                      url: "https://example.test/cats",
-                      snippet: "A collection of funny cat clips.",
-                    },
-                    {
-                      title: "Cat Memes",
-                      url: "https://example.test/memes",
-                      snippet: "Popular cat meme formats.",
-                    },
-                  ],
-                },
+            role: "toolResult",
+            toolName: "web_search",
+            details: {
+              summary: {
+                kind: "search_results",
+                query: "funny cats",
+                topResults: [
+                  {
+                    title: "Funny Cat Videos",
+                    url: "https://example.test/cats",
+                    snippet: "A collection of funny cat clips.",
+                  },
+                  {
+                    title: "Cat Memes",
+                    url: "https://example.test/memes",
+                    snippet: "Popular cat meme formats.",
+                  },
+                ],
               },
             },
-          },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
         ],
       }),
     );
@@ -2729,10 +2727,11 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runId: "run-terminal-search-loop-generic-summary",
     });
 
-    expect(result.payloads[0]?.isError).toBe(false);
-    expect(result.payloads[0]?.text).toContain('latest returned search results for "funny cats"');
-    expect(result.payloads[0]?.text).toContain("Funny Cat Videos: https://example.test/cats");
-    expect(result.payloads[0]?.text).toContain("Cat Memes: https://example.test/memes");
+    const payload = result.payloads?.[0];
+    expect(payload?.isError).toBe(false);
+    expect(payload?.text).toContain('latest returned search results for "funny cats"');
+    expect(payload?.text).toContain("Funny Cat Videos: https://example.test/cats");
+    expect(payload?.text).toContain("Cat Memes: https://example.test/memes");
     expect(result.meta?.error?.kind).toBe("tool_loop");
     expect(result.meta?.livenessState).toBe("blocked");
   });
@@ -2748,24 +2747,22 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         },
         messagesSnapshot: [
           {
-            message: {
-              role: "toolResult",
-              toolName: "web_search",
-              details: {
-                summary: {
-                  kind: "search_results",
-                  query: "funny cats",
-                  topResults: [
-                    {
-                      title: "Funny Cat Videos",
-                      url: "https://example.test/cats",
-                      snippet: "A collection of funny cat clips.",
-                    },
-                  ],
-                },
+            role: "toolResult",
+            toolName: "web_search",
+            details: {
+              summary: {
+                kind: "search_results",
+                query: "funny cats",
+                topResults: [
+                  {
+                    title: "Funny Cat Videos",
+                    url: "https://example.test/cats",
+                    snippet: "A collection of funny cat clips.",
+                  },
+                ],
               },
             },
-          },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
         ],
       }),
     );
@@ -2775,9 +2772,10 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       runId: "run-terminal-non-search-loop-no-stale-search-summary",
     });
 
-    expect(result.payloads[0]?.isError).toBe(true);
-    expect(result.payloads[0]?.text).toContain("Stopped repeated read calls");
-    expect(result.payloads[0]?.text).not.toContain("Funny Cat Videos");
+    const payload = result.payloads?.[0];
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toContain("Stopped repeated read calls");
+    expect(payload?.text).not.toContain("Funny Cat Videos");
     expect(result.meta?.error?.kind).toBe("tool_loop");
     expect(result.meta?.livenessState).toBe("blocked");
   });

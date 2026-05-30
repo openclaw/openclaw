@@ -20,7 +20,7 @@ const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
-type OpenClawExecSecurity = "deny" | "allowlist" | "full";
+type OpenClawExecSecurity = "deny" | "allowlist" | "denylist" | "full";
 type OpenClawExecAsk = "off" | "on-miss" | "always";
 type OpenClawExecApprovalFloorsForCodexAppServer = {
   security?: OpenClawExecSecurity;
@@ -1336,7 +1336,12 @@ function minOpenClawExecSecurity(
   left: OpenClawExecSecurity,
   right: OpenClawExecSecurity,
 ): OpenClawExecSecurity {
-  const order: Record<OpenClawExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
+  const order: Record<OpenClawExecSecurity, number> = {
+    deny: 0,
+    allowlist: 1,
+    denylist: 2,
+    full: 3,
+  };
   return order[left] <= order[right] ? left : right;
 }
 
@@ -1417,7 +1422,9 @@ function readBooleanEnv(value: string | undefined): boolean | undefined {
 }
 
 function readExecSecurity(value: unknown): OpenClawExecSecurity | undefined {
-  return value === "deny" || value === "allowlist" || value === "full" ? value : undefined;
+  return value === "deny" || value === "allowlist" || value === "denylist" || value === "full"
+    ? value
+    : undefined;
 }
 
 function readExecAsk(value: unknown): OpenClawExecAsk | undefined {
