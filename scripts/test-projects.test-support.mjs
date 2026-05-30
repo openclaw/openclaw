@@ -1043,7 +1043,10 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
   const unmatched = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
-    if (resolveVitestConfigTargetKind(relative) || isVitestConfigFileTarget(relative)) {
+    if (
+      resolveVitestConfigTargetKind(relative) ||
+      (isVitestConfigFileTarget(relative) && isExistingFileTarget(targetArg, cwd))
+    ) {
       continue;
     }
     const kind = classifyTarget(targetArg, cwd);

@@ -2114,6 +2114,17 @@ describe("scripts/test-projects full-suite sharding", () => {
     );
   });
 
+  it("rejects typoed explicit leaf project config targets", () => {
+    expect(
+      findUnmatchedExplicitTestTargets(["test/vitest/vitest.agents-croe.config.ts"], process.cwd()),
+    ).toEqual([
+      {
+        target: "test/vitest/vitest.agents-croe.config.ts",
+        reason: "path-does-not-exist",
+      },
+    ]);
+  });
+
   it("rejects watch mode with multiple explicit leaf project config targets", () => {
     expect(() =>
       buildVitestRunPlans(
