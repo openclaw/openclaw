@@ -8,6 +8,7 @@ vi.mock("./workspace.js", () => ({
 import {
   clearAllBootstrapSnapshots,
   clearBootstrapSnapshot,
+  getBootstrapCacheSizeForTest,
   getOrLoadBootstrapFiles,
 } from "./bootstrap-cache.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
@@ -115,5 +116,60 @@ describe("clearBootstrapSnapshot", () => {
     const second = await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
     expect(second).toBe(first);
     expect(mockLoad()).toHaveBeenCalledTimes(3); // sk1 x1, sk2 x2
+  });
+});
+
+describe("bootstrap cache size cap", () => {
+  const mockLoad = () => vi.mocked(loadWorkspaceBootstrapFiles);
+
+  beforeEach(() => {
+    clearAllBootstrapSnapshots();
+    mockLoad().mockResolvedValue([makeFile("AGENTS.md", "content")]);
+  });
+
+  afterEach(() => {
+    clearAllBootstrapSnapshots();
+    vi.clearAllMocks();
+  });
+
+  it("stays bounded at BOOTSTRAP_CACHE_MAX_SIZE under churn", async () => {
+    // Insert 65 distinct session keys — one more than the cap (64).
+    for (let i = 0; i < 65; i += 1) {
+      await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: `session-${i}` });
+    }
+
+    expect(getBootstrapCacheSizeForTest()).toBe(64);
+  });
+
+  it("evicts the oldest key when the cap is reached", async () => {
+    // Fill up to cap.
+    for (let i = 0; i < 64; i += 1) {
+      await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: `session-${i}` });
+    }
+    // session-0 is the oldest entry; adding session-64 should evict it.
+    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-64" });
+
+    // session-0 was evicted — the next access must hit disk.
+    mockLoad().mockClear();
+    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-0" });
+    expect(mockLoad()).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes access order so recently used keys survive eviction", async () => {
+    // Fill to cap, then refresh session-0 (moves it to end of insertion order).
+    for (let i = 0; i < 64; i += 1) {
+      await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: `session-${i}` });
+    }
+    // Refresh session-0 to make it the most recently used.
+    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-0" });
+
+    // Adding session-64 should evict session-1 (now the oldest), not session-0.
+    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-64" });
+
+    mockLoad().mockClear();
+    // session-0 should still be cached.
+    await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "session-0" });
+    expect(mockLoad()).toHaveBeenCalledTimes(1); // still loads because content refreshes per turn
+    expect(getBootstrapCacheSizeForTest()).toBe(64);
   });
 });
