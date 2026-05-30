@@ -175,6 +175,7 @@ struct ExecDenylistEntry: Codable, Hashable, Identifiable {
     var id: String?
     var pattern: String
     var flags: String?
+    var reason: String?
 
     private static let malformedFlags = "\u{0}"
 
@@ -182,12 +183,14 @@ struct ExecDenylistEntry: Codable, Hashable, Identifiable {
         case id
         case pattern
         case flags
+        case reason
     }
 
-    init(id: String? = nil, pattern: String, flags: String? = nil) {
+    init(id: String? = nil, pattern: String, flags: String? = nil, reason: String? = nil) {
         self.id = id
         self.pattern = pattern
         self.flags = flags
+        self.reason = reason
     }
 
     init(from decoder: Decoder) throws {
@@ -197,6 +200,7 @@ struct ExecDenylistEntry: Codable, Hashable, Identifiable {
             self.id = nil
             self.pattern = pattern
             self.flags = nil
+            self.reason = nil
             return
         }
 
@@ -204,11 +208,13 @@ struct ExecDenylistEntry: Codable, Hashable, Identifiable {
             self.id = nil
             self.pattern = ""
             self.flags = nil
+            self.reason = nil
             return
         }
 
         self.id = try? container.decodeIfPresent(String.self, forKey: .id)
         self.pattern = (try? container.decodeIfPresent(String.self, forKey: .pattern)) ?? ""
+        self.reason = try? container.decodeIfPresent(String.self, forKey: .reason)
         if container.contains(.flags) {
             if (try? container.decodeNil(forKey: .flags)) == true {
                 self.flags = nil
@@ -227,6 +233,7 @@ struct ExecDenylistEntry: Codable, Hashable, Identifiable {
         try container.encodeIfPresent(self.id, forKey: .id)
         try container.encode(self.pattern, forKey: .pattern)
         try container.encodeIfPresent(self.flags, forKey: .flags)
+        try container.encodeIfPresent(self.reason, forKey: .reason)
     }
 }
 

@@ -8,6 +8,7 @@ import {
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
   addDurableCommandApproval,
+  commandRequiresSecurityAuditSuppressionApproval,
   hasDurableExecApproval,
   maxAsk,
   minSecurity,
@@ -557,6 +558,23 @@ async function evaluateSystemRunPolicyPhase(
       message:
         `SYSTEM_RUN_DENIED: approval required (` +
         `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)`,
+    });
+    return null;
+  }
+
+  const requiresSecurityAuditSuppressionApproval =
+    commandRequiresSecurityAuditSuppressionApproval({
+      command: parsed.commandText,
+      cwd: parsed.cwd,
+      env: parsed.env,
+      segments,
+    }) &&
+    !(security === "full" && ask === "off") &&
+    !policy.approvedByAsk;
+  if (requiresSecurityAuditSuppressionApproval) {
+    await sendSystemRunDenied(opts, parsed.execution, {
+      reason: "approval-required",
+      message: "SYSTEM_RUN_DENIED: approval required",
     });
     return null;
   }

@@ -300,7 +300,7 @@ export type ExecToolConfig = {
   /** Exec host routing (default: auto). */
   host?: "auto" | "sandbox" | "gateway" | "node";
   /** Normalized exec policy mode. Prefer this over raw security/ask knobs. */
-  mode?: "deny" | "allowlist" | "ask" | "auto" | "full";
+  mode?: "deny" | "denylist" | "allowlist" | "ask" | "auto" | "full";
   /** Exec security mode (default: full; sandbox host defaults to deny). */
   security?: "deny" | "denylist" | "allowlist" | "full";
   /** Exec ask mode (default: off). */

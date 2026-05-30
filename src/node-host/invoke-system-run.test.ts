@@ -1644,6 +1644,35 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
+  it("requires explicit approval for security audit suppression edits even when allowlisted", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "allowlist",
+          ask: "off",
+          askFallback: "deny",
+        },
+        agents: {
+          main: {
+            allowlist: [{ pattern: "*" }],
+          },
+        },
+      },
+      run: async () => {
+        const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["openclaw", "config", "set", "security.audit.suppressions", "[]"],
+          security: "allowlist",
+          ask: "off",
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        expectApprovalRequiredDenied({ sendNodeEvent, sendInvokeResult });
+      },
+    });
+  });
+
   it("prefers strict inline-eval denial over generic allowlist prompts", async () => {
     setRuntimeConfigSnapshot({
       tools: {
