@@ -385,6 +385,15 @@ function extractAssistantMessageText(message: SessionTranscriptAssistantMessage)
   return parts.length > 0 ? parts.join("\n").trim() : null;
 }
 
+/**
+ * Collapse all whitespace (including newlines) to single spaces and trim,
+ * making text comparison tolerant of formatting differences such as line
+ * wrapping or extra spacing between content blocks.
+ */
+function normalizeTextForComparison(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 async function findLatestEquivalentAssistantMessageId(
   transcriptPath: string,
   message: SessionTranscriptAssistantMessage,
@@ -396,6 +405,7 @@ async function findLatestEquivalentAssistantMessageId(
   if (!expectedText) {
     return undefined;
   }
+  const normalizedExpected = normalizeTextForComparison(expectedText);
 
   for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
     try {
@@ -407,13 +417,23 @@ async function findLatestEquivalentAssistantMessageId(
       if (!candidate || candidate.role !== "assistant") {
         continue;
       }
-      const candidateText = extractAssistantMessageText(
+      // Compare visible text (excluding thinking/commentary phases) so that
+      // a delivery-mirror entry with only the final answer can match a real
+      // assistant response that also contains internal reasoning.
+      const candidateVisibleText = extractAssistantVisibleText(
         redactTranscriptMessage(
           candidate as AgentMessage,
           config,
-        ) as unknown as SessionTranscriptAssistantMessage,
+        ),
       );
-      if (candidateText !== expectedText) {
+      if (!candidateVisibleText) {
+        continue;
+      }
+      if (
+        normalizeTextForComparison(candidateVisibleText) !== normalizedExpected
+      ) {
+        // Most recent assistant differs — this is a different response, not
+        // a duplicate mirror. Abort rather than matching an older turn.
         return undefined;
       }
       if (typeof parsed.id === "string" && parsed.id) {
@@ -426,4 +446,5 @@ async function findLatestEquivalentAssistantMessageId(
   }
 
   return undefined;
+
 }

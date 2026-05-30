@@ -572,6 +572,102 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("dedupes delivery mirror when text differs only by whitespace normalization", async () => {
+    writeTranscriptStore();
+
+    // Exact assistant has "extra" spaces in its content text
+    const exactResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({
+        content: [{ type: "text", text: "Hello   world!" }],
+      }),
+    });
+    expect(exactResult.ok).toBe(true);
+
+    // Mirror has the same text with normal spacing
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello world!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(mirrorResult.ok).toBe(true);
+    if (exactResult.ok && mirrorResult.ok) {
+      expect(mirrorResult.messageId).toBe(exactResult.messageId);
+      // Only 2 lines: header + original assistant (no duplicate)
+      const lines = fs.readFileSync(mirrorResult.sessionFile, "utf-8").trim().split("\n");
+      expect(lines.length).toBe(2);
+    }
+  });
+
+  it("dedupes delivery mirror when assistant has phased commentary + final answer", async () => {
+    writeTranscriptStore();
+
+    // Exact assistant has both commentary (thinking) and final_answer phases
+    const exactResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({
+        content: [
+          {
+            type: "text",
+            text: "Let me think about this...\nI need to consider several factors.",
+            textSignature: JSON.stringify({ v: 1, id: "thinking", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "The answer is 42.",
+            textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
+          },
+        ],
+      }),
+    });
+    expect(exactResult.ok).toBe(true);
+
+    // Mirror has only the visible final-answer text
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "The answer is 42.",
+      storePath: fixture.storePath(),
+    });
+
+    expect(mirrorResult.ok).toBe(true);
+    if (exactResult.ok && mirrorResult.ok) {
+      expect(mirrorResult.messageId).toBe(exactResult.messageId);
+      const lines = fs.readFileSync(mirrorResult.sessionFile, "utf-8").trim().split("\n");
+      expect(lines.length).toBe(2);
+    }
+  });
+
+  it("dedupes delivery mirror when assistant text has extra newlines", async () => {
+    writeTranscriptStore();
+
+    // Exact assistant has trailing newline that differs from mirror
+    const exactResult = await appendExactAssistantMessageToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      message: createExactAssistantMessage({
+        content: [{ type: "text", text: "Hello from Codex!\n" }],
+      }),
+    });
+    expect(exactResult.ok).toBe(true);
+
+    // Mirror has same text without trailing newline
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from Codex!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(mirrorResult.ok).toBe(true);
+    if (exactResult.ok && mirrorResult.ok) {
+      expect(mirrorResult.messageId).toBe(exactResult.messageId);
+      const lines = fs.readFileSync(mirrorResult.sessionFile, "utf-8").trim().split("\n");
+      expect(lines.length).toBe(2);
+    }
+  });
+
   it("keeps delivery mirrors in transcripts while repair preserves real tool results", async () => {
     writeTranscriptStore();
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
