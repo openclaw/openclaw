@@ -16,11 +16,11 @@ function isBlockedServiceEnvVar(key: string): boolean {
 
 function isUnresolvedShellReference(value: string): boolean {
   // Match only values whose entire content is a shell variable reference:
-  //   $VAR_NAME          (simple reference)
+  //   $VAR_NAME          (simple reference — must start with a letter or underscore)
   //   ${VAR_NAME}        (brace-form reference)
   //   $(command)         (command substitution)
-  // A real credential that merely contains a $ (e.g. a password like "abc$2!") is NOT matched.
-  return /^\$[\w_][\w\d_]*$/.test(value) || /^\$\{[^}]+\}$/.test(value) || /^\$\(.*\)$/.test(value);
+  // A real credential that merely contains a $ (e.g. "abc$2!", "$100") is NOT matched.
+  return /^\$[A-Za-z_]\w*$/.test(value) || /^\$\{[^}]+\}$/.test(value) || /^\$\(.*\)$/.test(value);
 }
 
 function parseStateDirDotEnvContent(content: string): Record<string, string> {
