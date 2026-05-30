@@ -43,6 +43,10 @@ function firstRegisteredSubagentRun(): {
 
 describe("spawnSubagentDirect thread binding delivery", () => {
   type SpawnModule = Awaited<ReturnType<typeof loadSubagentSpawnModuleForTest>>;
+  type SetActivePluginRegistry = typeof import("../plugins/runtime.js").setActivePluginRegistry;
+  type CreateChannelTestPluginBase =
+    typeof import("../test-utils/channel-plugins.js").createChannelTestPluginBase;
+  type CreateTestRegistry = typeof import("../test-utils/channel-plugins.js").createTestRegistry;
   type SessionBindingService = NonNullable<
     Parameters<typeof loadSubagentSpawnModuleForTest>[0]["getSessionBindingService"]
   >;
@@ -51,6 +55,9 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   >;
 
   let spawnSubagentDirect: SpawnModule["spawnSubagentDirect"];
+  let setActivePluginRegistryForTest: SetActivePluginRegistry;
+  let createChannelTestPluginBaseForTest: CreateChannelTestPluginBase;
+  let createTestRegistryForTest: CreateTestRegistry;
   let currentConfig: Record<string, unknown>;
   let currentSessionBindingService: ReturnType<SessionBindingService>;
   let currentDeliveryTargetResolver: DeliveryTargetResolver;
@@ -68,9 +75,47 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       getSessionBindingService: () => currentSessionBindingService,
       resolveConversationDeliveryTarget: (params) => currentDeliveryTargetResolver(params),
     }));
+    ({ setActivePluginRegistry: setActivePluginRegistryForTest } =
+      await import("../plugins/runtime.js"));
+    ({
+      createChannelTestPluginBase: createChannelTestPluginBaseForTest,
+      createTestRegistry: createTestRegistryForTest,
+    } = await import("../test-utils/channel-plugins.js"));
   });
 
+  function installChannelRouteProjectionPluginsForTest() {
+    const matrixBase = createChannelTestPluginBaseForTest({ id: "matrix", label: "Matrix" });
+    setActivePluginRegistryForTest(
+      createTestRegistryForTest([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: {
+            ...matrixBase,
+            messaging: {
+              resolveDeliveryTarget: ({
+                conversationId,
+                parentConversationId,
+              }: {
+                conversationId: string;
+                parentConversationId?: string;
+              }) => {
+                const parent = parentConversationId?.trim();
+                const child = conversationId.trim();
+                if (parent && parent !== child) {
+                  return { to: `room:${parent}`, threadId: child };
+                }
+                return { to: `room:${child}` };
+              },
+            },
+          },
+        },
+      ]),
+    );
+  }
+
   beforeEach(() => {
+    installChannelRouteProjectionPluginsForTest();
     currentConfig = createSubagentSpawnTestConfig(os.tmpdir(), {
       agents: {
         defaults: {
