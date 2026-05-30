@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { resolveDateTimestampMs } from "../shared/number-coercion.js";
+import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 
 export type TimeFormatPreference = "auto" | "12" | "24";
 export type ResolvedTimeFormat = "12" | "24";

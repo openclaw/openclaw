@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  normalizeOptionalTrimmedStringList,
-  uniqueStrings,
-} from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";

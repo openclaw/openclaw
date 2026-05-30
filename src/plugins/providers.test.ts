@@ -1,7 +1,7 @@
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";

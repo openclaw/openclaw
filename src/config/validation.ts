@@ -1,6 +1,7 @@
 import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
@@ -36,7 +37,6 @@ import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
   isUnsafeGatewayTailscaleNoAuth,
 } from "../shared/gateway-tailscale-auth-policy.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";

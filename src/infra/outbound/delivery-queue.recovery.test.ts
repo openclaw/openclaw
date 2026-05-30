@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import {
   enqueueDelivery,

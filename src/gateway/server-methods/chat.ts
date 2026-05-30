@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -82,8 +84,6 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   stripInlineDirectiveTagsForDisplay,

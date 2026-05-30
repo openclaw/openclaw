@@ -1,9 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ReplyRunKey = string;
 

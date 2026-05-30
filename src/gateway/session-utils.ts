@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
@@ -76,12 +82,6 @@ import {
   isWorkspaceRelativeAvatarPath,
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";

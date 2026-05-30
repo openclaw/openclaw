@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
 import {
   GATEWAY_CLIENT_IDS,
@@ -34,8 +36,6 @@ import {
   parseAgentSessionKey,
   parseThreadSessionSuffix,
 } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { sortUniqueStrings, uniqueValues } from "../../shared/string-normalization.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";

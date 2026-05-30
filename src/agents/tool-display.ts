@@ -1,5 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { redactToolDetail } from "../logging/redact.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { shortenHomeInString } from "../utils.js";
 import {
   defaultTitle,

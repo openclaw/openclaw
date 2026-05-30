@@ -1,5 +1,5 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { readStringValue } from "../shared/string-coerce.js";
 import { asBoolean } from "../utils/boolean.js";
 import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 

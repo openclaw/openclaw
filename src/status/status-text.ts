@@ -1,4 +1,5 @@
 import os from "node:os";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -32,7 +33,6 @@ import {
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,

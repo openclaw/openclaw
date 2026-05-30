@@ -1,9 +1,9 @@
 import fs from "node:fs";
-import JSON5 from "json5";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import JSON5 from "json5";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;

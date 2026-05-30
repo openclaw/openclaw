@@ -1,13 +1,13 @@
+import { isRecord as isSchemaRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import {
   resolveUnsupportedToolSchemaKeywords,
   shouldOmitEmptyArrayItems,
 } from "../plugins/provider-model-compat.js";
-import { isRecord as isSchemaRecord } from "../shared/record-coerce.js";
 import { stripUnsupportedSchemaKeywords } from "../shared/schema-keyword-strip.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { uniqueValues } from "../shared/string-normalization.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
 export type ToolParameterSchemaOptions = {

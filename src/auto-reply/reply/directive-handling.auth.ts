@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
@@ -15,7 +16,6 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "../../utils/mask-api-key.js";
 

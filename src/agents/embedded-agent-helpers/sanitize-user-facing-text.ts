@@ -13,7 +13,7 @@ import { coerceChatContentText } from "../../shared/chat-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+} from "../../../packages/normalization-core/src/string-coerce.js";
 import {
   stripLegacyBracketToolCallBlocks,
   stripMinimaxToolCallXml,

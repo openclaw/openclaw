@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
-import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
 import {
   asDateTimestampMs,
   parseFiniteNumber as readFiniteNumber,
   resolveExpiresAtMsFromDurationMs,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
+import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   type TalkEvent,

@@ -2,14 +2,14 @@ import { execFileSync, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { formatErrorMessage } from "../infra/errors.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
-} from "../shared/number-coercion.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessage } from "../infra/errors.js";
+import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import type { OAuthCredentials, OAuthProvider } from "./auth-profiles/types.js";
 

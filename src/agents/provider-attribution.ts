@@ -1,12 +1,12 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
-import { isRecord } from "../shared/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";

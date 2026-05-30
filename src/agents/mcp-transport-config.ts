@@ -1,7 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,

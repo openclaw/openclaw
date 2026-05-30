@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { resolveAcpSessionResolutionError } from "../../../acp/control-plane/manager.utils.js";
 import {
@@ -46,7 +47,6 @@ import {
   type SessionBindingRecord,
   type SessionBindingService,
 } from "../../../infra/outbound/session-binding-service.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { ReplyPayload } from "../../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {

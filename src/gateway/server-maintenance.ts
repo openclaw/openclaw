@@ -1,7 +1,7 @@
+import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
-import { isFutureDateTimestampMs } from "../shared/number-coercion.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { ChatRunState } from "./server-chat-state.js";

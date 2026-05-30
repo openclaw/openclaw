@@ -314,7 +314,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "infra/ws": "src/infra/ws.ts",
     "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
     "plugins/tools": "src/plugins/tools.ts",
-    "shared/string-coerce": "src/shared/string-coerce.ts",
+    "normalization-core/string-coerce": "packages/normalization-core/src/string-coerce.ts",
   };
 }
 
@@ -422,6 +422,16 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
     "render-aware-chunking": "packages/markdown-core/src/render-aware-chunking.ts",
     tables: "packages/markdown-core/src/tables.ts",
     types: "packages/markdown-core/src/types.ts",
+  };
+}
+
+function buildNormalizationCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/normalization-core/src/index.ts",
+    "number-coercion": "packages/normalization-core/src/number-coercion.ts",
+    "record-coerce": "packages/normalization-core/src/record-coerce.ts",
+    "string-coerce": "packages/normalization-core/src/string-coerce.ts",
+    "string-normalization": "packages/normalization-core/src/string-normalization.ts",
   };
 }
 
@@ -560,6 +570,12 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
     ...Object.fromEntries(
+      Object.entries(buildNormalizationCoreDistEntries()).map(([entry, source]) => [
+        `normalization-core/${entry}`,
+        source,
+      ]),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildTerminalCoreDistEntries()).map(([entry, source]) => [
         `terminal-core/${entry}`,
         source,
@@ -644,6 +660,12 @@ export default defineConfig([
     deps: {
       neverBundle: shouldExternalizeMarkdownCoreDependency,
     },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildNormalizationCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("normalization-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

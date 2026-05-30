@@ -1,6 +1,10 @@
 import { existsSync } from "node:fs";
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
@@ -12,10 +16,6 @@ import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gate
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import { isProbeReachable } from "./gateway-status/helpers.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";

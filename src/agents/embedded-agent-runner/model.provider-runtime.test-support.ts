@@ -1,4 +1,4 @@
-import { lowercasePreservingWhitespace } from "../../shared/string-coerce.js";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
 
 const OPENAI_BASE_URL = "https://api.openai.com/v1";

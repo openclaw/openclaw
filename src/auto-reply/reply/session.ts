@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
@@ -46,11 +51,6 @@ import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeSessionDeliveryFields,

@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -15,7 +16,6 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
 import { hasKind } from "../plugins/slots.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],

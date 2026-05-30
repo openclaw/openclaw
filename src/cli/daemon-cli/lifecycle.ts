@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
@@ -12,7 +13,6 @@ import {
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 import { type GatewayRestartIntent, writeGatewayRestartIntentSync } from "../../infra/restart.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";

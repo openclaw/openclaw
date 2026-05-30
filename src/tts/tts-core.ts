@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
@@ -10,7 +11,6 @@ import { prepareModelForSimpleCompletion } from "../agents/simple-completion-tra
 import type { OpenClawConfig } from "../config/types.js";
 import { completeSimple } from "../llm/stream.js";
 import type { TextContent } from "../llm/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {
   normalizeApplyTextNormalization,

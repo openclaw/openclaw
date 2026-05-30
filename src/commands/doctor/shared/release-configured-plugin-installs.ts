@@ -1,4 +1,5 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
@@ -9,7 +10,6 @@ import { compareOpenClawVersions } from "../../../config/version.js";
 import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
-import { normalizeNullableString as normalizeId } from "../../../shared/string-coerce.js";
 import { VERSION } from "../../../version.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";

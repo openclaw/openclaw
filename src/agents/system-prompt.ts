@@ -1,4 +1,13 @@
 import { createHmac, createHash } from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -10,15 +19,6 @@ import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
-import {
-  normalizeStringEntries,
-  normalizeStringEntriesLower,
-  normalizeUniqueStringEntries,
-} from "../shared/string-normalization.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";

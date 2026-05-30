@@ -2,9 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";

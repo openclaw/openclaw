@@ -1,13 +1,13 @@
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   findNormalizedProviderValue,
   type ModelRef,
   normalizeProviderId,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 
 export type ModelPickerCatalogEntry = {
   provider: string;

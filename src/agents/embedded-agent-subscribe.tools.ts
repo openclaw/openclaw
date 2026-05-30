@@ -1,13 +1,14 @@
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
-import { asOptionalRecord as readRecord } from "../shared/record-coerce.js";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { isMessageToolSendActionName } from "./embedded-agent-messaging.js";

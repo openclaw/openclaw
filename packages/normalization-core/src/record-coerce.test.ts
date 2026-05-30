@@ -14,7 +14,10 @@ describe("record-coerce", () => {
   });
 
   it("stays isolated from utils.ts so browser bundles stay Node-free", () => {
-    const source = readFileSync(path.resolve("src/shared/record-coerce.ts"), "utf8");
+    const source = readFileSync(
+      path.resolve("packages/normalization-core/src/record-coerce.ts"),
+      "utf8",
+    );
 
     expect(source).not.toContain("../utils.js");
   });

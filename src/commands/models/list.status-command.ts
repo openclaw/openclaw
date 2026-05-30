@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentDir,
@@ -60,7 +61,6 @@ import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-r
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";

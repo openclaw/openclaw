@@ -1,5 +1,5 @@
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";

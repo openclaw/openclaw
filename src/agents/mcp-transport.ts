@@ -4,10 +4,10 @@ import {
 } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeHeadersInitForFetch } from "../infra/fetch-headers.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { logDebug } from "../logger.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   buildMcpHttpFetch,
   withoutMcpAuthorizationHeader,

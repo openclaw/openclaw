@@ -1,8 +1,8 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";

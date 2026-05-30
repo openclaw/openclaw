@@ -14,7 +14,7 @@ import {
   uniqueStrings,
 } from "./string-normalization.js";
 
-describe("shared/string-normalization", () => {
+describe("normalization-core/string-normalization", () => {
   it("normalizes mixed allow-list entries", () => {
     expect(normalizeStringEntries([" a ", 42, "", "  ", "z"])).toEqual(["a", "42", "z"]);
     expect(normalizeStringEntries([" ok ", null, { toString: () => " obj " }])).toEqual([

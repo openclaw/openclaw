@@ -1,5 +1,6 @@
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
@@ -7,7 +8,6 @@ import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-fi
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { readRemoteMediaBuffer } from "./fetch.js";

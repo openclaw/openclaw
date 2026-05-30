@@ -1,6 +1,6 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   resolveThreadBindingLifecycle as resolveSharedThreadBindingLifecycle,
   type ThreadBindingLifecycleRecord,

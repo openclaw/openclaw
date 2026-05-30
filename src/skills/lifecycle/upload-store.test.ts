@@ -2,8 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {
   createSkillUploadStore,
   MAX_ACTIVE_SKILL_UPLOADS,

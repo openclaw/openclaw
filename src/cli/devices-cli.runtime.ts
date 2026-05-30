@@ -1,4 +1,10 @@
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
@@ -31,12 +37,6 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../shared/device-pairing-access.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { formatCliCommand } from "./command-format.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";

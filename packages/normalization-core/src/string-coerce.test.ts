@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeStringifiedEntries } from "./string-coerce.js";
 
-describe("shared/string-coerce", () => {
+describe("normalization-core/string-coerce", () => {
   it("normalizes primitive stringified entries", () => {
     expect(normalizeStringifiedEntries([" a ", 42, true, 0n, "", "  ", null, {}])).toEqual([
       "a",

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { tryReadJson, tryReadJsonSync } from "../infra/json-files.js";
-import { isRecord } from "../shared/record-coerce.js";
 import { resolveDefaultPluginNpmDir, validatePluginId } from "./install-paths.js";
 import {
   resolveInstalledPluginIndexStorePath,

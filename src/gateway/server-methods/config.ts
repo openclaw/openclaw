@@ -1,5 +1,11 @@
 import { execFile } from "node:child_process";
 import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -37,12 +43,6 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "../../shared/number-coercion.js";
-import { isRecord } from "../../shared/record-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { diffConfigPaths } from "../config-diff.js";
 import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
 import {

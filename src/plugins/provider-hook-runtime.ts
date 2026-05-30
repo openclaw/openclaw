@@ -1,10 +1,10 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveModelCatalogScope } from "../agents/model-catalog-scope.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveModelCatalogScope } from "../agents/model-catalog-scope.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
   PluginLruCache,

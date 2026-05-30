@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -36,7 +37,6 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import type {
   AgentHealthSummary,

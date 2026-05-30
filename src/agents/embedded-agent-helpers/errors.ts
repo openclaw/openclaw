@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -7,10 +11,6 @@ import {
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,

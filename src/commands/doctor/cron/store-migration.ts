@@ -4,13 +4,13 @@ import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
 import { inferLegacyName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
-import { timestampMsToIsoString } from "../../../shared/number-coercion.js";
+import { timestampMsToIsoString } from "../../../../packages/normalization-core/src/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
-} from "../../../shared/string-coerce.js";
+} from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 import { hasLegacyOpenAICodexCronModelRef, migrateLegacyCronPayload } from "./payload-migration.js";
 

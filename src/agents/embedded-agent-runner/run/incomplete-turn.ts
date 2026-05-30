@@ -1,11 +1,11 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedAgentExecutionContract } from "../../../config/types.agent-defaults.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {

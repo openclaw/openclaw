@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { captureEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
