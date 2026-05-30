@@ -135,8 +135,10 @@ describe("managed service update handoff", () => {
       KEEP_ME: "1",
     });
 
+    const handoffRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-cwd-test-"));
+    tempDirs.add(handoffRoot);
     const result = await startManagedServiceUpdateHandoff({
-      root: "/tmp/openclaw",
+      root: handoffRoot,
       timeoutMs: 1_800_000,
       restartDelayMs: 500,
       parentPid: 12345,
@@ -171,8 +173,8 @@ describe("managed service update handoff", () => {
     };
     expect(helperParams.metaPath).toMatch(/sentinel-meta\.json$/u);
     expect(helperParams.sentinelPath).toMatch(/restart-sentinel\.json$/u);
-    expect(options.cwd).toBe(os.homedir());
-    expect(helperParams.cwd).toBe(os.homedir());
+    expect(options.cwd).toBe(handoffRoot);
+    expect(helperParams.cwd).toBe(handoffRoot);
     expect(options.detached).toBe(true);
     expect(options.env.KEEP_ME).toBe("1");
     for (const [key, value] of Object.entries(serviceIdentityEnv)) {

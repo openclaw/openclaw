@@ -306,7 +306,7 @@ export function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEn
 }
 
 async function resolveManagedServiceHandoffCwd(root: string): Promise<string> {
-  const candidates = [os.homedir(), os.tmpdir(), path.dirname(process.execPath), root];
+  const candidates = [root, os.homedir(), os.tmpdir(), path.dirname(process.execPath)];
   for (const candidate of candidates) {
     if (!candidate.trim()) {
       continue;
