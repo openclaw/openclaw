@@ -199,6 +199,31 @@ function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
   };
 }
 
+interface NativeQmdWatchPair {
+  dir: string;
+  main: fsSync.FSWatcher;
+}
+
+let _qmdNativeWatchFactory: typeof fsSync.watch | undefined;
+
+// Exposed for test injection so watcher creation can be verified without
+// touching the real filesystem. Defaults to native fs.watch.
+export function setQmdNativeWatchFactory(factory: typeof fsSync.watch): void {
+  _qmdNativeWatchFactory = factory;
+}
+
+export function resetQmdNativeWatchFactory(): void {
+  _qmdNativeWatchFactory = undefined;
+}
+
+function resolveQmdNativeWatchFactory(): typeof fsSync.watch {
+  return _qmdNativeWatchFactory ?? fsSync.watch;
+}
+
+function isGlobPattern(pattern: string): boolean {
+  return /[*?[]/.test(pattern);
+}
+
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   const normalized = path.normalize(watchPath);
   const parts = normalized
@@ -335,6 +360,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private updateTimer: NodeJS.Timeout | null = null;
   private embedTimer: NodeJS.Timeout | null = null;
   private watcher: FSWatcher | null = null;
+  private readonly nativeWatchPairs: NativeQmdWatchPair[] = [];
   private watchTimer: NodeJS.Timeout | null = null;
   private readonly pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   private pendingUpdate: Promise<void> | null = null;
@@ -1472,6 +1498,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       await this.watcher.close().catch(() => undefined);
       this.watcher = null;
     }
+    this.closeNativeQmdWatchPairs();
     this.queuedForcedRuns = 0;
     await this.pendingUpdate?.catch(() => undefined);
     await this.queuedForcedUpdate?.catch(() => undefined);
@@ -1556,36 +1583,182 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!this.syncSettings?.watch || this.watcher || this.closed) {
       return;
     }
-    const watchPaths = new Set<string>();
+    if (this.nativeWatchPairs.length > 0) {
+      // Already initialized via native watchers — preserve idempotence.
+      return;
+    }
+    const fileWatchPaths = new Set<string>();
+    const dirWatchPaths = new Set<string>();
     for (const collection of this.qmd.collections) {
       if (collection.kind === "sessions") {
         continue;
       }
-      watchPaths.add(this.resolveCollectionWatchPath(collection));
+      if (isGlobPattern(collection.pattern)) {
+        dirWatchPaths.add(path.normalize(collection.path));
+      } else {
+        fileWatchPaths.add(this.resolveCollectionWatchPath(collection));
+      }
     }
-    if (watchPaths.size === 0) {
+    if (fileWatchPaths.size === 0 && dirWatchPaths.size === 0) {
       return;
     }
-    const watchPathList = Array.from(watchPaths);
-    const startTime = Date.now();
-    log.info(`qmd watcher starting for agent "${this.agentId}" paths=${watchPathList.length}`);
-    this.watcher = chokidar.watch(watchPathList, {
-      ignoreInitial: true,
-      ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
-    });
     const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
       recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
       this.dirty = true;
       this.scheduleWatchSync();
     };
-    this.watcher.on("add", markDirty);
-    this.watcher.on("change", markDirty);
-    this.watcher.on("unlink", markDirty);
-    this.watcher.once("ready", () => {
+    // Native recursive fs.watch for directory collections — one watcher per
+    // directory on macOS (FSEvents) and Windows (ReadDirectoryChangesW).
+    // Avoids chokidar's per-file fs.watch fan-out that opened ~12k REG FDs
+    // on multi-thousand-`.md` memory trees (issue #86613).
+    //
+    // Linux is intentionally NOT in the native set: Node's
+    // `fs.watch(dir, { recursive: true })` on non-macOS/non-Windows routes
+    // through `internal/fs/recursive_watch`, which walks the tree and
+    // attaches one watcher per entry under the hood.
+    const nativeRecursiveSupported =
+      process.platform === "darwin" || process.platform === "win32";
+    for (const dir of dirWatchPaths) {
+      if (!nativeRecursiveSupported) {
+        fileWatchPaths.add(dir);
+        continue;
+      }
+      if (!this.attachNativeQmdWatchForDir(dir, markDirty)) {
+        // Native creation failed — fall back to chokidar so directory
+        // coverage isn't dropped.
+        fileWatchPaths.add(dir);
+      }
+    }
+    if (fileWatchPaths.size > 0) {
+      const watchPathList = Array.from(fileWatchPaths);
+      const startTime = Date.now();
       log.info(
-        `qmd watcher ready for agent "${this.agentId}" paths=${watchPathList.length} durationMs=${Date.now() - startTime}`,
+        `qmd watcher starting for agent "${this.agentId}" paths=${watchPathList.length}`,
       );
+      this.watcher = chokidar.watch(watchPathList, {
+        ignoreInitial: true,
+        ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
+      });
+      this.watcher.on("add", markDirty);
+      this.watcher.on("change", markDirty);
+      this.watcher.on("unlink", markDirty);
+      this.watcher.once("ready", () => {
+        log.info(
+          `qmd watcher ready for agent "${this.agentId}" paths=${watchPathList.length} durationMs=${Date.now() - startTime}`,
+        );
+      });
+    }
+  }
+
+  // Attach a native recursive fs.watch to `dir`. Returns true if the
+  // watcher attached successfully.
+  private attachNativeQmdWatchForDir(
+    dir: string,
+    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+  ): boolean {
+    if (this.closed) {
+      return false;
+    }
+    try {
+      fsSync.statSync(dir);
+    } catch {
+      // Directory doesn't exist; caller will fall back to chokidar.
+      return false;
+    }
+    let mainWatcher: fsSync.FSWatcher;
+    try {
+      mainWatcher = resolveQmdNativeWatchFactory()(
+        dir,
+        { recursive: true },
+        (_eventType, filename) => {
+          if (filename == null) {
+            markDirty();
+            return;
+          }
+          const full = path.join(dir, filename);
+          if (shouldIgnoreMemoryWatchPath(full)) {
+            return;
+          }
+          let stats: fsSync.Stats | undefined;
+          try {
+            const s = fsSync.lstatSync(full, { throwIfNoEntry: false });
+            stats = s ?? undefined;
+          } catch {
+            stats = undefined;
+          }
+          markDirty(full, stats);
+        },
+      );
+    } catch (err) {
+      log.warn(
+        `failed to start native recursive watcher on ${dir}: ${String(err)}; falling back to chokidar`,
+      );
+      return false;
+    }
+    const pair: NativeQmdWatchPair = { dir, main: mainWatcher };
+    mainWatcher.on("error", (err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`qmd native watcher error on ${dir}: ${message}`);
+      this.closeNativeQmdWatchPair(pair);
+      if (this.closed) {
+        return;
+      }
+      markDirty();
+      this.attachQmdChokidarFallback(dir, markDirty);
     });
+    this.nativeWatchPairs.push(pair);
+    return true;
+  }
+
+  private closeNativeQmdWatchPair(pair: NativeQmdWatchPair): void {
+    try {
+      pair.main.close();
+    } catch {
+      // ignore close failures
+    }
+    const idx = this.nativeWatchPairs.indexOf(pair);
+    if (idx >= 0) {
+      this.nativeWatchPairs.splice(idx, 1);
+    }
+  }
+
+  private closeNativeQmdWatchPairs(): void {
+    while (this.nativeWatchPairs.length > 0) {
+      const pair = this.nativeWatchPairs[0];
+      if (!pair) {
+        return;
+      }
+      this.closeNativeQmdWatchPair(pair);
+    }
+  }
+
+  // Fall back to chokidar for a directory after a native watcher dies.
+  private attachQmdChokidarFallback(
+    dir: string,
+    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+  ): void {
+    if (this.closed) {
+      return;
+    }
+    try {
+      if (this.watcher) {
+        this.watcher.add(dir);
+        return;
+      }
+      this.watcher = chokidar.watch([dir], {
+        ignoreInitial: true,
+        ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
+      });
+      this.watcher.on("add", markDirty);
+      this.watcher.on("change", markDirty);
+      this.watcher.on("unlink", markDirty);
+      this.watcher.on("error", (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`qmd watcher error: ${message}`);
+      });
+    } catch (err) {
+      log.warn(`failed to attach chokidar fallback for ${dir}: ${String(err)}`);
+    }
   }
 
   private resolveCollectionWatchPath(collection: ManagedCollection): string {
