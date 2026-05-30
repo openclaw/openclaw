@@ -181,11 +181,7 @@ export async function loadCrestodianOverview(
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const result = await probeFn(gatewayUrl);
       if (result.reachable || attempt >= maxRetries) return result;
-      await new Promise<void>((resolve) => {
-        const t = setTimeout(resolve, retryDelayMs);
-        // Allow the process to exit even if this timer is pending.
-        if (t.unref) t.unref();
-      });
+      await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
     }
     return probeFn(gatewayUrl);
   };
