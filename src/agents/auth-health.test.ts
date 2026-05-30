@@ -381,9 +381,9 @@ describe("buildAuthHealthSummary", () => {
     const store = {
       version: 1,
       profiles: {
-        "openai-codex:bad-expiry": {
+        "openai:bad-expiry": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: MAX_DATE_TIMESTAMP_MS + 1,
@@ -396,8 +396,8 @@ describe("buildAuthHealthSummary", () => {
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     });
 
-    const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:bad-expiry");
-    const provider = summary.providers.find((entry) => entry.provider === "openai-codex");
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai:bad-expiry");
+    const provider = summary.providers.find((entry) => entry.provider === "openai");
 
     expect(profile?.status).toBe("missing");
     expect(profile?.expiresAt).toBeUndefined();

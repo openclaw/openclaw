@@ -143,9 +143,9 @@ describe("discoverAuthStorage", () => {
           token: "sk-ant-runtime",
           expires: MAX_DATE_TIMESTAMP_MS + 1,
         },
-        "openai-codex:bad-oauth-expiry": {
+        "openai:bad-oauth-expiry": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: MAX_DATE_TIMESTAMP_MS + 1,
@@ -154,7 +154,7 @@ describe("discoverAuthStorage", () => {
     });
 
     expect(credentials.anthropic).toBeUndefined();
-    expect(credentials["openai-codex"]).toBeUndefined();
+    expect(credentials.openai).toBeUndefined();
   });
 
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {

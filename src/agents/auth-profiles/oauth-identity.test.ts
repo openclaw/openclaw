@@ -363,7 +363,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       name: "out-of-range existing expiry",
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: MAX_DATE_TIMESTAMP_MS + 1,
@@ -380,7 +380,7 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       },
       existing: {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "old",
         refresh: "old-refresh",
         expires: 1_000,

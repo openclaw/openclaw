@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";

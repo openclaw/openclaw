@@ -497,7 +497,7 @@ describe("cli credentials", () => {
 
       expectFields(creds, {
         refresh: "file-refresh",
-        provider: "openai-codex",
+        provider: "openai",
         expires: Math.floor(mtimeMs) + 60 * 60 * 1000,
       });
     } finally {

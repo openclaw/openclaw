@@ -790,14 +790,14 @@ describe("markAuthProfileBlockedUntil", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T18:00:00.000Z"));
     const laterBlockedUntil = Date.parse("2031-01-01T00:00:00.000Z");
     const store = makeStore({
-      "openai-codex:default": {
+      "openai:default": {
         blockedUntil: laterBlockedUntil,
       },
     });
     try {
       await markAuthProfileBlockedUntil({
         store,
-        profileId: "openai-codex:default",
+        profileId: "openai:default",
         blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
         source: "codex_rate_limits",
       });
@@ -805,7 +805,7 @@ describe("markAuthProfileBlockedUntil", () => {
       nowSpy.mockRestore();
     }
 
-    expect(store.usageStats?.["openai-codex:default"]?.blockedUntil).toBe(laterBlockedUntil);
+    expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(laterBlockedUntil);
   });
 
   it("ignores blocked-until updates when the process clock is invalid", async () => {
@@ -814,7 +814,7 @@ describe("markAuthProfileBlockedUntil", () => {
     try {
       await markAuthProfileBlockedUntil({
         store,
-        profileId: "openai-codex:default",
+        profileId: "openai:default",
         blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
         source: "codex_rate_limits",
       });
@@ -831,7 +831,7 @@ describe("markAuthProfileBlockedUntil", () => {
 
     await markAuthProfileBlockedUntil({
       store,
-      profileId: "openai-codex:default",
+      profileId: "openai:default",
       blockedUntil: Number.MAX_SAFE_INTEGER,
       source: "codex_rate_limits",
     });

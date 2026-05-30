@@ -1,7 +1,7 @@
 export const MODEL_CATALOG_APIS = [
   "openai-completions",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "anthropic-messages",
   "google-generative-ai",
   "google-vertex",

@@ -758,9 +758,9 @@ describe("buildStatusReply subagent summary", () => {
           JSON.stringify({
             version: 1,
             profiles: {
-              "openai-codex:status": {
+              "openai:status": {
                 type: "oauth",
-                provider: "openai-codex",
+                provider: "openai",
                 access: "access-token",
                 refresh: "refresh-token",
                 expires: Date.now() + 60 * 60_000,
@@ -774,7 +774,7 @@ describe("buildStatusReply subagent summary", () => {
           updatedAt: Date.now(),
           providers: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               displayName: "Codex",
               windows: [
                 {
@@ -810,16 +810,16 @@ describe("buildStatusReply subagent summary", () => {
 
         const normalized = normalizeTestText(text);
         expect(normalized).toContain("Model: codex/gpt-5.5");
-        expect(normalized).toContain("oauth (openai-codex:status)");
+        expect(normalized).toContain("oauth (openai:status)");
         expect(normalized).toContain("Runtime: OpenAI Codex");
         expect(normalized).toContain("Usage: 5h 92% left");
         const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
-          ([params]) => params?.providers?.includes("openai-codex"),
+          ([params]) => params?.providers?.includes("openai"),
         );
         if (!providerUsageCall) {
-          throw new Error("expected provider usage summary call for openai-codex");
+          throw new Error("expected provider usage summary call for openai");
         }
-        expect(providerUsageCall[0]?.providers).toEqual(["openai-codex"]);
+        expect(providerUsageCall[0]?.providers).toEqual(["openai"]);
       },
       {
         env: {
