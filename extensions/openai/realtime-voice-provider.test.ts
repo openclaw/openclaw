@@ -246,6 +246,17 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
+  it("preserves explicit realtime auto-response opt-out during config resolution", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+
+    expect(
+      provider.resolveConfig?.({
+        cfg: {} as never,
+        rawConfig: { autoRespondToAudio: false },
+      }).autoRespondToAudio,
+    ).toBe(false);
+  });
+
   it("advertises continuing realtime tool results", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

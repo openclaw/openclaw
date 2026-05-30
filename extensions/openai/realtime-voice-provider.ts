@@ -60,6 +60,7 @@ type OpenAIRealtimeVoiceProviderConfig = {
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
+  autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
   minBargeInAudioEndMs?: number;
   reasoningEffort?: string;
@@ -215,6 +216,8 @@ function normalizeProviderConfig(
     vadThreshold: asUnitInterval(raw?.vadThreshold),
     silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
     prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
+    autoRespondToAudio:
+      typeof raw?.autoRespondToAudio === "boolean" ? raw.autoRespondToAudio : undefined,
     interruptResponseOnInputAudio:
       typeof raw?.interruptResponseOnInputAudio === "boolean"
         ? raw.interruptResponseOnInputAudio
