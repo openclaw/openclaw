@@ -6,14 +6,10 @@ import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { normalizeToolName } from "../../agents/tool-policy.js";
-import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  createSourceDeliveryPlan,
-  type SourceDeliveryPlan,
-} from "../../infra/outbound/source-delivery-plan.js";
+import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
@@ -43,6 +39,7 @@ import type {
   PersistCronSessionEntry,
 } from "./run-session-state.js";
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
+import { resolveFallbackCronSourceDeliveryPlan } from "./source-delivery-fallback.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 type AgentTurnPayload = Extract<CronJob["payload"], { kind: "agentTurn" }> | null;
@@ -214,6 +211,7 @@ export function createCronPromptExecutor(params: {
     accountId?: string;
     to?: string;
     threadId?: string | number;
+    ok?: boolean;
   };
   resolvedDeliveryOk: boolean;
   messageToolPromptEnabled: boolean;
@@ -264,49 +262,15 @@ export function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
-  const sourceDelivery =
-    params.sourceDelivery ??
-    (() => {
-      // Version-skew compatibility: stale callers from before 4c613fbfe0
-      // may pass legacy fields instead of sourceDelivery.
-      const legacy = params as Record<string, unknown>;
-      const legacyToolPolicy = legacy.toolPolicy as
-        | {
-            requireExplicitMessageTarget?: boolean;
-            disableMessageTool?: boolean;
-            forceMessageTool?: boolean;
-          }
-        | undefined;
-      const legacyMessageChannel = legacy.messageChannel as string | undefined;
-
-      return createSourceDeliveryPlan({
-        owner: "none",
-        reason: "cron_none",
-        target: {
-          channel: legacyMessageChannel ?? params.resolvedDelivery.channel,
-          to: params.resolvedDelivery.to,
-          accountId: params.resolvedDelivery.accountId,
-          threadId: params.resolvedDelivery.threadId,
-        },
-        messageToolEnabled: legacyToolPolicy ? !legacyToolPolicy.disableMessageTool : true,
-        messageToolForced: legacyToolPolicy?.forceMessageTool ?? false,
-        requireExplicitMessageTarget: legacyToolPolicy?.requireExplicitMessageTarget ?? false,
-        directFallback: false,
-      });
-    })();
-  const rawLegacyMode = (params as Record<string, unknown>).sourceReplyDeliveryMode as
-    | string
-    | undefined;
-  const legacyMode: SourceReplyDeliveryMode | undefined =
-    rawLegacyMode === "automatic" || rawLegacyMode === "message_tool_only"
-      ? rawLegacyMode
-      : undefined;
-  if (rawLegacyMode && !legacyMode) {
+  if (!params.sourceDelivery) {
     logWarn(
-      `cron: ignoring unrecognized legacy sourceReplyDeliveryMode ${JSON.stringify(rawLegacyMode)}, falling back to sourceDelivery plan`,
+      `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
     );
   }
-  const sourceReplyDeliveryMode = legacyMode ?? sourceDelivery.sourceReplyDeliveryMode;
+  const sourceDelivery =
+    params.sourceDelivery ??
+    resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
+  const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   const deliveryTargetRuntimeContext = buildCronDeliveryTargetRuntimeContext({
     resolvedDeliveryOk: params.resolvedDeliveryOk,
@@ -536,6 +500,7 @@ export async function executeCronRun(params: {
     accountId?: string;
     to?: string;
     threadId?: string | number;
+    ok?: boolean;
   };
   resolvedDeliveryOk: boolean;
   messageToolPromptEnabled: boolean;
@@ -583,38 +548,7 @@ export async function executeCronRun(params: {
   }
   const sourceDelivery =
     params.sourceDelivery ??
-    (() => {
-      const legacy = params as Record<string, unknown>;
-      const legacyToolPolicy = legacy.toolPolicy as
-        | {
-            requireExplicitMessageTarget?: boolean;
-            disableMessageTool?: boolean;
-            forceMessageTool?: boolean;
-          }
-        | undefined;
-      const legacyMessageChannel = legacy.messageChannel as string | undefined;
-      const rawReplyMode = legacy.sourceReplyDeliveryMode as string | undefined;
-      const legacyReplyMode: SourceReplyDeliveryMode | undefined =
-        rawReplyMode === "automatic" || rawReplyMode === "message_tool_only"
-          ? rawReplyMode
-          : undefined;
-      const owner = legacyReplyMode === "message_tool_only" ? "direct_fallback" : "none";
-
-      return createSourceDeliveryPlan({
-        owner,
-        reason: owner === "direct_fallback" ? "cron_announce" : "cron_none",
-        target: {
-          channel: legacyMessageChannel ?? params.resolvedDelivery.channel,
-          to: params.resolvedDelivery.to,
-          accountId: params.resolvedDelivery.accountId,
-          threadId: params.resolvedDelivery.threadId,
-        },
-        messageToolEnabled: legacyToolPolicy ? !legacyToolPolicy.disableMessageTool : true,
-        messageToolForced: legacyToolPolicy?.forceMessageTool ?? false,
-        requireExplicitMessageTarget: legacyToolPolicy?.requireExplicitMessageTarget ?? false,
-        directFallback: false,
-      });
-    })();
+    resolveFallbackCronSourceDeliveryPlan(params.job, params.resolvedDelivery);
   const executor = createCronPromptExecutor({
     cfg: params.cfg,
     cfgWithAgentDefaults: params.cfgWithAgentDefaults,
