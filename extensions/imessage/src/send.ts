@@ -3,6 +3,7 @@ import { constants, accessSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/access-groups";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -826,6 +827,105 @@ async function trySendAttachmentForTarget(params: {
   };
 }
 
+function normalizeIMessageOutboundAllowValue(raw: string | number | null | undefined): string {
+  if (raw === null || raw === undefined) {
+    return "";
+  }
+  return normalizeIMessageHandle(String(raw));
+}
+
+function normalizeIMessageOutboundTarget(target: ParsedIMessageTarget): string {
+  if (target.kind === "chat_id") {
+    return `chat_id:${target.chatId}`;
+  }
+  if (target.kind === "chat_guid") {
+    return `chat_guid:${target.chatGuid}`;
+  }
+  if (target.kind === "chat_identifier") {
+    return `chat_identifier:${target.chatIdentifier}`;
+  }
+  return normalizeIMessageHandle(target.to);
+}
+
+function isIMessageOutboundTargetAllowed(
+  senderId: string,
+  allowFrom: readonly (string | number)[],
+): boolean {
+  return allowFrom.some((entry) => normalizeIMessageOutboundAllowValue(entry) === senderId);
+}
+
+async function expandIMessageOutboundAllowFrom(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedIMessageAccount;
+  target: ParsedIMessageTarget;
+  allowFrom: Array<string | number>;
+}): Promise<string[]> {
+  const normalizedTarget = normalizeIMessageOutboundTarget(params.target);
+  return await expandAllowFromWithAccessGroups({
+    cfg: params.cfg,
+    allowFrom: params.allowFrom,
+    channel: "imessage",
+    accountId: params.account.accountId,
+    senderId: normalizedTarget,
+    isSenderAllowed: isIMessageOutboundTargetAllowed,
+  });
+}
+
+export async function assertIMessageOutboundAllowed(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedIMessageAccount;
+  target: ParsedIMessageTarget;
+}): Promise<void> {
+  const { cfg, account, target } = params;
+  if (target.kind !== "handle") {
+    if (account.config.groupPolicy === "disabled") {
+      throw new Error("iMessage outbound blocked: group targets are disabled");
+    }
+    if (account.config.groupPolicy !== "allowlist") {
+      return;
+    }
+    const normalizedTarget = normalizeIMessageOutboundTarget(target);
+    const allowFrom = await expandIMessageOutboundAllowFrom({
+      cfg,
+      account,
+      target,
+      allowFrom: account.config.groupAllowFrom ?? [],
+    });
+    const allowed = new Set(allowFrom.map(normalizeIMessageOutboundAllowValue).filter(Boolean));
+    if (allowed.size === 0) {
+      throw new Error("iMessage outbound blocked: channels.imessage.groupAllowFrom is empty");
+    }
+    if (!allowed.has(normalizedTarget)) {
+      throw new Error(
+        "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+      );
+    }
+    return;
+  }
+  if (account.config.dmPolicy !== "allowlist") {
+    return;
+  }
+  const normalizedTarget = normalizeIMessageOutboundTarget(target);
+  const allowFrom = await expandIMessageOutboundAllowFrom({
+    cfg,
+    account,
+    target,
+    allowFrom: [
+      ...(account.config.allowFrom ?? []),
+      ...(account.config.defaultTo ? [account.config.defaultTo] : []),
+    ],
+  });
+  const allowed = new Set(allowFrom.map(normalizeIMessageOutboundAllowValue).filter(Boolean));
+  if (allowed.size === 0) {
+    throw new Error("iMessage outbound blocked: channels.imessage.allowFrom/defaultTo is empty");
+  }
+  if (!allowed.has(normalizedTarget)) {
+    throw new Error(
+      "iMessage outbound blocked: target is not in channels.imessage.allowFrom/defaultTo",
+    );
+  }
+}
+
 export async function sendMessageIMessage(
   to: string,
   text: string,
@@ -846,6 +946,7 @@ export async function sendMessageIMessage(
     remoteHost: account.config.remoteHost,
   });
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
+  await assertIMessageOutboundAllowed({ cfg, account, target });
   const service =
     opts.service ??
     resolveTargetService(target) ??
