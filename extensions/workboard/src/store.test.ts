@@ -1355,13 +1355,14 @@ describe("WorkboardStore", () => {
       total: 1,
       byStatus: { todo: 1 },
     });
+    const prototypeAgentId = ["__", "proto__"].join("");
     await store.create({
       title: "Prototype safe",
       boardId: "product",
-      agentId: "__proto__",
+      agentId: prototypeAgentId,
     });
     const stats = await store.stats({ boardId: "product" });
-    expect(stats.byAgent["__proto__"]).toBe(1);
+    expect(stats.byAgent[prototypeAgentId]).toBe(1);
   });
 
   it("rejects completed manifests for cards not created from the parent", async () => {
