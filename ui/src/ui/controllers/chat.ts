@@ -615,6 +615,27 @@ function normalizeFinalAssistantMessage(message: unknown): Record<string, unknow
   });
 }
 
+function buildErrorAssistantMessage(payload: ChatEventPayload): Record<string, unknown> | null {
+  const normalized = normalizeFinalAssistantMessage(payload.message);
+  if (normalized && !shouldHideAssistantChatMessage(normalized)) {
+    return normalized;
+  }
+  const error = payload.errorMessage?.trim();
+  if (!error) {
+    return null;
+  }
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "text",
+        text: error.startsWith("⚠️") || error.startsWith("Error:") ? error : `Error: ${error}`,
+      },
+    ],
+    timestamp: Date.now(),
+  };
+}
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
@@ -818,6 +839,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
+  const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = chatEventSessionMatches(state, payload);
   const activeRunMatches =
     state.chatRunId !== null &&
@@ -912,6 +934,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
+    const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
+    if (errorMessage) {
+      state.chatMessages = [...state.chatMessages, errorMessage];
+    }
     reconcileTerminalRun("interrupted", "failed");
     state.lastError = payload.errorMessage ?? "chat error";
   }

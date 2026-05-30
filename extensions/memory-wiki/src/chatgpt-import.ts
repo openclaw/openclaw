@@ -6,6 +6,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
@@ -203,7 +204,7 @@ function isoFromUnix(raw: unknown): string | undefined {
   if (!Number.isFinite(numeric)) {
     return undefined;
   }
-  return new Date(numeric * 1000).toISOString();
+  return timestampMsToIsoString(numeric * 1000);
 }
 
 function cleanMessageText(value: string): string {

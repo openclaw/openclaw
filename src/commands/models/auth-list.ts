@@ -10,6 +10,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { timestampMsToIsoString } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveKnownAgentId } from "./shared.js";
@@ -42,7 +43,7 @@ function resolveProviderFilter(rawProvider: string | undefined): {
   if (provider === "openai") {
     return {
       provider,
-      externalCliProvider: "openai-codex",
+      externalCliProvider: "openai",
       matches: (profile) => profile.provider === "openai" || profile.provider === "openai-codex",
     };
   }
@@ -66,10 +67,7 @@ function resolveTargetAgent(
 }
 
 function formatTimestamp(value: number | undefined): string | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return new Date(value).toISOString();
+  return timestampMsToIsoString(value);
 }
 
 function resolveProfileExpiry(profile: AuthProfileCredential): string | undefined {

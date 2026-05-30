@@ -95,6 +95,15 @@ export function asPositiveSafeInteger(value: unknown): number | undefined {
 
 export const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 export const MAX_TIMER_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_TIMEOUT_MS / 1000);
+export const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
+
+export function timestampMsToIsoString(value: unknown): string | undefined {
+  const timestampMs = asFiniteNumberInRange(value, {
+    min: -MAX_DATE_TIMESTAMP_MS,
+    max: MAX_DATE_TIMESTAMP_MS,
+  });
+  return timestampMs === undefined ? undefined : new Date(timestampMs).toISOString();
+}
 
 export function clampTimerTimeoutMs(valueMs: unknown, minMs = 1): number | undefined {
   const value = asFiniteNumber(valueMs);
@@ -124,6 +133,16 @@ export function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: number, minM
     return min;
   }
   return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
+}
+
+export function addTimerTimeoutGraceMs(timeoutMs: unknown, graceMs = 5_000): number | undefined {
+  const timeout = asFiniteNumber(timeoutMs);
+  const grace = asFiniteNumber(graceMs);
+  if (timeout === undefined || grace === undefined) {
+    return undefined;
+  }
+  const withGrace = timeout + grace;
+  return Number.isFinite(withGrace) ? clampTimerTimeoutMs(withGrace) : MAX_TIMER_TIMEOUT_MS;
 }
 
 export function finiteSecondsToTimerSafeMilliseconds(
@@ -220,14 +239,21 @@ export function resolveExpiresAtMsFromDurationSeconds(
 
 export function resolveExpiresAtMsFromEpochSeconds(
   value: unknown,
-  opts: { bufferMs?: number } = {},
+  opts: { bufferMs?: number; maxMs?: number } = {},
 ): number | undefined {
-  const epochMs = positiveSecondsToSafeMilliseconds(value);
+  const epochMs =
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.trunc(value) * 1000
+      : positiveSecondsToSafeMilliseconds(value);
   if (epochMs === undefined) {
     return undefined;
   }
   const expiresAt = epochMs - (opts.bufferMs ?? 0);
-  return Number.isSafeInteger(expiresAt) ? expiresAt : undefined;
+  if (!Number.isSafeInteger(expiresAt)) {
+    return undefined;
+  }
+  const maxMs = opts.maxMs;
+  return maxMs === undefined || expiresAt <= maxMs ? expiresAt : undefined;
 }
 
 export function resolveExpiresAtMsFromDurationOrEpoch(

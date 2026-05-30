@@ -109,8 +109,9 @@ function shouldProbeWhamForFailure(
   provider: string | undefined,
   reason: AuthProfileFailureReason,
 ): boolean {
+  const normalizedProvider = normalizeProviderId(provider ?? "");
   return (
-    normalizeProviderId(provider ?? "") === "openai-codex" &&
+    (normalizedProvider === "openai" || normalizedProvider === "openai-codex") &&
     (reason === "rate_limit" ||
       reason === "empty_response" ||
       reason === "no_error_details" ||
@@ -209,7 +210,7 @@ async function probeWhamForCooldown(
     }
     const headers =
       resolveProviderRequestHeaders({
-        provider: "openai-codex",
+        provider: "openai",
         baseUrl: WHAM_USAGE_URL,
         capability: "other",
         transport: "http",

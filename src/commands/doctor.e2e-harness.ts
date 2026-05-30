@@ -210,6 +210,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sourcePath: "/tmp/state/plugin-state/state.sqlite",
       hasLegacy: false,
     },
+    taskStateSidecars: {
+      taskRunsPath: "/tmp/state/tasks/runs.sqlite",
+      flowRunsPath: "/tmp/state/flows/registry.sqlite",
+      hasLegacy: false,
+    },
     channelPlans: {
       hasLegacy: false,
       plans: [],

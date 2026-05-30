@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { addTimerTimeoutGraceMs, MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -57,8 +58,10 @@ function expectAgentWaitRequest(
 
   const paramTimeoutMs = expectNumber(request.params?.timeoutMs, `${runId} param timeoutMs`);
   const requestTimeoutMs = expectNumber(request.timeoutMs, `${runId} request timeoutMs`);
-  expect(requestTimeoutMs).toBe(paramTimeoutMs + 2_000);
-  expect(requestTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs + 2_000);
+  expect(requestTimeoutMs).toBe(addTimerTimeoutGraceMs(paramTimeoutMs, 2_000));
+  expect(requestTimeoutMs).toBeLessThanOrEqual(
+    addTimerTimeoutGraceMs(maxParamTimeoutMs, 2_000) ?? MAX_TIMER_TIMEOUT_MS,
+  );
   expect(paramTimeoutMs).toBeGreaterThanOrEqual(1);
   expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
 }
@@ -265,6 +268,25 @@ describe("waitForAgentRun", () => {
         timeoutMs: 1,
       },
       timeoutMs: 2_001,
+    });
+  });
+
+  it("caps oversized wait timeouts before sending agent.wait", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+
+    const result = await waitForAgentRun({
+      runId: "run-huge",
+      timeoutMs: Number.MAX_VALUE,
+    });
+
+    expect(result).toEqual({ status: "ok" });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "agent.wait",
+      params: {
+        runId: "run-huge",
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
+      },
+      timeoutMs: MAX_TIMER_TIMEOUT_MS,
     });
   });
 

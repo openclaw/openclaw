@@ -57,6 +57,9 @@ describe("workboard gateway methods", () => {
       "workboard.cards.claim",
       "workboard.cards.heartbeat",
       "workboard.cards.release",
+      "workboard.cards.promote",
+      "workboard.cards.reassign",
+      "workboard.cards.reclaim",
       "workboard.cards.complete",
       "workboard.cards.block",
       "workboard.cards.unblock",
@@ -64,6 +67,8 @@ describe("workboard gateway methods", () => {
       "workboard.cards.diagnostics",
       "workboard.cards.diagnostics.refresh",
       "workboard.cards.dispatch",
+      "workboard.boards.list",
+      "workboard.cards.stats",
       "workboard.cards.archive",
       "workboard.cards.export",
     ]);

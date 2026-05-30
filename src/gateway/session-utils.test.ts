@@ -517,7 +517,7 @@ describe("gateway session utils", () => {
   });
 
   test("session defaults and rows expose bundled startup-lazy provider thinking without catalog", () => {
-    const cfg = createModelDefaultsConfig({ primary: "openai-codex/gpt-5.5" });
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.5" });
 
     const defaults = getSessionDefaults(cfg);
     const row = buildGatewaySessionRow({
@@ -535,14 +535,14 @@ describe("gateway session utils", () => {
     const defaults = getSessionDefaults({
       agents: {
         defaults: {
-          model: { primary: "openai-codex/gpt-5.5" },
+          model: { primary: "openai/gpt-5.5" },
           thinkingDefault: "high",
         },
       },
     } as OpenClawConfig);
 
     expectFields(defaults, {
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.5",
       thinkingDefault: "high",
     });
@@ -634,10 +634,10 @@ describe("gateway session utils", () => {
     const cfg = {
       agents: {
         defaults: {
-          model: { primary: "openai-codex/gpt-5.5" },
+          model: { primary: "openai/gpt-5.5" },
           thinkingDefault: "low",
           models: {
-            "openai-codex/gpt-5.5": {
+            "openai/gpt-5.5": {
               params: { thinking: "max" },
             },
           },
@@ -660,7 +660,7 @@ describe("gateway session utils", () => {
     });
 
     expectFields(row, {
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.5",
       thinkingDefault: "high",
     });
@@ -670,10 +670,10 @@ describe("gateway session utils", () => {
     const cfg = {
       agents: {
         defaults: {
-          model: { primary: "openai-codex/gpt-5.5" },
+          model: { primary: "openai/gpt-5.5" },
           thinkingDefault: "low",
           models: {
-            "openai-codex/gpt-5.5": {
+            "openai/gpt-5.5": {
               params: { thinking: "max" },
             },
           },
@@ -689,7 +689,7 @@ describe("gateway session utils", () => {
     });
 
     expectFields(row, {
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.5",
       thinkingDefault: "max",
     });

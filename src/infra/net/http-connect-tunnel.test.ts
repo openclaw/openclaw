@@ -342,6 +342,7 @@ describe("openHttpConnectTunnel", () => {
       targetPort: 443,
       timeoutMs: 1,
     });
+    void tunnel.catch(() => undefined);
     const rejected = expect(tunnel).rejects.toThrow(
       "Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after 1ms",
     );
@@ -364,6 +365,7 @@ describe("openHttpConnectTunnel", () => {
       targetPort: 443,
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
+    void tunnel.catch(() => undefined);
     const rejected = expect(tunnel).rejects.toThrow(
       `Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after ${MAX_TIMER_TIMEOUT_MS}ms`,
     );

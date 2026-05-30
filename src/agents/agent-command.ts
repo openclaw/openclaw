@@ -1,3 +1,4 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
@@ -44,7 +45,6 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
 import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
 import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";

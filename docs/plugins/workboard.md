@@ -89,11 +89,13 @@ and rolling failure count so repeated failures remain visible on the board.
 
 Workboard also exposes optional agent tools for board-aware workflows:
 
-- `workboard_list` lists compact cards with claim and diagnostic state.
+- `workboard_list` lists compact cards with claim and diagnostic state, with an
+  optional board filter.
 - `workboard_read` returns one card plus bounded worker context built from notes,
-  attempts, comments, links, proof, artifacts, and active diagnostics.
+  attempts, comments, links, proof, artifacts, parent results, recent assignee
+  work, and active diagnostics.
 - `workboard_create` creates a card with optional parents, tenant, skills,
-  workspace metadata, idempotency key, runtime limit, and retry budget.
+  board, workspace metadata, idempotency key, runtime limit, and retry budget.
 - `workboard_link` links a parent card to a child card. Children stay in `todo`
   until every parent reaches `done`; then dispatch promotion moves them to
   `ready`.
@@ -104,11 +106,14 @@ Workboard also exposes optional agent tools for board-aware workflows:
   can move the card to a next status.
 - `workboard_complete` and `workboard_block` are structured lifecycle tools for
   final summaries, proof, artifacts, created-card manifests, and blocker
-  reasons.
-- `workboard_comment`, `workboard_proof`, `workboard_unblock`, and
-  `workboard_dispatch` let an agent add handoff notes, attach proof or artifact
-  references, move blocked work back to `todo`, and nudge dependency promotion or
-  stale-claim cleanup.
+  reasons. Created-card manifests must reference cards linked back to the
+  completed card, which keeps phantom children out of summaries.
+- `workboard_boards`, `workboard_stats`, `workboard_promote`,
+  `workboard_reassign`, `workboard_reclaim`, `workboard_comment`,
+  `workboard_proof`, `workboard_unblock`, and `workboard_dispatch` let an agent
+  inspect board namespaces, view queue stats, recover stuck work, add handoff
+  notes, attach proof or artifact references, move blocked work back to `todo`,
+  and nudge dependency promotion or stale-claim cleanup.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 has the claim token returned by `workboard_claim`. Dashboard operators still use

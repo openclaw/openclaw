@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 
 const PLUGIN_ID = "secret-provider-proof";
 const INTEGRATION_ID = "vault";
@@ -40,6 +41,27 @@ function readPositiveInt(raw, fallback) {
   }
   const parsed = Number(text);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function remainingDeadlineMs(started, timeoutMs) {
+  return Math.max(1, timeoutMs - (Date.now() - started));
+}
+
+function formatErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return Object.prototype.toString.call(error);
+    }
+  }
+  return String(error);
 }
 
 function writeJson(file, value) {
@@ -529,26 +551,52 @@ async function startGateway(envCtx, port, token = TOKEN_V1) {
     stderr += chunk.toString("utf8");
   });
   const started = Date.now();
+  let lastHealthResult;
+  let lastHealthError;
   while (Date.now() - started < READY_TIMEOUT_MS) {
     if (child.exitCode !== null) {
       throw new Error(
         scrub(`gateway exited during startup (${child.exitCode})\n${stderr || stdout}`),
       );
     }
-    const health = await gatewayCall(envCtx.env, port, token, "health", {}, { allowFailure: true });
-    if (health.code === 0) {
-      return {
-        child,
-        output: () => ({ stdout, stderr }),
-        stop: async () => {
-          await stopGateway(child);
+    const remainingMs = remainingDeadlineMs(started, READY_TIMEOUT_MS);
+    try {
+      const health = await gatewayCall(
+        envCtx.env,
+        port,
+        token,
+        "health",
+        {},
+        {
+          allowFailure: true,
+          timeoutMs: Math.min(RPC_TIMEOUT_MS + 10000, remainingMs),
         },
-      };
+      );
+      lastHealthResult = health;
+      if (health.code === 0) {
+        return {
+          child,
+          output: () => ({ stdout, stderr }),
+          stop: async () => {
+            await stopGateway(child);
+          },
+        };
+      }
+    } catch (error) {
+      lastHealthError = error;
     }
-    await delay(500);
+    await delay(Math.min(500, remainingDeadlineMs(started, READY_TIMEOUT_MS)));
   }
   terminateProcessTree(child, "SIGTERM");
-  throw new Error(scrub(`gateway did not become ready\n${stderr || stdout}`));
+  const lastHealthOutput =
+    lastHealthError instanceof Error
+      ? lastHealthError.message
+      : lastHealthError
+        ? formatErrorMessage(lastHealthError)
+        : lastHealthResult
+          ? lastHealthResult.stderr || lastHealthResult.stdout
+          : "";
+  throw new Error(scrub(`gateway did not become ready\n${lastHealthOutput}\n${stderr || stdout}`));
 }
 
 async function stopGateway(child) {
@@ -612,7 +660,7 @@ async function gatewayCall(env, port, token, method, params = {}, options = {}) 
       OPENCLAW_STATE_DIR: clientStateDir,
       OPENCLAW_HOME: clientStateDir,
     },
-    { timeoutMs: RPC_TIMEOUT_MS + 10000, allowFailure: options.allowFailure },
+    { timeoutMs: options.timeoutMs ?? RPC_TIMEOUT_MS + 10000, allowFailure: options.allowFailure },
   );
 }
 
@@ -720,34 +768,45 @@ async function uninstallManagedGateway(env) {
 async function waitForManagedGatewayStatus(env, token) {
   const started = Date.now();
   let lastResult;
+  let lastError;
   while (Date.now() - started < READY_TIMEOUT_MS) {
-    lastResult = await runOpenClaw(
-      [
-        "gateway",
-        "status",
-        "--deep",
-        "--require-rpc",
-        "--json",
-        "--token",
-        token,
-        "--timeout",
-        String(RPC_TIMEOUT_MS),
-      ],
-      env,
-      { timeoutMs: RPC_TIMEOUT_MS + 10000, allowFailure: true },
-    );
-    if (lastResult.code === 0) {
-      return parseJsonOutput(lastResult.stdout);
+    try {
+      lastResult = await runOpenClaw(
+        [
+          "gateway",
+          "status",
+          "--deep",
+          "--require-rpc",
+          "--json",
+          "--token",
+          token,
+          "--timeout",
+          String(RPC_TIMEOUT_MS),
+        ],
+        env,
+        {
+          timeoutMs: Math.min(
+            RPC_TIMEOUT_MS + 10000,
+            remainingDeadlineMs(started, READY_TIMEOUT_MS),
+          ),
+          allowFailure: true,
+        },
+      );
+      if (lastResult.code === 0) {
+        return parseJsonOutput(lastResult.stdout);
+      }
+    } catch (error) {
+      lastError = error;
     }
-    await delay(500);
+    await delay(Math.min(500, remainingDeadlineMs(started, READY_TIMEOUT_MS)));
   }
-  throw new Error(
-    scrub(
-      `managed gateway did not become RPC-ready\n${
-        lastResult?.stderr || lastResult?.stdout || "<no output>"
-      }`,
-    ),
-  );
+  const lastOutput =
+    lastError instanceof Error
+      ? lastError.message
+      : lastError
+        ? formatErrorMessage(lastError)
+        : lastResult?.stderr || lastResult?.stdout || "<no output>";
+  throw new Error(scrub(`managed gateway did not become RPC-ready\n${lastOutput}`));
 }
 
 async function runWithProof(name, description, fn) {
@@ -1518,4 +1577,8 @@ async function main() {
   }
 }
 
-await main();
+export { gatewayCall, runCommand, startGateway, waitForManagedGatewayStatus };
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  await main();
+}

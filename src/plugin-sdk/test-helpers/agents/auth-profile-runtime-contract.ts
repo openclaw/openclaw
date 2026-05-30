@@ -33,12 +33,21 @@ export function createAuthAliasManifestRegistry(): PluginManifestRegistry {
         rootDir: "/tmp/openclaw-auth-contract-plugin",
         source: "test",
         manifestPath: "/tmp/openclaw-auth-contract-plugin/plugin.json",
+        providerAuthAliases: {
+          [AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider]:
+            AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+          [AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider]:
+            AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+        },
         providerAuthChoices: [
           {
-            provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+            provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
             method: "oauth",
-            choiceId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
-            deprecatedChoiceIds: [AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider],
+            choiceId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+            deprecatedChoiceIds: [
+              AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+              AUTH_PROFILE_RUNTIME_CONTRACT.codexCliProvider,
+            ],
           },
         ],
       },

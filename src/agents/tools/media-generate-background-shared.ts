@@ -10,6 +10,10 @@ import {
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import {
+  resolveRequiredCompletionDeliveryFailureTerminalResult,
+  type RequiredCompletionTerminalResult,
+} from "../../tasks/task-completion-contract.js";
 import { normalizeDeliveryContext, type DeliveryContext } from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -21,9 +25,15 @@ import {
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
+import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
+const MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS = new Set<SubagentAnnounceDeliveryFailureReason>([
+  "generated_media_missing",
+  "message_tool_delivery_missing",
+  "visible_reply_missing",
+]);
 
 export type MediaGenerationTaskHandle = {
   taskId: string;
@@ -66,6 +76,7 @@ type CompleteMediaGenerationTaskRunParams = {
   model: string;
   count: number;
   paths: string[];
+  terminalResult?: RequiredCompletionTerminalResult;
 };
 
 type FailMediaGenerationTaskRunParams = {
@@ -203,6 +214,7 @@ function completeMediaGenerationTaskRun(params: {
   count: number;
   paths: string[];
   generatedLabel: string;
+  terminalResult?: RequiredCompletionTerminalResult;
 }) {
   if (!params.handle) {
     return;
@@ -217,7 +229,10 @@ function completeMediaGenerationTaskRun(params: {
       endedAt,
       lastEventAt: endedAt,
       progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
-      terminalSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+      terminalSummary:
+        params.terminalResult?.terminalSummary ??
+        `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+      terminalOutcome: params.terminalResult?.terminalOutcome,
     });
   } finally {
     clearAgentRunContext(params.handle.runId);
@@ -355,48 +370,12 @@ export function scheduleMediaGenerationTaskCompletion<
   onWakeFailure: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   params.scheduleBackgroundWork(async () => {
+    let executed: T;
     try {
-      const executed = await withMediaGenerationTaskKeepalive({
+      executed = await withMediaGenerationTaskKeepalive({
         handle: params.handle,
         progressSummary: params.progressSummary,
         run: params.run,
-      });
-      params.lifecycle.recordTaskProgress({
-        handle: params.handle,
-        progressSummary: "Generated media; delivering completion",
-      });
-      let completionDelivered = false;
-      try {
-        completionDelivered = await params.lifecycle.wakeTaskCompletion({
-          config: params.config,
-          handle: params.handle,
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: executed.wakeResult,
-          attachments: executed.attachments,
-          mediaUrls: executed.mediaUrls,
-        });
-      } catch (error) {
-        params.onWakeFailure(
-          `${params.toolName} completion wake failed after successful generation`,
-          {
-            taskId: params.handle?.taskId,
-            runId: params.handle?.runId,
-            error,
-          },
-        );
-      }
-      if (!completionDelivered) {
-        throw new Error(
-          `${params.toolName} completion delivery failed after successful generation`,
-        );
-      }
-      params.lifecycle.completeTaskRun({
-        handle: params.handle,
-        provider: executed.provider,
-        model: executed.model,
-        count: executed.count,
-        paths: executed.paths,
       });
     } catch (error) {
       params.lifecycle.failTaskRun({
@@ -409,6 +388,95 @@ export function scheduleMediaGenerationTaskCompletion<
         status: "error",
         statusLabel: "failed",
         result: formatErrorMessage(error),
+      });
+      return;
+    }
+
+    try {
+      params.lifecycle.recordTaskProgress({
+        handle: params.handle,
+        progressSummary: "Generated media; delivering completion",
+      });
+    } catch (error) {
+      params.onWakeFailure(`${params.toolName} completion progress update failed`, {
+        taskId: params.handle?.taskId,
+        runId: params.handle?.runId,
+        error,
+      });
+    }
+    let terminalResult: RequiredCompletionTerminalResult | undefined;
+    try {
+      const completionDelivered = await params.lifecycle.wakeTaskCompletion({
+        config: params.config,
+        handle: params.handle,
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: executed.wakeResult,
+        attachments: executed.attachments,
+        mediaUrls: executed.mediaUrls,
+      });
+      if (!completionDelivered) {
+        terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
+          "completion delivery was not confirmed after successful generation",
+        );
+        params.onWakeFailure(
+          `${params.toolName} completion delivery was not confirmed after successful generation`,
+          {
+            taskId: params.handle?.taskId,
+            runId: params.handle?.runId,
+          },
+        );
+      }
+    } catch (error) {
+      terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
+        formatErrorMessage(error),
+      );
+      if (params.handle) {
+        const mediaUrls = Array.from(
+          new Set([
+            ...(executed.mediaUrls ?? []),
+            ...mediaUrlsFromGeneratedAttachments(executed.attachments),
+          ]),
+        );
+        const delivered = await tryDeliverMediaGenerationDirect({
+          config: params.config,
+          handle: params.handle,
+          toolName: params.toolName,
+          content: `${params.toolName} completed.`,
+          mediaUrls,
+          idempotencySuffix: "blocked",
+        });
+        if (delivered) {
+          terminalResult = undefined;
+        }
+      }
+      params.onWakeFailure(
+        `${params.toolName} completion wake failed after successful generation`,
+        {
+          taskId: params.handle?.taskId,
+          runId: params.handle?.runId,
+          error,
+        },
+      );
+    }
+    try {
+      params.lifecycle.completeTaskRun({
+        handle: params.handle,
+        provider: executed.provider,
+        model: executed.model,
+        count: executed.count,
+        paths: executed.paths,
+        terminalResult,
+      });
+    } catch (error) {
+      params.onWakeFailure(`${params.toolName} completion state update failed`, {
+        taskId: params.handle?.taskId,
+        runId: params.handle?.runId,
+        error,
+      });
+      params.lifecycle.failTaskRun({
+        handle: params.handle,
+        error,
       });
     }
   });
@@ -493,13 +561,33 @@ async function wakeMediaGenerationTaskCompletion(params: {
     });
     return true;
   }
-  if (params.status === "error") {
-    const delivered = await tryDeliverMediaGenerationFailureDirect({
+  const canTryDirectCompletionFallback =
+    delivery.reason != null && MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS.has(delivery.reason);
+  if (params.status === "ok" && canTryDirectCompletionFallback) {
+    const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
+    const delivered = await tryDeliverMediaGenerationDirect({
       config: params.config,
       handle: params.handle,
       toolName: params.toolName,
-      completionLabel: params.completionLabel,
-      result: params.result,
+      content:
+        mediaUrls.length > 0
+          ? `${label} generation completed.`
+          : `${label} generation completed, but the generated media could not be attached here.`,
+      mediaUrls,
+      idempotencySuffix: "ok",
+    });
+    if (delivered) {
+      return true;
+    }
+  }
+  if (params.status === "error") {
+    const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
+    const delivered = await tryDeliverMediaGenerationDirect({
+      config: params.config,
+      handle: params.handle,
+      toolName: params.toolName,
+      content: `${label} generation failed: ${params.result}`,
+      idempotencySuffix: "error",
     });
     if (delivered) {
       return true;
@@ -516,20 +604,20 @@ async function wakeMediaGenerationTaskCompletion(params: {
   return false;
 }
 
-async function tryDeliverMediaGenerationFailureDirect(params: {
+async function tryDeliverMediaGenerationDirect(params: {
   config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle;
   toolName: string;
-  completionLabel: string;
-  result: string;
+  content: string;
+  mediaUrls?: string[];
+  idempotencySuffix: string;
 }): Promise<boolean> {
   const origin = normalizeDeliveryContext(params.handle.requesterOrigin);
   if (!origin?.channel || !origin.to || !isDeliverableMessageChannel(origin.channel)) {
     return false;
   }
-  const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
   const agentId = resolveAgentIdFromSessionKey(params.handle.requesterSessionKey);
-  const idempotencyKey = `${params.toolName}:${params.handle.taskId}:error:direct`;
+  const idempotencyKey = `${params.toolName}:${params.handle.taskId}:${params.idempotencySuffix}:direct`;
   try {
     const { sendMessage } = await import("../../tasks/task-registry-delivery-runtime.js");
     await sendMessage({
@@ -538,7 +626,8 @@ async function tryDeliverMediaGenerationFailureDirect(params: {
       to: origin.to,
       accountId: origin.accountId,
       threadId: origin.threadId,
-      content: `${label} generation failed: ${params.result}`,
+      content: params.content,
+      mediaUrls: params.mediaUrls,
       requesterSessionKey: params.handle.requesterSessionKey,
       agentId,
       idempotencyKey,

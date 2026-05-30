@@ -1,4 +1,5 @@
 import fsSync from "node:fs";
+import { note } from "../../packages/terminal-core/src/note.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -37,7 +38,6 @@ import {
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./doctor-workspace.js";

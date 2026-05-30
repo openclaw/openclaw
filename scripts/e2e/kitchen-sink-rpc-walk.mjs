@@ -737,12 +737,15 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
     throw exitedBeforeReadyError();
   }
   while (Date.now() - started < timeoutMs) {
+    const remainingMs = Math.max(1, timeoutMs - (Date.now() - started));
     if (hasChildExited(child)) {
       throw exitedBeforeReadyError();
     }
     try {
       const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
+        attempts: 1,
         fetchImpl: options.fetchImpl,
+        timeoutMs: Math.min(FETCH_TIMEOUT_MS, remainingMs),
       });
       if (readyz.ok) {
         return;
@@ -754,7 +757,8 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
     if (logReportedReady()) {
       lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
-    await delay(pollDelayMs);
+    const nextDelayMs = Math.min(pollDelayMs, Math.max(1, timeoutMs - (Date.now() - started)));
+    await delay(nextDelayMs);
   }
   if (hasChildExited(child)) {
     throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);

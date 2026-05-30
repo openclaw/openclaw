@@ -561,6 +561,230 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
     distFile: "version.mjs",
   },
   {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "code-spans",
+    srcFile: "code-spans.ts",
+    distFile: "code-spans.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "fences",
+    srcFile: "fences.ts",
+    distFile: "fences.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "frontmatter",
+    srcFile: "frontmatter.ts",
+    distFile: "frontmatter.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "ir",
+    srcFile: "ir.ts",
+    distFile: "ir.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "render",
+    srcFile: "render.ts",
+    distFile: "render.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "render-aware-chunking",
+    srcFile: "render-aware-chunking.ts",
+    distFile: "render-aware-chunking.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "tables",
+    srcFile: "tables.ts",
+    distFile: "tables.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "types",
+    srcFile: "types.ts",
+    distFile: "types.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "capability-model-ref",
+    srcFile: "capability-model-ref.ts",
+    distFile: "capability-model-ref.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "catalog",
+    srcFile: "catalog.ts",
+    distFile: "catalog.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "model-ref",
+    srcFile: "model-ref.ts",
+    distFile: "model-ref.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "normalization",
+    srcFile: "normalization.ts",
+    distFile: "normalization.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "ansi",
+    srcFile: "ansi.ts",
+    distFile: "ansi.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "decorative-emoji",
+    srcFile: "decorative-emoji.ts",
+    distFile: "decorative-emoji.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "health-style",
+    srcFile: "health-style.ts",
+    distFile: "health-style.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "links",
+    srcFile: "links.ts",
+    distFile: "links.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "note",
+    srcFile: "note.ts",
+    distFile: "note.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "osc-progress",
+    srcFile: "osc-progress.ts",
+    distFile: "osc-progress.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "palette",
+    srcFile: "palette.ts",
+    distFile: "palette.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "progress-line",
+    srcFile: "progress-line.ts",
+    distFile: "progress-line.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "prompt-select-styled",
+    srcFile: "prompt-select-styled.ts",
+    distFile: "prompt-select-styled.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "prompt-select-styled-params",
+    srcFile: "prompt-select-styled-params.ts",
+    distFile: "prompt-select-styled-params.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "prompt-style",
+    srcFile: "prompt-style.ts",
+    distFile: "prompt-style.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "restore",
+    srcFile: "restore.ts",
+    distFile: "restore.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "safe-text",
+    srcFile: "safe-text.ts",
+    distFile: "safe-text.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "stream-writer",
+    srcFile: "stream-writer.ts",
+    distFile: "stream-writer.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "table",
+    srcFile: "table.ts",
+    distFile: "table.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "terminal-link",
+    srcFile: "terminal-link.ts",
+    distFile: "terminal-link.mjs",
+  },
+  {
+    packageName: "@openclaw/terminal-core",
+    packageDir: "terminal-core",
+    subpath: "theme",
+    srcFile: "theme.ts",
+    distFile: "theme.mjs",
+  },
+  {
     packageName: "@openclaw/net-policy",
     packageDir: "net-policy",
     subpath: "",
@@ -801,15 +1025,27 @@ function resolveWorkspacePackageAliasMap(params: {
   for (const entry of WORKSPACE_PACKAGE_ALIAS_ENTRIES) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
     for (const kind of orderedKinds) {
-      const candidate =
+      const candidates =
         kind === "dist"
-          ? path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile)
-          : path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile);
-      if (!fs.existsSync(candidate)) {
-        continue;
+          ? [
+              ...(entry.packageName === "@openclaw/terminal-core"
+                ? [
+                    path.join(
+                      packageRoot,
+                      "dist",
+                      "terminal-core",
+                      entry.distFile.replace(/\.mjs$/u, ".js"),
+                    ),
+                  ]
+                : []),
+              path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile),
+            ]
+          : [path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile)];
+      const candidate = candidates.find((candidatePath) => fs.existsSync(candidatePath));
+      if (candidate) {
+        aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
+        break;
       }
-      aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
-      break;
     }
   }
   return aliasMap;

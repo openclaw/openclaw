@@ -384,6 +384,33 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("preserves post-separator Vitest args without parsing them as targets", () => {
+    for (const [arg, watchMode] of [
+      ["--reporter=verbose", false],
+      ["--watch", true],
+    ] as const) {
+      expect(buildVitestRunPlans(["test/scripts/run-vitest.test.ts", "--", arg])).toEqual([
+        {
+          config: "test/vitest/vitest.tooling.config.ts",
+          forwardedArgs: [arg],
+          includePatterns: ["test/scripts/run-vitest.test.ts"],
+          watchMode,
+        },
+      ]);
+    }
+  });
+
+  it("keeps pnpm-style leading separators out of target routing", () => {
+    expect(buildVitestRunPlans(["--", "test/scripts/run-vitest.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/run-vitest.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
     expect(
       findUnmatchedExplicitTestTargets(
@@ -635,6 +662,28 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.extension-qa.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/qa-lab/src/scenario-catalog.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes explicit active-memory and Codex extension tests to their shards", () => {
+    expect(
+      buildVitestRunPlans([
+        "extensions/active-memory/index.test.ts",
+        "extensions/codex/index.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.extension-active-memory.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/active-memory/index.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.extension-codex.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/codex/index.test.ts"],
         watchMode: false,
       },
     ]);

@@ -222,6 +222,22 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
       },
       {
+        find: "@openclaw/llm-core/diagnostics",
+        replacement: path.join(repoRoot, "packages", "llm-core", "src", "utils", "diagnostics.ts"),
+      },
+      {
+        find: "@openclaw/llm-core/event-stream",
+        replacement: path.join(repoRoot, "packages", "llm-core", "src", "utils", "event-stream.ts"),
+      },
+      {
+        find: "@openclaw/llm-core/validation",
+        replacement: path.join(repoRoot, "packages", "llm-core", "src", "validation.ts"),
+      },
+      {
+        find: "@openclaw/llm-core",
+        replacement: path.join(repoRoot, "packages", "llm-core", "src", "index.ts"),
+      },
+      {
         find: "@openclaw/net-policy/ip",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "ip.ts"),
       },

@@ -1740,9 +1740,20 @@ export function parseTestProjectsArgs(args, cwd = process.cwd()) {
   const forwardedArgs = [];
   const targetArgs = [];
   let watchMode = false;
+  let passthrough = false;
 
   for (const arg of args) {
     if (arg === "--") {
+      if (targetArgs.length > 0) {
+        passthrough = true;
+      }
+      continue;
+    }
+    if (passthrough) {
+      if (arg === "--watch") {
+        watchMode = true;
+      }
+      forwardedArgs.push(arg);
       continue;
     }
     if (arg === "--watch") {
@@ -1874,7 +1885,9 @@ export function buildVitestRunPlans(
     "utils",
     "wizard",
     "e2e",
+    "extensionActiveMemory",
     "extensionAcpx",
+    "extensionCodex",
     "extensionDiffs",
     "extensionBrowser",
     "extensionDiscord",

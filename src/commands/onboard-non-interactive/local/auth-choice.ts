@@ -9,6 +9,7 @@ import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract
 import {
   formatDeprecatedNonInteractiveAuthChoiceError,
   isDeprecatedAuthChoice,
+  resolveDeprecatedAuthChoiceReplacement,
 } from "../../auth-choice-legacy.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
@@ -34,7 +35,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   baseConfig: OpenClawConfig;
 }): Promise<OpenClawConfig | null> {
   const { opts, runtime, baseConfig } = params;
-  const authChoice = normalizeApiKeyTokenProviderAuthChoice({
+  let authChoice = normalizeApiKeyTokenProviderAuthChoice({
     authChoice: params.authChoice,
     tokenProvider: opts.tokenProvider,
     config: params.nextConfig,
@@ -121,14 +122,23 @@ export async function applyNonInteractiveAuthChoice(params: {
     };
   };
   if (isDeprecatedAuthChoice(authChoice, { config: nextConfig, env: process.env })) {
-    runtime.error(
-      formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
-        config: nextConfig,
-        env: process.env,
-      })!,
-    );
-    runtime.exit(1);
-    return null;
+    const replacement = resolveDeprecatedAuthChoiceReplacement(authChoice, {
+      config: nextConfig,
+      env: process.env,
+    });
+    if (replacement) {
+      runtime.log(replacement.message);
+      authChoice = replacement.normalized;
+    } else {
+      runtime.error(
+        formatDeprecatedNonInteractiveAuthChoiceError(authChoice, {
+          config: nextConfig,
+          env: process.env,
+        })!,
+      );
+      runtime.exit(1);
+      return null;
+    }
   }
 
   const pluginProviderChoice = await applyNonInteractivePluginProviderChoice({
