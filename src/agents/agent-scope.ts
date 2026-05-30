@@ -539,8 +539,18 @@ export function resolveEffectiveModelFallbacks(params: {
   const canUseConfiguredFallbacks =
     params.modelOverrideSource === "auto" ||
     (params.modelOverrideSource === undefined && params.hasAutoFallbackProvenance === true);
+  // When the user has explicitly pinned a model (modelOverrideSource === "user"),
+  // we previously returned [] which disabled all fallbacks. This causes a complete
+  // outage when the pinned model hits a long-term quota limit (e.g. weekly quota
+  // exhaustion). The user's intent is to *prefer* a specific model, not to make
+  // the system entirely non-functional when that model is unavailable.
+  //
+  // Fix: user-pinned sessions still use the global fallback chain so that long-term
+  // failures (quota exhaustion, subscription limits) can be recovered automatically.
+  // The pinned model remains first in the candidate list and is always tried first.
   if (!canUseConfiguredFallbacks) {
-    return [];
+    const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+    return agentFallbacksOverride ?? defaultFallbacks;
   }
   const subagentFallbacksOverride = isSubagentSessionKey(params.sessionKey)
     ? resolveSubagentSpawnModelFallbacksOverride(params.cfg, params.agentId)
