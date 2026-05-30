@@ -2,8 +2,7 @@ import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
   JsonSchemaType,
@@ -194,6 +193,17 @@ function connectWithTimeout(
 
 function redactErrorUrls(error: unknown): string {
   return redactSensitiveUrlLikeString(String(error));
+}
+
+function getMcpErrorCode(error: unknown): number | undefined {
+  if (error instanceof McpError) {
+    return error.code;
+  }
+  if (error instanceof Error && error.name === "McpError") {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === "number" ? code : undefined;
+  }
+  return undefined;
 }
 
 async function listAllTools(client: Client, timeoutMs: number) {
@@ -481,14 +491,17 @@ export function createSessionMcpRuntime(params: {
       } catch (error) {
         // If the call failed because the child process died ("Not connected",
         // EPIPE, ERR_STREAM_DESTROYED), try to reconnect the server once.
-        // McpError instances come from healthy MCP servers returning JSON-RPC
+        // Most McpError instances come from healthy MCP servers returning JSON-RPC
         // errors (e.g. "Not connected to browser"), NOT dead transports.
-        // Never retry those — they are normal application-level failures.
-        if (error instanceof McpError) {
+        // One SDK-generated exception is ErrorCode.ConnectionClosed, which is
+        // raised when the transport closes while a request is in flight.
+        const mcpErrorCode = getMcpErrorCode(error);
+        if (mcpErrorCode !== undefined && mcpErrorCode !== ErrorCode.ConnectionClosed) {
           throw error;
         }
         const msg = error instanceof Error ? error.message : String(error);
         const isTransportDead =
+          mcpErrorCode === ErrorCode.ConnectionClosed ||
           msg.includes("Not connected") ||
           msg.includes("EPIPE") ||
           msg.includes("ERR_STREAM_DESTROYED") ||
