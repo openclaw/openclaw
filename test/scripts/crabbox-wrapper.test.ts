@@ -420,23 +420,22 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     );
 
     expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual(
-      ["run", "--target", "windows", "--", "echo ok"],
-      { env: { CRABBOX_PROVIDER: "aws" } },
-    );
-    expect(result.stderr).toContain("provider=aws");
-  });
-
-  it("keeps existing Windows lease selections on the configured provider", () => {
-    const result = runWrapper(azureProviderHelp, [
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
       "run",
-      "--id",
-      "cbx_existing",
       "--target",
       "windows",
       "--",
       "echo ok",
     ]);
+    expect(result.stderr).toContain("provider=aws");
+  });
+
+  it("keeps existing Windows lease selections on the configured provider", () => {
+    const result = runWrapper(
+      azureProviderHelp,
+      ["run", "--id", "cbx_existing", "--target", "windows", "--", "echo ok"],
+      { env: { CRABBOX_PROVIDER: "aws" } },
+    );
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toEqual([
