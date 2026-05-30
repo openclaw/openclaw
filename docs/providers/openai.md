@@ -49,7 +49,7 @@ The names are similar but not interchangeable:
 | Name you see                            | Layer             | Meaning                                                                                           |
 | --------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------- |
 | `openai`                                | Provider prefix   | Canonical OpenAI model route; agent turns use the Codex runtime.                                  |
-| `openai-codex`                          | Legacy prefix     | Older model/profile namespace. `openclaw doctor --fix` migrates it to `openai`.                   |
+| `openai-codex`                          | Legacy prefix     | Legacy model/profile ID namespace (`openai-codex/*`, `openai-codex:*`). `openclaw doctor --fix` migrates it to `openai`. |
 | `codex` plugin                          | Plugin            | Bundled OpenClaw plugin that provides native Codex app-server runtime and `/codex` chat controls. |
 | provider/model `agentRuntime.id: codex` | Agent runtime     | Force the native Codex app-server harness for matching embedded turns.                            |
 | `/codex ...`                            | Chat command set  | Bind/control Codex app-server threads from a conversation.                                        |
@@ -60,6 +60,13 @@ profiles point at either API-key or ChatGPT/Codex OAuth credentials. Use
 `auth.order.openai` for config; `openclaw doctor --fix` rewrites legacy
 `openai-codex/*` model refs, `openai-codex:*` profile ids, and
 `auth.order.openai-codex` to the canonical OpenAI route.
+
+<Note>
+Legacy Codex OAuth logins often have profile IDs prefixed `openai-codex:`. Those
+profiles are still stored with `provider: "openai"` inside `auth-profiles.json`.
+Keep the profile ID, but keep the stored provider as `openai` and order it under
+`auth.order.openai`.
+</Note>
 
 <Note>
 GPT-5.5 is available through both direct OpenAI Platform API-key access and

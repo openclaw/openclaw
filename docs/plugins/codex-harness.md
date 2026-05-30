@@ -20,6 +20,8 @@ The normal setup uses canonical OpenAI model refs such as `openai/gpt-5.5`.
 Do not configure `openai-codex/gpt-*` model refs. Put OpenAI agent auth order
 under `auth.order.openai`; older `openai-codex:*` profiles and
 `auth.order.openai-codex` entries remain supported for existing installs.
+Legacy `openai-codex:*` profile IDs are still stored with `provider: "openai"`
+inside `auth-profiles.json`.
 
 When no OpenClaw sandbox is active, OpenClaw starts Codex app-server threads
 with Codex native code mode enabled while leaving code-mode-only off by default.
