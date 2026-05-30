@@ -55,11 +55,7 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 };
 
 type AnthropicTransportOptions = AnthropicOptions &
-  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets"> & {
-    // Stop sequences ride the OpenClaw transport stream-param channel (same as
-    // the gateway sampling overrides), not the canonical StreamOptions contract.
-    stop?: string[];
-  };
+  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop">;
 type AnthropicAdaptiveEffort = NonNullable<AnthropicOptions["effort"]> | "xhigh";
 type AnthropicMessagesClient = {
   messages: {
