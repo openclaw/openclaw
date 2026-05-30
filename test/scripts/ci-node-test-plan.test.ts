@@ -195,14 +195,82 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
     expect(runtimeShards).toEqual([
       {
-        configs: [
-          "test/vitest/vitest.infra.config.ts",
-          "test/vitest/vitest.hooks.config.ts",
-          "test/vitest/vitest.secrets.config.ts",
-        ],
+        configs: ["test/vitest/vitest.infra.config.ts"],
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
-        shardName: "core-runtime-infra-state",
+        shardName: "core-runtime-infra-approval",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-device-push",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-exec",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-heartbeat",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-misc-a-f",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-misc-g-o",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-misc-p-z",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-network",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-outbound",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-package-provider",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-session-state",
+      },
+      {
+        configs: ["test/vitest/vitest.hooks.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-hooks",
+      },
+      {
+        configs: ["test/vitest/vitest.secrets.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-secrets",
       },
       {
         configs: [
@@ -275,6 +343,31 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(new Set(actual).size).toBe(actual.length);
   });
 
+  it("covers every infra test exactly once across core runtime infra shards", () => {
+    const infraShards = createNodeTestShards().filter((shard) =>
+      shard.configs.includes("test/vitest/vitest.infra.config.ts"),
+    );
+    const actual = infraShards
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+
+    expect(infraShards.map((shard) => shard.shardName)).toEqual([
+      "core-runtime-infra-approval",
+      "core-runtime-infra-device-push",
+      "core-runtime-infra-exec",
+      "core-runtime-infra-heartbeat",
+      "core-runtime-infra-misc-a-f",
+      "core-runtime-infra-misc-g-o",
+      "core-runtime-infra-misc-p-z",
+      "core-runtime-infra-network",
+      "core-runtime-infra-outbound",
+      "core-runtime-infra-package-provider",
+      "core-runtime-infra-session-state",
+    ]);
+    expect(actual).toEqual(listTestFiles("src/infra"));
+    expect(new Set(actual).size).toBe(actual.length);
+  });
+
   it("splits the agentic lane into control-plane, command, agent, gateway, SDK, and plugin shards", () => {
     const shards = createNodeTestShards();
     const controlPlaneShards = shards.filter((shard) =>
@@ -338,7 +431,11 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     });
     expect(commandShards.map((shard) => shard.shardName)).toEqual([
       "agentic-commands-agent-channel",
-      "agentic-commands-doctor",
+      "agentic-commands-doctor-auth",
+      "agentic-commands-doctor-config",
+      "agentic-commands-doctor-cron",
+      "agentic-commands-doctor-misc",
+      "agentic-commands-doctor-runtime",
       "agentic-commands-doctor-shared",
       "agentic-commands-models",
       "agentic-commands-onboard-config",
