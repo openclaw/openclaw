@@ -21,9 +21,9 @@ import {
   handleApprovalResolve,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
-  isApprovalDecision,
   listVisiblePendingApprovalRequests,
   registerPendingApprovalRecord,
+  resolveApprovalDecisionParams,
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -147,28 +147,19 @@ export function createPluginApprovalHandlers(
     },
 
     "plugin.approval.resolve": async ({ params, respond, client, context }) => {
-      if (!validatePluginApprovalResolveParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid plugin.approval.resolve params: ${formatValidationErrors(
-              validatePluginApprovalResolveParams.errors,
-            )}`,
-          ),
-        );
+      const resolveParams = resolveApprovalDecisionParams({
+        rawParams: params,
+        validate: validatePluginApprovalResolveParams,
+        methodName: "plugin.approval.resolve",
+        respond,
+      });
+      if (!resolveParams) {
         return;
       }
-      const p = params as { id: string; decision: string };
-      if (!isApprovalDecision(p.decision)) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
-        return;
-      }
-      const decision = p.decision;
+      const { inputId, decision } = resolveParams;
       await handleApprovalResolve({
         manager,
-        inputId: p.id,
+        inputId,
         decision,
         respond,
         context,

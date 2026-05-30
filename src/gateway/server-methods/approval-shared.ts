@@ -1,4 +1,9 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { ValidationError } from "../../../packages/gateway-protocol/src/index.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -49,6 +54,17 @@ type PendingApprovalListEntry<TPayload> = {
   request: TPayload;
   createdAtMs: number;
   expiresAtMs: number;
+};
+
+type ApprovalResolveParams = {
+  id: string;
+  decision: string;
+};
+
+type ApprovalResolveParamsValidator<TParams extends ApprovalResolveParams> = ((
+  params: unknown,
+) => params is TParams) & {
+  errors?: ValidationError[] | null;
 };
 
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
@@ -177,6 +193,34 @@ export function buildRequestedApprovalEvent<TPayload extends ApprovalTurnSourceF
     request: record.request,
     createdAtMs: record.createdAtMs,
     expiresAtMs: record.expiresAtMs,
+  };
+}
+
+export function resolveApprovalDecisionParams<TParams extends ApprovalResolveParams>(params: {
+  rawParams: unknown;
+  validate: ApprovalResolveParamsValidator<TParams>;
+  methodName: string;
+  respond: RespondFn;
+}): { inputId: string; decision: ExecApprovalDecision } | null {
+  const rawParams = params.rawParams;
+  if (!params.validate(rawParams)) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `invalid ${params.methodName} params: ${formatValidationErrors(params.validate.errors)}`,
+      ),
+    );
+    return null;
+  }
+  if (!isApprovalDecision(rawParams.decision)) {
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
+    return null;
+  }
+  return {
+    inputId: rawParams.id,
+    decision: rawParams.decision,
   };
 }
 

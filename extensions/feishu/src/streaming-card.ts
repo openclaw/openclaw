@@ -3,7 +3,11 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
-import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
+import {
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
@@ -48,13 +52,20 @@ const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
-function resolveStreamingTokenExpiresAt(value: unknown): number {
+function resolveDateBoundExpiresAtMs(value: unknown, nowMs: number): number | undefined {
+  const expiresAt = resolveExpiresAtMsFromDurationSeconds(value, { nowMs });
+  return timestampMsToIsoString(expiresAt) === undefined ? undefined : expiresAt;
+}
+
+function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
+  const now = resolveDateTimestampMs(nowMs);
   if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
-    return Date.now();
+    return now;
   }
   return (
-    resolveExpiresAtMsFromDurationSeconds(value) ??
-    Date.now() + FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS * 1000
+    resolveDateBoundExpiresAtMs(value, now) ??
+    resolveDateBoundExpiresAtMs(FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS, now) ??
+    now
   );
 }
 
@@ -85,7 +96,11 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
 async function getToken(creds: Credentials): Promise<string> {
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
-  if (cached && cached.expiresAt > Date.now() + 60000) {
+  const rawNow = Date.now();
+  const hasValidClock = timestampMsToIsoString(rawNow) !== undefined;
+  const now = resolveDateTimestampMs(rawNow);
+  const minUsableExpiresAt = resolveDateBoundExpiresAtMs(60, now) ?? now;
+  if (cached && hasValidClock && cached.expiresAt > minUsableExpiresAt) {
     return cached.token;
   }
 
@@ -115,7 +130,7 @@ async function getToken(creds: Credentials): Promise<string> {
   }
   tokenCache.set(key, {
     token: data.tenant_access_token,
-    expiresAt: resolveStreamingTokenExpiresAt(data.expire),
+    expiresAt: resolveStreamingTokenExpiresAt(data.expire, now),
   });
   return data.tenant_access_token;
 }
