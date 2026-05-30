@@ -261,6 +261,14 @@ export abstract class MemoryManagerSyncOps {
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
+  protected async indexFiles(
+    entries: MemoryIndexEntry[],
+    options: { source: MemorySource; content?: string },
+  ): Promise<void> {
+    for (const entry of entries) {
+      await this.indexFile(entry, options);
+    }
+  }
 
   protected resetVectorState(): void {
     this.vectorReady = null;
@@ -1168,8 +1176,42 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
-    const tasks = fileEntries.map((entry) => async () => {
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+    if (this.batch.enabled) {
+      const dirtyEntries: MemoryIndexEntry[] = [];
+      for (const entry of fileEntries) {
+        if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          continue;
+        }
+        dirtyEntries.push(entry);
+      }
+      await this.indexFiles(dirtyEntries, { source: "memory" });
+      if (params.progress && dirtyEntries.length > 0) {
+        params.progress.completed += dirtyEntries.length;
+        params.progress.report({
+          completed: params.progress.completed,
+          total: params.progress.total,
+        });
+      }
+    } else {
+      const tasks = fileEntries.map((entry) => async () => {
+        if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+          if (params.progress) {
+            params.progress.completed += 1;
+            params.progress.report({
+              completed: params.progress.completed,
+              total: params.progress.total,
+            });
+          }
+          return;
+        }
+        await this.indexFile(entry, { source: "memory" });
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -1177,18 +1219,9 @@ export abstract class MemoryManagerSyncOps {
             total: params.progress.total,
           });
         }
-        return;
-      }
-      await this.indexFile(entry, { source: "memory" });
-      if (params.progress) {
-        params.progress.completed += 1;
-        params.progress.report({
-          completed: params.progress.completed,
-          total: params.progress.total,
-        });
-      }
-    });
-    await runWithConcurrency(tasks, this.getIndexConcurrency());
+      });
+      await runWithConcurrency(tasks, this.getIndexConcurrency());
+    }
 
     for (const stale of existingRows) {
       if (activePaths.has(stale.path)) {

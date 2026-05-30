@@ -29,6 +29,7 @@ afterAll(() => {
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
+let providerRuntimeBatchCalls: string[][] = [];
 let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
 let providerCloseGate: Promise<void> | null = null;
@@ -77,7 +78,9 @@ vi.mock("./embeddings.js", () => {
         };
       }
       const providerId =
-        options.provider === "gemini" || options.provider === "fallback-provider"
+        options.provider === "gemini" ||
+        options.provider === "fallback-provider" ||
+        options.provider === "batch-test"
           ? options.provider
           : "mock";
       const model = options.model ?? "mock-embed";
@@ -130,20 +133,30 @@ vi.mock("./embeddings.js", () => {
               }
             : {}),
         },
-        ...(providerId === "gemini" || providerId === "fallback-provider"
+        ...(providerId === "batch-test"
           ? {
               runtime: {
                 id: providerId,
-                cacheKeyData: {
-                  provider: providerId,
-                  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-                  model,
-                  outputDimensionality: options.outputDimensionality,
-                  headers: [],
+                batchEmbed: async (batch: { chunks: Array<{ text: string }> }) => {
+                  providerRuntimeBatchCalls.push(batch.chunks.map((chunk) => chunk.text));
+                  return batch.chunks.map((chunk) => embedText(chunk.text));
                 },
               },
             }
-          : {}),
+          : providerId === "gemini" || providerId === "fallback-provider"
+            ? {
+                runtime: {
+                  id: providerId,
+                  cacheKeyData: {
+                    provider: providerId,
+                    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                    model,
+                    outputDimensionality: options.outputDimensionality,
+                    headers: [],
+                  },
+                },
+              }
+            : {}),
       };
     },
   };
@@ -217,6 +230,7 @@ describe("memory index", () => {
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
+    providerRuntimeBatchCalls = [];
     providerCloseCalls = 0;
     providerCloseFailuresRemaining = 0;
     providerCloseGate = null;
@@ -261,8 +275,9 @@ describe("memory index", () => {
     extraPaths?: string[];
     sources?: Array<"memory" | "sessions">;
     sessionMemory?: boolean;
-    provider?: "openai" | "gemini" | "fallback-provider";
+    provider?: "openai" | "gemini" | "fallback-provider" | "batch-test";
     fallback?: "none" | "gemini" | "fallback-provider";
+    batchEnabled?: boolean;
     model?: string;
     outputDimensionality?: number;
     multimodal?: {
@@ -289,6 +304,12 @@ describe("memory index", () => {
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },
             sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
+            remote: params.batchEnabled
+              ? {
+                  nonBatchConcurrency: 1,
+                  batch: { enabled: true, pollIntervalMs: 0, timeoutMinutes: 1 },
+                }
+              : undefined,
             query: {
               minScore: params.minScore ?? 0,
               hybrid: params.hybrid ?? { enabled: false },
@@ -383,6 +404,29 @@ describe("memory index", () => {
           files: status.files,
           chunks: status.chunks,
         },
+      ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("batches dirty memory chunks across files", async () => {
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "# Log\nGamma memory line.");
+    const cfg = createCfg({
+      provider: "batch-test",
+      batchEnabled: true,
+      storePath: path.join(workspaceDir, "index-cross-file-batch.sqlite"),
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(providerRuntimeBatchCalls[0]).toEqual([
+        "# Log\nAlpha memory line.\nZebra memory line.",
+        "# Log\nBeta memory line.",
+        "# Log\nGamma memory line.",
       ]);
     } finally {
       await manager.close?.();

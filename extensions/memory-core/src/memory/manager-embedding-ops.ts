@@ -79,6 +79,12 @@ type MemoryIndexEntry = {
   lineMap?: number[];
 };
 
+type PreparedMemoryIndexEntry = {
+  entry: MemoryIndexEntry;
+  chunks: MemoryChunk[];
+  structuredInputBytes?: number;
+};
+
 export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
   providerId?: string;
@@ -745,6 +751,80 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.upsertFileRecord(entry, source);
   }
 
+  private async prepareIndexEntry(
+    entry: MemoryIndexEntry,
+    options: { source: MemorySource; content?: string },
+  ): Promise<PreparedMemoryIndexEntry | null> {
+    if ("kind" in entry && entry.kind === "multimodal") {
+      const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
+      if (!multimodalChunk) {
+        this.clearIndexedFileData(entry.path, options.source);
+        this.deleteFileRecord(entry.path, options.source);
+        return null;
+      }
+      return {
+        entry,
+        chunks: [multimodalChunk.chunk],
+        structuredInputBytes: multimodalChunk.structuredInputBytes,
+      };
+    }
+
+    const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+    const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
+    const chunks = this.provider
+      ? enforceEmbeddingMaxInputTokens(this.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)
+      : baseChunks;
+    if (options.source === "sessions" && "lineMap" in entry) {
+      remapChunkLines(chunks, entry.lineMap);
+    }
+    return { entry, chunks };
+  }
+
+  protected override async indexFiles(
+    entries: MemoryIndexEntry[],
+    options: { source: MemorySource; content?: string },
+  ): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+    const batchEmbed = this.providerRuntime?.batchEmbed;
+    if (!this.provider || !this.batch.enabled || !batchEmbed || options.source !== "memory") {
+      for (const entry of entries) {
+        await this.indexFile(entry, options);
+      }
+      return;
+    }
+
+    const prepared: PreparedMemoryIndexEntry[] = [];
+    for (const entry of entries) {
+      if ("kind" in entry && entry.kind === "multimodal") {
+        await this.indexFile(entry, options);
+        continue;
+      }
+      const preparedEntry = await this.prepareIndexEntry(entry, options);
+      if (preparedEntry) {
+        prepared.push(preparedEntry);
+      }
+    }
+    const chunks = prepared.flatMap((item) => item.chunks);
+    const embeddings = await this.embedChunksWithBatch(chunks, entries[0], options.source);
+    const sample = embeddings.find((embedding) => embedding.length > 0);
+    const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
+    let offset = 0;
+    for (const item of prepared) {
+      const fileEmbeddings = embeddings.slice(offset, offset + item.chunks.length);
+      offset += item.chunks.length;
+      this.writeChunks(
+        item.entry,
+        options.source,
+        this.provider.model,
+        item.chunks,
+        fileEmbeddings,
+        vectorReady,
+      );
+    }
+  }
+
   protected async indexFile(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
@@ -755,55 +835,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if ("kind" in entry && entry.kind === "multimodal") {
         return;
       }
-      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-      const chunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
-      if (options.source === "sessions" && "lineMap" in entry) {
-        remapChunkLines(chunks, entry.lineMap);
-      }
-      this.writeChunks(entry, options.source, "fts-only", chunks, [], false);
+      const prepared = await this.prepareIndexEntry(entry, options);
+      this.writeChunks(entry, options.source, "fts-only", prepared?.chunks ?? [], [], false);
       return;
     }
 
-    let chunks: MemoryChunk[];
-    let structuredInputBytes: number | undefined;
-    if ("kind" in entry && entry.kind === "multimodal") {
-      if (!this.provider) {
-        log.debug("Skipping multimodal indexing in FTS-only mode", {
-          path: entry.path,
-          source: options.source,
-        });
-        this.clearIndexedFileData(entry.path, options.source);
-        this.upsertFileRecord(entry, options.source);
-        return;
-      }
-      const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
-      if (!multimodalChunk) {
-        this.clearIndexedFileData(entry.path, options.source);
-        this.deleteFileRecord(entry.path, options.source);
-        return;
-      }
-      structuredInputBytes = multimodalChunk.structuredInputBytes;
-      chunks = [multimodalChunk.chunk];
-    } else {
-      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-      const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
-      chunks = this.provider
-        ? enforceEmbeddingMaxInputTokens(this.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)
-        : baseChunks;
-      if (options.source === "sessions" && "lineMap" in entry) {
-        remapChunkLines(chunks, entry.lineMap);
-      }
-    }
-    if (!this.provider) {
-      this.writeChunks(entry, options.source, "fts-only", chunks, [], false);
+    const prepared = await this.prepareIndexEntry(entry, options);
+    if (!prepared) {
       return;
     }
 
     let embeddings: number[][];
     try {
       embeddings = this.batch.enabled
-        ? await this.embedChunksWithBatch(chunks, entry, options.source)
-        : await this.embedChunksInBatches(chunks);
+        ? await this.embedChunksWithBatch(prepared.chunks, entry, options.source)
+        : await this.embedChunksInBatches(prepared.chunks);
     } catch (err) {
       const message = formatErrorMessage(err);
       if (
@@ -815,7 +861,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       ) {
         log.warn("memory embeddings: skipping multimodal file rejected as too large", {
           path: entry.path,
-          bytes: structuredInputBytes,
+          bytes: prepared.structuredInputBytes,
           provider: this.provider.id,
           model: this.provider.model,
           error: message,
@@ -828,6 +874,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
-    this.writeChunks(entry, options.source, this.provider.model, chunks, embeddings, vectorReady);
+    this.writeChunks(
+      entry,
+      options.source,
+      this.provider.model,
+      prepared.chunks,
+      embeddings,
+      vectorReady,
+    );
   }
 }
