@@ -92,34 +92,4 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
-  /**
-   * Optional vision model configuration for browser screenshots. When `models`
-   * contains at least one valid provider/model entry, screenshot actions analyze
-   * the captured image with the configured vision model and return a text
-   * description so text-only main models can read screenshots. When not set,
-   * screenshots return image content blocks as before.
-   */
-  models?: Array<{
-    provider?: string;
-    model?: string;
-    prompt?: string;
-    maxChars?: number;
-    maxBytes?: number;
-    timeoutSeconds?: number;
-    type?: "provider" | "cli";
-    command?: string;
-    args?: string[];
-    profile?: string;
-    preferredProfile?: string;
-  }>;
-  /** Controls whether browser screenshot vision is active. Default: true when models is set. */
-  visionEnabled?: boolean;
-  /** Default prompt for vision model when describing screenshots. */
-  visionPrompt?: string;
-  /** Maximum characters in the vision description. Default: 4096. */
-  visionMaxChars?: number;
-  /** Maximum file size (bytes) for screenshots sent to vision. Default: 10MB. */
-  visionMaxBytes?: number;
-  /** Timeout (seconds) for vision model calls. */
-  visionTimeoutSeconds?: number;
 };

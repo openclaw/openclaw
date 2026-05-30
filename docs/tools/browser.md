@@ -191,25 +191,31 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 ### Screenshot vision (text-only model support)
 
 When the main model is text-only (no vision/multimodal support), browser
-screenshots return image blocks that the model cannot read. Configure
-`browser.models` to automatically describe screenshots using a vision model,
-returning text that any model can reason about.
+screenshots return image blocks that the model cannot read. Browser screenshots
+reuse the existing image-understanding configuration, so an image model
+configured for media understanding can describe screenshots as text without any
+browser-specific model settings.
 
 ```json5
 {
-  browser: {
-    // ... existing browser config ...
-    models: [
-      { provider: "bytedance", model: "doubao-seed-2.0-pro" },
-      // Add fallback candidates; first success wins
-      { provider: "openai", model: "gpt-4o" },
-    ],
-    // Optional overrides:
-    // visionEnabled: false,       // force-disable without removing models
-    // visionPrompt: "...",        // custom instruction for vision model
-    // visionMaxChars: 4096,       // max description length
-    // visionMaxBytes: 10485760,   // max screenshot file size (10MB)
-    // visionTimeoutSeconds: 60,   // per-model timeout
+  tools: {
+    media: {
+      image: {
+        models: [
+          { provider: "bytedance", model: "doubao-seed-2.0-pro" },
+          // Add fallback candidates; first success wins
+          { provider: "openai", model: "gpt-4o" },
+        ],
+      },
+      // Shared media models also work when tagged for image support.
+      // models: [{ provider: "openai", model: "gpt-4o", capabilities: ["image"] }],
+    },
+  },
+  agents: {
+    defaults: {
+      // Existing image-model defaults are also honored.
+      // imageModel: { primary: "openai/gpt-4o" },
+    },
   },
 }
 ```
@@ -217,22 +223,21 @@ returning text that any model can reason about.
 **How it works:**
 
 1. Agent calls `browser screenshot` → image captured to disk as usual.
-2. If `browser.models` is configured, the image is sent to the first valid
-   vision model for description.
+2. The browser tool asks the existing image-understanding runtime whether it
+   can describe the screenshot using configured media image models, shared media
+   models, image-model defaults, or an auth-backed image provider.
 3. The vision model returns a text description, which is wrapped with
    `wrapExternalContent` (prompt injection guard) and returned to the agent
    as a text block instead of an image block.
-4. If vision fails (timeout, API error, empty response, file exceeds
-   `visionMaxBytes`), falls back to returning the original image block.
+4. If image understanding is unavailable, skipped, or fails, the browser falls
+   back to returning the original image block.
 
-**Per-model overrides:** Each entry in `models[]` can override `prompt`,
-`timeoutSeconds`, `maxChars`, `maxBytes`, `profile`, and `preferredProfile`.
+Use the existing `tools.media.image` / `tools.media.models` fields for model
+fallbacks, timeouts, byte limits, profiles, and provider request settings.
 
-**When to use:** Configure this when your main model cannot process images
-(e.g. `hy3-preview`, text-only models) but you still want the agent to
-reason about web pages via screenshots. If your main model already supports
-vision (e.g. Claude, GPT-4o), leave `models` unconfigured — the agent will
-read the image directly.
+If the active main model already supports vision and no explicit image
+understanding model is configured, OpenClaw keeps the normal image result so the
+main model can read the screenshot directly.
 
 <AccordionGroup>
 

@@ -19,6 +19,13 @@ export type RunMediaUnderstandingFileParams = {
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
+};
+
+export type MediaUnderstandingScopeContext = {
+  sessionKey?: string;
+  channel?: string;
+  chatType?: string;
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -39,6 +46,7 @@ export type DescribeImageFileParams = {
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
 };
 
 export type DescribeImageFileWithModelParams = {
@@ -53,10 +61,6 @@ export type DescribeImageFileWithModelParams = {
   prompt: string;
   maxTokens?: number;
   timeoutMs?: number;
-  /** Auth profile id to use for this provider. */
-  profile?: string;
-  /** Preferred profile id if multiple are available. */
-  preferredProfile?: string;
 };
 
 type DescribeImageFileWithModelResult = Awaited<

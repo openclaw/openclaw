@@ -25,7 +25,7 @@ import {
   browserStatus,
   browserStop,
   callGatewayTool,
-  describeImageFileWithModel,
+  describeImageFile,
   getRuntimeConfig,
   getBrowserProfileCapabilities,
   imageResultFromFile,
@@ -41,17 +41,15 @@ import {
   resolveRuntimeImageSanitization,
   resolveNodeIdFromList,
   resolveProfile,
+  saveMediaBuffer,
   selectDefaultNodeFromList,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
-import {
-  describeBrowserImageWithVision,
-  isBrowserVisionEnabled,
-  neutralizeMediaDirectives,
-} from "./browser/vision.js";
+import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
+import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 import { wrapExternalContent } from "./sdk-security-runtime.js";
 
 const browserToolDeps = {
@@ -69,11 +67,13 @@ const browserToolDeps = {
   browserStart,
   browserStatus,
   browserStop,
-  describeImageFileWithModel,
+  describeImageFile,
   getRuntimeConfig,
   imageResultFromFile,
   listNodes,
   callGatewayTool,
+  normalizeBrowserScreenshot,
+  saveMediaBuffer,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
@@ -96,11 +96,13 @@ export const testing = {
       browserStart: typeof browserStart;
       browserStatus: typeof browserStatus;
       browserStop: typeof browserStop;
-      describeImageFileWithModel: typeof describeImageFileWithModel;
+      describeImageFile: typeof describeImageFile;
       imageResultFromFile: typeof imageResultFromFile;
       getRuntimeConfig: typeof getRuntimeConfig;
       listNodes: typeof listNodes;
       callGatewayTool: typeof callGatewayTool;
+      normalizeBrowserScreenshot: typeof normalizeBrowserScreenshot;
+      saveMediaBuffer: typeof saveMediaBuffer;
       touchSessionBrowserTab: typeof touchSessionBrowserTab;
       trackSessionBrowserTab: typeof trackSessionBrowserTab;
       untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
@@ -122,12 +124,14 @@ export const testing = {
     browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
     browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
     browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
-    browserToolDeps.describeImageFileWithModel =
-      overrides?.describeImageFileWithModel ?? describeImageFileWithModel;
+    browserToolDeps.describeImageFile = overrides?.describeImageFile ?? describeImageFile;
     browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
     browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
     browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
     browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
+    browserToolDeps.normalizeBrowserScreenshot =
+      overrides?.normalizeBrowserScreenshot ?? normalizeBrowserScreenshot;
+    browserToolDeps.saveMediaBuffer = overrides?.saveMediaBuffer ?? saveMediaBuffer;
     browserToolDeps.touchSessionBrowserTab =
       overrides?.touchSessionBrowserTab ?? touchSessionBrowserTab;
     browserToolDeps.trackSessionBrowserTab =
@@ -443,6 +447,15 @@ export function createBrowserTool(opts?: {
   agentSessionKey?: string;
   agentDir?: string;
   workspaceDir?: string;
+  activeModel?: {
+    provider?: string;
+    model?: string;
+  };
+  mediaScope?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -777,23 +790,30 @@ export function createBrowserTool(opts?: {
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           const screenshotPath = result.path;
           const screenshotCfg = browserToolDeps.getRuntimeConfig();
-          if (isBrowserVisionEnabled(screenshotCfg)) {
-            try {
-              const described = await describeBrowserImageWithVision(
-                {
-                  cfg: screenshotCfg,
-                  filePath: screenshotPath,
-                  // Intentionally omit `mediaUrl`: screenshots live on local
-                  // disk, so the helper should read the buffer from `filePath`
-                  // rather than HTTP-fetch the local path.
-                  agentDir: opts?.agentDir,
-                  workspaceDir: opts?.workspaceDir,
-                },
-                {
-                  describeImageFileWithModel: browserToolDeps.describeImageFileWithModel,
-                },
-              );
-              const headerLines = [`[analyzed by ${described.provider}/${described.model}]`];
+          const imageSanitization = resolveRuntimeImageSanitization();
+          try {
+            const described = await describeBrowserScreenshot(
+              {
+                cfg: screenshotCfg,
+                filePath: screenshotPath,
+                agentDir: opts?.agentDir,
+                workspaceDir: opts?.workspaceDir,
+                activeModel: opts?.activeModel,
+                mediaScope: opts?.mediaScope,
+                imageSanitization,
+              },
+              {
+                describeImageFile: browserToolDeps.describeImageFile,
+                normalizeBrowserScreenshot: browserToolDeps.normalizeBrowserScreenshot,
+                saveMediaBuffer: browserToolDeps.saveMediaBuffer,
+              },
+            );
+            if (described) {
+              const analyzedBy =
+                described.provider && described.model
+                  ? `${described.provider}/${described.model}`
+                  : "media image understanding";
+              const headerLines = [`[analyzed by ${analyzedBy}]`];
               // Vision model descriptions contain web page content which is
               // untrusted external input — wrap it the same way snapshot and
               // tabs results are wrapped to mitigate prompt injection.
@@ -825,39 +845,32 @@ export function createBrowserTool(opts?: {
                   vision: {
                     provider: described.provider,
                     model: described.model,
-                    attempts: described.attempts,
+                    decision: described.decision,
                   },
                 },
               };
-            } catch (err) {
-              // Fall back to returning the raw image block so the agent loop
-              // can still recover (multimodal models will still read it, and
-              // text-only models will see "[image omitted]" rather than nothing).
-              //
-              // Pass the same image sanitization options the non-vision
-              // screenshot path uses so the failure fallback does not silently
-              // bypass `agents.defaults.imageMaxDimensionPx`.
-              const rawReason = err instanceof Error ? err.message : String(err);
-              // Provider/runtime error messages are untrusted input too. Keep
-              // the diagnostic text readable, but defang line-start `MEDIA:`
-              // directives before `imageResultFromFile` emits it as a browser
-              // tool-result text block on the trusted local-media path.
-              const reason = neutralizeMediaDirectives(rawReason);
-              const extraText = `[browser screenshot vision failed: ${reason}]`;
-              return await browserToolDeps.imageResultFromFile({
-                label: "browser:screenshot",
-                path: screenshotPath,
-                extraText,
-                details: result,
-                imageSanitization: resolveRuntimeImageSanitization(),
-              });
             }
+          } catch (err) {
+            // Fall back to returning the raw image block so the agent loop can
+            // still recover. Provider/runtime error messages are untrusted
+            // input too, so defang line-start `MEDIA:` directives before
+            // `imageResultFromFile` emits the diagnostic text.
+            const rawReason = err instanceof Error ? err.message : String(err);
+            const reason = neutralizeMediaDirectives(rawReason);
+            const extraText = `[browser screenshot vision failed: ${reason}]`;
+            return await browserToolDeps.imageResultFromFile({
+              label: "browser:screenshot",
+              path: screenshotPath,
+              extraText,
+              details: result,
+              imageSanitization,
+            });
           }
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
             path: screenshotPath,
             details: result,
-            imageSanitization: resolveRuntimeImageSanitization(),
+            imageSanitization,
           });
         }
         case "navigate": {

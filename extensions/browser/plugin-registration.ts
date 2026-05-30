@@ -28,6 +28,22 @@ function isTruthyEnvValue(value: string | undefined): boolean {
   return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
 }
 
+function deriveChatTypeFromSessionKey(
+  sessionKey: string | undefined,
+): "direct" | "group" | "channel" | undefined {
+  const tokens = new Set(sessionKey?.toLowerCase().split(":").filter(Boolean) ?? []);
+  if (tokens.has("group")) {
+    return "group";
+  }
+  if (tokens.has("channel")) {
+    return "channel";
+  }
+  if (tokens.has("direct") || tokens.has("dm")) {
+    return "direct";
+  }
+  return undefined;
+}
+
 const BROWSER_CLI_DESCRIPTOR = {
   name: "browser",
   description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
@@ -40,6 +56,15 @@ function createLazyBrowserTool(opts?: {
   agentSessionKey?: string;
   agentDir?: string;
   workspaceDir?: string;
+  activeModel?: {
+    provider?: string;
+    model?: string;
+  };
+  mediaScope?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -66,6 +91,52 @@ function createLazyBrowserTool(opts?: {
       const tool = createBrowserTool(opts);
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
+  };
+}
+
+function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
+  sandboxBridgeUrl?: string;
+  allowHostControl?: boolean;
+  agentSessionKey?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  activeModel?: {
+    provider?: string;
+    model?: string;
+  };
+  mediaScope?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
+} {
+  const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
+  const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
+  return {
+    ...(ctx.browser?.sandboxBridgeUrl ? { sandboxBridgeUrl: ctx.browser.sandboxBridgeUrl } : {}),
+    ...(ctx.browser?.allowHostControl !== undefined
+      ? { allowHostControl: ctx.browser.allowHostControl }
+      : {}),
+    ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
+    ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+    ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+    ...(ctx.activeModel?.provider || ctx.activeModel?.modelId
+      ? {
+          activeModel: {
+            provider: ctx.activeModel.provider,
+            model: ctx.activeModel.modelId,
+          },
+        }
+      : {}),
+    ...(ctx.sessionKey || mediaChannel
+      ? {
+          mediaScope: {
+            ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
+            ...(mediaChannel ? { channel: mediaChannel } : {}),
+            ...(mediaChatType ? { chatType: mediaChatType } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -120,13 +191,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
 
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerTool(((ctx: OpenClawPluginToolContext) =>
-    createLazyBrowserTool({
-      sandboxBridgeUrl: ctx.browser?.sandboxBridgeUrl,
-      allowHostControl: ctx.browser?.allowHostControl,
-      agentSessionKey: ctx.sessionKey,
-      agentDir: ctx.agentDir,
-      workspaceDir: ctx.workspaceDir,
-    })) as OpenClawPluginToolFactory);
+    createLazyBrowserTool(createBrowserToolOptions(ctx))) as OpenClawPluginToolFactory);
   api.registerCli(
     async ({ program }) => {
       const { registerBrowserCli } = await import("./src/cli/browser-cli.js");
