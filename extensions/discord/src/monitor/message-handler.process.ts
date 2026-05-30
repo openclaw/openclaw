@@ -442,6 +442,8 @@ async function processDiscordMessageInner(
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
+  // Deliver target can move into a thread after preflight accepted the message.
+  // The typing owner follows the final target before reply dispatch starts.
   const typingFeedback =
     replyTypingFeedback ??
     createDiscordReplyTypingFeedback({

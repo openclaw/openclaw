@@ -21,6 +21,8 @@ export type DiscordAcceptedTypingPrestartDecision = {
 export function resolveDiscordSourceReplyDeliveryMode(
   ctx: DiscordMessagePreflightContext,
 ): SourceReplyDeliveryMode {
+  // Keep prestart policy keyed to the same source-reply mode as dispatch.
+  // Otherwise message-tool-only group replies would wait behind "message" mode.
   return resolveChannelMessageSourceReplyDeliveryMode({
     cfg: ctx.cfg,
     ctx: {
@@ -51,6 +53,8 @@ export function resolveDiscordAcceptedTypingPrestart(
   }
   const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
   if (configuredTypingMode !== undefined) {
+    // Explicit operator config wins over Discord heuristics.
+    // Non-instant modes intentionally defer to the normal reply pipeline.
     return {
       sourceReplyDeliveryMode,
       shouldPrestart: configuredTypingMode === "instant",
@@ -58,6 +62,8 @@ export function resolveDiscordAcceptedTypingPrestart(
     };
   }
   if (sourceReplyDeliveryMode === "message_tool_only") {
+    // Message-tool-only replies have no visible default response path.
+    // Prestart preserves user feedback while the tool-delivered reply waits.
     return { sourceReplyDeliveryMode, shouldPrestart: true, reason: "tool-only" };
   }
   if (!ctx.isGuildMessage && !ctx.isGroupDm) {

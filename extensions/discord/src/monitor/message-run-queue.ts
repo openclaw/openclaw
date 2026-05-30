@@ -107,6 +107,8 @@ export function createDiscordMessageRunQueue(
   let lifecycleActive = !params.abortSignal?.aborted;
 
   const cleanupSkippedQueuedMessages = () => {
+    // These callbacks represent jobs accepted into the queue but not started.
+    // Running jobs remove their callback before processDiscordMessage owns cleanup.
     if (!lifecycleActive && skippedCleanup.size === 0) {
       return;
     }
@@ -135,6 +137,8 @@ export function createDiscordMessageRunQueue(
       }
       skippedCleanup.add(cleanupSkipped);
       runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+        // Once the task starts, normal process/commit handling owns cleanup.
+        // Leaving it in skippedCleanup would double-release replay/typing state.
         skippedCleanup.delete(cleanupSkipped);
         await processDiscordQueuedMessage({
           job,

@@ -133,6 +133,8 @@ export function createDiscordMessageHandler(
     "group-mentions";
   const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
   const replayGuard = createDiscordInboundReplayGuard();
+  // The map owns pre-dispatch typing leases, not queued work itself.
+  // Each lease is released by the feedback cleanup hook installed below.
   const prestartedTypingFeedback = new Map<string, PrestartedTypingFeedbackEntry>();
   const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
