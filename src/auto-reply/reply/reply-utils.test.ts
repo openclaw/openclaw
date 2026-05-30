@@ -1236,6 +1236,16 @@ describe("createStreamingDirectiveAccumulator", () => {
     expect(result?.replyToCurrent).toBe(true);
   });
 
+  it("does not emit padding before a buffered trailing reply tag", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+
+    const first = accumulator.consume("Hello [[");
+    expect(first?.text).toBe("Hello");
+
+    const second = accumulator.consume("", { final: true });
+    expect(second?.text).toBe("[[");
+  });
+
   it("propagates explicit reply ids across current and subsequent chunks", () => {
     const accumulator = createStreamingDirectiveAccumulator();
 

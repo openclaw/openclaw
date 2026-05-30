@@ -35,16 +35,19 @@ export const splitTrailingDirective = (
   options: SplitTrailingDirectiveOptions = {},
 ): { text: string; tail: string } => {
   let bufferStart = text.length;
+  let trimTextBeforeTail = false;
 
   // 1. Unclosed `[[…` reply/audio directive tail.
   const openIndex = text.lastIndexOf("[[");
   if (openIndex >= 0 && !text.includes("]]", openIndex + 2)) {
     if (openIndex < bufferStart) {
       bufferStart = openIndex;
+      trimTextBeforeTail = true;
     }
   }
   if (text.endsWith("[") && text.length - 1 < bufferStart) {
     bufferStart = text.length - 1;
+    trimTextBeforeTail = true;
   }
 
   if (options.final) {
@@ -82,7 +85,7 @@ export const splitTrailingDirective = (
   }
 
   return {
-    text: text.slice(0, bufferStart),
+    text: trimTextBeforeTail ? text.slice(0, bufferStart).trimEnd() : text.slice(0, bufferStart),
     tail: text.slice(bufferStart),
   };
 };
