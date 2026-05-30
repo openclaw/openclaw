@@ -149,9 +149,6 @@ importers:
       linkedom:
         specifier: 0.18.12
         version: 0.18.12
-      markdown-it:
-        specifier: 14.2.0
-        version: 14.2.0
       minimatch:
         specifier: 10.2.5
         version: 10.2.5
