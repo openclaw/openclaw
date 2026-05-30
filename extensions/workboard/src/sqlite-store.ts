@@ -8,7 +8,7 @@ import type {
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
-} from "./store.js";
+} from "./persistence-types.js";
 import type {
   WorkboardArtifact,
   WorkboardAttachment,

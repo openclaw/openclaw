@@ -2,14 +2,14 @@ import {
   type PluginDoctorStateMigration,
   type PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
-import { createWorkboardSqliteStores, resolveWorkboardSqlitePath } from "./src/sqlite-store.js";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
   PersistedWorkboardCard,
   PersistedWorkboardNotificationSubscription,
   WorkboardKeyedStore,
-} from "./src/store.js";
+} from "./src/persistence-types.js";
+import { createWorkboardSqliteStores, resolveWorkboardSqlitePath } from "./src/sqlite-store.js";
 
 const MAX_CARDS = 2000;
 

@@ -4,6 +4,13 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type {
+  PersistedWorkboardAttachment,
+  PersistedWorkboardBoard,
+  PersistedWorkboardCard,
+  PersistedWorkboardNotificationSubscription,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   WORKBOARD_DIAGNOSTIC_KINDS,
@@ -54,6 +61,13 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "./types.js";
+export type {
+  PersistedWorkboardAttachment,
+  PersistedWorkboardBoard,
+  PersistedWorkboardCard,
+  PersistedWorkboardNotificationSubscription,
+  WorkboardKeyedStore,
+} from "./persistence-types.js";
 
 const POSITION_STEP = 1000;
 const MAX_CARDS = 2000;
@@ -86,34 +100,6 @@ function secondsToDurationMs(seconds: number): number {
 function addWorkboardDurationMs(now: number, durationMs: number): number {
   return resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: now }) ?? MAX_DATE_TIMESTAMP_MS;
 }
-
-export type PersistedWorkboardCard = {
-  version: 1;
-  card: WorkboardCard;
-};
-
-export type PersistedWorkboardBoard = {
-  version: 1;
-  board: WorkboardBoardMetadata;
-};
-
-export type PersistedWorkboardNotificationSubscription = {
-  version: 1;
-  subscription: WorkboardNotificationSubscription;
-};
-
-export type PersistedWorkboardAttachment = {
-  version: 1;
-  attachment: WorkboardAttachment;
-  contentBase64: string;
-};
-
-export type WorkboardKeyedStore<T = PersistedWorkboardCard> = {
-  register(key: string, value: T): Promise<void>;
-  lookup(key: string): Promise<T | undefined>;
-  delete(key: string): Promise<boolean>;
-  entries(): Promise<Array<{ key: string; value: T }>>;
-};
 
 export type WorkboardCardInput = {
   title?: unknown;
