@@ -380,6 +380,31 @@ interface ChatEphemeralState {
   pinnedExpanded: boolean;
 }
 
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+type SpeechRecognitionLike = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  addEventListener: (type: string, listener: EventListener) => void;
+  removeEventListener: (type: string, listener: EventListener) => void;
+  start: () => void;
+  stop: () => void;
+};
+
+type SpeechRecognitionEventLike = {
+  resultIndex: number;
+  results: ArrayLike<{
+    isFinal: boolean;
+    0?: { transcript?: string };
+  }>;
+};
+
+type WindowWithSpeechRecognition = Window & {
+  SpeechRecognition?: SpeechRecognitionConstructor;
+  webkitSpeechRecognition?: SpeechRecognitionConstructor;
+};
+
 function createChatEphemeralState(): ChatEphemeralState {
   return {
     slashMenuOpen: false,
@@ -396,6 +421,9 @@ function createChatEphemeralState(): ChatEphemeralState {
 }
 
 const vs = createChatEphemeralState();
+let activeDictation: SpeechRecognitionLike | null = null;
+let activeDictationCleanup: (() => void) | null = null;
+let dictationListening = false;
 
 /**
  * Reset chat view ephemeral state when navigating away.
@@ -403,6 +431,13 @@ const vs = createChatEphemeralState();
  */
 export function resetChatViewState() {
   Object.assign(vs, createChatEphemeralState());
+  if (activeDictation) {
+    activeDictationCleanup?.();
+    activeDictation.stop();
+  }
+  activeDictation = null;
+  activeDictationCleanup = null;
+  dictationListening = false;
 }
 
 export const cleanupChatModuleState = resetChatViewState;
@@ -450,6 +485,105 @@ function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "dow
     target.selectionStart = caret;
     target.selectionEnd = caret;
   });
+}
+
+function getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const win = window as WindowWithSpeechRecognition;
+  return win.SpeechRecognition ?? win.webkitSpeechRecognition ?? null;
+}
+
+function isSpeechDictationSupported(): boolean {
+  return getSpeechRecognitionConstructor() !== null;
+}
+
+function appendSpeechTranscript(draft: string, transcript: string): string {
+  const cleanTranscript = transcript.replace(/\s+/gu, " ").trim();
+  if (!cleanTranscript) {
+    return draft;
+  }
+  if (!draft.trim()) {
+    return cleanTranscript;
+  }
+  return `${draft}${/\s$/u.test(draft) ? "" : " "}${cleanTranscript}`;
+}
+
+function stopDictation(requestUpdate: () => void): void {
+  const current = activeDictation;
+  activeDictation = null;
+  dictationListening = false;
+  if (current) {
+    activeDictationCleanup?.();
+    activeDictationCleanup = null;
+    current.stop();
+  }
+  requestUpdate();
+}
+
+function toggleDictation(props: ChatProps, requestUpdate: () => void): void {
+  if (dictationListening) {
+    stopDictation(requestUpdate);
+    return;
+  }
+
+  const SpeechRecognition = getSpeechRecognitionConstructor();
+  if (!SpeechRecognition) {
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+  activeDictation = recognition;
+  dictationListening = true;
+
+  const baseDraft = props.getDraft?.() ?? props.draft;
+  let finalTranscript = "";
+
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = navigator.language || "en-US";
+  const handleResult: EventListener = (rawEvent) => {
+    const event = rawEvent as unknown as SpeechRecognitionEventLike;
+    let interimTranscript = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0]?.transcript ?? "";
+      if (event.results[i].isFinal) {
+        finalTranscript = `${finalTranscript} ${transcript}`.trim();
+      } else {
+        interimTranscript = `${interimTranscript} ${transcript}`.trim();
+      }
+    }
+    props.onDraftChange(
+      appendSpeechTranscript(baseDraft, `${finalTranscript} ${interimTranscript}`),
+    );
+    requestUpdate();
+  };
+  const handleError: EventListener = () => stopDictation(requestUpdate);
+  const handleEnd: EventListener = () => {
+    if (activeDictation === recognition) {
+      activeDictationCleanup?.();
+      activeDictationCleanup = null;
+      activeDictation = null;
+      dictationListening = false;
+      requestUpdate();
+    }
+  };
+  recognition.addEventListener("result", handleResult);
+  recognition.addEventListener("error", handleError);
+  recognition.addEventListener("end", handleEnd);
+  activeDictationCleanup = () => {
+    recognition.removeEventListener("result", handleResult);
+    recognition.removeEventListener("error", handleError);
+    recognition.removeEventListener("end", handleEnd);
+  };
+
+  try {
+    recognition.start();
+    requestUpdate();
+  } catch {
+    stopDictation(requestUpdate);
+  }
 }
 
 function generateAttachmentId(): string {
@@ -1100,6 +1234,7 @@ export function renderChat(props: ChatProps) {
   const deleted = getDeletedMessages(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(props.draft);
+  const speechDictationSupported = isSpeechDictationSupported();
 
   const placeholder = props.connected
     ? hasAttachments
@@ -1638,6 +1773,22 @@ export function renderChat(props: ChatProps) {
                     ?disabled=${!props.connected || props.realtimeTalkActive}
                   >
                     ${icons.settings}
+                  </button>
+                `
+              : nothing}
+            ${speechDictationSupported
+              ? html`
+                  <button
+                    class="agent-chat__input-btn ${dictationListening
+                      ? "agent-chat__input-btn--talk"
+                      : ""}"
+                    @click=${() => toggleDictation(props, requestUpdate)}
+                    title=${dictationListening ? "Listening..." : "Voice input"}
+                    aria-label=${dictationListening ? "Listening..." : "Voice input"}
+                    aria-pressed=${dictationListening ? "true" : "false"}
+                    ?disabled=${!props.connected}
+                  >
+                    ${dictationListening ? icons.micOff : icons.mic}
                   </button>
                 `
               : nothing}

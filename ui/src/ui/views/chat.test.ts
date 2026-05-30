@@ -741,12 +741,82 @@ describe("chat voice controls", () => {
     await i18n.setLocale("en");
   });
 
-  it("keeps Talk visible without the stale browser dictation button", () => {
+  it("keeps browser dictation hidden when SpeechRecognition is unavailable", () => {
     const container = renderChatView();
 
     requireElement(container, '[aria-label="Start Talk"]', "Start Talk button");
     requireElement(container, '[aria-label="Talk options"]', "Talk options button");
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+
+  it("shows browser dictation when SpeechRecognition is available", () => {
+    class MockSpeechRecognition {
+      continuous = false;
+      interimResults = false;
+      lang = "";
+      listeners: Record<string, EventListener[]> = {};
+      addEventListener = vi.fn((type: string, listener: EventListener) => {
+        this.listeners[type] = [...(this.listeners[type] ?? []), listener];
+      });
+      removeEventListener = vi.fn((type: string, listener: EventListener) => {
+        this.listeners[type] = (this.listeners[type] ?? []).filter((item) => item !== listener);
+      });
+      start = vi.fn();
+      stop = vi.fn();
+    }
+    vi.stubGlobal("SpeechRecognition", MockSpeechRecognition);
+
+    const container = renderChatView();
+
+    requireElement(container, '[aria-label="Voice input"]', "Voice input button");
+  });
+
+  it("appends dictated speech to the draft", () => {
+    const instances: MockSpeechRecognition[] = [];
+    class MockSpeechRecognition {
+      continuous = false;
+      interimResults = false;
+      lang = "";
+      listeners: Record<string, EventListener[]> = {};
+      addEventListener = vi.fn((type: string, listener: EventListener) => {
+        this.listeners[type] = [...(this.listeners[type] ?? []), listener];
+      });
+      removeEventListener = vi.fn((type: string, listener: EventListener) => {
+        this.listeners[type] = (this.listeners[type] ?? []).filter((item) => item !== listener);
+      });
+      start = vi.fn();
+      stop = vi.fn();
+      constructor() {
+        instances.push(this);
+      }
+    }
+    vi.stubGlobal("SpeechRecognition", MockSpeechRecognition);
+    let draft = "Hello";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const requestUpdate = vi.fn();
+    const container = renderChatView({
+      draft,
+      getDraft: () => draft,
+      onDraftChange,
+      onRequestUpdate: requestUpdate,
+    });
+
+    const voiceInputButton = requireElement(
+      container,
+      '[aria-label="Voice input"]',
+      "Voice input button",
+    ) as HTMLButtonElement;
+    voiceInputButton.click();
+    expect(instances[0]).toBeDefined();
+    instances[0].listeners.result?.[0]?.({
+      resultIndex: 0,
+      results: [{ isFinal: true, 0: { transcript: " world" } }],
+    } as unknown as Event);
+
+    expect(onDraftChange).toHaveBeenLastCalledWith("Hello world");
+    expect(requestUpdate).toHaveBeenCalled();
   });
 
   it("renders editable Talk launch options", () => {
