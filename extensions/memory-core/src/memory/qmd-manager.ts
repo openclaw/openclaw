@@ -2544,8 +2544,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     if (typeof server.command === "string" && server.command.length > 0) {
-      const copiedEnv = asRecord(server.env) ?? {};
-      server.env = { ...copiedEnv, ...this.buildMcporterQmdEnv() };
+      server.env = this.buildMcporterQmdEnv();
       // startDaemon=true depends on mcporter treating the configured stdio
       // server as daemon-warm; without lifecycle, mcporter keeps it ephemeral.
       if (server.lifecycle === undefined && this.qmd.mcporter.startDaemon) {

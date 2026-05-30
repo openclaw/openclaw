@@ -4206,7 +4206,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("preserves a configured stdio mcporter server in the agent-scoped config", async () => {
+  it("preserves a configured stdio mcporter server without persisting user env", async () => {
     const userXdgConfigHome = path.join(tmpRoot, "user-xdg-config");
     const userXdgCacheHome = path.join(tmpRoot, "user-xdg-cache");
     const userQmdConfigDir = path.join(tmpRoot, "user-qmd-config");
@@ -4241,7 +4241,12 @@ describe("QmdMemoryManager", () => {
             command: "node",
             args: ["/opt/qmd-wrapper.js", "mcp"],
             cwd: "/opt/qmd",
-            env: { CUSTOM_KEEP: "1", XDG_CONFIG_HOME: "/user/qmd/config" },
+            env: {
+              CUSTOM_KEEP: "1",
+              API_KEY: "secret",
+              TOKEN: "secret",
+              XDG_CONFIG_HOME: "/user/qmd/config",
+            },
             lifecycle: { mode: "keep-alive", idleTimeoutMs: 123_000 },
             allowedTools: ["query"],
           }),
@@ -4288,7 +4293,9 @@ describe("QmdMemoryManager", () => {
     expect(custom?.command).toBe("node");
     expect(custom?.args).toEqual(["/opt/qmd-wrapper.js", "mcp"]);
     expect(custom?.cwd).toBe("/opt/qmd");
-    expect(custom?.env?.CUSTOM_KEEP).toBe("1");
+    expect(custom?.env?.CUSTOM_KEEP).toBeUndefined();
+    expect(custom?.env?.API_KEY).toBeUndefined();
+    expect(custom?.env?.TOKEN).toBeUndefined();
     expect(normalizePath(custom?.env?.XDG_CONFIG_HOME)).toContain("/agents/main/qmd/xdg-config");
     expect(normalizePath(custom?.env?.QMD_CONFIG_DIR)).toContain("/agents/main/qmd/xdg-config/qmd");
     expect(normalizePath(custom?.env?.XDG_CACHE_HOME)).toContain("/agents/main/qmd/xdg-cache");
