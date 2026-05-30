@@ -137,7 +137,12 @@ export function mergeSlackAccountConfig(
     channelConfig: cfg.channels?.slack as SlackAccountConfig,
     accounts: cfg.channels?.slack?.accounts as Record<string, Partial<SlackAccountConfig>>,
     accountId,
-    nestedObjectKeys: ["botLoopProtection"],
+    // Deep-merge "dm" so a documented global channels.slack.dm setting (e.g.
+    // collapseAssistantThreads) survives an account-level dm override that only
+    // sets other dm keys. Without this, an account `dm: { policy: ... }` block
+    // shallow-replaces the whole root dm object and the global flag reads as
+    // undefined for that account.
+    nestedObjectKeys: ["botLoopProtection", "dm"],
   });
   const streaming = mergeSlackStreamingConfig(
     (cfg.channels?.slack as Record<string, unknown> | undefined)?.streaming,

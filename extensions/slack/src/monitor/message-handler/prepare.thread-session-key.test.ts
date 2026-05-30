@@ -684,6 +684,64 @@ describe("thread-level session keys", () => {
     expect(routing.sessionKey).not.toContain(":thread:");
   });
 
+  it("preserves a global channels.slack.dm.collapseAssistantThreads=true when an account sets an unrelated dm override", () => {
+    // Regression for the inheritance gap: the merge helper only deep-merges keys
+    // listed in nestedObjectKeys. Before "dm" was added there, an account-level
+    // dm block that set any other key (e.g. policy) shallow-replaced the whole
+    // root dm object, so the documented global collapseAssistantThreads flag read
+    // as undefined for that account and assistant DMs kept fanning out.
+    const cfg = {
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          enabled: true,
+          replyToMode: "all",
+          dm: { collapseAssistantThreads: true },
+          accounts: {
+            default: {
+              // Account overrides only an unrelated dm key; the global collapse
+              // flag must still apply via the deep-merge.
+              dm: { policy: "open" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveSlackAccount({ cfg, accountId: "default" });
+    // Deep-merge keeps the root flag while honoring the account's own dm key.
+    expect(account.dm?.collapseAssistantThreads).toBe(true);
+    expect(account.dm?.policy).toBe("open");
+
+    const ctx = {
+      cfg,
+      teamId: "T1",
+      threadInheritParent: false,
+      threadHistoryScope: "thread",
+    } satisfies SlackRoutingContextDeps;
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "assistant reply",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+      assistantThreadTs: "1770408530.000000",
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.sessionKey).not.toContain(":thread:");
+  });
+
   it("routes DM thread replies through explicit runtime conversation bindings", () => {
     const targetSessionKey = "agent:review:acp:session-slack-dm";
     const binding: SessionBindingRecord = {
