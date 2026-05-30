@@ -8,7 +8,6 @@ describe("OpenClawApp full-message sidebar upgrade", () => {
     const { OpenClawApp } = await import("./app.ts");
     const content: SidebarContent = {
       kind: "markdown",
-      title: "Assistant",
       content: "short\n...(truncated)...",
       fullMessageRequest: {
         sessionKey: "main",
