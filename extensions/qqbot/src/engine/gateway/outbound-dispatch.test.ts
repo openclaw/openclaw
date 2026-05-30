@@ -224,6 +224,24 @@ describe("dispatchOutbound", () => {
     }
   });
 
+  it("clears the response watchdog after dispatch resolves without delivering", async () => {
+    vi.useFakeTimers();
+    try {
+      // Dispatch completes but never calls deliver, so hasResponse stays
+      // false and the watchdog would otherwise remain armed past the race.
+      const runtime = makeRuntime({ onDeliver: async () => {} });
+
+      await dispatchOutbound(makeInbound(), { runtime, cfg: {}, account });
+
+      // A leftover watchdog later rejects the already-settled race promise
+      // as an unhandled "Response timeout" (#88242), so none may remain.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("marks voice-only inbound as audio without adding voice paths to MediaPaths", async () => {
     let finalized: Record<string, unknown> | undefined;
     const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });

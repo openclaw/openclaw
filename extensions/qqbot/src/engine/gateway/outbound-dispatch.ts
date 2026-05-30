@@ -559,6 +559,15 @@ export async function dispatchOutbound(
       clearTimeout(timeoutId);
     }
   } finally {
+    // Always clear the response watchdog. Previously only the catch and
+    // block-deliver paths cleared it, so a dispatch that resolved without
+    // ever delivering (e.g. a model turn that produced no reply) left the
+    // timer armed; it then rejected the already-settled race promise as an
+    // unhandled "Response timeout", crashing the gateway (#88242).
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
     if (toolOnlyTimeoutId) {
       clearTimeout(toolOnlyTimeoutId);
       toolOnlyTimeoutId = null;
