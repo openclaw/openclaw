@@ -53,6 +53,11 @@ import {
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  markGeneratedMediaDelivered,
+  resetGeneratedMediaDeliveryDedupeForTest,
+  shouldSuppressGeneratedMediaDelivery,
+} from "../../infra/outbound/generated-media-dedupe.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import {
@@ -125,7 +130,7 @@ import type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
 } from "./dispatch-from-config.types.js";
-import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
+import { resolveEffectiveReplyRoute, type EffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -227,6 +232,34 @@ function loadRuntimePlugins() {
 
 function loadReplyMediaPathsRuntime() {
   return replyMediaPathsRuntimeLoader.load();
+}
+
+function shouldSuppressRecentlyDeliveredGeneratedMediaFinal(params: {
+  payload: ReplyPayload;
+  route: EffectiveReplyRoute;
+  now?: number;
+}): boolean {
+  return shouldSuppressGeneratedMediaDelivery({
+    route: params.route,
+    mediaUrls: resolveSendableOutboundReplyParts(params.payload).mediaUrls,
+    now: params.now,
+  });
+}
+
+function markGeneratedMediaFinalDelivered(params: {
+  payload: ReplyPayload;
+  route: EffectiveReplyRoute;
+  now?: number;
+}): void {
+  markGeneratedMediaDelivered({
+    route: params.route,
+    mediaUrls: resolveSendableOutboundReplyParts(params.payload).mediaUrls,
+    now: params.now,
+  });
+}
+
+function resetGeneratedMediaFinalDeliveryDedupeForTest(): void {
+  resetGeneratedMediaDeliveryDedupeForTest();
 }
 
 function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
@@ -442,6 +475,9 @@ function createReplyDispatchEvent(
 
 export const testing = {
   createReplyDispatchEvent,
+  markGeneratedMediaFinalDelivered,
+  resetGeneratedMediaFinalDeliveryDedupeForTest,
+  shouldSuppressRecentlyDeliveredGeneratedMediaFinal,
 };
 
 function resolveHarnessDefaultChannel(params: {
@@ -1929,6 +1965,18 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       throwIfFinalDeliveryAborted();
+      if (
+        shouldSuppressRecentlyDeliveredGeneratedMediaFinal({
+          payload: normalizedPayload,
+          route: replyRoute,
+        })
+      ) {
+        logVerbose("dispatch-from-config: suppressed duplicate generated media final delivery");
+        return {
+          queuedFinal: true,
+          routedFinalCount: 0,
+        };
+      }
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
         kind: "final",
@@ -1940,6 +1988,10 @@ export async function dispatchReplyFromConfig(
           );
         }
         if (isRoutedReplyDelivered(result)) {
+          markGeneratedMediaFinalDelivered({
+            payload: normalizedPayload,
+            route: replyRoute,
+          });
           await mirrorInternalSourceReplyToTranscript({
             metadata: sourceReplyTranscriptMirror,
             cfg,
@@ -1959,6 +2011,10 @@ export async function dispatchReplyFromConfig(
       });
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal) {
+        markGeneratedMediaFinalDelivered({
+          payload: normalizedPayload,
+          route: replyRoute,
+        });
         await mirrorInternalSourceReplyAfterDispatcherDelivery({
           dispatcher,
           before: finalOutcomeBefore,

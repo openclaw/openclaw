@@ -133,6 +133,25 @@ function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
   return copyPayloadWithSanitizedText(payload, cleaned);
 }
 
+function filterDuplicateMediaFinalPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
+  const seenMediaPayloads = new Set<string>();
+  const filtered: ReplyPayload[] = [];
+  for (const payload of payloads) {
+    const reply = resolveSendableOutboundReplyParts(payload);
+    if (!reply.hasMedia) {
+      filtered.push(payload);
+      continue;
+    }
+    const key = createBlockReplyContentKey(payload);
+    if (seenMediaPayloads.has(key)) {
+      continue;
+    }
+    seenMediaPayloads.add(key);
+    filtered.push(payload);
+  }
+  return filtered;
+}
+
 function copyPayloadWithSanitizedText(
   payload: ReplyPayload,
   text: string | undefined,
@@ -405,8 +424,9 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
+  const uniquePayloads = filterDuplicateMediaFinalPayloads(filteredPayloads);
   const replyPayloads: ReplyPayload[] = [];
-  for (const payload of filteredPayloads) {
+  for (const payload of uniquePayloads) {
     if (isRenderablePayload(payload)) {
       replyPayloads.push(payload);
     }

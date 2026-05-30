@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import type { OutboundPayloadDeliveryOutcome } from "../../infra/outbound/deliver-types.js";
 import type { OutboundDeliveryIntent } from "../../infra/outbound/deliver.js";
+import { resetGeneratedMediaDeliveryDedupeForTest } from "../../infra/outbound/generated-media-dedupe.js";
 
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 
@@ -372,6 +373,37 @@ describe("withDurableMessageSendContext", () => {
       { platformMessageIds?: unknown },
     ];
     expect(receiptArg.platformMessageIds).toEqual([]);
+  });
+
+  it("suppresses replayed generated media before durable outbound delivery", async () => {
+    resetGeneratedMediaDeliveryDedupeForTest();
+    deliverOutboundPayloads.mockClear();
+    deliverOutboundPayloads.mockResolvedValueOnce([{ channel: "discord", messageId: "msg-1" }]);
+    const payloads = [
+      {
+        text: "generated",
+        mediaUrls: ["/tmp/openclaw/tool-image-generation/replayed.png"],
+      },
+    ];
+
+    const first = await sendDurableMessageBatch({
+      cfg,
+      channel: "discord",
+      to: "channel-1",
+      payloads,
+    });
+    const second = await sendDurableMessageBatch({
+      cfg,
+      channel: "discord",
+      to: "channel-1",
+      payloads,
+    });
+
+    expectBatchStatus(first, "sent");
+    expectBatchStatus(second, "suppressed");
+    expect(second.reason).toBe("no_visible_result");
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    resetGeneratedMediaDeliveryDedupeForTest();
   });
 
   it("reports hook-cancelled deliveries as explicit suppressed sends", async () => {
