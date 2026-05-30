@@ -353,7 +353,7 @@ export function buildHelp(): string {
     "- /codex steer <message>",
     "- /codex model [model]",
     "- /codex plan [on|off|status]",
-    "- /codex think [default|minimal|low|medium|high|xhigh|status]",
+    "- /codex think [plan|execute] [default|minimal|low|medium|high|xhigh|status]",
     "- /codex fast [on|off|status]",
     "- /codex permissions [default|yolo|status]",
     "- /codex detach",

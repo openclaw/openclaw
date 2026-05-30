@@ -61,6 +61,10 @@ describe("codex app-server session binding", () => {
       modelProvider: "openai",
       collaborationMode: "plan",
       reasoningEffort: "xhigh",
+      reasoningEffortDefaults: {
+        execute: "medium",
+        plan: "xhigh",
+      },
       dynamicToolsFingerprint: "tools-v1",
       userMcpServersFingerprint: "user-mcp-v1",
       nativeHookRelayGeneration: "generation-v1",
@@ -76,6 +80,10 @@ describe("codex app-server session binding", () => {
     expect(binding?.modelProvider).toBe("openai");
     expect(binding?.collaborationMode).toBe("plan");
     expect(binding?.reasoningEffort).toBe("xhigh");
+    expect(binding?.reasoningEffortDefaults).toEqual({
+      execute: "medium",
+      plan: "xhigh",
+    });
     expect(binding?.dynamicToolsFingerprint).toBe("tools-v1");
     expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
     expect(binding?.nativeHookRelayGeneration).toBe("generation-v1");
@@ -94,6 +102,10 @@ describe("codex app-server session binding", () => {
         cwd: tempDir,
         collaborationMode: "execute",
         reasoningEffort: "maximum",
+        reasoningEffortDefaults: {
+          execute: "maximum",
+          plan: "very-high",
+        },
       })}\n`,
     );
 
@@ -101,6 +113,7 @@ describe("codex app-server session binding", () => {
 
     expect(binding?.collaborationMode).toBeUndefined();
     expect(binding?.reasoningEffort).toBeUndefined();
+    expect(binding?.reasoningEffortDefaults).toBeUndefined();
   });
 
   it("round-trips plugin app policy context with app ids as record keys", async () => {

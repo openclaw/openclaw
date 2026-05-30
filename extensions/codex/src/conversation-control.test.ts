@@ -66,7 +66,7 @@ describe("codex conversation controls", () => {
     expect(binding?.sandbox).toBe("workspace-write");
   });
 
-  it("persists plan mode and Codex think overrides for later bound turns", async () => {
+  it("persists mode-specific Codex think defaults for later bound turns", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
@@ -75,23 +75,49 @@ describe("codex conversation controls", () => {
     });
 
     await expect(setCodexConversationPlanMode({ sessionFile, mode: "plan" })).resolves.toBe(
-      "Codex plan mode enabled.",
+      "Codex plan mode enabled. Codex think: default.",
     );
     await expect(
       setCodexConversationReasoningEffort({ sessionFile, effort: "xhigh" }),
-    ).resolves.toBe("Codex think set to xhigh.");
+    ).resolves.toBe("Codex plan-mode think set to xhigh.");
+    await expect(
+      setCodexConversationReasoningEffort({
+        sessionFile,
+        parsed: { mode: "execute", effort: "medium", status: false },
+      }),
+    ).resolves.toBe("Codex execute-mode think set to medium.");
 
     let binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.collaborationMode).toBe("plan");
-    expect(binding?.reasoningEffort).toBe("xhigh");
+    expect(binding?.reasoningEffortDefaults).toEqual({ execute: "medium", plan: "xhigh" });
 
     await expect(
       setCodexConversationReasoningEffort({ sessionFile, effort: "default" }),
-    ).resolves.toBe("Codex think reset to default.");
+    ).resolves.toBe("Codex plan-mode think reset to default.");
 
     binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.collaborationMode).toBe("plan");
-    expect(binding?.reasoningEffort).toBeUndefined();
+    expect(binding?.reasoningEffortDefaults).toEqual({ execute: "medium" });
+  });
+
+  it("reports configured Codex think defaults when a binding has no override", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "gpt-5.4",
+    });
+
+    await expect(
+      setCodexConversationReasoningEffort({
+        sessionFile,
+        pluginConfig: {
+          appServer: {
+            conversationReasoningDefaults: { execute: "medium", plan: "xhigh" },
+          },
+        },
+      }),
+    ).resolves.toBe("Codex think: medium. Execute default: medium. Plan default: xhigh.");
   });
 
   it("does not persist public OpenAI provider after model changes on native auth bindings", async () => {

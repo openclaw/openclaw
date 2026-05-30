@@ -3794,6 +3794,9 @@ describe("codex command", () => {
       handleCodexCommand(createContext("think xhigh", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Codex think set to xhigh." });
     await expect(
+      handleCodexCommand(createContext("think execute medium", sessionFile), { deps }),
+    ).resolves.toEqual({ text: "Codex think set to xhigh." });
+    await expect(
       handleCodexCommand(createContext("fast on", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Codex fast mode enabled." });
     await expect(
@@ -3813,7 +3816,13 @@ describe("codex command", () => {
     });
     expect(setCodexConversationReasoningEffort).toHaveBeenCalledWith({
       sessionFile,
-      effort: "xhigh",
+      parsed: { effort: "xhigh", status: false },
+      pluginConfig: undefined,
+    });
+    expect(setCodexConversationReasoningEffort).toHaveBeenCalledWith({
+      sessionFile,
+      parsed: { mode: "execute", effort: "medium", status: false },
+      pluginConfig: undefined,
     });
     expect(setCodexConversationFastMode).toHaveBeenCalledWith({
       sessionFile,
@@ -3883,9 +3892,9 @@ describe("codex command", () => {
       handleCodexCommand(createContext("plan on now", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Usage: /codex plan [on|off|status]" });
     await expect(
-      handleCodexCommand(createContext("think xhigh now", sessionFile), { deps }),
+      handleCodexCommand(createContext("think plan xhigh now", sessionFile), { deps }),
     ).resolves.toEqual({
-      text: "Usage: /codex think [default|minimal|low|medium|high|xhigh|status]",
+      text: "Usage: /codex think [plan|execute] [default|minimal|low|medium|high|xhigh|status]",
     });
     await expect(
       handleCodexCommand(createContext("fast on now", sessionFile), { deps }),
@@ -3920,8 +3929,10 @@ describe("codex command", () => {
     await expect(handleCodexCommand(createContext("plan on now"), { deps })).resolves.toEqual({
       text: "Usage: /codex plan [on|off|status]",
     });
-    await expect(handleCodexCommand(createContext("think xhigh now"), { deps })).resolves.toEqual({
-      text: "Usage: /codex think [default|minimal|low|medium|high|xhigh|status]",
+    await expect(
+      handleCodexCommand(createContext("think plan xhigh now"), { deps }),
+    ).resolves.toEqual({
+      text: "Usage: /codex think [plan|execute] [default|minimal|low|medium|high|xhigh|status]",
     });
     await expect(
       handleCodexCommand(createContext("permissions yolo now"), { deps }),

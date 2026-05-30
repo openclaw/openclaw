@@ -14,6 +14,13 @@ import {
 } from "./config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
+import {
+  readCodexAppServerConversationReasoningDefaults,
+  readCodexAppServerReasoningEffort,
+  type CodexAppServerCollaborationMode,
+  type CodexAppServerConversationReasoningDefaults,
+  type CodexAppServerReasoningEffort,
+} from "./reasoning-defaults.js";
 
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
@@ -38,6 +45,7 @@ export type CodexAppServerThreadBinding = {
   modelProvider?: string;
   collaborationMode?: CodexAppServerCollaborationMode;
   reasoningEffort?: CodexAppServerReasoningEffort;
+  reasoningEffortDefaults?: CodexAppServerConversationReasoningDefaults;
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
@@ -55,8 +63,11 @@ export type CodexAppServerThreadBinding = {
   updatedAt: string;
 };
 
-export type CodexAppServerCollaborationMode = "default" | "plan";
-export type CodexAppServerReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type {
+  CodexAppServerCollaborationMode,
+  CodexAppServerConversationReasoningDefaults,
+  CodexAppServerReasoningEffort,
+} from "./reasoning-defaults.js";
 
 export type CodexAppServerContextEngineBinding = {
   schemaVersion: 1;
@@ -111,7 +122,10 @@ export async function readCodexAppServerBinding(
         modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
       }),
       collaborationMode: readCollaborationMode(parsed.collaborationMode),
-      reasoningEffort: readReasoningEffort(parsed.reasoningEffort),
+      reasoningEffort: readCodexAppServerReasoningEffort(parsed.reasoningEffort),
+      reasoningEffortDefaults: readCodexAppServerConversationReasoningDefaults(
+        parsed.reasoningEffortDefaults,
+      ),
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
@@ -180,6 +194,7 @@ export async function writeCodexAppServerBinding(
     }),
     collaborationMode: binding.collaborationMode,
     reasoningEffort: binding.reasoningEffort,
+    reasoningEffortDefaults: binding.reasoningEffortDefaults,
     approvalPolicy: binding.approvalPolicy,
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
@@ -204,16 +219,6 @@ export async function writeCodexAppServerBinding(
 
 function readCollaborationMode(value: unknown): CodexAppServerCollaborationMode | undefined {
   return value === "default" || value === "plan" ? value : undefined;
-}
-
-function readReasoningEffort(value: unknown): CodexAppServerReasoningEffort | undefined {
-  return value === "minimal" ||
-    value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "xhigh"
-    ? value
-    : undefined;
 }
 
 function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {

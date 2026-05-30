@@ -1049,6 +1049,133 @@ describe("codex conversation binding", () => {
     expect(turnStartParams).toEqual([]);
   });
 
+  it("uses configured Codex think defaults for execute and plan turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        model: "gpt-5.4-mini",
+      }),
+    );
+    const turnStartParams: Record<string, unknown>[] = [];
+    const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method !== "turn/start") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        const turnIndex = turnStartParams.length + 1;
+        turnStartParams.push(requestParams);
+        setImmediate(() => {
+          for (const handler of notificationHandlers) {
+            handler({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: `turn-${turnIndex}`,
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: `item-${turnIndex}`, text: "done" }],
+                },
+              },
+            });
+          }
+        });
+        return { turn: { id: `turn-${turnIndex}` } };
+      }),
+      addNotificationHandler: vi.fn((handler) => {
+        notificationHandlers.push(handler);
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+    const pluginConfig = {
+      appServer: {
+        conversationReasoningDefaults: {
+          execute: "medium",
+          plan: "xhigh",
+        },
+      },
+    };
+    const bindingContext = {
+      channelId: "telegram",
+      pluginBinding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: tempDir,
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "5185575566",
+        boundAt: Date.now(),
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: tempDir,
+        },
+      },
+    };
+
+    await expect(
+      handleCodexConversationInboundClaim(
+        {
+          content: "execute this",
+          bodyForAgent: "execute this",
+          channel: "telegram",
+          isGroup: false,
+          commandAuthorized: true,
+        },
+        bindingContext,
+        { pluginConfig, timeoutMs: 50 },
+      ),
+    ).resolves.toEqual({ handled: true, reply: { text: "done" } });
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        model: "gpt-5.4-mini",
+        collaborationMode: "plan",
+      }),
+    );
+    await expect(
+      handleCodexConversationInboundClaim(
+        {
+          content: "plan this",
+          bodyForAgent: "plan this",
+          channel: "telegram",
+          isGroup: false,
+          commandAuthorized: true,
+        },
+        bindingContext,
+        { pluginConfig, timeoutMs: 50 },
+      ),
+    ).resolves.toEqual({ handled: true, reply: { text: "done" } });
+
+    expect(turnStartParams[0]?.effort).toBe("medium");
+    expect(turnStartParams[0]?.collaborationMode).toEqual({
+      mode: "default",
+      settings: {
+        model: "gpt-5.4-mini",
+        reasoning_effort: "medium",
+        developer_instructions: null,
+      },
+    });
+    expect(turnStartParams[1]?.effort).toBe("xhigh");
+    expect(turnStartParams[1]?.collaborationMode).toEqual({
+      mode: "plan",
+      settings: {
+        model: "gpt-5.4-mini",
+        reasoning_effort: "xhigh",
+        developer_instructions: null,
+      },
+    });
+  });
+
   it("returns a clean failure reply when app-server turn start rejects", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const agentDir = path.join(tempDir, "agents", "bot-b", "agent");

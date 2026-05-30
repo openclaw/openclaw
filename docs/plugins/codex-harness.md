@@ -416,8 +416,9 @@ Common forms:
   thread.
 - `/codex plan [on|off|status]` toggles native Codex plan mode for the attached
   thread.
-- `/codex think [default|minimal|low|medium|high|xhigh|status]` sets a
-  Codex-native reasoning effort override for the attached thread.
+- `/codex think [plan|execute] [default|minimal|low|medium|high|xhigh|status]`
+  sets Codex-native reasoning defaults for the attached thread. Without a
+  `plan` or `execute` scope, it updates the currently active mode.
 - `/codex fast [on|off|status]` toggles the Codex service tier preference for
   the attached thread.
 - `/codex permissions [default|yolo|status]` changes the native Codex approval
@@ -559,6 +560,7 @@ Supported `appServer` fields:
 | `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                                 |
 | `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                                    |
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                            |
+| `conversationReasoningDefaults` | unset                                                  | Optional default Codex think levels for `/codex bind` conversations. Set `execute` for plan-off turns and `plan` for plan-on turns, for example `{ execute: "medium", plan: "xhigh" }`.                                                 |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90 second

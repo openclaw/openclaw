@@ -204,6 +204,20 @@
                 "default": false
               }
             }
+          },
+          "conversationReasoningDefaults": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "execute": {
+                "type": "string",
+                "enum": ["minimal", "low", "medium", "high", "xhigh"]
+              },
+              "plan": {
+                "type": "string",
+                "enum": ["minimal", "low", "medium", "high", "xhigh"]
+              }
+            }
           }
         }
       }
@@ -397,6 +411,11 @@
     "appServer.experimental.sandboxExecServer": {
       "label": "Sandbox Exec Server",
       "help": "Route native Codex execution through an OpenClaw sandbox-backed exec-server when OpenClaw sandboxing is active.",
+      "advanced": true
+    },
+    "appServer.conversationReasoningDefaults": {
+      "label": "Conversation Think Defaults",
+      "help": "Default Codex think levels for bound conversations when plan mode is on or off.",
       "advanced": true
     }
   }

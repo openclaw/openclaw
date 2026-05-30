@@ -32,6 +32,7 @@ import type {
   CodexTurnStartResponse,
   JsonValue,
 } from "./app-server/protocol.js";
+import { resolveCodexAppServerConversationReasoningEffort } from "./app-server/reasoning-defaults.js";
 import {
   resolveCodexNativeExecutionBlock,
   resolveCodexNativeSandboxBlock,
@@ -44,6 +45,7 @@ import {
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
   type CodexAppServerCollaborationMode,
+  type CodexAppServerConversationReasoningDefaults,
   type CodexAppServerReasoningEffort,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
@@ -105,6 +107,7 @@ type CodexConversationStartParams = {
   serviceTier?: CodexServiceTier;
   collaborationMode?: CodexAppServerCollaborationMode;
   reasoningEffort?: CodexAppServerReasoningEffort;
+  reasoningEffortDefaults?: CodexAppServerConversationReasoningDefaults;
 };
 
 type BoundTurnResult = {
@@ -190,6 +193,8 @@ export async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       collaborationMode: params.collaborationMode ?? existingBinding?.collaborationMode,
       reasoningEffort: params.reasoningEffort ?? existingBinding?.reasoningEffort,
+      reasoningEffortDefaults:
+        params.reasoningEffortDefaults ?? existingBinding?.reasoningEffortDefaults,
       config: params.config,
       sessionKey: params.sessionKey,
     });
@@ -207,6 +212,8 @@ export async function startCodexConversationThread(
       serviceTier: params.serviceTier,
       collaborationMode: params.collaborationMode ?? existingBinding?.collaborationMode,
       reasoningEffort: params.reasoningEffort ?? existingBinding?.reasoningEffort,
+      reasoningEffortDefaults:
+        params.reasoningEffortDefaults ?? existingBinding?.reasoningEffortDefaults,
       config: params.config,
       sessionKey: params.sessionKey,
     });
@@ -329,6 +336,7 @@ type CodexThreadBindingParams = {
   serviceTier?: CodexServiceTier;
   collaborationMode?: CodexAppServerCollaborationMode;
   reasoningEffort?: CodexAppServerReasoningEffort;
+  reasoningEffortDefaults?: CodexAppServerConversationReasoningDefaults;
   config?: CodexAppServerAuthProfileLookup["config"];
   agentId?: string;
   sessionKey?: string;
@@ -412,6 +420,7 @@ async function writeThreadBindingFromResponse(
       }),
       collaborationMode: params.collaborationMode,
       reasoningEffort: params.reasoningEffort,
+      reasoningEffortDefaults: params.reasoningEffortDefaults,
       approvalPolicy: resolved.execPolicy?.touched
         ? runtimeApprovalPolicy
         : (params.approvalPolicy ?? runtimeApprovalPolicy),
@@ -509,10 +518,19 @@ async function runBoundTurn(params: {
   const notificationCleanup = client.addNotificationHandler((notification) =>
     collector.handleNotification(notification),
   );
-  const reasoningEffort = binding.reasoningEffort
-    ? resolveReasoningEffort(binding.reasoningEffort, binding.model ?? "")
+  const reasoningEffort = resolveCodexAppServerConversationReasoningEffort({
+    mode: binding.collaborationMode,
+    bindingDefaults: binding.reasoningEffortDefaults,
+    legacyReasoningEffort: binding.reasoningEffort,
+    configDefaults: runtime.conversationReasoningDefaults,
+  });
+  const normalizedReasoningEffort = reasoningEffort
+    ? resolveReasoningEffort(reasoningEffort, binding.model ?? "")
     : null;
-  const collaborationMode = buildBoundConversationCollaborationMode(binding, reasoningEffort);
+  const collaborationMode = buildBoundConversationCollaborationMode(
+    binding,
+    normalizedReasoningEffort,
+  );
   const requestCleanup = client.addRequestHandler(
     async (request): Promise<JsonValue | undefined> => {
       if (request.method === "item/tool/call") {
@@ -569,7 +587,7 @@ async function runBoundTurn(params: {
         ),
         ...(binding.model ? { model: binding.model } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
-        ...(reasoningEffort ? { effort: reasoningEffort } : {}),
+        ...(normalizedReasoningEffort ? { effort: normalizedReasoningEffort } : {}),
         ...(collaborationMode ? { collaborationMode } : {}),
         ...((binding.serviceTier ?? runtime.serviceTier)
           ? { serviceTier: binding.serviceTier ?? runtime.serviceTier }
@@ -646,6 +664,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
       serviceTier: binding?.serviceTier,
       collaborationMode: binding?.collaborationMode,
       reasoningEffort: binding?.reasoningEffort,
+      reasoningEffortDefaults: binding?.reasoningEffortDefaults,
       config: params.config,
       sessionKey: params.sessionKey,
     });
