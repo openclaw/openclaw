@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readLocalFileSafely } from "../../infra/fs-safe.js";
+import { readLocalFileSafely, root, walkDirectory } from "../../infra/fs-safe.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   buildWorkspaceSkillStatus,
@@ -18,15 +18,23 @@ import {
   createSkillProposalId,
   createSkillProposalRollback,
   hashSkillProposalContent,
+  MAX_PROPOSAL_SUPPORT_FILE_BYTES,
+  MAX_PROPOSAL_SUPPORT_FILES,
+  normalizeSkillProposalSupportPath,
+  prepareSkillProposalSupportFiles,
+  readProposalSupportFiles,
   readSkillProposal,
   readSkillProposalManifest,
+  readWorkspaceSupportFile,
   readWorkspaceSkillFile,
   refreshSkillProposalManifest,
   resolveSkillProposalTarget,
   updateSkillProposalRecord,
   writeSkillProposal,
   writeSkillProposalRollback,
+  writeWorkspaceSupportFile,
   writeWorkspaceSkillFile,
+  type PreparedSkillProposalSupportFile,
 } from "./store.js";
 import {
   SKILL_WORKSHOP_SCHEMA,
@@ -37,6 +45,7 @@ import {
   type SkillProposalReadResult,
   type SkillProposalRecord,
   type SkillProposalScan,
+  type SkillProposalSupportFileInput,
   type SkillProposalUpdateInput,
 } from "./types.js";
 
@@ -47,6 +56,7 @@ type SkillWorkshopWorkspaceOptions = {
 
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
+const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
 
 export async function listSkillProposals(): Promise<SkillProposalManifest> {
   return await readSkillProposalManifest();
@@ -58,6 +68,53 @@ export async function readSkillProposalDraftFile(filePath: string): Promise<stri
     maxBytes: MAX_PROPOSAL_DRAFT_BYTES,
   });
   return read.buffer.toString("utf8");
+}
+
+export async function readSkillProposalDraftDirectory(dirPath: string): Promise<{
+  content: string;
+  supportFiles: SkillProposalSupportFileInput[];
+}> {
+  const absoluteDir = path.resolve(dirPath);
+  const draftRoot = await root(absoluteDir);
+  const proposal = await draftRoot.read("PROPOSAL.md", {
+    hardlinks: "reject",
+    maxBytes: MAX_PROPOSAL_DRAFT_BYTES,
+    symlinks: "reject",
+  });
+  const scanned = await walkDirectory(absoluteDir, {
+    maxDepth: 8,
+    maxEntries: MAX_PROPOSAL_DIRECTORY_ENTRIES,
+    symlinks: "include",
+  });
+  if (scanned.truncated) {
+    throw new Error("Proposal directory has too many entries.");
+  }
+  const supportFiles: SkillProposalSupportFileInput[] = [];
+  for (const entry of scanned.entries.toSorted((a, b) =>
+    a.relativePath.localeCompare(b.relativePath),
+  )) {
+    const relativePath = toPortableRelativePath(entry.relativePath);
+    if (!relativePath || relativePath === "PROPOSAL.md") {
+      continue;
+    }
+    if (entry.kind === "directory") {
+      continue;
+    }
+    if (entry.kind !== "file") {
+      throw new Error(`Proposal support file must be a regular file: ${relativePath}`);
+    }
+    const supportPath = normalizeSkillProposalSupportPath(relativePath);
+    const read = await draftRoot.read(relativePath, {
+      hardlinks: "reject",
+      maxBytes: MAX_PROPOSAL_SUPPORT_FILE_BYTES,
+      symlinks: "reject",
+    });
+    supportFiles.push({ path: supportPath, content: read.buffer.toString("utf8") });
+  }
+  return {
+    content: proposal.buffer.toString("utf8"),
+    supportFiles,
+  };
 }
 
 export async function inspectSkillProposal(
@@ -76,6 +133,7 @@ export async function proposeCreateSkill(
     throw new Error(`Skill already exists at ${target.skillFile}.`);
   }
 
+  const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
   const proposalContent = renderProposalMarkdown({
     name,
     description,
@@ -105,11 +163,12 @@ export async function proposeCreateSkill(
       skillFile: target.skillFile,
       source: "openclaw-workspace",
     },
-    scan: scanProposalContent(proposalContent),
+    scan: scanProposalBundle(proposalContent, supportFiles),
+    ...(supportFiles.length > 0 ? { supportFiles: supportFileMetadata(supportFiles) } : {}),
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
-  await writeSkillProposal({ record, content: proposalContent });
+  await writeSkillProposal({ record, content: proposalContent, supportFiles });
   return { record, content: proposalContent };
 }
 
@@ -131,6 +190,7 @@ export async function proposeUpdateSkill(
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
   }
 
+  const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
   const proposalContent = renderProposalMarkdown({
     name: targetSkill.name,
     description: targetSkill.description,
@@ -161,11 +221,12 @@ export async function proposeUpdateSkill(
       source: targetSkill.source,
       currentContentHash: hashSkillProposalContent(currentContent),
     },
-    scan: scanProposalContent(proposalContent),
+    scan: scanProposalBundle(proposalContent, supportFiles),
+    ...(supportFiles.length > 0 ? { supportFiles: supportFileMetadata(supportFiles) } : {}),
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
-  await writeSkillProposal({ record, content: proposalContent });
+  await writeSkillProposal({ record, content: proposalContent, supportFiles });
   return { record, content: proposalContent };
 }
 
@@ -207,11 +268,12 @@ export async function applySkillProposal(
   if (draftHash !== record.draftHash) {
     throw new Error("Proposal draft changed without updating proposal metadata.");
   }
+  const supportFiles = await readProposalSupportFiles(record);
   const draftFrontmatter = readProposalFrontmatter(content);
   if (!draftFrontmatter) {
     throw new Error("Proposal draft must include proposal frontmatter.");
   }
-  const scan = scanProposalContent(content);
+  const scan = scanProposalBundle(content, supportFiles);
   if (scan.state !== "clean") {
     const updated = {
       ...record,
@@ -230,6 +292,31 @@ export async function applySkillProposal(
   const previousContent = await readWorkspaceSkillFile(record.target.skillFile);
   if (record.kind === "create" && previousContent !== null) {
     throw new Error(`Target skill already exists: ${record.target.skillFile}`);
+  }
+  const previousSupportFiles = [];
+  for (const file of supportFiles) {
+    const previousSupportContent = await readWorkspaceSupportFile({
+      skillDir: record.target.skillDir,
+      relativePath: file.path,
+    });
+    if (record.kind === "create" && previousSupportContent !== null) {
+      throw new Error(
+        `Target support file already exists: ${path.join(record.target.skillDir, file.path)}`,
+      );
+    }
+    previousSupportFiles.push(
+      previousSupportContent === null
+        ? {
+            path: file.path,
+            existed: false,
+          }
+        : {
+            path: file.path,
+            existed: true,
+            previousContent: previousSupportContent,
+            previousContentHash: hashSkillProposalContent(previousSupportContent),
+          },
+    );
   }
   if (record.kind === "update") {
     if (previousContent === null) {
@@ -256,6 +343,7 @@ export async function applySkillProposal(
     targetSkillFile: record.target.skillFile,
     action: record.kind,
     ...(previousContent !== null ? { previousContent } : {}),
+    ...(previousSupportFiles.length > 0 ? { supportFiles: previousSupportFiles } : {}),
   });
   await writeSkillProposalRollback({
     proposalId: record.id,
@@ -268,6 +356,13 @@ export async function applySkillProposal(
     filePath: record.target.skillFile,
     content: skillContent,
   });
+  for (const file of supportFiles) {
+    await writeWorkspaceSupportFile({
+      skillDir: record.target.skillDir,
+      relativePath: file.path,
+      content: file.content,
+    });
+  }
   const now = new Date().toISOString();
   const applied: SkillProposalRecord = {
     ...record,
@@ -281,9 +376,15 @@ export async function applySkillProposal(
   return { record: applied, targetSkillFile: record.target.skillFile };
 }
 
-function scanProposalContent(content: string): SkillProposalScan {
+function scanProposalBundle(
+  content: string,
+  supportFiles: readonly PreparedSkillProposalSupportFile[] = [],
+): SkillProposalScan {
   const scannedAt = new Date().toISOString();
-  const findings = scanSource(content, "PROPOSAL.md");
+  const findings = [
+    ...scanSource(content, "PROPOSAL.md"),
+    ...supportFiles.flatMap((file) => scanSource(file.content, file.path)),
+  ];
   const critical = findings.filter((finding) => finding.severity === "critical").length;
   const warn = findings.filter((finding) => finding.severity === "warn").length;
   const info = findings.filter((finding) => finding.severity === "info").length;
@@ -295,6 +396,14 @@ function scanProposalContent(content: string): SkillProposalScan {
     info,
     findings,
   };
+}
+
+function supportFileMetadata(files: readonly PreparedSkillProposalSupportFile[]) {
+  return files.map((file) => ({
+    path: file.path,
+    sizeBytes: file.sizeBytes,
+    hash: file.hash,
+  }));
 }
 
 async function markProposal(
@@ -339,4 +448,8 @@ function normalizeRequired(value: string, label: string): string {
     throw new Error(`${label} is required.`);
   }
   return normalized;
+}
+
+function toPortableRelativePath(relativePath: string): string {
+  return relativePath.split(path.sep).join("/");
 }

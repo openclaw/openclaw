@@ -139,6 +139,15 @@ openclaw skills workshop propose-create \
   --proposal ./PROPOSAL.md
 ```
 
+Or create a proposal from a full draft skill directory:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal-dir ./qa-check-proposal
+```
+
 Update an existing workspace skill through the same pending path:
 
 ```bash
@@ -160,6 +169,12 @@ Applying a proposal writes the active `SKILL.md` into the workspace `skills/`
 root, strips `status` and proposal `version` from the frontmatter, scans the
 draft, writes rollback metadata, and refuses stale updates when the target skill
 changed after the proposal was created.
+
+When `--proposal-dir` is used, the directory must contain `PROPOSAL.md`.
+Support files can be included under `assets/`, `examples/`, `references/`,
+`scripts/`, or `templates/`. OpenClaw stores support files with the proposal,
+scans them, verifies their hashes before apply, and writes them beside the
+active `SKILL.md` only after the proposal is applied.
 
 Agents can create pending proposals through the `skill_research` tool when they
 identify reusable work, but applying, rejecting, or quarantining remains an

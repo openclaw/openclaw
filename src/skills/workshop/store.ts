@@ -15,6 +15,8 @@ import {
   type SkillProposalReadResult,
   type SkillProposalRecord,
   type SkillProposalRollback,
+  type SkillProposalSupportFile,
+  type SkillProposalSupportFileInput,
 } from "./types.js";
 
 const WORKSHOP_REL_DIR = "skill-workshop";
@@ -24,11 +26,25 @@ const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
 const MAX_PROPOSAL_BYTES = 1024 * 1024;
+export const MAX_PROPOSAL_SUPPORT_FILE_BYTES = 256 * 1024;
+export const MAX_PROPOSAL_SUPPORT_FILES = 64;
+export const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
+const ALLOWED_SUPPORT_FILE_ROOTS = new Set([
+  "assets",
+  "examples",
+  "references",
+  "scripts",
+  "templates",
+]);
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
 
 type SkillWorkshopStoreOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
+};
+
+export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & {
+  content: string;
 };
 
 export function createSkillProposalId(name: string, now = new Date()): string {
@@ -40,6 +56,10 @@ export function createSkillProposalId(name: string, now = new Date()): string {
 
 export function hashSkillProposalContent(content: string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+function contentSizeBytes(content: string): number {
+  return Buffer.byteLength(content, "utf8");
 }
 
 function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): string {
@@ -70,6 +90,78 @@ export function resolveProposalDraftPath(
   options: SkillWorkshopStoreOptions = {},
 ): string {
   return path.join(resolveProposalDir(proposalId, options), PROPOSAL_DRAFT_FILE);
+}
+
+export function normalizeSkillProposalSupportPath(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    throw new Error("Support file path is required.");
+  }
+  if (trimmed.includes("\\")) {
+    throw new Error("Support file paths must use forward slashes.");
+  }
+  if (path.posix.isAbsolute(trimmed)) {
+    throw new Error("Support file paths must be relative.");
+  }
+  const rawParts = trimmed.split("/");
+  if (rawParts.some((part) => !part || part === "." || part === ".." || part.startsWith("."))) {
+    throw new Error("Support file paths must use plain relative path segments.");
+  }
+  const normalized = path.posix.normalize(trimmed);
+  if (
+    !normalized ||
+    normalized === "." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
+    throw new Error("Support file paths must stay inside the skill directory.");
+  }
+  const parts = normalized.split("/");
+  if (!ALLOWED_SUPPORT_FILE_ROOTS.has(parts[0] ?? "")) {
+    throw new Error(
+      `Support file paths must be under one of: ${[...ALLOWED_SUPPORT_FILE_ROOTS].join(", ")}.`,
+    );
+  }
+  if (normalized === PROPOSAL_DRAFT_FILE || normalized === "SKILL.md") {
+    throw new Error("Support files cannot replace the proposal or skill markdown file.");
+  }
+  return normalized;
+}
+
+export function prepareSkillProposalSupportFiles(
+  input: readonly SkillProposalSupportFileInput[] | undefined,
+): PreparedSkillProposalSupportFile[] {
+  if (!input || input.length === 0) {
+    return [];
+  }
+  if (input.length > MAX_PROPOSAL_SUPPORT_FILES) {
+    throw new Error(`A skill proposal can include at most ${MAX_PROPOSAL_SUPPORT_FILES} files.`);
+  }
+  const seen = new Set<string>();
+  let totalBytes = 0;
+  const files: PreparedSkillProposalSupportFile[] = [];
+  for (const file of input) {
+    const filePath = normalizeSkillProposalSupportPath(file.path);
+    if (seen.has(filePath)) {
+      throw new Error(`Duplicate support file path: ${filePath}`);
+    }
+    seen.add(filePath);
+    const sizeBytes = contentSizeBytes(file.content);
+    if (sizeBytes > MAX_PROPOSAL_SUPPORT_FILE_BYTES) {
+      throw new Error(`Support file is too large: ${filePath}`);
+    }
+    totalBytes += sizeBytes;
+    if (totalBytes > MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES) {
+      throw new Error("Skill proposal support files exceed the total size limit.");
+    }
+    files.push({
+      path: filePath,
+      sizeBytes,
+      hash: hashSkillProposalContent(file.content),
+      content: file.content,
+    });
+  }
+  return files;
 }
 
 export function resolveSkillProposalTarget(params: { workspaceDir: string; skillName: string }): {
@@ -119,6 +211,7 @@ export async function readSkillProposalRecord(
 export async function writeSkillProposal(params: {
   record: SkillProposalRecord;
   content: string;
+  supportFiles?: readonly PreparedSkillProposalSupportFile[];
   store?: SkillWorkshopStoreOptions;
 }): Promise<void> {
   assertProposalId(params.record.id);
@@ -128,6 +221,12 @@ export async function writeSkillProposal(params: {
   await stateRoot.write(path.join(relativeDir, PROPOSAL_DRAFT_FILE), params.content, {
     encoding: "utf8",
   });
+  for (const file of params.supportFiles ?? []) {
+    await stateRoot.write(path.join(relativeDir, file.path), file.content, {
+      encoding: "utf8",
+      mkdir: true,
+    });
+  }
   await stateRoot.writeJson(path.join(relativeDir, PROPOSAL_RECORD_FILE), params.record, {
     trailingNewline: true,
   });
@@ -216,6 +315,48 @@ export async function readWorkspaceSkillFile(filePath: string): Promise<string |
   return read.buffer.toString("utf8");
 }
 
+export async function readProposalSupportFiles(
+  record: SkillProposalRecord,
+  options: SkillWorkshopStoreOptions = {},
+): Promise<PreparedSkillProposalSupportFile[]> {
+  const stateRoot = await root(resolveSkillWorkshopStateDir(options));
+  const out: PreparedSkillProposalSupportFile[] = [];
+  for (const file of record.supportFiles ?? []) {
+    const filePath = normalizeSkillProposalSupportPath(file.path);
+    const read = await stateRoot.read(path.join(proposalRelativeDir(record.id), filePath), {
+      hardlinks: "reject",
+      maxBytes: MAX_PROPOSAL_SUPPORT_FILE_BYTES,
+      symlinks: "reject",
+    });
+    const content = read.buffer.toString("utf8");
+    const sizeBytes = contentSizeBytes(content);
+    const hash = hashSkillProposalContent(content);
+    if (file.sizeBytes !== sizeBytes || file.hash !== hash) {
+      throw new Error(`Proposal support file changed without updating metadata: ${filePath}`);
+    }
+    out.push({ path: filePath, sizeBytes, hash, content });
+  }
+  return out;
+}
+
+export async function readWorkspaceSupportFile(params: {
+  skillDir: string;
+  relativePath: string;
+}): Promise<string | null> {
+  const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
+  const absolutePath = path.join(params.skillDir, ...relativePath.split("/"));
+  if (!(await pathExists(absolutePath))) {
+    return null;
+  }
+  const skillRoot = await root(params.skillDir);
+  const read = await skillRoot.read(relativePath, {
+    hardlinks: "reject",
+    maxBytes: MAX_PROPOSAL_SUPPORT_FILE_BYTES,
+    symlinks: "reject",
+  });
+  return read.buffer.toString("utf8");
+}
+
 export async function writeWorkspaceSkillFile(params: {
   workspaceDir: string;
   filePath: string;
@@ -230,11 +371,22 @@ export async function writeWorkspaceSkillFile(params: {
   await workspaceRoot.write(relativePath, params.content, { encoding: "utf8", mkdir: true });
 }
 
+export async function writeWorkspaceSupportFile(params: {
+  skillDir: string;
+  relativePath: string;
+  content: string;
+}): Promise<void> {
+  const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
+  const skillRoot = await root(params.skillDir);
+  await skillRoot.write(relativePath, params.content, { encoding: "utf8", mkdir: true });
+}
+
 export function createSkillProposalRollback(params: {
   proposalId: string;
   targetSkillFile: string;
   action: "create" | "update";
   previousContent?: string;
+  supportFiles?: SkillProposalRollback["supportFiles"];
 }): SkillProposalRollback {
   return {
     schema: SKILL_WORKSHOP_ROLLBACK_SCHEMA,
@@ -247,6 +399,9 @@ export function createSkillProposalRollback(params: {
           previousContent: params.previousContent,
           previousContentHash: hashSkillProposalContent(params.previousContent),
         }
+      : {}),
+    ...(params.supportFiles && params.supportFiles.length > 0
+      ? { supportFiles: params.supportFiles }
       : {}),
   };
 }
@@ -299,6 +454,7 @@ function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
     typeof record.updatedAt !== "string" ||
     typeof record.draftHash !== "string" ||
     record.draftFile !== PROPOSAL_DRAFT_FILE ||
+    !isValidSupportFileList(record.supportFiles) ||
     !record.target ||
     typeof record.target !== "object" ||
     typeof record.target.skillName !== "string" ||
@@ -311,6 +467,44 @@ function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
     return null;
   }
   return record;
+}
+
+function isValidSupportFileList(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (!Array.isArray(value) || value.length > MAX_PROPOSAL_SUPPORT_FILES) {
+    return false;
+  }
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return false;
+    }
+    const file = item as SkillProposalSupportFile;
+    if (
+      typeof file.path !== "string" ||
+      typeof file.hash !== "string" ||
+      !/^[a-f0-9]{64}$/i.test(file.hash) ||
+      typeof file.sizeBytes !== "number" ||
+      !Number.isSafeInteger(file.sizeBytes) ||
+      file.sizeBytes < 0 ||
+      file.sizeBytes > MAX_PROPOSAL_SUPPORT_FILE_BYTES
+    ) {
+      return false;
+    }
+    let normalized: string;
+    try {
+      normalized = normalizeSkillProposalSupportPath(file.path);
+    } catch {
+      return false;
+    }
+    if (seen.has(normalized)) {
+      return false;
+    }
+    seen.add(normalized);
+  }
+  return true;
 }
 
 function parseSkillProposalManifest(raw: unknown): SkillProposalManifest | null {

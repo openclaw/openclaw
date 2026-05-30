@@ -1,7 +1,10 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { proposeCreateSkill, proposeUpdateSkill } from "../../skills/workshop/service.js";
-import type { SkillProposalReadResult } from "../../skills/workshop/types.js";
+import type {
+  SkillProposalReadResult,
+  SkillProposalSupportFileInput,
+} from "../../skills/workshop/types.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   asToolParamsRecord,
@@ -27,6 +30,21 @@ const SkillResearchToolSchema = Type.Object(
     proposal_content: Type.String({
       description: "Full proposed procedure markdown. It will be stored as PROPOSAL.md.",
     }),
+    support_files: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            path: Type.String({
+              description:
+                "Relative support file path under assets/, examples/, references/, scripts/, or templates/.",
+            }),
+            content: Type.String({ description: "Support file text content." }),
+          },
+          { additionalProperties: false },
+        ),
+        { description: "Optional support files to store with the proposal." },
+      ),
+    ),
     goal: Type.Optional(Type.String({ description: "Research or improvement goal." })),
     evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
   },
@@ -54,6 +72,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
         required: true,
         label: "proposal_content",
       });
+      const supportFiles = readSupportFilesParam(params);
       const goal = readStringParam(params, "goal");
       const evidence = readStringParam(params, "evidence");
 
@@ -64,6 +83,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
           name: readStringParam(params, "name", { required: true }),
           description: readStringParam(params, "description", { required: true }),
           content: proposalContent,
+          supportFiles,
           createdBy: "skill-research",
           goal,
           evidence,
@@ -78,6 +98,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
             label: "skill_name",
           }),
           content: proposalContent,
+          supportFiles,
           createdBy: "skill-research",
           goal,
           evidence,
@@ -95,10 +116,39 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
           skillName: proposal.record.target.skillName,
           skillKey: proposal.record.target.skillKey,
           proposalFile: proposal.record.draftFile,
+          supportFileCount: proposal.record.supportFiles?.length ?? 0,
           targetSkillFile: proposal.record.target.skillFile,
           scanState: proposal.record.scan.state,
         },
       };
     },
   };
+}
+
+function readSupportFilesParam(
+  params: Record<string, unknown>,
+): SkillProposalSupportFileInput[] | undefined {
+  const raw = params.support_files;
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(raw)) {
+    throw new ToolInputError("support_files must be an array");
+  }
+  return raw.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new ToolInputError(`support_files[${index}] must be an object`);
+    }
+    const file = item as Record<string, unknown>;
+    if (typeof file.path !== "string" || !file.path.trim()) {
+      throw new ToolInputError(`support_files[${index}].path required`);
+    }
+    if (typeof file.content !== "string") {
+      throw new ToolInputError(`support_files[${index}].content required`);
+    }
+    return {
+      path: file.path,
+      content: file.content,
+    };
+  });
 }

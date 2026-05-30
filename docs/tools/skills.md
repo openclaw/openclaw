@@ -130,6 +130,8 @@ under:
   proposals/<proposal-id>/
     proposal.json
     PROPOSAL.md
+    references/
+    scripts/
     rollback.json
 ```
 
@@ -140,6 +142,12 @@ listing manifest and can be rebuilt from proposal folders when missing or stale.
 `PROPOSAL.md` marks draft content explicitly with `status: proposal` and
 `version: v1`; those proposal-only fields are stripped when the proposal is
 applied as an active `SKILL.md`.
+
+Proposal folders can also carry support files under `assets/`, `examples/`,
+`references/`, `scripts/`, or `templates/`. OpenClaw records support file
+metadata in `proposal.json`, stores the file contents beside `PROPOSAL.md`,
+scans them with the proposal, and verifies their hashes before apply. Approved
+support files are written into the active skill directory beside `SKILL.md`.
 
 Only pending proposals can be applied. Apply writes to the selected workspace
 `skills/` root, runs the skill scanner, writes rollback metadata, refuses to

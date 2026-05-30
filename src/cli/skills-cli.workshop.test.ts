@@ -91,10 +91,16 @@ describe("skills workshop cli", () => {
   });
 
   it("creates, lists, inspects, and applies a skill proposal", async () => {
-    const draftPath = path.join(mocks.workspaceDir, "draft.md");
+    const draftPath = path.join(mocks.workspaceDir, "proposal-draft");
+    await fs.mkdir(path.join(draftPath, "references"), { recursive: true });
     await fs.writeFile(
-      draftPath,
+      path.join(draftPath, "PROPOSAL.md"),
       "# Paris Weather\n\nCheck current weather before advice.\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(draftPath, "references", "weather.md"),
+      "Use current conditions before recommendations.\n",
       "utf8",
     );
 
@@ -106,7 +112,7 @@ describe("skills workshop cli", () => {
       "Paris Weather",
       "--description",
       "Weather lookup workflow",
-      "--proposal",
+      "--proposal-dir",
       draftPath,
     ]);
 
@@ -124,6 +130,12 @@ describe("skills workshop cli", () => {
     await expect(
       fs.readFile(path.join(mocks.workspaceDir, "skills", "paris-weather", "SKILL.md"), "utf8"),
     ).resolves.toContain("# Paris Weather");
+    await expect(
+      fs.readFile(
+        path.join(mocks.workspaceDir, "skills", "paris-weather", "references", "weather.md"),
+        "utf8",
+      ),
+    ).resolves.toContain("Use current conditions");
   });
 
   it("rejects missing proposal drafts before creating workshop state", async () => {

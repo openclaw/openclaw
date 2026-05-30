@@ -502,6 +502,21 @@ const SkillProposalSourceSchema = Type.Union([
   Type.Literal("gateway"),
 ]);
 const SkillProposalContentString = Type.String({ minLength: 1, maxLength: 1_048_576 });
+const SkillProposalSupportFileInputSchema = Type.Object(
+  {
+    path: NonEmptyString,
+    content: Type.String({ maxLength: 262_144 }),
+  },
+  { additionalProperties: false },
+);
+const SkillProposalSupportFileSchema = Type.Object(
+  {
+    path: NonEmptyString,
+    sizeBytes: Type.Integer({ minimum: 0, maximum: 262_144 }),
+    hash: Sha256String,
+  },
+  { additionalProperties: false },
+);
 
 const SkillProposalFindingSchema = Type.Object(
   {
@@ -553,6 +568,7 @@ const SkillProposalRecordSchema = Type.Object(
     proposedVersion: NonEmptyString,
     draftFile: Type.Literal("PROPOSAL.md"),
     draftHash: NonEmptyString,
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileSchema, { maxItems: 64 })),
     target: SkillProposalTargetSchema,
     scan: SkillProposalScanSchema,
     goal: Type.Optional(Type.String()),
@@ -620,6 +636,7 @@ export const SkillsProposalCreateParamsSchema = Type.Object(
     name: NonEmptyString,
     description: NonEmptyString,
     content: SkillProposalContentString,
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
     goal: Type.Optional(Type.String()),
     evidence: Type.Optional(Type.String()),
   },
@@ -631,6 +648,7 @@ export const SkillsProposalUpdateParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     skillName: NonEmptyString,
     content: SkillProposalContentString,
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
     goal: Type.Optional(Type.String()),
     evidence: Type.Optional(Type.String()),
   },

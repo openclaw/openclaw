@@ -43,12 +43,26 @@ describe("skill workshop proposals", () => {
       name: "Weather Helper",
       description: "Check weather before planning outdoor tasks",
       content: "# Weather Helper\n\nUse the weather provider before answering.\n",
+      supportFiles: [
+        {
+          path: "references/weather-api.md",
+          content: "# Weather API\n\nUse the current weather endpoint.\n",
+        },
+        {
+          path: "scripts/check-weather.js",
+          content: "export function parseWeather(value) { return value; }\n",
+        },
+      ],
       createdBy: "skill-research",
       goal: "Reuse weather lookup steps",
     });
 
     expect(proposal.record.status).toBe("pending");
     expect(proposal.record.scan.state).toBe("clean");
+    expect(proposal.record.supportFiles?.map((file) => file.path)).toEqual([
+      "references/weather-api.md",
+      "scripts/check-weather.js",
+    ]);
     expect(proposal.record.target.skillFile).toBe(
       path.join(workspaceDir, "skills", "weather-helper", "SKILL.md"),
     );
@@ -73,6 +87,18 @@ describe("skill workshop proposals", () => {
     await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toBe(
       '---\nname: "Weather Helper"\ndescription: "Check weather before planning outdoor tasks"\n---\n\n# Weather Helper\n\nUse the weather provider before answering.\n',
     );
+    await expect(
+      fs.readFile(
+        path.join(workspaceDir, "skills", "weather-helper", "references", "weather-api.md"),
+        "utf8",
+      ),
+    ).resolves.toContain("Use the current weather endpoint.");
+    await expect(
+      fs.readFile(
+        path.join(workspaceDir, "skills", "weather-helper", "scripts", "check-weather.js"),
+        "utf8",
+      ),
+    ).resolves.toContain("parseWeather");
 
     const status = buildWorkspaceSkillStatus(workspaceDir);
     expect(status.skills.find((skill) => skill.name === "Weather Helper")).toMatchObject({
@@ -120,10 +146,18 @@ describe("skill workshop proposals", () => {
       description: "Run QA checks",
       body: "# QA\n\nOld checklist.\n",
     });
+    await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "references", "qa.md"), "Old support file.\n", "utf8");
     const proposal = await proposeUpdateSkill({
       workspaceDir,
       skillName: "qa-check",
       content: "# QA\n\nNew checklist.\n",
+      supportFiles: [
+        {
+          path: "references/qa.md",
+          content: "New support file.\n",
+        },
+      ],
     });
 
     await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
@@ -136,8 +170,12 @@ describe("skill workshop proposals", () => {
         path.join(stateDir, "skill-workshop", "proposals", proposal.record.id, "rollback.json"),
         "utf8",
       ),
-    ) as { previousContent?: string };
+    ) as { previousContent?: string; supportFiles?: Array<{ previousContent?: string }> };
     expect(rollback.previousContent).toContain("Old checklist.");
+    expect(rollback.supportFiles?.[0]?.previousContent).toContain("Old support file.");
+    await expect(fs.readFile(path.join(skillDir, "references", "qa.md"), "utf8")).resolves.toBe(
+      "New support file.\n",
+    );
   });
 
   it("rejects and quarantines proposals without touching active skills", async () => {
@@ -213,5 +251,86 @@ describe("skill workshop proposals", () => {
       applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
     ).rejects.toThrow("Proposal scan failed");
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("quarantined");
+  });
+
+  it("rejects unsafe support paths before creating proposal state", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        name: "Unsafe Support Path",
+        description: "Reject traversal",
+        content: "# Unsafe Support Path\n",
+        supportFiles: [
+          {
+            path: "scripts/../references/escape.md",
+            content: "bad\n",
+          },
+        ],
+      }),
+    ).rejects.toThrow("plain relative path segments");
+
+    await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+  });
+
+  it("quarantines proposals with unsafe support file contents during apply", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Unsafe Support",
+      description: "Unsafe support script",
+      content: "# Unsafe Support\n",
+      supportFiles: [
+        {
+          path: "scripts/run.js",
+          content: "eval('2 + 2');\n",
+        },
+      ],
+    });
+
+    expect(proposal.record.scan.state).toBe("failed");
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("Proposal scan failed");
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("quarantined");
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "unsafe-support", "scripts", "run.js")),
+    ).rejects.toThrow();
+  });
+
+  it("rejects tampered support files during apply", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Tamper Guard",
+      description: "Detect changed proposal support files",
+      content: "# Tamper Guard\n",
+      supportFiles: [
+        {
+          path: "references/check.md",
+          content: "Original\n",
+        },
+      ],
+    });
+    await fs.writeFile(
+      path.join(
+        stateDir,
+        "skill-workshop",
+        "proposals",
+        proposal.record.id,
+        "references",
+        "check.md",
+      ),
+      "Changed\n",
+      "utf8",
+    );
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("changed without updating metadata");
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "tamper-guard", "SKILL.md")),
+    ).rejects.toThrow();
   });
 });

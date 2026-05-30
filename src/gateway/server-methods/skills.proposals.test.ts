@@ -93,10 +93,19 @@ describe("skills proposal gateway handlers", () => {
       name: "Weather Planner",
       description: "Plan around current weather",
       content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+      supportFiles: [
+        {
+          path: "references/weather.md",
+          content: "Use current weather before recommendations.\n",
+        },
+      ],
     });
     expect(create.ok).toBe(true);
-    const created = create.response as { record: { id: string } };
+    const created = create.response as {
+      record: { id: string; supportFiles?: Array<{ path: string }> };
+    };
     expect(created.record.id).toMatch(/^weather-planner-/);
+    expect(created.record.supportFiles?.[0]?.path).toBe("references/weather.md");
 
     const list = await callHandler("skills.proposals.list", {});
     expect(list.ok).toBe(true);
@@ -117,6 +126,12 @@ describe("skills proposal gateway handlers", () => {
     await expect(
       fs.readFile(path.join(mocks.workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
     ).resolves.toContain("# Weather Planner");
+    await expect(
+      fs.readFile(
+        path.join(mocks.workspaceDir, "skills", "weather-planner", "references", "weather.md"),
+        "utf8",
+      ),
+    ).resolves.toContain("Use current weather");
   });
 
   it("rejects invalid params before touching workshop state", async () => {

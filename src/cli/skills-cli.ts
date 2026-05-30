@@ -32,10 +32,15 @@ import {
   proposeCreateSkill,
   proposeUpdateSkill,
   quarantineSkillProposal,
+  readSkillProposalDraftDirectory,
   readSkillProposalDraftFile,
   rejectSkillProposal,
 } from "../skills/workshop/service.js";
-import type { SkillProposalManifest, SkillProposalReadResult } from "../skills/workshop/types.js";
+import type {
+  SkillProposalManifest,
+  SkillProposalReadResult,
+  SkillProposalSupportFileInput,
+} from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
@@ -199,6 +204,24 @@ function formatSkillProposalInspect(read: SkillProposalReadResult): string {
   ]
     .filter((line) => line !== undefined)
     .join("\n");
+}
+
+async function readSkillProposalInput(options: {
+  proposal?: string;
+  proposalDir?: string;
+}): Promise<{ content: string; supportFiles?: SkillProposalSupportFileInput[] }> {
+  const proposal = normalizeOptionalString(options.proposal);
+  const proposalDir = normalizeOptionalString(options.proposalDir);
+  if (proposal && proposalDir) {
+    throw new Error("Use either --proposal or --proposal-dir, not both.");
+  }
+  if (!proposal && !proposalDir) {
+    throw new Error("Provide --proposal or --proposal-dir.");
+  }
+  if (proposalDir) {
+    return await readSkillProposalDraftDirectory(proposalDir);
+  }
+  return { content: await readSkillProposalDraftFile(proposal!) };
 }
 
 /**
@@ -512,7 +535,11 @@ export function registerSkillsCli(program: Command) {
     .description("Create a pending proposal for a new workspace skill")
     .requiredOption("--name <name>", "Skill name")
     .requiredOption("--description <description>", "Skill description")
-    .requiredOption("--proposal <path>", "Path to PROPOSAL.md draft content")
+    .option("--proposal <path>", "Path to PROPOSAL.md draft content")
+    .option(
+      "--proposal-dir <path>",
+      "Path to proposal directory with PROPOSAL.md and support files",
+    )
     .option("--goal <text>", "Research or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
@@ -521,7 +548,8 @@ export function registerSkillsCli(program: Command) {
         opts: {
           name: string;
           description: string;
-          proposal: string;
+          proposal?: string;
+          proposalDir?: string;
           goal?: string;
           evidence?: string;
           json?: boolean;
@@ -531,12 +559,13 @@ export function registerSkillsCli(program: Command) {
       ) => {
         try {
           const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const content = await readSkillProposalDraftFile(opts.proposal);
+          const draft = await readSkillProposalInput(opts);
           const proposal = await proposeCreateSkill({
             workspaceDir,
             name: opts.name,
             description: opts.description,
-            content,
+            content: draft.content,
+            supportFiles: draft.supportFiles,
             createdBy: "cli",
             goal: opts.goal,
             evidence: opts.evidence,
@@ -557,7 +586,11 @@ export function registerSkillsCli(program: Command) {
     .command("propose-update")
     .description("Create a pending proposal for an existing workspace skill")
     .argument("<skill>", "Skill name or key")
-    .requiredOption("--proposal <path>", "Path to PROPOSAL.md draft content")
+    .option("--proposal <path>", "Path to PROPOSAL.md draft content")
+    .option(
+      "--proposal-dir <path>",
+      "Path to proposal directory with PROPOSAL.md and support files",
+    )
     .option("--goal <text>", "Research or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
@@ -565,7 +598,8 @@ export function registerSkillsCli(program: Command) {
       async (
         skill: string,
         opts: {
-          proposal: string;
+          proposal?: string;
+          proposalDir?: string;
           goal?: string;
           evidence?: string;
           json?: boolean;
@@ -578,13 +612,14 @@ export function registerSkillsCli(program: Command) {
             command.parent,
             opts,
           );
-          const content = await readSkillProposalDraftFile(opts.proposal);
+          const draft = await readSkillProposalInput(opts);
           const proposal = await proposeUpdateSkill({
             workspaceDir,
             config,
             agentId,
             skillName: skill,
-            content,
+            content: draft.content,
+            supportFiles: draft.supportFiles,
             createdBy: "cli",
             goal: opts.goal,
             evidence: opts.evidence,

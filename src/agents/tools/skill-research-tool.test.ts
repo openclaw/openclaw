@@ -41,6 +41,12 @@ describe("skill_research tool", () => {
       name: "Weather Planner",
       description: "Plan around current weather",
       proposal_content: "# Weather Planner\n\nCheck weather before outdoor recommendations.\n",
+      support_files: [
+        {
+          path: "references/weather.md",
+          content: "Use weather API details.\n",
+        },
+      ],
       goal: "Reuse weather planning steps",
     });
 
@@ -49,6 +55,7 @@ describe("skill_research tool", () => {
       kind: "create",
       skillKey: "weather-planner",
       scanState: "clean",
+      supportFileCount: 1,
     });
     await expect(
       fs.readFile(
@@ -62,6 +69,19 @@ describe("skill_research tool", () => {
         "utf8",
       ),
     ).resolves.toContain("status: proposal");
+    await expect(
+      fs.readFile(
+        path.join(
+          stateDir,
+          "skill-workshop",
+          "proposals",
+          (result.details as { id: string }).id,
+          "references",
+          "weather.md",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain("Use weather API details.");
     await expect(
       fs.access(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md")),
     ).rejects.toThrow();

@@ -28,6 +28,12 @@ export type SkillProposalTarget = {
   currentContentHash?: string;
 };
 
+export type SkillProposalSupportFile = {
+  path: string;
+  sizeBytes: number;
+  hash: string;
+};
+
 export type SkillProposalRecord = {
   schema: typeof SKILL_WORKSHOP_SCHEMA;
   id: string;
@@ -41,6 +47,7 @@ export type SkillProposalRecord = {
   proposedVersion: string;
   draftFile: "PROPOSAL.md";
   draftHash: string;
+  supportFiles?: SkillProposalSupportFile[];
   target: SkillProposalTarget;
   scan: SkillProposalScan;
   goal?: string;
@@ -79,6 +86,17 @@ export type SkillProposalRollback = {
   action: "create" | "update";
   previousContentHash?: string;
   previousContent?: string;
+  supportFiles?: Array<{
+    path: string;
+    existed: boolean;
+    previousContentHash?: string;
+    previousContent?: string;
+  }>;
+};
+
+export type SkillProposalSupportFileInput = {
+  path: string;
+  content: string;
 };
 
 export type SkillProposalCreateInput = {
@@ -86,6 +104,7 @@ export type SkillProposalCreateInput = {
   name: string;
   description: string;
   content: string;
+  supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
   goal?: string;
   evidence?: string;
@@ -95,6 +114,7 @@ export type SkillProposalUpdateInput = {
   workspaceDir: string;
   skillName: string;
   content: string;
+  supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;
   goal?: string;
   evidence?: string;
