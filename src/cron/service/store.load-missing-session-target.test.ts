@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";
-import { resolveCronQuarantinePath } from "../store.js";
+import { loadCronStore, resolveCronQuarantinePath } from "../store.js";
 import { assertSupportedJobSpec, findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
@@ -208,10 +208,8 @@ describe("cron service store load: missing sessionTarget", () => {
 
     expect(state.store?.jobs.map((job) => job.id)).toEqual(["valid-job"]);
     expect(findJobOrThrow(state, "valid-job").state.nextRunAtMs).toBe(STORE_TEST_NOW);
-    const sanitized = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
-    expect(sanitized.jobs.map((job) => job.id)).toEqual(["valid-job"]);
+    await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["valid-job"]);
     const quarantine = JSON.parse(
       await fs.readFile(resolveCronQuarantinePath(storePath), "utf-8"),
     ) as { jobs: Array<{ job?: Record<string, unknown> }> };

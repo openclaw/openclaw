@@ -63,6 +63,39 @@ describe("openclaw state database", () => {
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
+  it("opens databases with early cron tables before creating cron indexes", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE cron_jobs (
+        store_key TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        created_at_ms INTEGER NOT NULL,
+        schedule_kind TEXT NOT NULL,
+        session_target TEXT NOT NULL,
+        wake_mode TEXT NOT NULL,
+        payload_kind TEXT NOT NULL,
+        job_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (store_key, job_id)
+      );
+    `);
+    db.close();
+
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(() =>
+      database.db.prepare("SELECT session_key FROM cron_jobs LIMIT 1").all(),
+    ).not.toThrow();
+  });
+
   it("configures durable SQLite connection pragmas", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

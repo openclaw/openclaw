@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveCronQuarantinePath } from "../cron/store.js";
+import { loadCronStore, resolveCronQuarantinePath } from "../cron/store.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
@@ -87,10 +87,7 @@ async function writeLegacyCronArrayStore(storePath: string, jobs: Array<Record<s
 }
 
 async function readPersistedJobs(storePath: string): Promise<Array<Record<string, unknown>>> {
-  const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-    jobs: Array<Record<string, unknown>>;
-  };
-  return persisted.jobs;
+  return (await loadCronStore(storePath)).jobs as unknown as Array<Record<string, unknown>>;
 }
 
 function requirePersistedJob(jobs: Array<Record<string, unknown>>, index: number) {
@@ -349,12 +346,8 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      version?: unknown;
-      jobs?: Array<Record<string, unknown>>;
-    };
-    const job = requirePersistedJob(persisted.jobs ?? [], 0);
-    expect(persisted.version).toBe(1);
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
     expect(job.jobId).toBeUndefined();
     expect(job.id).toBe("legacy-job");
     expect(job.notify).toBeUndefined();
@@ -462,7 +455,8 @@ describe("maybeRepairLegacyCronStore", () => {
       message: "Repair legacy cron jobs now?",
       initialValue: true,
     });
-    expect(job.jobId).toBe("legacy-job");
+    expect(job.jobId).toBeUndefined();
+    expect(job.id).toBe("legacy-job");
     expect(job.notify).toBe(true);
     expectNoNoteContaining("Cron store normalized", "Doctor changes");
   });
@@ -586,10 +580,8 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
-    const job = requirePersistedJob(persisted.jobs, 0);
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
     expect(job.sessionTarget).toBe("isolated");
     const payload = requireRecord(job.payload, "cron payload");
     expect(payload.kind).toBe("agentTurn");
