@@ -6,7 +6,7 @@ import {
   isNativeToolProgressNotification,
   isNativeResponseStreamDeltaNotification,
   isPendingOpenClawDynamicToolCompletionNotification,
-  isRawAssistantCompletionNotification,
+  isRawAssistantProgressNotification,
   isRawReasoningCompletionNotification,
   isRawToolOutputCompletionNotification,
   isReasoningItemCompletionNotification,
@@ -138,7 +138,7 @@ export function applyCodexTurnNotificationState(params: {
   const postToolRawAssistantCompletionNeedsTerminalGuard =
     isCurrentTurnNotification &&
     turnCrossedToolHandoff &&
-    isRawAssistantCompletionNotification(notification) &&
+    isRawAssistantProgressNotification(notification) &&
     params.activeTurnItemIds.size === 0;
   const rawResponseItemCompletedWithNoActiveItems =
     isCurrentTurnNotification &&
