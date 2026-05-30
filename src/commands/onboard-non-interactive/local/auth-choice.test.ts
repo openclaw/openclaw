@@ -86,7 +86,7 @@ describe("applyNonInteractiveAuthChoice", () => {
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
     const resolvedConfig = { auth: { profiles: { "openai:default": { mode: "oauth" } } } };
     resolveManifestDeprecatedProviderAuthChoice.mockImplementation(((choiceId: string) =>
-      choiceId === "openai-codex"
+      choiceId === "openai"
         ? {
             choiceId: "openai",
             choiceLabel: "ChatGPT Login",
@@ -96,7 +96,7 @@ describe("applyNonInteractiveAuthChoice", () => {
 
     const result = await applyNonInteractiveAuthChoice({
       nextConfig,
-      authChoice: "openai-codex",
+      authChoice: "openai",
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
@@ -104,7 +104,7 @@ describe("applyNonInteractiveAuthChoice", () => {
 
     expect(result).toBe(resolvedConfig);
     expect(runtime.log).toHaveBeenCalledWith(
-      'Auth choice "openai-codex" is deprecated; using ChatGPT Login setup instead.',
+      'Auth choice "openai" is deprecated; using ChatGPT Login setup instead.',
     );
     expect(runtime.error).not.toHaveBeenCalled();
     expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledWith(

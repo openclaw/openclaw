@@ -248,9 +248,9 @@ describe("createModelListAuthIndex", () => {
       authStore: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
@@ -279,9 +279,9 @@ describe("createModelListAuthIndex", () => {
       authStore: {
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,

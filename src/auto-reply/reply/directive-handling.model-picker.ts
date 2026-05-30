@@ -20,7 +20,7 @@ export type ModelPickerItem = ModelRef;
 const MODEL_PICK_PROVIDER_PREFERENCE = [
   "anthropic",
   "openai",
-  "openai-codex",
+  "openai",
   "minimax",
   "synthetic",
   "google",

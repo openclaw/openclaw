@@ -1225,14 +1225,14 @@ export function resolveCodexAppServerModelProvider(params: {
   }
   if (
     isCodexAppServerNativeAuthProfile(params) &&
-    (normalizedLower === "openai" || normalizedLower === "openai-codex")
+    (normalizedLower === "openai" || normalizedLower === "openai")
   ) {
     // When OpenClaw is forwarding ChatGPT/Codex OAuth, `openai` is Codex's
     // native provider id, not a public OpenAI API-key choice. Omit the override
     // so app-server keeps its configured provider/auth pair for this session.
     return undefined;
   }
-  return normalizedLower === "openai-codex" ? "openai" : normalized;
+  return normalizedLower === "openai" ? "openai" : normalized;
 }
 
 // Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark) use the

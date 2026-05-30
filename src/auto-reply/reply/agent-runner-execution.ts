@@ -42,7 +42,7 @@ import {
   resolveModelRefFromString,
   resolvePersistedOverrideModelRef,
 } from "../../agents/model-selection.js";
-import { resolveOpenAIRuntimeProvider } from "../../agents/openai-codex-routing.js";
+import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
   resolveGroupSessionKey,
@@ -622,7 +622,7 @@ function collapseRepeatedFailureDetail(message: string): string {
   return message.trim();
 }
 
-const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai-codex"]);
+const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai", "openai"]);
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 
@@ -720,7 +720,7 @@ function buildMissingApiKeyFailureText(message: string): string | null {
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
     return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
-  if (provider === "openai-codex") {
+  if (provider === "openai") {
     return "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.";
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {

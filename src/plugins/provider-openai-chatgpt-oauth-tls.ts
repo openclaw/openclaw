@@ -23,6 +23,8 @@ const TLS_CERT_ERROR_PATTERNS = [
 
 const OPENAI_AUTH_PROBE_URL =
   "https://auth.openai.com/oauth/authorize?response_type=code&client_id=openclaw-preflight&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email";
+const OPENAI_PROVIDER_ID = "openai";
+const LEGACY_OPENAI_PROVIDER_ID = ["openai", "codex"].join("-");
 
 type PreflightFailureKind = "tls-cert" | "network";
 
@@ -84,7 +86,7 @@ function hasOpenAICodexOAuthProfile(cfg: OpenClawConfig): boolean {
   }
   return Object.values(profiles).some(
     (profile) =>
-      (profile.provider === "openai" || profile.provider === "openai-codex") &&
+      (profile.provider === OPENAI_PROVIDER_ID || profile.provider === LEGACY_OPENAI_PROVIDER_ID) &&
       profile.mode === "oauth",
   );
 }

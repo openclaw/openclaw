@@ -14,12 +14,12 @@ export function resolveQaLiveFrontierPreferredModel() {
     const store = loadAuthProfileStoreForRuntime(undefined, {
       readOnly: true,
       allowKeychainPrompt: false,
-      externalCliProviderIds: ["openai-codex"],
+      externalCliProviderIds: ["openai"],
     });
     if (listProfilesForProvider(store, "openai").length > 0) {
       return undefined;
     }
-    return listProfilesForProvider(store, "openai-codex").length > 0
+    return listProfilesForProvider(store, "openai").length > 0
       ? QA_CODEX_OAUTH_LIVE_MODEL
       : undefined;
   } catch {

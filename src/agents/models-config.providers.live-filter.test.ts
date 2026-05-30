@@ -153,7 +153,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
   it("maps scoped startup provider aliases through model catalog owners", () => {
     const snapshot = {
       owners: metadataOwners({
-        modelCatalogProviders: new Map([["openai-codex", ["codex"]]]),
+        modelCatalogProviders: new Map([["openai", ["codex"]]]),
       }),
     };
 

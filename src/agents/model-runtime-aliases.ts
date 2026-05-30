@@ -10,7 +10,7 @@ import {
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
-const RUNTIME_COMPARISON_PROVIDER_ALIASES = new Map<string, string>([["openai-codex", "openai"]]);
+const RUNTIME_COMPARISON_PROVIDER_ALIASES = new Map<string, string>([["openai", "openai"]]);
 
 /** True for CLI runtime provider ids such as `claude-cli` and `google-gemini-cli`. */
 export function isCliRuntimeProvider(

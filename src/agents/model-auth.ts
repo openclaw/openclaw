@@ -74,7 +74,7 @@ export type RuntimeProviderAuthLookup = {
 
 const log = createSubsystemLogger("model-auth");
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
 function directOpenAIPlatformModelRequiresApiKey(params: {
   provider: string;

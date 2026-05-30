@@ -29,8 +29,8 @@ describe("isLiveProfileKeyModeEnabled", () => {
 
 describe("live credential precedence", () => {
   it("uses profile-first auth for Codex even when the global live mode is env-first", () => {
-    expect(resolveLiveCredentialPrecedence("openai-codex", false)).toBe("profile-first");
-    expect(requiresLiveProfileCredential("openai-codex", false)).toBe(true);
+    expect(resolveLiveCredentialPrecedence("openai", false)).toBe("profile-first");
+    expect(requiresLiveProfileCredential("openai", false)).toBe(true);
   });
 
   it("keeps env-first auth for normal providers unless profile keys are required", () => {

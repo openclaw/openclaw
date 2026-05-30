@@ -28,7 +28,7 @@ export type AuthProfileEligibility = {
 };
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
   cfg?: OpenClawConfig;

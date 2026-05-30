@@ -16,7 +16,7 @@ import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import {
   buildOpenAIChatGPTAuthMethods,
   buildOpenAICodexProviderHooks,
-} from "./openai-codex-provider.js";
+} from "./openai-chatgpt-provider.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -24,13 +24,9 @@ import {
   findCatalogTemplate,
   matchesExactOrPrefix,
 } from "./shared.js";
-import {
-  resolveOpenAICodexThinkingProfile,
-  resolveOpenAIThinkingProfile,
-} from "./thinking-policy.js";
+import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
-const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_CHAT_LATEST_MODEL_ID = "chat-latest";
 const OPENAI_GPT_55_MODEL_ID = "gpt-5.5";
 const OPENAI_GPT_55_PRO_MODEL_ID = "gpt-5.5-pro";
@@ -103,9 +99,9 @@ function shouldUseOpenAIResponsesTransport(params: {
   return typeof params.baseUrl === "string" && isOpenAIApiBaseUrl(params.baseUrl);
 }
 
-function isOpenAIOrLegacyCodexProvider(provider: string | undefined): boolean {
+function isOpenAIProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
-  return normalized === PROVIDER_ID || normalized === LEGACY_OPENAI_CODEX_PROVIDER_ID;
+  return normalized === PROVIDER_ID;
 }
 
 function normalizeOpenAITransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
@@ -130,10 +126,7 @@ function shouldUseCodexResponsesHooks(params: {
   api?: ProviderRuntimeModel["api"] | null;
   baseUrl?: string;
 }): boolean {
-  if (normalizeProviderId(params.provider ?? "") === LEGACY_OPENAI_CODEX_PROVIDER_ID) {
-    return true;
-  }
-  if (params.api === "openai-codex-responses") {
+  if (params.api === "openai-chatgpt-responses") {
     return true;
   }
   return typeof params.baseUrl === "string" && isOpenAICodexBaseUrl(params.baseUrl);
@@ -151,9 +144,6 @@ function resolveConfiguredAuthTransport(
   if (ctx.authProfileMode === "api_key" || ctx.authProfileMode === "aws-sdk") {
     return "responses";
   }
-  if (ctx.authProfileId && isLegacyOpenAIProfileId(ctx.authProfileId)) {
-    return "codex";
-  }
   const authMode = ctx.providerConfig?.auth;
   if (authMode === "oauth" || authMode === "token") {
     return "codex";
@@ -164,10 +154,7 @@ function resolveConfiguredAuthTransport(
 
   const auth = ctx.config?.auth;
   const profiles = auth?.profiles ?? {};
-  const orderedProfileIds = [
-    ...(auth?.order?.[PROVIDER_ID] ?? []),
-    ...(auth?.order?.[LEGACY_OPENAI_CODEX_PROVIDER_ID] ?? []),
-  ];
+  const orderedProfileIds = auth?.order?.[PROVIDER_ID] ?? [];
   for (const profileId of orderedProfileIds) {
     const mode = profiles[profileId]?.mode;
     if (mode === "oauth" || mode === "token") {
@@ -179,11 +166,7 @@ function resolveConfiguredAuthTransport(
   }
 
   const providerModes = Object.values(profiles)
-    .filter((profile) =>
-      [PROVIDER_ID, LEGACY_OPENAI_CODEX_PROVIDER_ID].includes(
-        normalizeProviderId(profile.provider),
-      ),
-    )
+    .filter((profile) => normalizeProviderId(profile.provider) === PROVIDER_ID)
     .map((profile) => profile.mode);
   if (providerModes.some((mode) => mode === "oauth" || mode === "token")) {
     return "codex";
@@ -192,10 +175,6 @@ function resolveConfiguredAuthTransport(
     return "responses";
   }
   return undefined;
-}
-
-function isLegacyOpenAIProfileId(profileId: string): boolean {
-  return normalizeProviderId(profileId.split(":", 1)[0] ?? "") === LEGACY_OPENAI_CODEX_PROVIDER_ID;
 }
 
 function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelContext): boolean {
@@ -335,15 +314,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
   return {
     id: PROVIDER_ID,
     label: "OpenAI",
-    hookAliases: ["openai-codex", "azure-openai", "azure-openai-responses"],
+    hookAliases: ["azure-openai", "azure-openai-responses"],
     docsPath: "/providers/models",
     envVars: ["OPENAI_API_KEY"],
-    oauthProfileIdRepairs: [
-      {
-        legacyProfileId: "openai-codex:default",
-        promptLabel: "OpenAI",
-      },
-    ],
     auth: [
       ...buildOpenAIChatGPTAuthMethods(),
       createProviderApiKeyAuthMethod({
@@ -374,7 +347,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
         : resolveOpenAIGptForwardCompatModel(ctx),
     preferRuntimeResolvedModel: (ctx) => codexHooks.preferRuntimeResolvedModel?.(ctx) ?? false,
     normalizeResolvedModel: (ctx) => {
-      if (!isOpenAIOrLegacyCodexProvider(ctx.provider)) {
+      if (!isOpenAIProvider(ctx.provider)) {
         return undefined;
       }
       if (
@@ -420,16 +393,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId }) =>
-      normalizeProviderId(provider) === LEGACY_OPENAI_CODEX_PROVIDER_ID
-        ? resolveOpenAICodexThinkingProfile(modelId)
-        : resolveOpenAIThinkingProfile(modelId),
+      normalizeProviderId(provider) === PROVIDER_ID
+        ? resolveUnifiedOpenAIThinkingProfile(modelId)
+        : null,
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
-    buildMissingAuthMessage: (ctx) => {
-      if (ctx.provider !== PROVIDER_ID || ctx.listProfileIds("openai-codex").length === 0) {
-        return undefined;
-      }
-      return 'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth; OpenAI agent model runs use openai/gpt-* through the Codex runtime. Set OPENAI_API_KEY only for direct OpenAI API-key surfaces.';
-    },
     augmentModelCatalog: (ctx) => {
       const openAiGpt55ProTemplate = findCatalogTemplate({
         entries: ctx.entries,

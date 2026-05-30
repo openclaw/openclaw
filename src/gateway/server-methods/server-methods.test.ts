@@ -787,8 +787,8 @@ describe("sanitizeChatHistoryMessages", () => {
             openclawReasoningReplay: {
               v: 1,
               source: "openai-responses",
-              provider: "openai-codex",
-              api: "openai-codex-responses",
+              provider: "openai",
+              api: "openai-chatgpt-responses",
               model: "gpt-5.5",
             },
           },

@@ -351,7 +351,7 @@ describe("createVideoGenerateTool", () => {
     expectVideoGenerateTool(
       createVideoGenerateTool({
         config: asConfig({}),
-        authProfileStore: createAuthStore(["openai-codex"]),
+        authProfileStore: createAuthStore(["openai"]),
       }),
     );
   });
@@ -415,7 +415,7 @@ describe("createVideoGenerateTool", () => {
         config: asConfig({
           agents: {
             defaults: {
-              videoGenerationModel: { primary: "openai-codex/sora-2" },
+              videoGenerationModel: { primary: "openai/sora-2" },
             },
           },
         }),
@@ -571,7 +571,7 @@ describe("createVideoGenerateTool", () => {
       },
       {
         id: "openai",
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         defaultModel: "sora-2",
         models: ["sora-2"],
         capabilities: {},
@@ -586,7 +586,7 @@ describe("createVideoGenerateTool", () => {
           agents: {
             defaults: {
               model: {
-                primary: "openai-codex/gpt-5.5",
+                primary: "openai/gpt-5.5",
               },
             },
           },

@@ -286,8 +286,8 @@ describe("live model switch", () => {
   it("strips duplicated provider prefixes from persisted overrides", async () => {
     state.loadSessionStoreMock.mockReturnValue({
       main: {
-        providerOverride: "openai-codex",
-        modelOverride: "openai-codex/gpt-5.4",
+        providerOverride: "openai",
+        modelOverride: "openai/gpt-5.4",
       },
     });
 
@@ -302,7 +302,7 @@ describe("live model switch", () => {
         defaultModel: "claude-opus-4-6",
       }),
     ).toEqual({
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       authProfileId: undefined,
       authProfileIdSource: undefined,
@@ -361,13 +361,13 @@ describe("live model switch", () => {
     expect(state.embeddedAgentModuleImported).toBe(false);
   });
 
-  it("treats active openai-codex as an already-applied openai runtime promotion", async () => {
+  it("treats active openai as an already-applied openai runtime promotion", async () => {
     const { hasDifferentLiveSessionModelSelection } = await loadModule();
 
     expect(
       hasDifferentLiveSessionModelSelection(
         {
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.5",
         },
         {
@@ -388,7 +388,7 @@ describe("live model switch", () => {
           model: "gpt-5.5",
         },
         {
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.5",
         },
       ),
@@ -414,7 +414,7 @@ describe("live model switch", () => {
     expect(
       hasDifferentLiveSessionModelSelection(
         {
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.5",
         },
         {
@@ -551,7 +551,7 @@ describe("live model switch", () => {
       expect(result).toBeUndefined();
     });
 
-    it("does not trigger switch when runtime promotes openai to openai-codex", async () => {
+    it("does not trigger switch when runtime promotes openai to openai", async () => {
       const sessionEntry = {
         liveModelSwitchPending: true,
         providerOverride: "openai",
@@ -563,7 +563,7 @@ describe("live model switch", () => {
 
       const result = shouldSwitchToLiveModel(
         makeShouldSwitchParams({
-          currentProvider: "openai-codex",
+          currentProvider: "openai",
           currentModel: "gpt-5.5",
           defaultProvider: "openai",
           defaultModel: "gpt-5.5",

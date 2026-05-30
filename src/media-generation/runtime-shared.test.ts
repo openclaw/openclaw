@@ -105,7 +105,7 @@ describe("media-generation runtime shared candidates", () => {
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.5",
+              primary: "openai/gpt-5.5",
             },
           },
         },
@@ -120,7 +120,7 @@ describe("media-generation runtime shared candidates", () => {
         },
         {
           id: "openai",
-          aliases: ["openai-codex"],
+          aliases: ["openai"],
           defaultModel: "gpt-image-2",
           isConfigured: () => true,
         },

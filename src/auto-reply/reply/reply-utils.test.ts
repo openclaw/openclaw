@@ -620,8 +620,8 @@ describe("resolveResponsePrefixTemplate", () => {
       {
         name: "modelFull",
         template: "[{modelFull}]",
-        values: { modelFull: "openai-codex/gpt-5.4" },
-        expected: "[openai-codex/gpt-5.4]",
+        values: { modelFull: "openai/gpt-5.4" },
+        expected: "[openai/gpt-5.4]",
       },
       {
         name: "provider",
@@ -1414,7 +1414,7 @@ describe("createStreamingDirectiveAccumulator", () => {
 describe("extractShortModelName", () => {
   it("normalizes provider/date/latest suffixes while preserving other IDs", () => {
     const cases = [
-      ["openai-codex/gpt-5.4", "gpt-5.4"],
+      ["openai/gpt-5.4", "gpt-5.4"],
       ["claude-opus-4-6-20251101", "claude-opus-4-6"],
       ["gpt-5.4-latest", "gpt-5.4"],
       // Date suffix must be exactly 8 digits at the end.

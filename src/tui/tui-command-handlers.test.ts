@@ -819,14 +819,14 @@ describe("tui command handlers", () => {
       runAuthFlow,
     });
 
-    await handleCommand("/auth openai-codex");
+    await handleCommand("/auth openai");
 
-    expect(runAuthFlow).toHaveBeenCalledWith({ provider: "openai-codex" });
+    expect(runAuthFlow).toHaveBeenCalledWith({ provider: "openai" });
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(addSystem).toHaveBeenCalledWith(
-      "opening auth flow for openai-codex; TUI will resume when it exits",
+      "opening auth flow for openai; TUI will resume when it exits",
     );
-    expect(addSystem).toHaveBeenCalledWith("auth flow finished for openai-codex");
+    expect(addSystem).toHaveBeenCalledWith("auth flow finished for openai");
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
   });
 
@@ -846,7 +846,7 @@ describe("tui command handlers", () => {
       runAuthFlow,
     });
 
-    await handleCommand("/auth openai-codex");
+    await handleCommand("/auth openai");
 
     expect(runAuthFlow).not.toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("abort the current run before /auth");

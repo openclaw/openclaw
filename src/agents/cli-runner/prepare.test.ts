@@ -257,10 +257,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     expect(
       shouldSkipLocalCliCredentialEpoch({
         authEpochMode: "profile-only",
-        authProfileId: "openai-codex:default",
+        authProfileId: "openai:default",
         authCredential: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
@@ -278,7 +278,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     expect(
       shouldSkipLocalCliCredentialEpoch({
         authEpochMode: "profile-only",
-        authProfileId: "openai-codex:default",
+        authProfileId: "openai:default",
         authCredential: undefined,
         preparedExecution: null,
       }),

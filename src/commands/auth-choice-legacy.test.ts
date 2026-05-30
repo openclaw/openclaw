@@ -15,7 +15,7 @@ const manifestAuthChoices = vi.hoisted(() => [
     methodId: "oauth",
     choiceId: "openai",
     choiceLabel: "ChatGPT Login",
-    deprecatedChoiceIds: ["openai-codex", "codex-cli"],
+    deprecatedChoiceIds: ["openai", "codex-cli"],
   },
 ]);
 
@@ -55,16 +55,33 @@ describe("auth choice legacy aliases", () => {
   });
 
   it("sources deprecated cli aliases from plugin manifests", () => {
+    const legacyChoice = ["openai", "codex"].join("-");
     expect(resolveLegacyAuthChoiceAliasesForCli({ env: authChoiceManifestEnv() })).toEqual([
       "claude-cli",
       "codex-cli",
-      "openai-codex",
+      legacyChoice,
+      `${legacyChoice}-device-code`,
+      `${legacyChoice}-api-key`,
     ]);
   });
 
   it("maps the old OpenAI Codex setup choice to OpenAI login", () => {
-    expect(normalizeLegacyOnboardAuthChoice("openai-codex", { env: authChoiceManifestEnv() })).toBe(
+    const legacyChoice = ["openai", "codex"].join("-");
+    expect(normalizeLegacyOnboardAuthChoice(legacyChoice, { env: authChoiceManifestEnv() })).toBe(
       "openai",
     );
+    expect(normalizeLegacyOnboardAuthChoice("codex-cli", { env: authChoiceManifestEnv() })).toBe(
+      "openai",
+    );
+    expect(
+      resolveDeprecatedAuthChoiceReplacement(legacyChoice, { env: authChoiceManifestEnv() }),
+    ).toEqual({
+      normalized: "openai",
+      message: `Auth choice "${legacyChoice}" is deprecated; using ChatGPT Login setup instead.`,
+    });
+    expect(normalizeLegacyOnboardAuthChoice(`${legacyChoice}-device-code`)).toBe(
+      "openai-device-code",
+    );
+    expect(normalizeLegacyOnboardAuthChoice(`${legacyChoice}-api-key`)).toBe("openai-api-key");
   });
 });

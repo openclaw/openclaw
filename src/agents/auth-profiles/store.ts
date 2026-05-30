@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, repairJsonFilePermissions, saveJsonFile } from "../../infra/json-file.js";
+import { isRecord } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import {
@@ -26,10 +27,8 @@ import {
 import {
   applyLegacyAuthStore,
   buildPersistedAuthProfileSecretsStore,
-  isRuntimeLegacyOAuthSidecarCredential,
   loadLegacyAuthProfileStore,
   loadPersistedAuthProfileStore,
-  matchesRuntimeLegacyOAuthSidecarMaterial,
   mergeAuthProfileStores,
   mergeOAuthFileIntoStore,
 } from "./persisted.js";
@@ -53,7 +52,6 @@ type LoadAuthProfileStoreOptions = {
   config?: OpenClawConfig;
   externalCli?: ExternalCliAuthDiscovery;
   readOnly?: boolean;
-  resolveLegacyOAuthSidecars?: boolean;
   syncExternalCli?: boolean;
   externalCliProviderIds?: Iterable<string>;
   externalCliProfileIds?: Iterable<string>;
@@ -63,6 +61,61 @@ type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;
   syncExternalCli?: boolean;
 };
+
+const INLINE_OAUTH_TOKEN_FIELDS = ["access", "refresh", "idToken"] as const;
+
+function hasInlineOAuthTokenMaterial(credential: Record<string, unknown>): boolean {
+  return INLINE_OAUTH_TOKEN_FIELDS.some((field) => credential[field] !== undefined);
+}
+
+function hasChangedInlineOAuthTokenMaterial(params: {
+  credential: Record<string, unknown>;
+  existingCredential: Record<string, unknown>;
+}): boolean {
+  return INLINE_OAUTH_TOKEN_FIELDS.some((field) => {
+    if (params.credential[field] === undefined) {
+      return false;
+    }
+    return !isDeepStrictEqual(params.credential[field], params.existingCredential[field]);
+  });
+}
+
+function preserveLegacyOAuthRefsOnSave(params: {
+  payload: ReturnType<typeof buildPersistedAuthProfileSecretsStore>;
+  existingRaw: unknown;
+}): ReturnType<typeof buildPersistedAuthProfileSecretsStore> {
+  if (!isRecord(params.existingRaw) || !isRecord(params.existingRaw.profiles)) {
+    return params.payload;
+  }
+  let nextProfiles: typeof params.payload.profiles | undefined;
+  for (const [profileId, credential] of Object.entries(
+    params.payload.profiles as Record<string, unknown>,
+  )) {
+    if (!isRecord(credential) || credential.oauthRef !== undefined || credential.type !== "oauth") {
+      continue;
+    }
+    const existingCredential = params.existingRaw.profiles[profileId];
+    if (
+      !isRecord(existingCredential) ||
+      existingCredential.oauthRef === undefined ||
+      existingCredential.type !== "oauth"
+    ) {
+      continue;
+    }
+    if (
+      hasInlineOAuthTokenMaterial(credential) &&
+      hasChangedInlineOAuthTokenMaterial({ credential, existingCredential })
+    ) {
+      continue;
+    }
+    nextProfiles ??= { ...params.payload.profiles };
+    nextProfiles[profileId] = {
+      ...credential,
+      oauthRef: existingCredential.oauthRef,
+    } as unknown as (typeof nextProfiles)[string];
+  }
+  return nextProfiles ? { ...params.payload, profiles: nextProfiles } : params.payload;
+}
 
 type ResolvedExternalCliOverlayOptions = {
   allowKeychainPrompt?: boolean;
@@ -83,12 +136,9 @@ type ExternalCliSyncResult = {
 };
 
 function resolvePersistedLoadOptions(
-  options:
-    | Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt" | "resolveLegacyOAuthSidecars">
-    | undefined,
-): { allowKeychainPrompt?: boolean; resolveLegacyOAuthSidecars?: boolean } {
+  options: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt"> | undefined,
+): { allowKeychainPrompt?: boolean } {
   return {
-    resolveLegacyOAuthSidecars: options?.resolveLegacyOAuthSidecars ?? true,
     ...(options?.allowKeychainPrompt !== undefined
       ? { allowKeychainPrompt: options.allowKeychainPrompt }
       : {}),
@@ -494,7 +544,7 @@ function buildLocalAuthProfileStoreForSave(params: {
 function buildAuthProfileStoreWithoutExternalProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
-  options?: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt" | "resolveLegacyOAuthSidecars">;
+  options?: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt">;
 }): AuthProfileStore {
   const runtimeExternalProfileIds = new Set(params.store.runtimeExternalProfileIds ?? []);
   const localStore = cloneAuthProfileStore(params.store);
@@ -862,21 +912,16 @@ export function loadAuthProfileStoreForSecretsRuntime(
     ...options,
     readOnly: true,
     allowKeychainPrompt: false,
-    resolveLegacyOAuthSidecars: true,
   });
 }
 
 export function loadAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
-  loadOptions?: Pick<
-    LoadAuthProfileStoreOptions,
-    "allowKeychainPrompt" | "resolveLegacyOAuthSidecars"
-  >,
+  loadOptions?: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt">,
 ): AuthProfileStore {
   const options: LoadAuthProfileStoreOptions = {
     readOnly: true,
     allowKeychainPrompt: loadOptions?.allowKeychainPrompt ?? false,
-    resolveLegacyOAuthSidecars: loadOptions?.resolveLegacyOAuthSidecars ?? true,
   };
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
@@ -926,13 +971,11 @@ export function ensureAuthProfileStoreWithoutExternalProfiles(
   options?: {
     allowKeychainPrompt?: boolean;
     readOnly?: boolean;
-    resolveLegacyOAuthSidecars?: boolean;
     syncExternalCli?: boolean;
   },
 ): AuthProfileStore {
   const effectiveOptions: LoadAuthProfileStoreOptions = {
     ...options,
-    resolveLegacyOAuthSidecars: options?.resolveLegacyOAuthSidecars ?? true,
   };
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir, effectiveOptions);
   if (runtimeStore) {
@@ -1046,20 +1089,11 @@ export function saveAuthProfileStore(
 ): void {
   const authPath = resolveAuthStorePath(agentDir);
   const statePath = resolveAuthStatePath(agentDir);
-  const runtimeLegacyOAuthSidecarProfileIds = new Set(
-    Object.entries(store.profiles)
-      .filter(
-        ([profileId, credential]) =>
-          isRuntimeLegacyOAuthSidecarCredential(credential) ||
-          matchesRuntimeLegacyOAuthSidecarMaterial({ authPath, profileId, credential }),
-      )
-      .map(([profileId]) => profileId),
-  );
   const localStore = buildLocalAuthProfileStoreForSave({ store, agentDir, options });
   const existingRaw = loadJsonFile(authPath);
-  const payload = buildPersistedAuthProfileSecretsStore(localStore, undefined, {
+  const payload = preserveLegacyOAuthRefsOnSave({
+    payload: buildPersistedAuthProfileSecretsStore(localStore),
     existingRaw,
-    runtimeLegacyOAuthSidecarProfileIds,
   });
   if (isDeepStrictEqual(existingRaw, payload)) {
     repairJsonFilePermissions(authPath);

@@ -31,7 +31,7 @@ type OpenAIResponsesEndpointClass =
   | "moonshot-native"
   | "modelstudio-native"
   | "openai-public"
-  | "openai-codex"
+  | "openai"
   | "opencode-native"
   | "azure-openai"
   | "openrouter"
@@ -64,7 +64,7 @@ type OpenAIResponsesPayloadCapabilities = {
 const OPENAI_RESPONSES_APIS = new Set([
   "openai-responses",
   "azure-openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "openclaw-openai-responses-transport",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
@@ -166,7 +166,7 @@ function resolveBundledOpenAIResponsesEndpointClass(
     case "api.openai.com":
       return "openai-public";
     case "chatgpt.com":
-      return "openai-codex";
+      return "openai";
     case "generativelanguage.googleapis.com":
       return "google-generative-ai";
     case "aiplatform.googleapis.com":
@@ -223,13 +223,13 @@ function resolveOpenAIResponsesPayloadCapabilities(
 ): OpenAIResponsesPayloadCapabilities {
   const provider = normalizeLowercaseString(model.provider);
   const api = normalizeLowercaseString(model.api);
-  const isOpenAIProvider = provider === "openai" || provider === "openai-codex";
+  const isOpenAIProvider = provider === "openai" || provider === "openai";
   const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
   const isResponsesApi = isOpenAIResponsesApi(api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
     endpointClass === "openai-public" ||
-    endpointClass === "openai-codex" ||
+    endpointClass === "openai" ||
     endpointClass === "azure-openai";
   const usesKnownNativeOpenAIRoute =
     endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint;
@@ -250,13 +250,13 @@ function resolveOpenAIResponsesPayloadCapabilities(
         (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
         endpointClass === "openai-public") ||
       (isOpenAIProvider &&
-        (api === "openai-codex-responses" ||
+        (api === "openai-chatgpt-responses" ||
           api === "openai-responses" ||
           api === "openclaw-openai-responses-transport") &&
-        endpointClass === "openai-codex"),
+        endpointClass === "openai"),
     allowsResponsesStore:
       supportsResponsesStoreField &&
-      api !== "openai-codex-responses" &&
+      api !== "openai-chatgpt-responses" &&
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,

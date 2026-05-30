@@ -425,7 +425,7 @@ function isTransportHtmlErrorStatus(status: number | undefined): boolean {
 function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   return (
-    normalizedProvider === "openai-codex" ||
+    normalizedProvider === "openai" ||
     /\bopenai\s+codex\b/i.test(raw) ||
     /\bcodex\b.*\bscopes?\b/i.test(raw)
   );

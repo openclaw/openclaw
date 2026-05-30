@@ -716,11 +716,11 @@ function resolveThreadRequestModelProvider(params: {
   }
   if (
     isCodexAppServerNativeAuthProfile(params) &&
-    (modelProvider.toLowerCase() === "openai" || modelProvider.toLowerCase() === "openai-codex")
+    (modelProvider.toLowerCase() === "openai" || modelProvider.toLowerCase() === "openai")
   ) {
     return undefined;
   }
-  return modelProvider.toLowerCase() === "openai-codex" ? "openai" : modelProvider;
+  return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
 }
 
 function buildAgentLookup(params: {

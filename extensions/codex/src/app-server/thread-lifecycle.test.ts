@@ -23,7 +23,7 @@ function createAttemptParams(params: {
   const authProfileProviders =
     params.authProfileProviders ??
     (params.authProfileId
-      ? { [params.authProfileId]: params.authProfileProvider ?? "openai-codex" }
+      ? { [params.authProfileId]: params.authProfileProvider ?? "openai" }
       : {});
   return {
     provider: params.provider,
@@ -552,7 +552,7 @@ describe("Codex app-server turn params", () => {
 });
 
 describe("Codex app-server model provider selection", () => {
-  it.each(["openai", "openai-codex"])(
+  it.each(["openai", "openai"])(
     "omits public %s modelProvider when forwarding native Codex auth on thread/start",
     (provider) => {
       const request = buildThreadStartParams(
@@ -573,7 +573,7 @@ describe("Codex app-server model provider selection", () => {
     const request = buildThreadResumeParams(
       createAttemptParams({
         provider: "openai",
-        authProfileProviders: { bound: "openai-codex" },
+        authProfileProviders: { bound: "openai" },
       }),
       {
         threadId: "thread-1",
@@ -590,7 +590,7 @@ describe("Codex app-server model provider selection", () => {
     const request = buildThreadStartParams(
       createAttemptParams({
         provider: "openai",
-        authProfileId: "openai-codex:work",
+        authProfileId: "openai:work",
         authProfileProvider: "openai",
       }),
       {

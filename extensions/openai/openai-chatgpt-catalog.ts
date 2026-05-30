@@ -6,7 +6,7 @@ const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 export function buildOpenAICodexProvider(): ModelProviderConfig {
   return {
     baseUrl: OPENAI_CODEX_BASE_URL,
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     models: [],
   };
 }

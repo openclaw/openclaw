@@ -8,7 +8,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: ssrfMocks.fetchWithSsrFGuard,
 }));
 
-import { openaiCodexOAuthProvider, testing } from "./openai-codex-oauth-flow.runtime.js";
+import { openaiCodexOAuthProvider, testing } from "./openai-chatgpt-oauth-flow.runtime.js";
 
 function timeoutError(): Error {
   return new DOMException("timed out", "TimeoutError");
@@ -96,7 +96,7 @@ describe("OpenAI Codex OAuth flow", () => {
 
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
-        auditContext: "openai-codex-oauth-token",
+        auditContext: "openai-chatgpt-oauth-token",
         timeoutMs: 5,
       }),
     );
@@ -149,7 +149,7 @@ describe("OpenAI Codex OAuth flow", () => {
 
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
-        auditContext: "openai-codex-oauth-token",
+        auditContext: "openai-chatgpt-oauth-token",
         timeoutMs: 5,
       }),
     );

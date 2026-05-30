@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveCodexAccessTokenExpiry } from "./openai-codex-auth-identity.js";
-import { loginOpenAICodexDeviceCode } from "./openai-codex-device-code.js";
+import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
+import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
 
 function createJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");

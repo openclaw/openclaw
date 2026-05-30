@@ -78,9 +78,7 @@ async function copyPortableAuthProfiles(params: {
   destAuthPath: string;
   sourceAgentDir: string;
 }): Promise<{ copied: number; skipped: number }> {
-  const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir, {
-    resolveLegacyOAuthSidecars: false,
-  });
+  const sourceStore = loadPersistedAuthProfileStore(params.sourceAgentDir);
   if (!sourceStore || Object.keys(sourceStore.profiles).length === 0) {
     return { copied: 0, skipped: 0 };
   }
@@ -339,9 +337,7 @@ export async function agentsAddCommand(
         (await pathExists(sourceAuthPath)) &&
         !(await pathExists(destAuthPath))
       ) {
-        const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir, {
-          resolveLegacyOAuthSidecars: false,
-        });
+        const sourceStore = loadPersistedAuthProfileStore(sourceAgentDir);
         const portable = sourceStore
           ? buildPortableAuthProfileSecretsStoreForAgentCopy(sourceStore)
           : undefined;

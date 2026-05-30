@@ -254,7 +254,7 @@ function resolveModelRouteHint(provider: string): string | undefined {
   if (normalized === "openai") {
     return "Codex runtime route";
   }
-  if (normalized === "openai-codex") {
+  if (normalized === "openai") {
     return "legacy Codex OAuth route";
   }
   return undefined;

@@ -37,7 +37,7 @@ describe("warnIfModelConfigLooksOff", () => {
     const config = {
       agents: {
         defaults: {
-          model: "openai-codex/gpt-5.5",
+          model: "openai/gpt-5.5",
         },
       },
     } as OpenClawConfig;
@@ -47,13 +47,10 @@ describe("warnIfModelConfigLooksOff", () => {
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).toHaveBeenCalledOnce();
     expect(listProfilesForProvider).toHaveBeenCalledTimes(2);
-    expect(listProfilesForProvider).toHaveBeenCalledWith(
-      { version: 1, profiles: {} },
-      "openai-codex",
-    );
+    expect(listProfilesForProvider).toHaveBeenCalledWith({ version: 1, profiles: {} }, "openai");
     expect(listProfilesForProvider).toHaveBeenCalledWith({ version: 1, profiles: {} }, "openai");
     expect(note).toHaveBeenCalledWith(
-      'No auth configured for provider "openai-codex". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai`, `openclaw configure`, or set an API key env var.',
+      'No auth configured for provider "openai". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai`, `openclaw configure`, or set an API key env var.',
       "Model check",
     );
   });
@@ -64,9 +61,9 @@ describe("warnIfModelConfigLooksOff", () => {
     const store = {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
@@ -75,7 +72,7 @@ describe("warnIfModelConfigLooksOff", () => {
     } satisfies AuthProfileStore;
     ensureAuthProfileStore.mockReturnValue(store);
     listProfilesForProvider.mockImplementation((_store, provider) =>
-      provider === "openai-codex" ? ["openai-codex:default"] : [],
+      provider === "openai" ? ["openai:default"] : [],
     );
     const config = {
       agents: {
@@ -91,7 +88,7 @@ describe("warnIfModelConfigLooksOff", () => {
 
     expect(note).not.toHaveBeenCalled();
     expect(listProfilesForProvider).toHaveBeenCalledWith(store, "openai");
-    expect(listProfilesForProvider).toHaveBeenCalledWith(store, "openai-codex");
+    expect(listProfilesForProvider).toHaveBeenCalledWith(store, "openai");
     expect(resolveEnvApiKey).not.toHaveBeenCalled();
     expect(hasUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
@@ -100,7 +97,7 @@ describe("warnIfModelConfigLooksOff", () => {
     const note = vi.fn(async () => {});
     const prompter = makePrompter({ note });
     listProfilesForProvider.mockImplementation((_store, provider) =>
-      provider === "openai-codex" ? ["openai-codex:default"] : [],
+      provider === "openai" ? ["openai:default"] : [],
     );
     const config = {
       agents: {
@@ -135,7 +132,7 @@ describe("warnIfModelConfigLooksOff", () => {
     const config = {
       agents: {
         defaults: {
-          model: "openai-codex/gpt-5.5",
+          model: "openai/gpt-5.5",
         },
       },
     } as OpenClawConfig;

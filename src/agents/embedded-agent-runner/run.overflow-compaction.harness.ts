@@ -254,7 +254,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
     id: "codex",
     label: "Codex",
     supports: (ctx) =>
-      ctx.provider === "codex" || ctx.provider === "openai-codex" || ctx.provider === "openai"
+      ctx.provider === "codex" || ctx.provider === "openai" || ctx.provider === "openai"
         ? { supported: true, priority: 100 }
         : { supported: false },
     runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),

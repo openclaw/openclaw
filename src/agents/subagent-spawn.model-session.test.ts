@@ -71,7 +71,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     const result = await spawnSubagentDirect(
       {
         task: "test",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -87,7 +87,7 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: /^agent:main:subagent:/,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       overrideSource: "user",
     });

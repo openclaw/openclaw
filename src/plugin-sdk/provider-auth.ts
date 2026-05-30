@@ -108,7 +108,7 @@ export {
   resolveOpenAICodexAuthIdentity,
   resolveOpenAICodexImportProfileName,
   type OpenAICodexAuthIdentity,
-} from "./provider-openai-codex-auth.js";
+} from "./provider-openai-chatgpt-auth.js";
 export {
   generateHexPkceVerifierChallenge,
   generatePkceVerifierChallenge,
@@ -405,7 +405,6 @@ function resolveUsableProviderAuthProfiles(params: {
 
   const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: params.allowKeychainPrompt ?? false,
-    resolveLegacyOAuthSidecars: true,
   });
   return {
     agentDir,

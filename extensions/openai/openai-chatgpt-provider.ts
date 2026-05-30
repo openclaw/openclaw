@@ -33,9 +33,9 @@ import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
-import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
-import { loginOpenAICodexDeviceCode } from "./openai-codex-device-code.js";
-import { loginOpenAICodexOAuth } from "./openai-codex-oauth.runtime.js";
+import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
+import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
+import { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -46,7 +46,6 @@ import {
 import { resolveOpenAICodexThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
-const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_CODEX_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
 const OPENAI_CODEX_LOGIN_ASSISTANT_PRIORITY = -30;
 const OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY = -10;
@@ -109,7 +108,7 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
 
 function isOpenAIOrLegacyCodexProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
-  return normalized === PROVIDER_ID || normalized === LEGACY_OPENAI_CODEX_PROVIDER_ID;
+  return normalized === PROVIDER_ID;
 }
 
 function isLegacyCodexCompatBaseUrl(baseUrl?: string): boolean {
@@ -132,10 +131,12 @@ function normalizeCodexTransportFields(params: {
   const api =
     useCodexTransport &&
     (!params.api || params.api === "openai-responses" || params.api === "openai-completions")
-      ? "openai-codex-responses"
+      ? "openai-chatgpt-responses"
       : (params.api ?? undefined);
   const baseUrl =
-    api === "openai-codex-responses" && useCodexTransport ? OPENAI_CODEX_BASE_URL : params.baseUrl;
+    api === "openai-chatgpt-responses" && useCodexTransport
+      ? OPENAI_CODEX_BASE_URL
+      : params.baseUrl;
   return { api, baseUrl };
 }
 
@@ -225,7 +226,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       normalizeModelCompat({
         id: trimmedModelId,
         name: trimmedModelId,
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: PROVIDER_ID,
         baseUrl: synthBaseUrl,
         reasoning: true,
@@ -280,7 +281,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
   }
   patch = {
     ...patch,
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     baseUrl: synthBaseUrl,
   };
 
@@ -304,7 +305,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
         lower === OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID
           ? OPENAI_CODEX_GPT_54_MODEL_ID
           : trimmedModelId,
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       provider: PROVIDER_ID,
       baseUrl: synthBaseUrl,
       reasoning: true,
@@ -351,7 +352,7 @@ function withCodexTransport(
   }
   return normalizeModelCompat({
     ...model,
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     baseUrl,
   } as ProviderRuntimeModel);
 }
@@ -381,7 +382,7 @@ function buildOpenAICodexAuthConfigPatch(): NonNullable<ProviderAuthResult["conf
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
-    const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
+    const { refreshOpenAICodexToken } = await import("./openai-chatgpt-provider.runtime.js");
     const refreshed = await refreshOpenAICodexToken(cred.refresh);
     const identity = resolveCodexAuthIdentity({
       accessToken: refreshed.access,

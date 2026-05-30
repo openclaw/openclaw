@@ -78,7 +78,8 @@ async function refreshViaProviderRuntime(refreshToken: string): Promise<OAuthCre
 
 export async function loginOpenAICodex(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
   throwIfOAuthLoginAborted(callbacks.signal);
-  const { loginOpenAICodexOAuth } = await import("../../../plugins/provider-openai-codex-oauth.js");
+  const { loginOpenAICodexOAuth } =
+    await import("../../../plugins/provider-openai-chatgpt-oauth.js");
   const manualCodeInput = callbacks.onManualCodeInput;
   const onManualCodeInput = manualCodeInput
     ? async () => await withOAuthLoginAbort(manualCodeInput(), callbacks.signal)

@@ -223,7 +223,7 @@ const oauthManager = createOAuthManager({
       credential,
     }),
   readFallbackCredential: ({ profileId, credential }) =>
-    credential.provider === "openai" || credential.provider === "openai-codex"
+    credential.provider === "openai" || credential.provider === "openai"
       ? readExternalCliFallbackCredential({
           profileId,
           credential,

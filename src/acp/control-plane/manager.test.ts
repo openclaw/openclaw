@@ -1359,7 +1359,7 @@ describe("AcpSessionManager", () => {
         acp: {
           ...readySessionMeta(),
           runtimeOptions: {
-            model: "openai-codex/gpt-5.4",
+            model: "openai/gpt-5.4",
           },
         },
       };
@@ -1376,7 +1376,7 @@ describe("AcpSessionManager", () => {
 
     expectRecordFields(mockCallArg(runtimeState.ensureSession), {
       sessionKey,
-      model: "openai-codex/gpt-5.4",
+      model: "openai/gpt-5.4",
     });
   });
 
@@ -1947,7 +1947,7 @@ describe("AcpSessionManager", () => {
       storeSessionKey: "agent:codex:acp:session-a",
       acp: readySessionMeta({
         runtimeOptions: {
-          model: "openai-codex/gpt-5.4",
+          model: "openai/gpt-5.4",
           thinking: "high",
         },
       }),
@@ -1960,20 +1960,20 @@ describe("AcpSessionManager", () => {
       agent: "codex",
       mode: "persistent",
       runtimeOptions: {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
     });
 
     expect(extractRuntimeOptionsFromUpserts()).toEqual([
       {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
     ]);
     expectRecordFields(mockCallArg(runtimeState.ensureSession), {
       sessionKey: "agent:codex:acp:session-a",
-      model: "openai-codex/gpt-5.4",
+      model: "openai/gpt-5.4",
       thinking: "high",
     });
   });
@@ -3741,7 +3741,7 @@ describe("AcpSessionManager", () => {
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       key: "model",
-      value: "openai-codex/gpt-5.4",
+      value: "openai/gpt-5.4",
     });
     expect(runtimeState.setMode).not.toHaveBeenCalled();
 
@@ -4210,7 +4210,7 @@ describe("AcpSessionManager", () => {
         ...readySessionMeta(),
         runtimeOptions: {
           runtimeMode: "plan",
-          model: "openai-codex/gpt-5.4",
+          model: "openai/gpt-5.4",
           thinking: "high",
           permissionProfile: "strict",
           timeoutSeconds: 120,
@@ -4232,7 +4232,7 @@ describe("AcpSessionManager", () => {
     });
     expectMockCallFields(runtimeState.setConfigOption, {
       key: "model",
-      value: "openai-codex/gpt-5.4",
+      value: "openai/gpt-5.4",
     });
     expectMockCallFields(runtimeState.setConfigOption, {
       key: "thinking",

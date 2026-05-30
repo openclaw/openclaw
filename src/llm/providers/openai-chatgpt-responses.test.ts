@@ -5,7 +5,7 @@ import {
   extractOpenAICodexAccountId,
   resetOpenAICodexWebSocketDebugStats,
   streamOpenAICodexResponses,
-} from "./openai-codex-responses.js";
+} from "./openai-chatgpt-responses.js";
 
 function createJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -84,15 +84,15 @@ describe("streamOpenAICodexResponses transport", () => {
   const model = {
     id: "gpt-5.5",
     name: "GPT-5.5",
-    api: "openai-codex-responses",
-    provider: "openai-codex",
+    api: "openai-chatgpt-responses",
+    provider: "openai",
     baseUrl: "https://chatgpt.test/backend-api",
     reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 16_000,
-  } satisfies Model<"openai-codex-responses">;
+  } satisfies Model<"openai-chatgpt-responses">;
 
   const context = {
     messages: [{ role: "user", content: "hi", timestamp: 1 }],

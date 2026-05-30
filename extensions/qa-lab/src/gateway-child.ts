@@ -437,11 +437,11 @@ function expandQaLiveProviderConfigIds(
   providers: Record<string, unknown>,
 ) {
   const expanded = new Set(providerIds);
-  if (expanded.has("openai-codex")) {
+  if (expanded.has("openai")) {
     expanded.add("openai");
-    expanded.add("openai-codex");
+    expanded.add("openai");
   } else if (expanded.has("openai") && isQaLiveOfficialOpenAiProviderConfig(providers.openai)) {
-    expanded.add("openai-codex");
+    expanded.add("openai");
   }
   return [...expanded];
 }

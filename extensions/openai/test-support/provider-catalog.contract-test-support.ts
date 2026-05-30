@@ -103,7 +103,7 @@ export function describeOpenAIProviderCatalogContract() {
           switch (params.provider) {
             case "azure-openai-responses":
             case "openai":
-            case "openai-codex":
+            case "openai":
               return ["openai"];
             default:
               return undefined;

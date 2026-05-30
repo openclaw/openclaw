@@ -118,7 +118,7 @@ describe("resolveEffectiveRuntimeModel", () => {
     const cfg = {
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://chatgpt.com/backend-api/codex",
             models: [createConfiguredModel()],
           },
@@ -129,7 +129,7 @@ describe("resolveEffectiveRuntimeModel", () => {
     const result = resolveEffectiveRuntimeModel({
       cfg,
       provider: "openai",
-      contextConfigProvider: "openai-codex",
+      contextConfigProvider: "openai",
       modelId: "gpt-5.5",
       runtimeModel: createRuntimeModel(),
     });
@@ -145,7 +145,7 @@ describe("resolveEffectiveRuntimeModel", () => {
     const cfg = {
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://chatgpt.com/backend-api/codex",
             models: [createConfiguredModel()],
           },

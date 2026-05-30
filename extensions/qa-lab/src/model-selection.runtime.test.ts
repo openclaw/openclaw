@@ -40,7 +40,7 @@ describe("qa model selection runtime", () => {
 
   it("prefers the Codex OAuth live default when only Codex auth profiles are available", () => {
     listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
+      provider === "openai" ? ["openai:user@example.com"] : [],
     );
 
     expect(resolveQaPreferredLiveModel()).toBe("openai/gpt-5.5");
@@ -48,13 +48,13 @@ describe("qa model selection runtime", () => {
     expect(loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(undefined, {
       readOnly: true,
       allowKeychainPrompt: false,
-      externalCliProviderIds: ["openai-codex"],
+      externalCliProviderIds: ["openai"],
     });
   });
 
   it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {
     listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai" || provider === "openai-codex" ? [`${provider}:user@example.com`] : [],
+      provider === "openai" || provider === "openai" ? [`${provider}:user@example.com`] : [],
     );
 
     expect(resolveQaPreferredLiveModel()).toBeUndefined();
@@ -63,7 +63,7 @@ describe("qa model selection runtime", () => {
 
   it("leaves mock defaults unchanged", () => {
     listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
+      provider === "openai" ? ["openai:user@example.com"] : [],
     );
 
     expect(defaultQaRuntimeModelForMode("mock-openai")).toBe("mock-openai/gpt-5.5");

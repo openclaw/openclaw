@@ -96,7 +96,7 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
 }
 
 function registerStatusCodexHarness(): void {
-  const codexProviders = new Set(["codex", "openai", "openai-codex"]);
+  const codexProviders = new Set(["codex", "openai", "openai"]);
   const harness: AgentHarness = {
     id: "codex",
     label: "Codex",
@@ -641,9 +641,9 @@ describe("buildStatusReply subagent summary", () => {
           JSON.stringify({
             version: 1,
             profiles: {
-              "openai-codex:status": {
+              "openai:status": {
                 type: "oauth",
-                provider: "openai-codex",
+                provider: "openai",
                 access: "access-token",
                 refresh: "refresh-token",
                 expires: Date.now() + 60 * 60_000,
@@ -657,7 +657,7 @@ describe("buildStatusReply subagent summary", () => {
           updatedAt: Date.now(),
           providers: [
             {
-              provider: "openai-codex",
+              provider: "openai",
               displayName: "Codex",
               windows: [
                 {
@@ -714,21 +714,21 @@ describe("buildStatusReply subagent summary", () => {
         const normalizedCodex = normalizeTestText(codexText);
         const normalizedImplicitCodex = normalizeTestText(implicitCodexText);
         expect(normalizedCodex).toContain("Model: openai/gpt-5.5");
-        expect(normalizedCodex).toContain("oauth (openai-codex:status)");
-        expect(normalizedCodex).toContain("openai-codex:status");
+        expect(normalizedCodex).toContain("oauth (openai:status)");
+        expect(normalizedCodex).toContain("openai:status");
         expect(normalizedCodex).toContain("Usage: 5h 91% left");
         expect(normalizedCodex).toContain("Week 70% left");
         expect(normalizedImplicitCodex).toContain("Model: openai/gpt-5.5");
-        expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
+        expect(normalizedImplicitCodex).toContain("oauth (openai:status)");
         expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
         expect(normalizedImplicitCodex).toContain("Usage: 5h 91% left");
         const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
-          ([params]) => params?.providers?.includes("openai-codex"),
+          ([params]) => params?.providers?.includes("openai"),
         );
         if (!providerUsageCall) {
-          throw new Error("expected provider usage summary call for openai-codex");
+          throw new Error("expected provider usage summary call for openai");
         }
-        expect(providerUsageCall[0]?.providers).toEqual(["openai-codex"]);
+        expect(providerUsageCall[0]?.providers).toEqual(["openai"]);
       },
       {
         env: {
@@ -847,9 +847,9 @@ describe("buildStatusReply subagent summary", () => {
           JSON.stringify({
             version: 1,
             profiles: {
-              "openai-codex:status": {
+              "openai:status": {
                 type: "oauth",
-                provider: "openai-codex",
+                provider: "openai",
                 access: "access-token",
                 refresh: "refresh-token",
                 expires: Date.now() + 60 * 60_000,
@@ -878,7 +878,7 @@ describe("buildStatusReply subagent summary", () => {
             },
             auth: {
               order: {
-                openai: ["openai-codex:status", "openai:backup"],
+                openai: ["openai:status", "openai:backup"],
               },
             },
           },
@@ -904,7 +904,7 @@ describe("buildStatusReply subagent summary", () => {
 
         const normalized = normalizeTestText(text);
         expect(normalized).toContain("Model: openai/gpt-5.5");
-        expect(normalized).toContain("oauth (openai-codex:status)");
+        expect(normalized).toContain("oauth (openai:status)");
         expect(normalized).not.toContain("api-key (openai:backup)");
       },
       { env: { OPENAI_API_KEY: undefined } },
@@ -1024,7 +1024,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "https://chatgpt.com/backend-api/codex",
               models: [codexStatusModel],
             },
@@ -1071,10 +1071,6 @@ describe("buildStatusReply subagent summary", () => {
         models: {
           providers: {
             openai: {
-              baseUrl: "https://api.openai.com/v1",
-              models: [{ ...codexStatusModel, contextWindow: 400_000 }],
-            },
-            "openai-codex": {
               baseUrl: "https://chatgpt.com/backend-api/codex",
               models: [{ ...codexStatusModel, contextWindow: 258_000, contextTokens: 258_000 }],
             },

@@ -380,7 +380,7 @@ describe("plugin registry facade", () => {
       JSON.stringify({
         id: "openai",
         configSchema: { type: "object" },
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
         channels: ["openai-chat"],
       }),
       "utf8",

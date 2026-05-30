@@ -22,7 +22,7 @@ export function buildOpenAICompatibleReplayPolicy(
   if (
     modelApi !== "openai-completions" &&
     modelApi !== "openai-responses" &&
-    modelApi !== "openai-codex-responses" &&
+    modelApi !== "openai-chatgpt-responses" &&
     modelApi !== "azure-openai-responses"
   ) {
     return undefined;
@@ -32,7 +32,7 @@ export function buildOpenAICompatibleReplayPolicy(
   const dropReasoningFromHistory = options.dropReasoningFromHistory ?? true;
   const isResponsesFamily =
     modelApi === "openai-responses" ||
-    modelApi === "openai-codex-responses" ||
+    modelApi === "openai-chatgpt-responses" ||
     modelApi === "azure-openai-responses";
 
   return {

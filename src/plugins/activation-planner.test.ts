@@ -59,7 +59,7 @@ describe("activation planner", () => {
             onAgentHarnesses: ["codex"],
           },
           setup: {
-            providers: [{ id: "openai-codex" }],
+            providers: [{ id: "openai" }],
           },
           channels: [],
           cliBackends: [],
@@ -158,7 +158,7 @@ describe("activation planner", () => {
       resolveManifestActivationPluginIds({
         trigger: {
           kind: "provider",
-          provider: "openai-codex",
+          provider: "openai",
         },
       }),
     ).toEqual(["openai"]);
@@ -295,7 +295,7 @@ describe("activation planner", () => {
       resolveManifestActivationPlan({
         trigger: {
           kind: "provider",
-          provider: "openai-codex",
+          provider: "openai",
         },
       }).entries,
     ).toEqual([

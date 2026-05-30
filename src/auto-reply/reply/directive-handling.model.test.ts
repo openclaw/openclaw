@@ -238,7 +238,7 @@ vi.mock("../../agents/harness/selection.js", () => ({
         ? undefined
         : (modelRuntime ??
           (providerRuntime === "default" ? undefined : providerRuntime) ??
-          (provider === "openai" || provider === "openai-codex" ? "codex" : "auto"));
+          (provider === "openai" || provider === "openai" ? "codex" : "auto"));
     return {
       runtime,
       runtimeSource: modelRuntime ? "model" : providerRuntime ? "provider" : "implicit",
@@ -256,7 +256,7 @@ vi.mock("../../agents/runtime-plan/auth.js", () => ({
   }) => ({
     providerForAuth: provider,
     authProfileProviderForAuth: provider,
-    ...(harnessRuntime === "codex" ? { harnessAuthProvider: "openai-codex" } : {}),
+    ...(harnessRuntime === "codex" ? { harnessAuthProvider: "openai" } : {}),
   }),
 }));
 
@@ -800,9 +800,9 @@ describe("/model chat UX", () => {
 
   it("reports Codex runtime auth for OpenAI status rows", async () => {
     setAuthProfiles({
-      "openai-codex:patrick@example.test": {
+      "openai:patrick@example.test": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
@@ -832,8 +832,8 @@ describe("/model chat UX", () => {
 
     expect(reply?.text).toContain("[openai] endpoint: default auth:");
     expect(reply?.text).not.toContain("[openai] endpoint: default auth: missing");
-    expect(reply?.text).toContain("via codex runtime / openai-codex");
-    expect(reply?.text).toContain("openai-codex:patrick@example.test=OAuth");
+    expect(reply?.text).toContain("via codex runtime / openai");
+    expect(reply?.text).toContain("openai:patrick@example.test=OAuth");
   }, 240_000);
 
   it("keeps direct provider auth labels when OpenAI API key auth exists", async () => {
@@ -843,9 +843,9 @@ describe("/model chat UX", () => {
         provider: "openai",
         key: "sk-openai-direct",
       },
-      "openai-codex:patrick@example.test": {
+      "openai:patrick@example.test": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
@@ -879,9 +879,9 @@ describe("/model chat UX", () => {
 
   it("does not borrow Codex auth when OpenAI model policy pins OpenClaw runtime", async () => {
     setAuthProfiles({
-      "openai-codex:patrick@example.test": {
+      "openai:patrick@example.test": {
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: "access-token",
         refresh: "refresh-token",
         expires: Date.now() + 60_000,
@@ -912,7 +912,7 @@ describe("/model chat UX", () => {
 
     expect(reply?.text).toContain("[openai] endpoint: default auth: missing");
     expect(reply?.text).not.toContain("via codex runtime");
-    expect(reply?.text).not.toContain("openai-codex:patrick@example.test=OAuth");
+    expect(reply?.text).not.toContain("openai:patrick@example.test=OAuth");
   });
 
   it("uses workspace-scoped auth evidence in /model status labels", async () => {
@@ -1219,7 +1219,7 @@ describe("/model chat UX", () => {
         ...baseConfig(),
         models: {
           providers: {
-            "openai-codex": {
+            openai: {
               baseUrl: "https://chatgpt.com/backend-api/codex",
               models: [
                 {
@@ -1734,7 +1734,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
   it.each([
     ["openai", "gpt-5.5"],
-    ["openai-codex", "gpt-5.5"],
+    ["openai", "gpt-5.5"],
   ])("accepts xhigh for %s/%s when catalog marks reasoning support", async (provider, model) => {
     setDirectiveTestProviders([
       {

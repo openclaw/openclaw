@@ -144,7 +144,7 @@ const RETRY_GUARD_MODEL_APIS = new Set([
   "anthropic-messages",
   "bedrock-converse-stream",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
   "openclaw-azure-openai-responses-transport",

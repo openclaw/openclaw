@@ -1,6 +1,6 @@
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import { refreshOpenAICodexToken as refreshOpenAICodexTokenFromFlow } from "./openai-codex-oauth-flow.runtime.js";
-import type { OAuthCredentials } from "./openai-codex-oauth-types.runtime.js";
+import { refreshOpenAICodexToken as refreshOpenAICodexTokenFromFlow } from "./openai-chatgpt-oauth-flow.runtime.js";
+import type { OAuthCredentials } from "./openai-chatgpt-oauth-types.runtime.js";
 
 type OpenAICodexProviderRuntimeDeps = {
   ensureGlobalUndiciEnvProxyDispatcher: typeof ensureGlobalUndiciEnvProxyDispatcher;
@@ -46,10 +46,10 @@ async function getOpenAICodexOAuthApiKey(
   providerId: string,
   credentials: Record<string, OAuthCredentials>,
 ): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
-  if (providerId !== "openai" && providerId !== "openai-codex") {
+  if (providerId !== "openai") {
     throw new Error(`Unknown OAuth provider: ${providerId}`);
   }
-  let creds = credentials[providerId] ?? credentials["openai-codex"];
+  let creds = credentials[providerId];
   if (!creds) {
     return null;
   }

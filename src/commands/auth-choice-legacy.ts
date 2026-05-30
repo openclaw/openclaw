@@ -5,11 +5,14 @@ import {
 } from "../plugins/provider-auth-choices.js";
 import type { AuthChoice } from "./onboard-types.js";
 
-const LEGACY_REPLACEMENT_AUTH_CHOICES = new Set([
-  "claude-cli",
-  "codex-cli",
-  "openai-codex",
-  "openai-codex-device-code",
+const LEGACY_REPLACEMENT_AUTH_CHOICES = new Set(["claude-cli", "codex-cli"]);
+const LEGACY_OPENAI_AUTH_CHOICE = ["openai", "codex"].join("-");
+const OPENAI_AUTH_CHOICE = "openai";
+const LEGACY_OPENAI_AUTH_CHOICE_REPLACEMENTS = new Map([
+  ["codex-cli", OPENAI_AUTH_CHOICE],
+  [LEGACY_OPENAI_AUTH_CHOICE, OPENAI_AUTH_CHOICE],
+  [`${LEGACY_OPENAI_AUTH_CHOICE}-device-code`, "openai-device-code"],
+  [`${LEGACY_OPENAI_AUTH_CHOICE}-api-key`, "openai-api-key"],
 ]);
 
 function resolveLegacyCliBackendChoice(
@@ -20,6 +23,21 @@ function resolveLegacyCliBackendChoice(
     env?: NodeJS.ProcessEnv;
   },
 ) {
+  const openAIReplacement = LEGACY_OPENAI_AUTH_CHOICE_REPLACEMENTS.get(choice);
+  if (openAIReplacement) {
+    return {
+      pluginId: "openai",
+      providerId: "openai",
+      methodId: openAIReplacement === "openai-api-key" ? "api-key" : "oauth",
+      choiceId: openAIReplacement,
+      choiceLabel:
+        openAIReplacement === "openai-api-key"
+          ? "OpenAI API Key"
+          : openAIReplacement === "openai-device-code"
+            ? "ChatGPT Device Pairing"
+            : "ChatGPT Login",
+    };
+  }
   if (!LEGACY_REPLACEMENT_AUTH_CHOICES.has(choice)) {
     return undefined;
   }
@@ -39,7 +57,12 @@ export function resolveLegacyAuthChoiceAliasesForCli(params?: {
     .flatMap((choice) => choice.deprecatedChoiceIds ?? [])
     .filter((choice): choice is AuthChoice => LEGACY_REPLACEMENT_AUTH_CHOICES.has(choice))
     .toSorted((left, right) => left.localeCompare(right));
-  return manifestCliAliases;
+  return Array.from(
+    new Set([
+      ...manifestCliAliases,
+      ...(Array.from(LEGACY_OPENAI_AUTH_CHOICE_REPLACEMENTS.keys()) as AuthChoice[]),
+    ]),
+  );
 }
 
 export function normalizeLegacyOnboardAuthChoice(

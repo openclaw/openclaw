@@ -281,15 +281,15 @@ describe("openai transport stream", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
     const output: OpenAIResponsesOutput = {
       role: "assistant" as const,
       content: [],
@@ -324,11 +324,11 @@ describe("openai transport stream", () => {
       output,
       { push: vi.fn() },
       model,
-      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+      { authProfileId: "openai:oauth", sessionId: "session-123" },
     );
 
     const expectedReplayMetadata = testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-      authProfileId: "openai-codex:oauth",
+      authProfileId: "openai:oauth",
       sessionId: "session-123",
     });
     const thinkingBlock = output.content[0] as {
@@ -490,7 +490,7 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4-codex",
         name: "GPT-5.4 Codex",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         headers: {
@@ -502,7 +502,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       { systemPrompt: "", messages: [] } as never,
     );
 
@@ -583,7 +583,7 @@ describe("openai transport stream", () => {
 
   it("reports the supported transport-aware APIs", () => {
     expect(isTransportAwareApiSupported("openai-responses")).toBe(true);
-    expect(isTransportAwareApiSupported("openai-codex-responses")).toBe(true);
+    expect(isTransportAwareApiSupported("openai-chatgpt-responses")).toBe(true);
     expect(isTransportAwareApiSupported("openai-completions")).toBe(true);
     expect(isTransportAwareApiSupported("azure-openai-responses")).toBe(true);
     expect(isTransportAwareApiSupported("anthropic-messages")).toBe(true);
@@ -623,15 +623,15 @@ describe("openai transport stream", () => {
       createBoundaryAwareStreamFnForModel({
         id: "codex-mini-latest",
         name: "Codex Mini Latest",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">),
+      } satisfies Model<"openai-chatgpt-responses">),
     ).toBeTypeOf("function");
     expect(
       createBoundaryAwareStreamFnForModel({
@@ -687,15 +687,15 @@ describe("openai transport stream", () => {
       {
         id: "codex-mini-latest",
         name: "Codex Mini Latest",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://api.openai.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         proxy: {
           mode: "explicit-proxy",
@@ -709,7 +709,7 @@ describe("openai transport stream", () => {
     expect(resolveTransportAwareSimpleApi(model.api)).toBe("openclaw-openai-responses-transport");
     expectRecordFields(prepared, {
       api: "openclaw-openai-responses-transport",
-      provider: "openai-codex",
+      provider: "openai",
       id: "codex-mini-latest",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
@@ -2325,15 +2325,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400000,
         maxTokens: 128000,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: "",
         messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
@@ -2355,7 +2355,7 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,
@@ -2363,7 +2363,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400000,
         maxTokens: 128000,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: "",
         messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
@@ -2385,15 +2385,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.5",
         name: "GPT-5.5",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://proxy.example.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400000,
         maxTokens: 128000,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: "",
         messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
@@ -2414,15 +2414,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],
@@ -2467,7 +2467,7 @@ describe("openai transport stream", () => {
         id: "gpt-5.5",
         name: "GPT-5.5",
         api: "openclaw-openai-responses-transport" as Api,
-        provider: "openai-codex",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api/codex",
         reasoning: true,
         input: ["text"],
@@ -2528,15 +2528,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       payload,
     );
 
@@ -2555,15 +2555,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://proxy.example.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [{ role: "user", content: "Hello", timestamp: 1 }],
@@ -2655,15 +2655,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://proxy.example.com/v1",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       payload,
     );
 
@@ -2675,22 +2675,22 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: "system",
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -2780,15 +2780,15 @@ describe("openai transport stream", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -2797,8 +2797,8 @@ describe("openai transport stream", () => {
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -2822,7 +2822,7 @@ describe("openai transport stream", () => {
                 openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
                   model,
                   {
-                    authProfileId: "openai-codex:oauth",
+                    authProfileId: "openai:oauth",
                     sessionId: "session-123",
                   },
                 ),
@@ -2847,7 +2847,7 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+      { authProfileId: "openai:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
@@ -2948,15 +2948,15 @@ describe("openai transport stream", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -2965,8 +2965,8 @@ describe("openai transport stream", () => {
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -2990,7 +2990,7 @@ describe("openai transport stream", () => {
                 openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
                   model,
                   {
-                    authProfileId: "openai-codex:oauth",
+                    authProfileId: "openai:oauth",
                     sessionId: "different-session",
                   },
                 ),
@@ -3000,7 +3000,7 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+      { authProfileId: "openai:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
@@ -3021,15 +3021,15 @@ describe("openai transport stream", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -3038,8 +3038,8 @@ describe("openai transport stream", () => {
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -3063,7 +3063,7 @@ describe("openai transport stream", () => {
                 openclawReasoningReplay: testing.buildOpenAIResponsesReasoningReplayMetadata(
                   model,
                   {
-                    authProfileId: "openai-codex:old-oauth",
+                    authProfileId: "openai:old-oauth",
                     sessionId: "session-123",
                   },
                 ),
@@ -3073,7 +3073,7 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { authProfileId: "openai-codex:new-oauth", sessionId: "session-123" },
+      { authProfileId: "openai:new-oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
@@ -3094,15 +3094,15 @@ describe("openai transport stream", () => {
     const model = {
       id: "gpt-5.4",
       name: "GPT-5.4",
-      api: "openai-codex-responses",
-      provider: "openai-codex",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
       baseUrl: "https://proxy.example.com/v1",
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: 8192,
-    } satisfies Model<"openai-codex-responses">;
+    } satisfies Model<"openai-chatgpt-responses">;
 
     const params = buildOpenAIResponsesParams(
       model,
@@ -3111,8 +3111,8 @@ describe("openai transport stream", () => {
         messages: [
           {
             role: "assistant",
-            api: "openai-codex-responses",
-            provider: "openai-codex",
+            api: "openai-chatgpt-responses",
+            provider: "openai",
             model: "gpt-5.4",
             usage: {
               input: 0,
@@ -3137,7 +3137,7 @@ describe("openai transport stream", () => {
                     },
                     model,
                     {
-                      authProfileId: "openai-codex:oauth",
+                      authProfileId: "openai:oauth",
                       sessionId: "session-123",
                     },
                   ),
@@ -3148,7 +3148,7 @@ describe("openai transport stream", () => {
         ],
         tools: [],
       } as never,
-      { authProfileId: "openai-codex:oauth", sessionId: "session-123" },
+      { authProfileId: "openai:oauth", sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
@@ -3369,15 +3369,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
         messages: [],
@@ -3615,15 +3615,15 @@ describe("openai transport stream", () => {
       {
         id: "gpt-5.1-codex-mini",
         name: "gpt-5.1-codex-mini",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-codex-responses">,
+      } satisfies Model<"openai-chatgpt-responses">,
       {
         systemPrompt: "system",
         messages: [],
@@ -3649,12 +3649,12 @@ describe("openai transport stream", () => {
       },
     },
     {
-      label: "openai-codex",
+      label: "openai",
       model: {
         id: "gpt-5.4",
         name: "GPT-5.4",
-        api: "openai-codex-responses",
-        provider: "openai-codex",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
       },
     },
@@ -3736,7 +3736,7 @@ describe("openai transport stream", () => {
       role: "assistant",
       phase: "commentary",
     });
-    if (label === "openai-codex") {
+    if (label === "openai") {
       expect(assistantItem?.id).toBeUndefined();
     } else {
       expect(assistantItem?.id).toBe("msg_commentary");

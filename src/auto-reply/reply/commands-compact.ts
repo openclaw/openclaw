@@ -6,7 +6,7 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   OPENAI_PROVIDER_ID,
   resolveContextConfigProviderForRuntime,
-} from "../../agents/openai-codex-routing.js";
+} from "../../agents/openai-routing.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";

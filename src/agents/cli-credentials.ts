@@ -329,7 +329,7 @@ function readCodexKeychainCredentials(options?: {
 
     return {
       type: "oauth",
-      provider: "openai-codex" as OAuthProvider,
+      provider: "openai" as OAuthProvider,
       access: accessToken,
       refresh: refreshToken,
       expires,
@@ -664,7 +664,7 @@ export function readCodexCliCredentials(options?: {
 
   return {
     type: "oauth",
-    provider: "openai-codex" as OAuthProvider,
+    provider: "openai" as OAuthProvider,
     access: accessToken,
     refresh: refreshToken,
     expires,

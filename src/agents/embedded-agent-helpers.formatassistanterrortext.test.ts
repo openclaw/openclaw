@@ -340,7 +340,7 @@ describe("formatAssistantErrorText", () => {
 
   it("returns an explicit re-authentication message for OAuth refresh failures", () => {
     const msg = makeAssistantError(
-      "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
+      "OAuth token refresh failed for openai: invalid_grant. Please try again or re-authenticate.",
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh failed. Re-authenticate this provider and try again.",
@@ -365,7 +365,7 @@ describe("formatAssistantErrorText", () => {
 
   it("returns a timeout-specific message for OAuth refresh hard timeouts", () => {
     const msg = makeAssistantError(
-      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
@@ -376,7 +376,7 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
     );
-    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+    expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
       "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
     );
   });
@@ -385,7 +385,7 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"},"code":401}',
     );
-    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).toBe(
+    expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
       "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
     );
   });
@@ -403,7 +403,7 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError(
       '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
     );
-    expect(formatAssistantErrorText(msg, { provider: "openai-codex" })).not.toContain(
+    expect(formatAssistantErrorText(msg, { provider: "openai" })).not.toContain(
       "required OpenAI Codex scopes",
     );
   });

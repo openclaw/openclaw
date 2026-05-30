@@ -1,6 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./openai-codex-oauth.runtime.js";
+import { testing } from "./openai-chatgpt-oauth.runtime.js";
 
 describe("OpenAI Codex OAuth runtime", () => {
   afterEach(() => {

@@ -418,7 +418,7 @@ export function registerModelsCli(program: Command) {
   auth
     .command("paste-api-key")
     .description("Paste an API key into auth-profiles.json and update config")
-    .requiredOption("--provider <name>", "Provider id (e.g. openai-codex)")
+    .requiredOption("--provider <name>", "Provider id (e.g. openai)")
     .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
     .action(async (opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {

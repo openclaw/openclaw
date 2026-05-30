@@ -4243,7 +4243,7 @@ describe("resolveProviderVariant", () => {
   it("tags prefix-qualified openai models", () => {
     expect(resolveProviderVariant("openai/gpt-5.5")).toBe("openai");
     expect(resolveProviderVariant("openai:gpt-5.5")).toBe("openai");
-    expect(resolveProviderVariant("openai-codex/gpt-5.5")).toBe("openai");
+    expect(resolveProviderVariant("openai/gpt-5.5")).toBe("openai");
   });
 
   it("tags prefix-qualified anthropic models", () => {

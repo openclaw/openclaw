@@ -334,7 +334,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       data: {
         phase: "fallback_step",
         fallbackStepFinalOutcome: "next_fallback",
-        fallbackStepFromModel: "openai-codex/gpt-5.5",
+        fallbackStepFromModel: "openai/gpt-5.5",
         fallbackStepToModel: "openrouter/meta-llama/llama-3.1-70b",
       },
     });
@@ -1173,7 +1173,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       localMode: true,
       state: {
         activeChatRunId: null,
-        sessionInfo: { modelProvider: "openai-codex" },
+        sessionInfo: { modelProvider: "openai" },
       },
     });
 
@@ -1186,7 +1186,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.addSystem).toHaveBeenCalledWith(
-      "auth or provider access failed for openai-codex. Run /auth openai-codex to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.",
+      "auth or provider access failed for openai. Run /auth openai to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.",
     );
   });
 

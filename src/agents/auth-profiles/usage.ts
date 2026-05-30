@@ -113,7 +113,7 @@ function shouldProbeWhamForFailure(
 ): boolean {
   const normalizedProvider = normalizeProviderId(provider ?? "");
   return (
-    (normalizedProvider === "openai" || normalizedProvider === "openai-codex") &&
+    (normalizedProvider === "openai" || normalizedProvider === "openai") &&
     (reason === "rate_limit" ||
       reason === "empty_response" ||
       reason === "no_error_details" ||
@@ -208,9 +208,13 @@ async function probeWhamForCooldown(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WHAM_TIMEOUT_MS);
   try {
+    const version = process.env.OPENCLAW_VERSION?.trim();
     const defaultHeaders: Record<string, string> = {
       Authorization: `Bearer ${profile.access}`,
       Accept: "application/json",
+      originator: "openclaw",
+      ...(version ? { version } : {}),
+      "User-Agent": `openclaw/${version || "dev"}`,
     };
     if (profile.accountId) {
       defaultHeaders["ChatGPT-Account-Id"] = profile.accountId;

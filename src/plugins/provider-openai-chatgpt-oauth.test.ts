@@ -18,7 +18,7 @@ vi.mock("../plugin-sdk/facade-runtime.js", () => ({
     providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
-import { loginOpenAICodexOAuth } from "./provider-openai-codex-oauth.js";
+import { loginOpenAICodexOAuth } from "./provider-openai-chatgpt-oauth.js";
 
 function createPrompter(): WizardPrompter {
   const spin = { update: vi.fn(), stop: vi.fn() };
@@ -47,7 +47,7 @@ function createRuntime(): RuntimeEnv {
 function createCredential() {
   return {
     type: "oauth" as const,
-    provider: "openai-codex",
+    provider: "openai",
     access: "access-token",
     refresh: "refresh-token",
     expires: Date.now() + 60_000,
@@ -81,7 +81,7 @@ describe("loginOpenAICodexOAuth", () => {
     const controller = new AbortController();
     const onManualCodeInput = vi.fn(async () => "manual-code");
     providerRuntimeMocks.runOAuth.mockResolvedValueOnce({
-      profiles: [{ profileId: "openai-codex:user@example.com", credential }],
+      profiles: [{ profileId: "openai:user@example.com", credential }],
     });
 
     const result = await loginOpenAICodexOAuth({

@@ -197,7 +197,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     provider: string;
     context: { listProfileIds: (providerId: string) => string[] };
   }) => {
-    if (params.provider === "openai" && params.context.listProfileIds("openai-codex").length > 0) {
+    if (params.provider === "openai" && params.context.listProfileIds("openai").length > 0) {
       return 'No API key found for provider "openai". Use openai/gpt-5.5.';
     }
     return undefined;
@@ -408,9 +408,9 @@ describe("getApiKeyForModel", () => {
         await state.writeAuthProfiles({
           version: 1,
           profiles: {
-            "openai-codex:default": {
+            "openai:default": {
               type: "oauth",
-              provider: "openai-codex",
+              provider: "openai",
               ...oauthFixture,
             },
           },
@@ -418,8 +418,8 @@ describe("getApiKeyForModel", () => {
 
         const model = {
           id: "codex-mini-latest",
-          provider: "openai-codex",
-          api: "openai-codex-responses",
+          provider: "openai",
+          api: "openai-chatgpt-responses",
         } as Model;
 
         const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
@@ -427,7 +427,7 @@ describe("getApiKeyForModel", () => {
         });
         const apiKey = await getApiKeyForModel({
           model,
-          profileId: "openai-codex:default",
+          profileId: "openai:default",
           store,
           agentDir: process.env.OPENCLAW_AGENT_DIR,
         });
@@ -465,7 +465,7 @@ describe("getApiKeyForModel", () => {
       model: {
         id: "gpt-5.5",
         provider: "openai",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
       } as Model,
       store,
     });
@@ -596,7 +596,7 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("suggests openai-codex when only Codex OAuth is configured", async () => {
+  it("suggests openai when only Codex OAuth is configured", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -610,9 +610,9 @@ describe("getApiKeyForModel", () => {
         await state.writeAuthProfiles({
           version: 1,
           profiles: {
-            "openai-codex:default": {
+            "openai:default": {
               type: "oauth",
-              provider: "openai-codex",
+              provider: "openai",
               ...oauthFixture,
             },
           },

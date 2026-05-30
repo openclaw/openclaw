@@ -163,7 +163,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         channels: [],
         origin: "bundled",
         enabledByDefault: true,
-        providers: ["openai", "openai-codex"],
+        providers: ["openai", "openai"],
         cliBackends: [],
         contracts: {
           speechProviders: ["openai"],

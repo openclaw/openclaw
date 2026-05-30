@@ -121,7 +121,8 @@ function buildPdfExtractionContext(
   // Add the user prompt
   content.push({ type: "text", text: prompt });
 
-  const systemPrompt = model?.api === "openai-codex-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
+  const systemPrompt =
+    model?.api === "openai-chatgpt-responses" ? CODEX_PDF_INSTRUCTIONS : undefined;
 
   return {
     ...(systemPrompt ? { systemPrompt } : {}),

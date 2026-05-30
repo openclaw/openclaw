@@ -292,7 +292,7 @@ function createResetAwareSessionStore(
 const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
-const CODEX_ACP_OPENCLAW_PREFIX = "openai-codex/";
+const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
 const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["off", undefined],
@@ -437,7 +437,7 @@ function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never 
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
     detail ??
-      `Codex ACP model "${rawModel}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
+      `Codex ACP model "${rawModel}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
   );
 }
 
@@ -498,7 +498,7 @@ function normalizeCodexAcpModelOverride(
   if (parts.length > 2) {
     failUnsupportedCodexAcpModel(
       raw,
-      `Codex ACP model "${raw}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
+      `Codex ACP model "${raw}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
     );
   }
   const model = (parts[0] ?? "").trim();
@@ -506,7 +506,7 @@ function normalizeCodexAcpModelOverride(
   if (!model) {
     failUnsupportedCodexAcpModel(
       raw,
-      `Codex ACP model "${raw}" is not supported. Use openai-codex/<model> or <model>/<reasoning-effort>.`,
+      `Codex ACP model "${raw}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
     );
   }
   const reasoningEffort = thinkingReasoningEffort ?? modelReasoningEffort;

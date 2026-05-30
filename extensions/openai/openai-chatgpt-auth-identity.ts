@@ -1,5 +1,5 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { trimNonEmptyString } from "./openai-codex-shared.js";
+import { trimNonEmptyString } from "./openai-chatgpt-shared.js";
 
 type CodexJwtPayload = {
   exp?: unknown;
