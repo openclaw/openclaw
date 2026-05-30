@@ -60,13 +60,17 @@ vi.mock("./monitor-reply-cache.js", async () => {
 
 const { imessageMessageActions } = await import("./actions.js");
 
-function cfg(actions?: Record<string, boolean | undefined>): OpenClawConfig {
+function cfg(
+  actions?: Record<string, boolean | undefined>,
+  imessage?: Record<string, unknown>,
+): OpenClawConfig {
   return {
     channels: {
       imessage: {
         cliPath: "imsg",
         dbPath: "/tmp/messages.db",
         actions,
+        ...imessage,
       },
     },
   } as OpenClawConfig;
@@ -439,6 +443,30 @@ describe("imessage message actions", () => {
     });
   });
 
+  it("blocks reply when the group target is not allowlisted", async () => {
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_identifier:allowed-thread"],
+        }),
+        params: {
+          chatIdentifier: "blocked-thread",
+          messageId: "message-guid",
+          text: "reply",
+        },
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+  });
+
   describe("reply with attachment (openclaw/imsg#114 plumbing)", () => {
     // The core message-action runner hydrates path/media/filePath/etc.
     // through the outbound media resolver (mediaLocalRoots/sandbox/size)
@@ -807,6 +835,58 @@ describe("imessage message actions", () => {
       ]);
     });
 
+    it("blocks sendWithEffect targets outside iMessage allowlist policy", async () => {
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "ok" });
+
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "sendWithEffect",
+          cfg: {
+            channels: {
+              imessage: {
+                cliPath: "imsg",
+                dbPath: "/tmp/messages.db",
+                dmPolicy: "allowlist",
+                allowFrom: ["+15551230000"],
+              },
+            },
+          } as OpenClawConfig,
+          params: {
+            to: "+15559999999",
+            text: "boom",
+            effect: "slam",
+          },
+        } as never),
+      ).rejects.toThrow(
+        "iMessage outbound blocked: target is not in channels.imessage.allowFrom/defaultTo",
+      );
+      expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+      expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    });
+
+    it("blocks sendWithEffect when the group target is not allowlisted", async () => {
+      runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "ok" });
+
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action: "sendWithEffect",
+          cfg: cfg(undefined, {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["chat_guid:iMessage;+;allowed"],
+          }),
+          params: {
+            chatGuid: "iMessage;+;blocked",
+            text: "boom",
+            effect: "slam",
+          },
+        } as never),
+      ).rejects.toThrow(
+        "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+      );
+      expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+      expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+    });
+
     it.each([
       ["echo", "com.apple.messages.effect.CKEchoEffect"],
       ["happybirthday", "com.apple.messages.effect.CKHappyBirthdayEffect"],
@@ -909,4 +989,25 @@ describe("imessage message actions", () => {
       expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
     },
   );
+
+  it("blocks upload-file when the group target is not allowlisted", async () => {
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "upload-file",
+        cfg: cfg(undefined, {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["chat_guid:iMessage;+;allowed"],
+        }),
+        params: {
+          chatGuid: "iMessage;+;blocked",
+          filename: "photo.jpg",
+          buffer: Buffer.from("image").toString("base64"),
+        },
+      } as never),
+    ).rejects.toThrow(
+      "iMessage outbound blocked: target is not in channels.imessage.groupAllowFrom",
+    );
+    expect(probeMock.probeIMessagePrivateApi).not.toHaveBeenCalled();
+    expect(runtimeMock.sendAttachment).not.toHaveBeenCalled();
+  });
 });

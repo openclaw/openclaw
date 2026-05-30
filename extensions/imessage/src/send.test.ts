@@ -80,6 +80,154 @@ describe("sendMessageIMessage receipts", () => {
     vi.useRealTimers();
   });
 
+  it("blocks explicit chat targets when group targets are disabled", async () => {
+    const client = createClient({ guid: "p:0/blocked" });
+
+    await expect(
+      sendMessageIMessage("chat_id:42", "hello", {
+        config: {
+          channels: {
+            imessage: {
+              dmPolicy: "allowlist",
+              allowFrom: ["+15551230000"],
+              defaultTo: "+15551230000",
+              groupPolicy: "disabled",
+            },
+          },
+        },
+        client,
+      }),
+    ).rejects.toThrow("iMessage outbound blocked: group targets are disabled");
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit chat targets listed by group allowlist policy", async () => {
+    const client = createClient({ guid: "p:0/group" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["chat_id:42"],
+          },
+        },
+      },
+      client,
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 42 }),
+      expect.any(Object),
+    );
+  });
+
+  it("allows explicit chat targets through configured group access groups", async () => {
+    const client = createClient({ guid: "p:0/group-access" });
+
+    await sendMessageIMessage("chat_id:42", "hello", {
+      config: {
+        accessGroups: {
+          owners: {
+            type: "message.senders",
+            members: {
+              imessage: ["chat_id:42"],
+            },
+          },
+        },
+        channels: {
+          imessage: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["accessGroup:owners"],
+          },
+        },
+      },
+      client,
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 42 }),
+      expect.any(Object),
+    );
+  });
+
+  it("allows outbound handles listed by allowlist policy", async () => {
+    const client = createClient({ guid: "p:0/allowed" });
+
+    await sendMessageIMessage("+15551230000", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["+1 (555) 123-0000"],
+          },
+        },
+      },
+      client,
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ to: "+15551230000" }),
+      expect.any(Object),
+    );
+  });
+
+  it("allows outbound handles matching defaultTo under allowlist policy", async () => {
+    const client = createClient({ guid: "p:0/default" });
+
+    await sendMessageIMessage("+15551230000", "hello", {
+      config: {
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            defaultTo: "+1 (555) 123-0000",
+          },
+        },
+      },
+      client,
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ to: "+15551230000" }),
+      expect.any(Object),
+    );
+  });
+
+  it("allows outbound handles through configured access groups", async () => {
+    const client = createClient({ guid: "p:0/access-group" });
+
+    await sendMessageIMessage("+15551230000", "hello", {
+      config: {
+        accessGroups: {
+          owners: {
+            type: "message.senders",
+            members: {
+              imessage: ["+1 (555) 123-0000"],
+            },
+          },
+        },
+        channels: {
+          imessage: {
+            dmPolicy: "allowlist",
+            allowFrom: ["accessGroup:owners"],
+          },
+        },
+      },
+      client,
+    });
+
+    expect(client.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ to: "+15551230000" }),
+      expect.any(Object),
+    );
+  });
+
   it("attaches a text receipt for native send ids", async () => {
     const client = createClient({ guid: "p:0/imsg-1" });
 
