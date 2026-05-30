@@ -108,4 +108,19 @@ describe("buildOauthProviderAuthResult", () => {
       access: "access-token",
     });
   });
+
+  it("preserves provider-owned default model migration metadata", () => {
+    const result = buildOauthProviderAuthResult({
+      providerId: "openai",
+      defaultModel: "openai/gpt-5.5",
+      access: "access-token",
+      defaultModelMigration: {
+        fromProviderIds: ["codex", "openai-codex"],
+      },
+    });
+
+    expect(result.defaultModelMigration).toEqual({
+      fromProviderIds: ["codex", "openai-codex"],
+    });
+  });
 });

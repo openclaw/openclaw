@@ -27,7 +27,12 @@ import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import { isRemoteEnvironment, openUrl } from "./setup-browser.js";
-import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "./types.js";
+import type {
+  ProviderAuthDefaultModelMigration,
+  ProviderAuthMethod,
+  ProviderAuthOptionBag,
+  ProviderPlugin,
+} from "./types.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
@@ -108,6 +113,51 @@ function resolveConfiguredDefaultModelPrimary(cfg: OpenClawConfig): string | und
   return undefined;
 }
 
+function splitNormalizedModelRef(model: string | undefined):
+  | {
+      provider: string;
+      modelId: string;
+    }
+  | undefined {
+  const normalized = model ? normalizeAgentModelRefForConfig(model) : undefined;
+  const slashIndex = normalized?.indexOf("/") ?? -1;
+  if (!normalized || slashIndex <= 0 || slashIndex >= normalized.length - 1) {
+    return undefined;
+  }
+  return {
+    provider: normalized.slice(0, slashIndex),
+    modelId: normalized.slice(slashIndex + 1),
+  };
+}
+
+function shouldPreserveExistingDefaultPrimary(params: {
+  previousPrimary: string | undefined;
+  selectedModel: string;
+  preserveExistingDefaultModel: boolean | undefined;
+  defaultModelMigration: ProviderAuthDefaultModelMigration | undefined;
+}): boolean {
+  if (params.preserveExistingDefaultModel !== true || !params.previousPrimary) {
+    return false;
+  }
+  if (params.previousPrimary === params.selectedModel) {
+    return true;
+  }
+  const previous = splitNormalizedModelRef(params.previousPrimary);
+  const selected = splitNormalizedModelRef(params.selectedModel);
+  const migration = params.defaultModelMigration;
+  const shouldMatchModelId = migration?.whenModelIdMatchesDefault !== false;
+  if (
+    migration &&
+    previous &&
+    selected &&
+    migration.fromProviderIds.includes(previous.provider) &&
+    (!shouldMatchModelId || previous.modelId === selected.modelId)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 async function noteDefaultModelResult(params: {
   previousPrimary: string | undefined;
   selectedModel: string;
@@ -142,6 +192,7 @@ async function applyDefaultModelFromAuthChoice(params: {
   configBeforeProviderAuth?: OpenClawConfig;
   selectedModel: string;
   selectedModelDisplay?: string;
+  defaultModelMigration: ProviderAuthDefaultModelMigration | undefined;
   preserveExistingDefaultModel: boolean | undefined;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -150,16 +201,21 @@ async function applyDefaultModelFromAuthChoice(params: {
 }): Promise<OpenClawConfig> {
   const defaultModelBaseConfig = params.configBeforeProviderAuth ?? params.config;
   const previousPrimary = resolveConfiguredDefaultModelPrimary(defaultModelBaseConfig);
+  const preserveExistingPrimary = shouldPreserveExistingDefaultPrimary({
+    previousPrimary,
+    selectedModel: params.selectedModel,
+    preserveExistingDefaultModel: params.preserveExistingDefaultModel,
+    defaultModelMigration: params.defaultModelMigration,
+  });
   const preservesDifferentPrimary =
-    params.preserveExistingDefaultModel === true &&
+    preserveExistingPrimary &&
     previousPrimary !== undefined &&
     previousPrimary !== params.selectedModel;
-  const defaultModelConfig =
-    params.preserveExistingDefaultModel === true
-      ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
-      : params.config;
+  const defaultModelConfig = preserveExistingPrimary
+    ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
+    : params.config;
   let nextConfig = applyDefaultModel(defaultModelConfig, params.selectedModel, {
-    preserveExistingPrimary: params.preserveExistingDefaultModel === true,
+    preserveExistingPrimary,
   });
   if (!preservesDifferentPrimary) {
     const { CODEX_RUNTIME_PLUGIN_ID, ensureCodexRuntimePluginForModelSelection } =
@@ -204,7 +260,7 @@ async function applyDefaultModelFromAuthChoice(params: {
     previousPrimary,
     selectedModel: params.selectedModel,
     selectedModelDisplay: params.selectedModelDisplay,
-    preserveExistingDefaultModel: params.preserveExistingDefaultModel,
+    preserveExistingDefaultModel: preserveExistingPrimary,
     prompter: params.prompter,
   });
   return nextConfig;
@@ -266,7 +322,11 @@ export async function runProviderPluginAuthMethod(params: {
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
-}): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
+}): Promise<{
+  config: OpenClawConfig;
+  defaultModel?: string;
+  defaultModelMigration?: ProviderAuthDefaultModelMigration;
+}> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const agentDir = params.agentDir ?? resolveAgentDir(params.config, agentId);
   const workspaceDir =
@@ -331,6 +391,9 @@ export async function runProviderPluginAuthMethod(params: {
   return {
     config: nextConfig,
     ...(defaultModel ? { defaultModel } : {}),
+    ...(result.defaultModelMigration
+      ? { defaultModelMigration: result.defaultModelMigration }
+      : {}),
   };
 }
 
@@ -474,6 +537,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
         configBeforeProviderAuth,
         selectedModel,
         selectedModelDisplay,
+        defaultModelMigration: applied.defaultModelMigration,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
         prompter: params.prompter,
         runtime: params.runtime,
@@ -568,6 +632,7 @@ export async function applyAuthChoicePluginProvider(
         configBeforeProviderAuth,
         selectedModel,
         selectedModelDisplay,
+        defaultModelMigration: applied.defaultModelMigration,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
         prompter: params.prompter,
         runtime: params.runtime,

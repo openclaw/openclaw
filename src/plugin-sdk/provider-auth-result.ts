@@ -131,6 +131,7 @@ export function buildOauthProviderAuthResult(params: {
   profilePrefix?: string;
   credentialExtra?: Record<string, unknown>;
   configPatch?: Partial<OpenClawConfig>;
+  defaultModelMigration?: ProviderAuthResult["defaultModelMigration"];
   notes?: string[];
 }): ProviderAuthResult {
   const email = params.email ?? undefined;
@@ -169,6 +170,9 @@ export function buildOauthProviderAuthResult(params: {
         } as Partial<OpenClawConfig>),
     ),
     defaultModel,
+    ...(params.defaultModelMigration
+      ? { defaultModelMigration: params.defaultModelMigration }
+      : {}),
     notes: params.notes,
   };
 }

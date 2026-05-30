@@ -104,6 +104,9 @@ const LOCAL_PROFILE_ID = `${LOCAL_PROVIDER_ID}:default`;
 const LOCAL_API_KEY = "local-provider-key";
 const LOCAL_DEFAULT_MODEL = `${LOCAL_PROVIDER_ID}/demo-model`;
 const EXISTING_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0";
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_DEFAULT_MODEL = "openai/gpt-5.5";
+const LEGACY_CODEX_DEFAULT_MODEL = "codex/gpt-5.5";
 
 function buildProvider(): ProviderPlugin {
   return {
@@ -163,6 +166,51 @@ function buildProviderWithDefaultModelPatch(): ProviderPlugin {
             },
           },
           defaultModel: LOCAL_DEFAULT_MODEL,
+        }),
+      },
+    ],
+  };
+}
+
+function buildOpenAIProviderWithDefaultModelPatch(
+  method: Pick<ProviderAuthMethod, "id" | "label" | "kind"> = {
+    id: "device-code",
+    label: "ChatGPT/Codex Device Pairing",
+    kind: "device_code",
+  },
+): ProviderPlugin {
+  const defaultModelMigration =
+    method.kind === "api_key" ? undefined : { fromProviderIds: ["codex", "openai-codex"] };
+  return {
+    id: OPENAI_PROVIDER_ID,
+    label: "OpenAI",
+    auth: [
+      {
+        id: method.id,
+        label: method.label,
+        kind: method.kind,
+        run: async () => ({
+          profiles: [
+            {
+              profileId: "openai:default",
+              credential: {
+                type: "token",
+                provider: OPENAI_PROVIDER_ID,
+                token: "test-openai-oauth-token",
+              },
+            },
+          ],
+          configPatch: {
+            agents: {
+              defaults: {
+                models: {
+                  [OPENAI_DEFAULT_MODEL]: { alias: "GPT" },
+                },
+              },
+            },
+          },
+          defaultModel: OPENAI_DEFAULT_MODEL,
+          ...(defaultModelMigration ? { defaultModelMigration } : {}),
         }),
       },
     ],
@@ -407,6 +455,94 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
       `Kept existing default model ${EXISTING_DEFAULT_MODEL}; ${LOCAL_DEFAULT_MODEL} is available.`,
+      "Model configured",
+    );
+  });
+
+  it("migrates a stale Codex default to the canonical OpenAI auth model", async () => {
+    const provider = buildOpenAIProviderWithDefaultModelPatch();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+    const note = vi.fn(async () => {});
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: LEGACY_CODEX_DEFAULT_MODEL },
+              models: {
+                [LEGACY_CODEX_DEFAULT_MODEL]: { alias: "Legacy Codex" },
+              },
+            },
+          },
+        },
+        prompter: {
+          note,
+        } as unknown as ApplyAuthChoiceParams["prompter"],
+        preserveExistingDefaultModel: true,
+      }),
+    );
+
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: OPENAI_DEFAULT_MODEL,
+    });
+    expect(result?.config.agents?.defaults?.models).toEqual({
+      [LEGACY_CODEX_DEFAULT_MODEL]: { alias: "Legacy Codex" },
+      [OPENAI_DEFAULT_MODEL]: { alias: "GPT" },
+    });
+    expect(runProviderModelSelectedHook).toHaveBeenCalledOnce();
+    expect(note).toHaveBeenCalledWith(
+      `Default model set to ${OPENAI_DEFAULT_MODEL}`,
+      "Model configured",
+    );
+  });
+
+  it("keeps a Codex default during direct OpenAI API-key setup", async () => {
+    const provider = buildOpenAIProviderWithDefaultModelPatch({
+      id: "api-key",
+      label: "OpenAI API key",
+      kind: "api_key",
+    });
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
+    });
+    const note = vi.fn(async () => {});
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: LEGACY_CODEX_DEFAULT_MODEL },
+              models: {
+                [LEGACY_CODEX_DEFAULT_MODEL]: { alias: "Codex" },
+              },
+            },
+          },
+        },
+        prompter: {
+          note,
+        } as unknown as ApplyAuthChoiceParams["prompter"],
+        preserveExistingDefaultModel: true,
+      }),
+    );
+
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: LEGACY_CODEX_DEFAULT_MODEL,
+    });
+    expect(result?.config.agents?.defaults?.models).toEqual({
+      [LEGACY_CODEX_DEFAULT_MODEL]: { alias: "Codex" },
+      [OPENAI_DEFAULT_MODEL]: { alias: "GPT" },
+    });
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      `Kept existing default model ${LEGACY_CODEX_DEFAULT_MODEL}; ${OPENAI_DEFAULT_MODEL} is available.`,
       "Model configured",
     );
   });

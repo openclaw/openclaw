@@ -306,6 +306,20 @@ export type OpenClawPluginConfigSchema = {
 
 export type ProviderAuthKind = "oauth" | "api_key" | "token" | "device_code" | "custom";
 
+export type ProviderAuthDefaultModelMigration = {
+  /**
+   * Provider ids whose existing primary model may be replaced by this auth
+   * result's default model even when setup was asked to preserve the user's
+   * current default.
+   */
+  fromProviderIds: string[];
+  /**
+   * When true, only migrate refs whose model id matches the selected default
+   * model id. Defaults to true.
+   */
+  whenModelIdMatchesDefault?: boolean;
+};
+
 /** Standard result payload returned by provider auth methods. */
 export type ProviderAuthResult = {
   profiles: Array<{ profileId: string; credential: AuthProfileCredential }>;
@@ -318,6 +332,7 @@ export type ProviderAuthResult = {
    */
   configPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
+  defaultModelMigration?: ProviderAuthDefaultModelMigration;
   notes?: string[];
   /**
    * Opt in to replace `agents.defaults.models` wholesale with the patch map.
