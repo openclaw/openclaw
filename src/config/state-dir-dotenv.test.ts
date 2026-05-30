@@ -39,6 +39,17 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
     });
   });
 
+  it("preserves credential values that merely contain a dollar sign", async () => {
+    const content = ["PASSWORD=abc$2!xyz", "TOKEN=tok_$prod_v2", "PURE_REF=$SOME_VAR"].join("\n");
+
+    await withDotEnv(content, async (dir) => {
+      const result = readStateDirDotEnvVarsFromStateDir(dir);
+      expect(result["PASSWORD"]).toBe("abc$2!xyz");
+      expect(result["TOKEN"]).toBe("tok_$prod_v2");
+      expect(Object.keys(result)).not.toContain("PURE_REF");
+    });
+  });
+
   it("returns empty object when .env is missing", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-missing-"));
     try {

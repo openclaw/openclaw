@@ -14,8 +14,13 @@ function isBlockedServiceEnvVar(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
 }
 
-function containsUnresolvedShellReference(value: string): boolean {
-  return /\$[\w{(]/.test(value);
+function isUnresolvedShellReference(value: string): boolean {
+  // Match only values whose entire content is a shell variable reference:
+  //   $VAR_NAME          (simple reference)
+  //   ${VAR_NAME}        (brace-form reference)
+  //   $(command)         (command substitution)
+  // A real credential that merely contains a $ (e.g. a password like "abc$2!") is NOT matched.
+  return /^\$[\w_][\w\d_]*$/.test(value) || /^\$\{[^}]+\}$/.test(value) || /^\$\(.*\)$/.test(value);
 }
 
 function parseStateDirDotEnvContent(content: string): Record<string, string> {
@@ -32,11 +37,12 @@ function parseStateDirDotEnvContent(content: string): Record<string, string> {
     if (isBlockedServiceEnvVar(key)) {
       continue;
     }
-    // Skip values that still contain unresolved shell variable references
-    // ($VAR or ${VAR}). dotenv does not expand them, so persisting them into
-    // a single-quoted LaunchAgent/systemd env file would store the literal
+    // Skip values whose entire content is an unresolved shell variable reference
+    // ($VAR, ${VAR}, or $(cmd)). dotenv does not expand them, so persisting them
+    // into a single-quoted LaunchAgent/systemd env file would store the literal
     // reference string rather than the intended credential value.
-    if (containsUnresolvedShellReference(value)) {
+    // Values that merely contain $ (e.g. a password like "abc$2!") are kept.
+    if (isUnresolvedShellReference(value)) {
       continue;
     }
     entries[key] = value;
