@@ -596,6 +596,26 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (manuallyStopped.has(rKey)) {
                 return;
               }
+              if (recoveryStopTimedOut.has(rKey)) {
+                recoveryStopTimedOut.delete(rKey);
+                restartAttempts.delete(rKey);
+                log.info?.(`[${id}] restarting after timed-out channel stop completed`);
+                setRuntime(channelId, id, {
+                  accountId: id,
+                  restartPending: true,
+                  reconnectAttempts: 0,
+                });
+                if (store.tasks.get(id) === trackedPromise) {
+                  store.tasks.delete(id);
+                }
+                if (store.aborts.get(id) === abort) {
+                  store.aborts.delete(id);
+                }
+                await startChannelInternal(channelId, id, {
+                  preserveManualStop: true,
+                });
+                return;
+              }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
               restartAttempts.set(rKey, attempt);
               if (attempt > MAX_RESTART_ATTEMPTS) {
@@ -616,24 +636,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 restartPending: true,
                 reconnectAttempts: attempt,
               });
-              const recoveryRestartSleepAbort = recoveryStopTimedOut.has(rKey)
-                ? new AbortController()
-                : undefined;
-              if (recoveryRestartSleepAbort) {
-                store.aborts.set(id, recoveryRestartSleepAbort);
-              }
               try {
-                const restartSleepAbort = recoveryRestartSleepAbort?.signal ?? abort.signal;
-                await sleepWithAbort(delayMs, restartSleepAbort);
+                await sleepWithAbort(delayMs, abort.signal);
                 if (manuallyStopped.has(rKey)) {
-                  recoveryStopTimedOut.delete(rKey);
                   return;
                 }
-                recoveryStopTimedOut.delete(rKey);
                 if (store.tasks.get(id) === trackedPromise) {
                   store.tasks.delete(id);
                 }
-                if (store.aborts.get(id) === (recoveryRestartSleepAbort ?? abort)) {
+                if (store.aborts.get(id) === abort) {
                   store.aborts.delete(id);
                 }
                 await startChannelInternal(channelId, id, {
@@ -642,13 +653,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 });
               } catch {
                 // abort or startup failure — next crash will retry
-              } finally {
-                if (recoveryRestartSleepAbort) {
-                  recoveryStopTimedOut.delete(rKey);
-                  if (store.aborts.get(id) === recoveryRestartSleepAbort) {
-                    store.aborts.delete(id);
-                  }
-                }
               }
             })
             .finally(() => {
