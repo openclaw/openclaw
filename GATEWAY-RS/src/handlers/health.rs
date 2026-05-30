@@ -23,12 +23,14 @@ pub async fn handle_health(
 }
 
 pub async fn handle_status(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Json(req): Json<RequestFrame>,
 ) -> Json<ResponseFrame> {
+    let uptime = state.start_time.elapsed().as_millis();
     let payload = json!({
         "status": "ok",
-        "version": "0.1.0",
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptimeMs": uptime,
     });
 
     Json(ResponseFrame {

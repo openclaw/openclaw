@@ -4,13 +4,16 @@ use crate::models::protocol::{RequestFrame, ResponseFrame};
 use serde_json::json;
 
 pub async fn handle_channels_status(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Json(req): Json<RequestFrame>,
 ) -> Json<ResponseFrame> {
+    let config = state.config.read().await;
+    let channels = config.channels.as_ref().cloned().unwrap_or_default();
+
     Json(ResponseFrame {
         id: req.id,
         ok: true,
-        payload: Some(json!({"channels": {}})),
+        payload: Some(json!({"channels": channels})),
         error: None,
     })
 }

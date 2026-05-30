@@ -4,11 +4,20 @@ use crate::models::protocol::{RequestFrame, ResponseFrame};
 use serde_json::json;
 
 pub async fn handle_models_list(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Json(req): Json<RequestFrame>,
 ) -> Json<ResponseFrame> {
+    let config = state.config.read().await;
+
+    // Extract models from config
+    let models = config.extra.get("models")
+        .and_then(|m| m.get("list"))
+        .and_then(|l| l.as_array())
+        .cloned()
+        .unwrap_or_default();
+
     let payload = json!({
-        "models": []
+        "models": models
     });
 
     Json(ResponseFrame {
