@@ -232,7 +232,6 @@ export async function proposeCreateSkill(
   }
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
-  await assertCanCreatePendingProposal(input.workspaceDir, config);
   const now = new Date().toISOString();
   const proposalContent = renderProposalMarkdown({
     name: target.skillKey,
@@ -270,7 +269,14 @@ export async function proposeCreateSkill(
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
-  await writeSkillProposal({ record, content: proposalContent, supportFiles });
+  await writeSkillProposal({
+    record,
+    content: proposalContent,
+    supportFiles,
+    beforeWrite: async (manifest) => {
+      await assertCanCreatePendingProposal(input.workspaceDir, config, manifest);
+    },
+  });
   return { record, content: proposalContent };
 }
 
@@ -296,7 +302,6 @@ export async function proposeUpdateSkill(
   assertProposalContentWithinLimit(input.content, config.maxSkillBytes);
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
-  await assertCanCreatePendingProposal(input.workspaceDir, config);
   const now = new Date().toISOString();
   const proposalContent = renderProposalMarkdown({
     name: targetSkill.skillKey,
@@ -336,7 +341,14 @@ export async function proposeUpdateSkill(
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
-  await writeSkillProposal({ record, content: proposalContent, supportFiles });
+  await writeSkillProposal({
+    record,
+    content: proposalContent,
+    supportFiles,
+    beforeWrite: async (manifest) => {
+      await assertCanCreatePendingProposal(input.workspaceDir, config, manifest);
+    },
+  });
   return { record, content: proposalContent };
 }
 
@@ -707,11 +719,35 @@ function scanProposalBundle(
 async function assertCanCreatePendingProposal(
   workspaceDir: string,
   config: SkillWorkshopConfig,
+  manifest?: SkillProposalManifest,
 ): Promise<void> {
-  const manifest = await listSkillProposals({ workspaceDir });
-  const activeProposalCount = manifest.proposals.filter(
-    (entry) => entry.status === "pending" || entry.status === "quarantined",
-  ).length;
+  if (!manifest) {
+    const proposals = (await listSkillProposals({ workspaceDir })).proposals;
+    assertPendingProposalCountWithinLimit(
+      proposals.filter((entry) => entry.status === "pending" || entry.status === "quarantined")
+        .length,
+      config,
+    );
+    return;
+  }
+
+  let activeProposalCount = 0;
+  for (const entry of manifest.proposals) {
+    if (entry.status !== "pending" && entry.status !== "quarantined") {
+      continue;
+    }
+    const record = await readSkillProposalRecord(entry.id);
+    if (record && isProposalInWorkspace(record, workspaceDir)) {
+      activeProposalCount += 1;
+    }
+  }
+  assertPendingProposalCountWithinLimit(activeProposalCount, config);
+}
+
+function assertPendingProposalCountWithinLimit(
+  activeProposalCount: number,
+  config: SkillWorkshopConfig,
+): void {
   if (activeProposalCount >= config.maxPending) {
     throw new Error(`Skill Workshop pending proposal limit reached (${config.maxPending}).`);
   }

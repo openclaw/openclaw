@@ -61,6 +61,7 @@ type SkillWorkshopStoreOptions = {
 export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & {
   content: string;
 };
+type SkillProposalWriteGuard = (manifest: SkillProposalManifest) => Promise<void> | void;
 
 export function createSkillProposalId(name: string, now = new Date()): string {
   const normalized = normalizeSkillIndexName(name) || "skill";
@@ -253,10 +254,25 @@ export async function writeSkillProposal(params: {
   record: SkillProposalRecord;
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
+  beforeWrite?: SkillProposalWriteGuard;
   store?: SkillWorkshopStoreOptions;
 }): Promise<void> {
   assertProposalId(params.record.id);
   assertSkillProposalContentSize(params.content);
+  await withSkillProposalManifestLock(params.store ?? {}, async () => {
+    const manifest = await readSkillProposalManifestUnlocked(params.store);
+    await params.beforeWrite?.(manifest);
+    await writeSkillProposalFiles(params);
+    await refreshSkillProposalManifestUnlocked(params.store);
+  });
+}
+
+async function writeSkillProposalFiles(params: {
+  record: SkillProposalRecord;
+  content: string;
+  supportFiles?: readonly PreparedSkillProposalSupportFile[];
+  store?: SkillWorkshopStoreOptions;
+}): Promise<void> {
   const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
   const relativeDir = proposalRelativeDir(params.record.id);
   await stateRoot.mkdir(relativeDir);
@@ -272,7 +288,6 @@ export async function writeSkillProposal(params: {
   await stateRoot.writeJson(path.join(relativeDir, PROPOSAL_RECORD_FILE), params.record, {
     trailingNewline: true,
   });
-  await refreshSkillProposalManifest(params.store);
 }
 
 export async function replaceSkillProposalDraft(params: {
@@ -352,12 +367,18 @@ export async function writeSkillProposalRollback(params: {
 export async function readSkillProposalManifest(
   options: SkillWorkshopStoreOptions = {},
 ): Promise<SkillProposalManifest> {
+  return await readSkillProposalManifestUnlocked(options);
+}
+
+async function readSkillProposalManifestUnlocked(
+  options: SkillWorkshopStoreOptions = {},
+): Promise<SkillProposalManifest> {
   const manifestPath = path.join(resolveSkillWorkshopStateDir(options), MANIFEST_REL_PATH);
   const parsed = parseSkillProposalManifest(await tryReadJson<unknown>(manifestPath));
   if (parsed) {
     return parsed;
   }
-  return await refreshSkillProposalManifest(options);
+  return await refreshSkillProposalManifestUnlocked(options);
 }
 
 export async function refreshSkillProposalManifest(
