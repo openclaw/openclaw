@@ -93,13 +93,13 @@ describe("security audit sandbox browser findings", () => {
   });
 
   it("bounds sandbox browser Docker probes that do not return", async () => {
-    vi.useFakeTimers();
     let probeSignal: AbortSignal | undefined;
     let markProbeStarted!: () => void;
     const probeStarted = new Promise<void>((resolve) => {
       markProbeStarted = resolve;
     });
 
+    vi.useFakeTimers();
     const findingsPromise = collectSandboxBrowserHashLabelFindings({
       timeoutMs: 250,
       execDockerRawFn: async (_args, opts) => {
@@ -127,13 +127,13 @@ describe("security audit sandbox browser findings", () => {
   });
 
   it("stops probing remaining sandbox browser containers after a Docker timeout", async () => {
-    vi.useFakeTimers();
     const calls: string[] = [];
     let markHungProbeStarted!: () => void;
     const hungProbeStarted = new Promise<void>((resolve) => {
       markHungProbeStarted = resolve;
     });
 
+    vi.useFakeTimers();
     const findingsPromise = collectSandboxBrowserHashLabelFindings({
       timeoutMs: 250,
       execDockerRawFn: async (args, opts) => {

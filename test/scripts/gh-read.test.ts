@@ -59,13 +59,13 @@ describe("gh-read helpers", () => {
   });
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {
-    vi.useFakeTimers();
     let signal: AbortSignal | undefined;
     let markFetchStarted!: () => void;
     const fetchStarted = new Promise<void>((resolve) => {
       markFetchStarted = resolve;
     });
 
+    vi.useFakeTimers();
     const request = githubJson("/app", "token", undefined, {
       timeoutMs: 5,
       fetchImpl: ((_url, init) => {
