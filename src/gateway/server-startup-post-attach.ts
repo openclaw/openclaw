@@ -16,6 +16,7 @@ import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import type { ResolvedGatewayAuthMode } from "./auth.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
@@ -1062,6 +1063,8 @@ export async function startGatewayPostAttachRuntime(
     bindHosts: string[];
     port: number;
     tlsEnabled: boolean;
+    controlUiEnabled?: boolean;
+    authMode?: ResolvedGatewayAuthMode;
     log: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -1159,6 +1162,8 @@ export async function startGatewayPostAttachRuntime(
       bindHosts: params.bindHosts,
       port: params.port,
       tlsEnabled: params.tlsEnabled,
+      controlUiEnabled: params.controlUiEnabled,
+      authMode: params.authMode,
       loadedPluginIds: pluginRegistry.plugins
         .filter((plugin) => plugin.status === "loaded")
         .map((plugin) => plugin.id),

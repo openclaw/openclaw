@@ -217,8 +217,16 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
   return call[argIndex];
 }
 
-function firstStartupLog(): { loadedPluginIds?: string[] } {
-  return mockCallArg(hoisted.logGatewayStartup) as { loadedPluginIds?: string[] };
+function firstStartupLog(): {
+  loadedPluginIds?: string[];
+  controlUiEnabled?: boolean;
+  authMode?: string;
+} {
+  return mockCallArg(hoisted.logGatewayStartup) as {
+    loadedPluginIds?: string[];
+    controlUiEnabled?: boolean;
+    authMode?: string;
+  };
 }
 
 function createStartupTraceRecorder() {
@@ -329,6 +337,8 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
     expect(hoisted.logGatewayStartup).toHaveBeenCalledTimes(1);
     expect(firstStartupLog().loadedPluginIds).toEqual(["beta", "alpha"]);
+    expect(firstStartupLog().controlUiEnabled).toBe(true);
+    expect(firstStartupLog().authMode).toBe("trusted-proxy");
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
@@ -2012,6 +2022,8 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     resetOnExit: false,
     preserveFunnel: false,
     controlUiBasePath: "/",
+    controlUiEnabled: true,
+    authMode: "trusted-proxy",
     logTailscale: {
       info: vi.fn(),
       warn: vi.fn(),
