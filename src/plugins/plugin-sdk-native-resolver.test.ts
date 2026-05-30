@@ -66,6 +66,13 @@ function writeExternalPluginEntry(root: string): string {
   return entry;
 }
 
+function writeNormalizationCoreSource(root: string): string {
+  const sourcePath = path.join(root, "packages", "normalization-core", "src", "string-coerce.ts");
+  fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+  fs.writeFileSync(sourcePath, "export const normalizeOptionalString = () => undefined;\n", "utf8");
+  return sourcePath;
+}
+
 describe("installOpenClawPluginSdkNativeResolver", () => {
   it("keeps native aliases on JS dist artifacts when source files exist", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-source-resolver-"));
@@ -217,6 +224,30 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     const requireFromOutside = createRequire(unrelatedEntry);
     expect(requireFromPlugin.resolve("openclaw/plugin-sdk/channel-outbound")).toBeTruthy();
     expect(() => requireFromOutside.resolve("openclaw/plugin-sdk/channel-outbound")).toThrow();
+  });
+
+  it("resolves internal core packages only for OpenClaw-owned source parents", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-core-internal-"));
+    const { loaderModulePath } = writeFakeOpenClawPackage(root);
+    const normalizationSource = writeNormalizationCoreSource(root);
+    const externalPluginEntry = writeExternalPluginEntry(path.join(root, "external-plugin"));
+    const coreSourceParent = path.join(root, "src", "config", "plugin-web-search-config.ts");
+    fs.mkdirSync(path.dirname(coreSourceParent), { recursive: true });
+    fs.writeFileSync(coreSourceParent, "export default {};\n", "utf8");
+
+    const installedAliases = installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginModulePath: externalPluginEntry,
+      pluginSdkResolution: "dist",
+    });
+
+    expect(installedAliases).toContain("@openclaw/normalization-core/string-coerce");
+    const requireFromCoreSource = createRequire(coreSourceParent);
+    const requireFromPlugin = createRequire(externalPluginEntry);
+    expect(
+      fs.realpathSync(requireFromCoreSource.resolve("@openclaw/normalization-core/string-coerce")),
+    ).toBe(fs.realpathSync(normalizationSource));
+    expect(() => requireFromPlugin.resolve("@openclaw/normalization-core/string-coerce")).toThrow();
   });
 
   it("does not register source-only SDK subpaths for native resolution", () => {
