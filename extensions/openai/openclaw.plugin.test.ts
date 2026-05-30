@@ -29,6 +29,7 @@ const manifest = JSON.parse(
   setup?: {
     providers?: Array<{ id: string }>;
   };
+  providerAuthAliases?: Record<string, string>;
 };
 
 const packageJson = JSON.parse(
