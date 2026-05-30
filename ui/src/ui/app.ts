@@ -1362,7 +1362,11 @@ export class OpenClawApp extends LitElement {
               : null;
       const nextRawText =
         fetchedMessageText ??
-        (typeof content.rawText === "string" ? content.rawText : content.content);
+        (typeof content.rawText === "string"
+          ? content.rawText
+          : content.kind === "markdown"
+            ? content.content
+            : null);
 
       if (content.kind === "markdown") {
         this.sidebarContent = {
