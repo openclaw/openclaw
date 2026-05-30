@@ -48,8 +48,8 @@ type SkillWorkshopWorkspaceOptions = {
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 
-export async function listSkillProposals(workspaceDir: string): Promise<SkillProposalManifest> {
-  return await readSkillProposalManifest(workspaceDir);
+export async function listSkillProposals(): Promise<SkillProposalManifest> {
+  return await readSkillProposalManifest();
 }
 
 export async function readSkillProposalDraftFile(filePath: string): Promise<string> {
@@ -61,10 +61,9 @@ export async function readSkillProposalDraftFile(filePath: string): Promise<stri
 }
 
 export async function inspectSkillProposal(
-  workspaceDir: string,
   proposalId: string,
 ): Promise<SkillProposalReadResult | null> {
-  return await readSkillProposal(workspaceDir, proposalId);
+  return await readSkillProposal(proposalId);
 }
 
 export async function proposeCreateSkill(
@@ -110,7 +109,7 @@ export async function proposeCreateSkill(
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
-  await writeSkillProposal({ workspaceDir: input.workspaceDir, record, content: proposalContent });
+  await writeSkillProposal({ record, content: proposalContent });
   return { record, content: proposalContent };
 }
 
@@ -166,7 +165,7 @@ export async function proposeUpdateSkill(
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
-  await writeSkillProposal({ workspaceDir: input.workspaceDir, record, content: proposalContent });
+  await writeSkillProposal({ record, content: proposalContent });
   return { record, content: proposalContent };
 }
 
@@ -179,7 +178,7 @@ export async function rejectSkillProposal(
 export async function quarantineSkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalRecord> {
-  const read = await readRequiredProposal(input.workspaceDir, input.proposalId);
+  const read = await readRequiredProposal(input.proposalId);
   const now = new Date().toISOString();
   const record: SkillProposalRecord = {
     ...read.record,
@@ -192,14 +191,14 @@ export async function quarantineSkillProposal(
       state: "quarantined",
     },
   };
-  await updateSkillProposalRecord({ workspaceDir: input.workspaceDir, record });
+  await updateSkillProposalRecord({ record });
   return record;
 }
 
 export async function applySkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalApplyResult> {
-  const read = await readRequiredProposal(input.workspaceDir, input.proposalId);
+  const read = await readRequiredProposal(input.proposalId);
   const { record, content } = read;
   if (record.status !== "pending") {
     throw new Error(`Only pending proposals can be applied. Current status: ${record.status}.`);
@@ -222,7 +221,7 @@ export async function applySkillProposal(
       scan: { ...scan, state: "quarantined" as const },
       statusReason: "Proposal scan failed.",
     };
-    await updateSkillProposalRecord({ workspaceDir: input.workspaceDir, record: updated });
+    await updateSkillProposalRecord({ record: updated });
     throw new Error("Proposal scan failed; proposal was quarantined.");
   }
 
@@ -247,7 +246,7 @@ export async function applySkillProposal(
         staleAt: new Date().toISOString(),
         statusReason: "Target skill changed after proposal creation.",
       };
-      await updateSkillProposalRecord({ workspaceDir: input.workspaceDir, record: stale });
+      await updateSkillProposalRecord({ record: stale });
       throw new Error("Target skill changed after proposal creation; proposal marked stale.");
     }
   }
@@ -259,7 +258,6 @@ export async function applySkillProposal(
     ...(previousContent !== null ? { previousContent } : {}),
   });
   await writeSkillProposalRollback({
-    workspaceDir: input.workspaceDir,
     proposalId: record.id,
     rollback,
   });
@@ -278,8 +276,8 @@ export async function applySkillProposal(
     appliedAt: now,
     scan,
   };
-  await updateSkillProposalRecord({ workspaceDir: input.workspaceDir, record: applied });
-  await refreshSkillProposalManifest(input.workspaceDir);
+  await updateSkillProposalRecord({ record: applied });
+  await refreshSkillProposalManifest();
   return { record: applied, targetSkillFile: record.target.skillFile };
 }
 
@@ -303,7 +301,7 @@ async function markProposal(
   input: SkillProposalActionInput,
   status: "rejected",
 ): Promise<SkillProposalRecord> {
-  const read = await readRequiredProposal(input.workspaceDir, input.proposalId);
+  const read = await readRequiredProposal(input.proposalId);
   const now = new Date().toISOString();
   const record: SkillProposalRecord = {
     ...read.record,
@@ -312,15 +310,12 @@ async function markProposal(
     rejectedAt: now,
     statusReason: normalizeOptionalString(input.reason),
   };
-  await updateSkillProposalRecord({ workspaceDir: input.workspaceDir, record });
+  await updateSkillProposalRecord({ record });
   return record;
 }
 
-async function readRequiredProposal(
-  workspaceDir: string,
-  proposalId: string,
-): Promise<SkillProposalReadResult> {
-  const read = await readSkillProposal(workspaceDir, proposalId);
+async function readRequiredProposal(proposalId: string): Promise<SkillProposalReadResult> {
+  const read = await readSkillProposal(proposalId);
   if (!read) {
     throw new Error(`Skill proposal not found: ${proposalId}`);
   }

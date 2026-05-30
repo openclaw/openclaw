@@ -107,8 +107,9 @@ openclaw skills workshop propose-create \
 ```
 
 The draft is stored under
-`<workspace>/.openclaw/skill-workshop/proposals/<proposal-id>/PROPOSAL.md` and
-stays inactive until an operator reviews and applies it:
+`<OPENCLAW_STATE_DIR>/skill-workshop/proposals/<proposal-id>/PROPOSAL.md` and
+stays inactive until an operator reviews and applies it. The default state
+directory is `~/.openclaw`:
 
 ```bash
 openclaw skills workshop inspect <proposal-id>

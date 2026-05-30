@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { registerSkillsCli } from "./skills-cli.js";
 
 const tempDirs = createTrackedTempDirs();
+let envSnapshot: ReturnType<typeof captureEnv>;
+let stateDir = "";
 
 const mocks = vi.hoisted(() => {
   const runtimeStdout: string[] = [];
@@ -69,7 +72,10 @@ describe("skills workshop cli", () => {
   };
 
   beforeEach(async () => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-");
+    stateDir = await tempDirs.make("openclaw-skills-cli-workshop-state-");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     mocks.runtimeStdout.length = 0;
     mocks.runtimeErrors.length = 0;
     mocks.defaultRuntime.log.mockClear();
@@ -80,6 +86,7 @@ describe("skills workshop cli", () => {
   });
 
   afterEach(async () => {
+    envSnapshot.restore();
     await tempDirs.cleanup();
   });
 
@@ -135,8 +142,6 @@ describe("skills workshop cli", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(mocks.runtimeErrors[0]).toContain("file not found");
-    await expect(
-      fs.access(path.join(mocks.workspaceDir, ".openclaw", "skill-workshop")),
-    ).rejects.toThrow();
+    await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
   });
 });

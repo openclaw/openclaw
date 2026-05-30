@@ -1,13 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { createSkillResearchTool } from "./skill-research-tool.js";
 
 const tempDirs = createTrackedTempDirs();
+let envSnapshot: ReturnType<typeof captureEnv>;
+let stateDir = "";
+
+beforeEach(async () => {
+  envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  stateDir = await tempDirs.make("openclaw-skill-research-state-");
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+});
 
 afterEach(async () => {
+  envSnapshot.restore();
   await tempDirs.cleanup();
 });
 
@@ -43,8 +53,7 @@ describe("skill_research tool", () => {
     await expect(
       fs.readFile(
         path.join(
-          workspaceDir,
-          ".openclaw",
+          stateDir,
           "skill-workshop",
           "proposals",
           (result.details as { id: string }).id,

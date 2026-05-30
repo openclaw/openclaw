@@ -126,9 +126,9 @@ Notes:
 ## Skill Workshop proposals
 
 `openclaw skills workshop` manages pending skill proposals in the selected
-workspace. Proposals are durable drafts under
-`<workspace>/.openclaw/skill-workshop/proposals/`; they are not active skills
-until applied.
+workspace. Proposals are durable OpenClaw state under
+`<OPENCLAW_STATE_DIR>/skill-workshop/proposals/`; they are not active skills
+until applied. The default state directory is `~/.openclaw`.
 
 Create a proposal from a draft markdown file:
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -16,8 +17,17 @@ import {
 import { readSkillProposalManifest, resolveProposalDraftPath } from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
+let envSnapshot: ReturnType<typeof captureEnv>;
+let stateDir = "";
+
+beforeEach(async () => {
+  envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  stateDir = await tempDirs.make("openclaw-skill-workshop-state-");
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+});
 
 afterEach(async () => {
+  envSnapshot.restore();
   await tempDirs.cleanup();
 });
 
@@ -43,10 +53,10 @@ describe("skill workshop proposals", () => {
       path.join(workspaceDir, "skills", "weather-helper", "SKILL.md"),
     );
     await expect(
-      fs.readFile(resolveProposalDraftPath(workspaceDir, proposal.record.id), "utf8"),
+      fs.readFile(resolveProposalDraftPath(proposal.record.id), "utf8"),
     ).resolves.toContain("status: proposal");
 
-    const listed = await listSkillProposals(workspaceDir);
+    const listed = await listSkillProposals();
     expect(listed.proposals).toHaveLength(1);
     expect(listed.proposals[0]).toMatchObject({
       id: proposal.record.id,
@@ -70,9 +80,7 @@ describe("skill workshop proposals", () => {
       source: "openclaw-workspace",
       filePath: applied.targetSkillFile,
     });
-    expect((await inspectSkillProposal(workspaceDir, proposal.record.id))?.record.status).toBe(
-      "applied",
-    );
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
   });
 
   it("updates only writable workspace skills and marks stale proposals when the target changes", async () => {
@@ -100,9 +108,7 @@ describe("skill workshop proposals", () => {
     await expect(
       applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
     ).rejects.toThrow("proposal marked stale");
-    expect((await inspectSkillProposal(workspaceDir, proposal.record.id))?.record.status).toBe(
-      "stale",
-    );
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("stale");
   });
 
   it("applies update proposals with rollback metadata", async () => {
@@ -127,14 +133,7 @@ describe("skill workshop proposals", () => {
     );
     const rollback = JSON.parse(
       await fs.readFile(
-        path.join(
-          workspaceDir,
-          ".openclaw",
-          "skill-workshop",
-          "proposals",
-          proposal.record.id,
-          "rollback.json",
-        ),
+        path.join(stateDir, "skill-workshop", "proposals", proposal.record.id, "rollback.json"),
         "utf8",
       ),
     ) as { previousContent?: string };
@@ -167,7 +166,7 @@ describe("skill workshop proposals", () => {
       reason: "needs review",
     });
 
-    const manifest = await readSkillProposalManifest(workspaceDir);
+    const manifest = await readSkillProposalManifest();
     expect(manifest.proposals.map((entry) => [entry.skillKey, entry.status])).toEqual([
       ["draft-two", "quarantined"],
       ["draft-one", "rejected"],
@@ -189,12 +188,12 @@ describe("skill workshop proposals", () => {
       content: "# Manifest Repair\n",
     });
     await fs.writeFile(
-      path.join(workspaceDir, ".openclaw", "skill-workshop", "proposals.json"),
+      path.join(stateDir, "skill-workshop", "proposals.json"),
       "{not-json",
       "utf8",
     );
 
-    const manifest = await listSkillProposals(workspaceDir);
+    const manifest = await listSkillProposals();
 
     expect(manifest.proposals).toHaveLength(1);
     expect(manifest.proposals[0]?.id).toBe(proposal.record.id);
@@ -213,8 +212,6 @@ describe("skill workshop proposals", () => {
     await expect(
       applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
     ).rejects.toThrow("Proposal scan failed");
-    expect((await inspectSkillProposal(workspaceDir, proposal.record.id))?.record.status).toBe(
-      "quarantined",
-    );
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("quarantined");
   });
 });

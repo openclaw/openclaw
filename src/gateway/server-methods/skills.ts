@@ -246,7 +246,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      respond(true, await listSkillProposals(resolved.workspaceDir), undefined);
+      respond(true, await listSkillProposals(), undefined);
     } catch (err) {
       respondSkillWorkshopError(respond, err);
     }
@@ -268,7 +268,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const proposal = await inspectSkillProposal(resolved.workspaceDir, params.proposalId);
+      const proposal = await inspectSkillProposal(params.proposalId);
       if (!proposal) {
         respond(
           false,

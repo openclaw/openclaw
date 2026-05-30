@@ -125,13 +125,15 @@ skills without silently mutating active `SKILL.md` files. OpenClaw stores them
 under:
 
 ```text
-<workspace>/.openclaw/skill-workshop/
+<OPENCLAW_STATE_DIR>/skill-workshop/
   proposals.json
   proposals/<proposal-id>/
     proposal.json
     PROPOSAL.md
     rollback.json
 ```
+
+The default state directory is `~/.openclaw`.
 
 `proposal.json` is the canonical proposal record. `proposals.json` is the fast
 listing manifest and can be rebuilt from proposal folders when missing or stale.

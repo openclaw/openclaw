@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
 const tempDirs = createTrackedTempDirs();
+let envSnapshot: ReturnType<typeof captureEnv>;
+let stateDir = "";
 
 const mocks = vi.hoisted(() => ({
   workspaceDir: "",
@@ -74,10 +77,14 @@ async function callHandler(method: string, params: Record<string, unknown>) {
 
 describe("skills proposal gateway handlers", () => {
   beforeEach(async () => {
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     mocks.workspaceDir = await tempDirs.make("openclaw-skills-proposals-gateway-");
+    stateDir = await tempDirs.make("openclaw-skills-proposals-gateway-state-");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
   });
 
   afterEach(async () => {
+    envSnapshot.restore();
     await tempDirs.cleanup();
   });
 
@@ -119,8 +126,6 @@ describe("skills proposal gateway handlers", () => {
     });
     expect(result.ok).toBe(false);
     expect((result.error as { code?: string }).code).toBe("INVALID_REQUEST");
-    await expect(
-      fs.access(path.join(mocks.workspaceDir, ".openclaw", "skill-workshop")),
-    ).rejects.toThrow();
+    await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
   });
 });

@@ -469,10 +469,9 @@ export function registerSkillsCli(program: Command) {
     .command("list")
     .description("List pending and completed skill proposals")
     .option("--json", "Output as JSON", false)
-    .action(async (opts: { json?: boolean; agent?: string }, command: Command) => {
+    .action(async (opts: { json?: boolean; agent?: string }) => {
       try {
-        const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-        const manifest = await listSkillProposals(workspaceDir);
+        const manifest = await listSkillProposals();
         if (opts.json) {
           defaultRuntime.writeJson(manifest);
           return;
@@ -489,27 +488,24 @@ export function registerSkillsCli(program: Command) {
     .description("Inspect a skill proposal")
     .argument("<proposal-id>", "Skill proposal id")
     .option("--json", "Output as JSON", false)
-    .action(
-      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
-        try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
-          const proposal = await inspectSkillProposal(workspaceDir, proposalId);
-          if (!proposal) {
-            defaultRuntime.error(`Skill proposal not found: ${proposalId}`);
-            defaultRuntime.exit(1);
-            return;
-          }
-          if (opts.json) {
-            defaultRuntime.writeJson(proposal);
-            return;
-          }
-          defaultRuntime.writeStdout(formatSkillProposalInspect(proposal));
-        } catch (err) {
-          defaultRuntime.error(String(err));
+    .action(async (proposalId: string, opts: { json?: boolean; agent?: string }) => {
+      try {
+        const proposal = await inspectSkillProposal(proposalId);
+        if (!proposal) {
+          defaultRuntime.error(`Skill proposal not found: ${proposalId}`);
           defaultRuntime.exit(1);
+          return;
         }
-      },
-    );
+        if (opts.json) {
+          defaultRuntime.writeJson(proposal);
+          return;
+        }
+        defaultRuntime.writeStdout(formatSkillProposalInspect(proposal));
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
 
   workshop
     .command("propose-create")

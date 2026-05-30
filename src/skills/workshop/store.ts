@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { pathExists, readFileWithinRoot, root } from "../../infra/fs-safe.js";
+import { resolveStateDir } from "../../config/paths.js";
+import { pathExists, root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { isPathInside } from "../../infra/path-safety.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -16,7 +17,7 @@ import {
   type SkillProposalRollback,
 } from "./types.js";
 
-const WORKSHOP_REL_DIR = path.join(".openclaw", "skill-workshop");
+const WORKSHOP_REL_DIR = "skill-workshop";
 const PROPOSALS_REL_DIR = path.join(WORKSHOP_REL_DIR, "proposals");
 const MANIFEST_REL_PATH = path.join(WORKSHOP_REL_DIR, "proposals.json");
 const PROPOSAL_RECORD_FILE = "proposal.json";
@@ -24,6 +25,11 @@ const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
 const MAX_PROPOSAL_BYTES = 1024 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
+
+type SkillWorkshopStoreOptions = {
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+};
 
 export function createSkillProposalId(name: string, now = new Date()): string {
   const normalized = normalizeSkillIndexName(name) || "skill";
@@ -36,21 +42,34 @@ export function hashSkillProposalContent(content: string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
-export function resolveWorkshopPath(workspaceDir: string): string {
-  return path.resolve(workspaceDir, WORKSHOP_REL_DIR);
+function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): string {
+  return path.resolve(options.stateDir ?? resolveStateDir(options.env));
 }
 
-export function resolveProposalDir(workspaceDir: string, proposalId: string): string {
+export function resolveWorkshopPath(options: SkillWorkshopStoreOptions = {}): string {
+  return path.join(resolveSkillWorkshopStateDir(options), WORKSHOP_REL_DIR);
+}
+
+export function resolveProposalDir(
+  proposalId: string,
+  options: SkillWorkshopStoreOptions = {},
+): string {
   assertProposalId(proposalId);
-  return path.resolve(workspaceDir, proposalRelativeDir(proposalId));
+  return path.join(resolveSkillWorkshopStateDir(options), proposalRelativeDir(proposalId));
 }
 
-export function resolveProposalRecordPath(workspaceDir: string, proposalId: string): string {
-  return path.join(resolveProposalDir(workspaceDir, proposalId), PROPOSAL_RECORD_FILE);
+export function resolveProposalRecordPath(
+  proposalId: string,
+  options: SkillWorkshopStoreOptions = {},
+): string {
+  return path.join(resolveProposalDir(proposalId, options), PROPOSAL_RECORD_FILE);
 }
 
-export function resolveProposalDraftPath(workspaceDir: string, proposalId: string): string {
-  return path.join(resolveProposalDir(workspaceDir, proposalId), PROPOSAL_DRAFT_FILE);
+export function resolveProposalDraftPath(
+  proposalId: string,
+  options: SkillWorkshopStoreOptions = {},
+): string {
+  return path.join(resolveProposalDir(proposalId, options), PROPOSAL_DRAFT_FILE);
 }
 
 export function resolveSkillProposalTarget(params: { workspaceDir: string; skillName: string }): {
@@ -70,15 +89,15 @@ export function resolveSkillProposalTarget(params: { workspaceDir: string; skill
 }
 
 export async function readSkillProposal(
-  workspaceDir: string,
   proposalId: string,
+  options: SkillWorkshopStoreOptions = {},
 ): Promise<SkillProposalReadResult | null> {
-  const record = await readSkillProposalRecord(workspaceDir, proposalId);
+  const record = await readSkillProposalRecord(proposalId, options);
   if (!record) {
     return null;
   }
-  const workspaceRoot = await root(workspaceDir);
-  const draft = await workspaceRoot.read(
+  const stateRoot = await root(resolveSkillWorkshopStateDir(options));
+  const draft = await stateRoot.read(
     path.join(proposalRelativeDir(proposalId), PROPOSAL_DRAFT_FILE),
     {
       hardlinks: "reject",
@@ -90,52 +109,52 @@ export async function readSkillProposal(
 }
 
 export async function readSkillProposalRecord(
-  workspaceDir: string,
   proposalId: string,
+  options: SkillWorkshopStoreOptions = {},
 ): Promise<SkillProposalRecord | null> {
-  const raw = await tryReadJson<unknown>(resolveProposalRecordPath(workspaceDir, proposalId));
+  const raw = await tryReadJson<unknown>(resolveProposalRecordPath(proposalId, options));
   return parseSkillProposalRecord(raw);
 }
 
 export async function writeSkillProposal(params: {
-  workspaceDir: string;
   record: SkillProposalRecord;
   content: string;
+  store?: SkillWorkshopStoreOptions;
 }): Promise<void> {
   assertProposalId(params.record.id);
-  const workspaceRoot = await root(params.workspaceDir);
+  const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
   const relativeDir = proposalRelativeDir(params.record.id);
-  await workspaceRoot.mkdir(relativeDir);
-  await workspaceRoot.write(path.join(relativeDir, PROPOSAL_DRAFT_FILE), params.content, {
+  await stateRoot.mkdir(relativeDir);
+  await stateRoot.write(path.join(relativeDir, PROPOSAL_DRAFT_FILE), params.content, {
     encoding: "utf8",
   });
-  await workspaceRoot.writeJson(path.join(relativeDir, PROPOSAL_RECORD_FILE), params.record, {
+  await stateRoot.writeJson(path.join(relativeDir, PROPOSAL_RECORD_FILE), params.record, {
     trailingNewline: true,
   });
-  await refreshSkillProposalManifest(params.workspaceDir);
+  await refreshSkillProposalManifest(params.store);
 }
 
 export async function updateSkillProposalRecord(params: {
-  workspaceDir: string;
   record: SkillProposalRecord;
+  store?: SkillWorkshopStoreOptions;
 }): Promise<void> {
   assertProposalId(params.record.id);
-  const workspaceRoot = await root(params.workspaceDir);
-  await workspaceRoot.writeJson(
+  const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
+  await stateRoot.writeJson(
     path.join(proposalRelativeDir(params.record.id), PROPOSAL_RECORD_FILE),
     params.record,
     { trailingNewline: true },
   );
-  await refreshSkillProposalManifest(params.workspaceDir);
+  await refreshSkillProposalManifest(params.store);
 }
 
 export async function writeSkillProposalRollback(params: {
-  workspaceDir: string;
   proposalId: string;
   rollback: SkillProposalRollback;
+  store?: SkillWorkshopStoreOptions;
 }): Promise<void> {
-  const workspaceRoot = await root(params.workspaceDir);
-  await workspaceRoot.writeJson(
+  const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
+  await stateRoot.writeJson(
     path.join(proposalRelativeDir(params.proposalId), PROPOSAL_ROLLBACK_FILE),
     params.rollback,
     { trailingNewline: true },
@@ -143,29 +162,29 @@ export async function writeSkillProposalRollback(params: {
 }
 
 export async function readSkillProposalManifest(
-  workspaceDir: string,
+  options: SkillWorkshopStoreOptions = {},
 ): Promise<SkillProposalManifest> {
-  const manifestPath = path.resolve(workspaceDir, MANIFEST_REL_PATH);
+  const manifestPath = path.join(resolveSkillWorkshopStateDir(options), MANIFEST_REL_PATH);
   const parsed = parseSkillProposalManifest(await tryReadJson<unknown>(manifestPath));
   if (parsed) {
     return parsed;
   }
-  return await refreshSkillProposalManifest(workspaceDir);
+  return await refreshSkillProposalManifest(options);
 }
 
 export async function refreshSkillProposalManifest(
-  workspaceDir: string,
+  options: SkillWorkshopStoreOptions = {},
 ): Promise<SkillProposalManifest> {
-  const workspaceRoot = await root(workspaceDir);
-  await workspaceRoot.mkdir(PROPOSALS_REL_DIR);
-  const entries = await workspaceRoot.list(PROPOSALS_REL_DIR, { withFileTypes: true });
+  const stateRoot = await root(resolveSkillWorkshopStateDir(options));
+  await stateRoot.mkdir(PROPOSALS_REL_DIR);
+  const entries = await stateRoot.list(PROPOSALS_REL_DIR, { withFileTypes: true });
   const proposals: SkillProposalManifestEntry[] = [];
 
   for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory || !PROPOSAL_ID_PATTERN.test(entry.name)) {
       continue;
     }
-    const record = await readSkillProposalRecord(workspaceDir, entry.name);
+    const record = await readSkillProposalRecord(entry.name, options);
     if (!record) {
       continue;
     }
@@ -177,7 +196,7 @@ export async function refreshSkillProposalManifest(
     updatedAt: new Date().toISOString(),
     proposals: proposals.toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
   };
-  await workspaceRoot.writeJson(MANIFEST_REL_PATH, manifest, {
+  await stateRoot.writeJson(MANIFEST_REL_PATH, manifest, {
     mkdir: true,
     trailingNewline: true,
   });
@@ -188,10 +207,11 @@ export async function readWorkspaceSkillFile(filePath: string): Promise<string |
   if (!(await pathExists(filePath))) {
     return null;
   }
-  const read = await readFileWithinRoot({
-    rootDir: path.dirname(filePath),
-    relativePath: path.basename(filePath),
+  const skillRoot = await root(path.dirname(filePath));
+  const read = await skillRoot.read(path.basename(filePath), {
+    hardlinks: "reject",
     maxBytes: MAX_PROPOSAL_BYTES,
+    symlinks: "reject",
   });
   return read.buffer.toString("utf8");
 }
