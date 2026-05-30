@@ -21,7 +21,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   isSlackAnyNativeApprovalClientEnabled,
   resolveSlackApprovalKind,
-  shouldDeliverSlackNativeApprovalRequest,
+  shouldHandleSlackNativeApprovalRequest,
 } from "./approval-native-gates.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
@@ -438,7 +438,7 @@ async function updateMessage(params: {
       blocks: params.blocks,
     });
   } catch (err) {
-    logError(`slack exec approvals: failed to update message: ${String(err)}`);
+    logError(`slack approvals: failed to update message: ${String(err)}`);
   }
 }
 
@@ -465,7 +465,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       if (!resolved) {
         return false;
       }
-      return shouldDeliverSlackNativeApprovalRequest({
+      return shouldHandleSlackNativeApprovalRequest({
         cfg: params.cfg,
         accountId: resolved.accountId,
         approvalKind: resolveSlackApprovalKind(params.request),
@@ -536,7 +536,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
   },
   observe: {
     onDeliveryError: ({ error, request }) => {
-      logError(`slack exec approvals: failed to deliver approval ${request.id}: ${String(error)}`);
+      logError(`slack approvals: failed to deliver approval ${request.id}: ${String(error)}`);
     },
   },
 });

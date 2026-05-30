@@ -1,16 +1,16 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
-  resolveInstalledBinaryPath,
+  resolveInstalledBinaryCommandInvocation,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 
@@ -20,16 +20,13 @@ type InstalledPackageJson = {
 
 function npmExec(args: string[], cwd: string): string {
   const invocation = resolveNpmCommandInvocation({
+    npmArgs: args,
     npmExecPath: process.env.npm_execpath,
     nodeExecPath: process.execPath,
     platform: process.platform,
   });
 
-  return execFileSync(invocation.command, [...invocation.args, ...args], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+  return runNpmVerifyCommand(invocation, cwd);
 }
 
 function main(): void {
@@ -67,16 +64,8 @@ function main(): void {
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
     });
-    const installedBinaryVersion = execFileSync(
-      resolveInstalledBinaryPath(prefixDir),
-      ["--version"],
-      {
-        cwd: workingDir,
-        encoding: "utf8",
-        shell: process.platform === "win32",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    ).trim();
+    const binaryInvocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
+    const installedBinaryVersion = runNpmVerifyCommand(binaryInvocation, workingDir);
     if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== resolvedExpectedVersion) {
       errors.push(
         `installed openclaw binary version mismatch: expected ${resolvedExpectedVersion}, found ${installedBinaryVersion || "<missing>"}.`,

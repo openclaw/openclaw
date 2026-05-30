@@ -17,7 +17,7 @@ Persona:
 Style:
 - read source and docs first
 - test systematically
-- record evidence
+- record what happened
 - end with a concise protocol report`;
 
 const qaScenarioConfigSchema = z.record(z.string(), z.unknown()).superRefine((config, ctx) => {
@@ -230,6 +230,7 @@ export type QaBootstrapScenarioCatalog = {
 };
 
 export {
+  QA_OBSERVABILITY_SCENARIO_IDS,
   QA_PERSONAL_AGENT_SCENARIO_IDS,
   QA_SCENARIO_PACKS,
   resolveQaScenarioPackScenarioIds,

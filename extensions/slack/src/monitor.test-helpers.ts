@@ -1,5 +1,6 @@
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { Mock, vi } from "vitest";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
 import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
@@ -246,6 +247,9 @@ vi.mock("./monitor/reply.runtime.js", async () => {
     "./monitor/reply.runtime.js",
   );
   type DispatchParams = Parameters<typeof actual.dispatchInboundMessage>[0];
+  type BufferedDispatchParams = Parameters<
+    typeof actual.dispatchReplyWithBufferedBlockDispatcher
+  >[0];
   type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
   const replyResolver: ReplyResolver = (...args) =>
     slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
@@ -253,6 +257,11 @@ vi.mock("./monitor/reply.runtime.js", async () => {
     ...actual,
     dispatchInboundMessage: (params: Parameters<typeof actual.dispatchInboundMessage>[0]) =>
       actual.dispatchInboundMessage({
+        ...params,
+        replyResolver,
+      }),
+    dispatchReplyWithBufferedBlockDispatcher: (params: BufferedDispatchParams) =>
+      actual.dispatchReplyWithBufferedBlockDispatcher({
         ...params,
         replyResolver,
       }),

@@ -14,17 +14,19 @@ import {
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type {
   MigrationApplyResult,
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerAuthProfileIdForAgent,
-  resolveCodexAppServerEnvApiKeyCacheKey,
+  resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "../app-server/auth-bridge.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -41,8 +43,10 @@ import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
   clearSharedCodexAppServerClientIfCurrentAndWait,
-  getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
+import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import {
   buildCodexPluginsConfigValue,
@@ -84,8 +88,8 @@ export function prepareTargetCodexAppServer(
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
   const targets = resolveCodexMigrationTargets(ctx);
-  let warmedClient: Awaited<ReturnType<typeof getSharedCodexAppServerClient>> | undefined;
-  const ready = getSharedCodexAppServerClient({
+  let warmedClient: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>> | undefined;
+  const ready = getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: 60_000,
     agentDir: targets.agentDir,
@@ -99,6 +103,9 @@ export function prepareTargetCodexAppServer(
   return {
     async dispose() {
       await ready;
+      if (warmedClient) {
+        releaseLeasedSharedCodexAppServerClient(warmedClient);
+      }
       await clearSharedCodexAppServerClientIfCurrentAndWait(warmedClient, {
         exitTimeoutMs: 2_000,
         forceKillDelayMs: 250,
@@ -115,6 +122,21 @@ export async function applyCodexMigrationPlan(params: {
   const plan = params.plan ?? (await buildCodexMigrationPlan(params.ctx));
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "codex");
   const items: MigrationItem[] = [];
+  const targets = resolveCodexMigrationTargets(params.ctx);
+  const codexHome =
+    typeof plan.metadata?.codexHome === "string" && plan.metadata.codexHome.trim()
+      ? plan.metadata.codexHome
+      : plan.source;
+  const authSource = {
+    root: plan.source,
+    confidence: "high" as const,
+    codexHome,
+    authPath: path.join(codexHome, "auth.json"),
+    modelsCachePath: path.join(codexHome, "models_cache.json"),
+    skills: [],
+    plugins: [],
+    archivePaths: [],
+  };
   const runtime = withCachedMigrationConfigRuntime(
     params.ctx.runtime ?? params.runtime,
     params.ctx.config,
@@ -127,6 +149,21 @@ export async function applyCodexMigrationPlan(params: {
     }
     if (item.id === CODEX_PLUGIN_CONFIG_ITEM_ID) {
       items.push(await applyCodexPluginConfigItem(applyCtx, item, items));
+    } else if (item.kind === "auth") {
+      const authItem = await applyCodexAuthItem({
+        ctx: applyCtx,
+        item,
+        source: authSource,
+        targets,
+      });
+      items.push(authItem);
+      items.push(
+        ...(await buildCodexAuthConfigPatchItems({
+          ctx: applyCtx,
+          item: authItem,
+          source: authSource,
+        })),
+      );
     } else if (item.kind === "plugin" && item.action === "install") {
       items.push(await applyCodexPluginInstallItem(applyCtx, item));
     } else if (item.kind === "manual") {
@@ -145,8 +182,8 @@ export async function applyCodexMigrationPlan(params: {
     reportDir,
   };
   if (items.some(isCodexPluginLoadWarningItem)) {
-    result.warnings = [...new Set([...(result.warnings ?? []), CODEX_PLUGIN_LOAD_WARNING])];
-    result.nextSteps = [...new Set([CODEX_PLUGIN_LOAD_WARNING, ...(result.nextSteps ?? [])])];
+    result.warnings = uniqueStrings([...(result.warnings ?? []), CODEX_PLUGIN_LOAD_WARNING]);
+    result.nextSteps = uniqueStrings([CODEX_PLUGIN_LOAD_WARNING, ...(result.nextSteps ?? [])]);
   }
   await writeMigrationReport(result, { title: "Codex Migration Report" });
   return result;
@@ -326,9 +363,13 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   );
 }
 
-function targetCodexMarketplaceDiscoveryTimeoutMs(): number {
-  const configured = Number(process.env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV]);
-  if (Number.isFinite(configured) && configured >= 0) {
+export function targetCodexMarketplaceDiscoveryTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const configured = parseStrictNonNegativeInteger(
+    env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
+  );
+  if (configured !== undefined) {
     return configured;
   }
   return TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
@@ -361,7 +402,7 @@ async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext):
   });
   const envApiKeyFingerprint = authProfileId
     ? undefined
-    : resolveCodexAppServerEnvApiKeyCacheKey({
+    : resolveCodexAppServerFallbackApiKeyCacheKey({
         startOptions: appServer.start,
       });
   return buildCodexPluginAppCacheKey({

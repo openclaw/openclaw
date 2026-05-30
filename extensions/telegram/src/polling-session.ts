@@ -3,11 +3,19 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
+  collectErrorGraphCandidates,
+  formatErrorMessage,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
+import {
+  clampPositiveTimerTimeoutMs,
+  resolvePositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   computeBackoff,
   formatDurationPrecise,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
-import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
@@ -60,9 +68,34 @@ const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 1
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
+const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
+const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
 
 function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
+}
+
+type NonRetryableSpooledUpdateFailure = {
+  reason: "missing-agent-harness";
+  message: string;
+};
+
+function resolveNonRetryableSpooledUpdateFailure(
+  err: unknown,
+): NonRetryableSpooledUpdateFailure | null {
+  for (const candidate of collectErrorGraphCandidates(err, (current) => [
+    current.cause,
+    current.error,
+  ])) {
+    const message = formatErrorMessage(candidate);
+    if (
+      readErrorName(candidate) === MISSING_AGENT_HARNESS_ERROR_NAME ||
+      MISSING_AGENT_HARNESS_MESSAGE_RE.test(message)
+    ) {
+      return { reason: "missing-agent-harness", message };
+    }
+  }
+  return null;
 }
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
@@ -188,18 +221,12 @@ function resolveSpooledUpdateHandlerTimeoutMs(params: {
     Number(params.env?.[TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV]),
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate > 0) {
-      return Math.floor(candidate);
+    const timeoutMs = clampPositiveTimerTimeoutMs(candidate);
+    if (timeoutMs !== undefined) {
+      return timeoutMs;
     }
   }
   return ISOLATED_INGRESS_BACKLOG_STALL_MS;
-}
-
-function resolvePositiveFiniteMs(value: number | undefined, fallback: number): number {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  return fallback;
 }
 
 function buildSpooledUpdateHandlerKey(params: { spoolDir: string; laneKey: string }): string {
@@ -238,7 +265,7 @@ export class TelegramPollingSession {
         : {}),
       env: process.env,
     });
-    this.#spooledUpdateHandlerAbortGraceMs = resolvePositiveFiniteMs(
+    this.#spooledUpdateHandlerAbortGraceMs = resolvePositiveTimerTimeoutMs(
       opts.isolatedIngress?.spooledUpdateHandlerAbortGraceMs,
       TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS,
     );
@@ -457,6 +484,30 @@ export class TelegramPollingSession {
     err: unknown;
     update: ClaimedTelegramSpooledUpdate;
   }): Promise<void> {
+    const nonRetryable = resolveNonRetryableSpooledUpdateFailure(params.err);
+    if (nonRetryable) {
+      try {
+        const failed = await failTelegramSpooledUpdateClaim({
+          update: params.update,
+          reason: nonRetryable.reason,
+          message: nonRetryable.message,
+        });
+        if (!failed) {
+          this.opts.log(
+            `[telegram][diag] spooled update ${params.update.updateId} failed with non-retryable ${nonRetryable.reason}, but no processing marker remained to dead-letter.`,
+          );
+          return;
+        }
+        this.opts.log(
+          `[telegram][diag] spooled update ${params.update.updateId} failed with non-retryable ${nonRetryable.reason}; dead-lettered: ${nonRetryable.message}`,
+        );
+        return;
+      } catch (failErr) {
+        this.opts.log(
+          `[telegram][diag] spooled update ${params.update.updateId} failed with non-retryable ${nonRetryable.reason}, but could not be dead-lettered: ${formatErrorMessage(failErr)}`,
+        );
+      }
+    }
     try {
       await releaseTelegramSpooledUpdateClaim(params.update);
     } catch (releaseErr) {

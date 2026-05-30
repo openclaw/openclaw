@@ -1,10 +1,13 @@
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
+import type {
+  GatewayClientMode,
+  GatewayClientName,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayClientMode, GatewayClientName } from "../../gateway/protocol/client-info.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
@@ -25,7 +28,7 @@ export type ChannelExposure = {
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
 /** Agent tool registered by a channel plugin. */
-export type ChannelAgentTool = AgentTool<TSchema, unknown>;
+export type ChannelAgentTool = AgentTool;
 
 /** Lazy agent-tool factory used when tool availability depends on config. */
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
@@ -151,12 +154,29 @@ export type ChannelHeartbeatDeps = {
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
-export type ChannelLegacyStateMigrationPlan = {
-  kind: "copy" | "move";
-  label: string;
-  sourcePath: string;
-  targetPath: string;
-};
+export type ChannelLegacyStateMigrationPlan =
+  | {
+      kind: "copy" | "move";
+      label: string;
+      sourcePath: string;
+      targetPath: string;
+    }
+  | {
+      kind: "plugin-state-import";
+      label: string;
+      sourcePath: string;
+      targetPath: string;
+      pluginId: string;
+      namespace: string;
+      maxEntries: number;
+      scopeKey: string;
+      stateDir?: string;
+      cleanupSource?: "rename";
+      preview?: string;
+      readEntries: () =>
+        | Array<{ key: string; value: unknown; ttlMs?: number }>
+        | Promise<Array<{ key: string; value: unknown; ttlMs?: number }>>;
+    };
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */
 export type ChannelMeta = {
@@ -561,6 +581,11 @@ export type ChannelMessagingAdapter = {
     id: string;
     threadId?: string | null;
   }) => string | undefined;
+  /**
+   * @deprecated Use `targetResolver` for target id normalization and
+   * `resolveOutboundSessionRoute` for session/thread identity. This remains for
+   * compatibility with older route parsing helpers.
+   */
   parseExplicitTarget?: (params: { raw: string }) => {
     to: string;
     threadId?: string | number;

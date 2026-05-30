@@ -126,9 +126,10 @@ observation-only.
 **Messages and delivery**
 
 - **`inbound_claim`** - claim an inbound message before agent routing (synthetic replies)
-- `message_received` - observe inbound content, sender, thread, and metadata
-- **`message_sending`** - rewrite outbound content or cancel delivery
-- `message_sent` - observe outbound delivery success or failure
+- `message_received` — observe inbound content, sender, thread, and metadata
+- **`message_sending`** — rewrite outbound content or cancel delivery
+- **`reply_payload_sending`** — mutate or cancel normalized reply payloads before delivery
+- `message_sent` — observe outbound delivery success or failure
 - **`before_dispatch`** - inspect or rewrite an outbound dispatch before channel handoff
 - **`reply_dispatch`** - participate in the final reply-dispatch pipeline
 
@@ -167,6 +168,11 @@ file.
 
 - `event.toolName`
 - `event.params`
+- optional `event.toolKind` and `event.toolInputKind`, host-authoritative
+  discriminators for tools that intentionally share names; for example, outer
+  code-mode `exec` calls use `toolKind: "code_mode_exec"` and
+  include `toolInputKind: "javascript" | "typescript"` when the input language
+  is known
 - optional `event.derivedPaths`, containing best-effort host-derived target path
   hints for well-known tool envelopes such as `apply_patch`; when present,
   these paths may be incomplete or may over-approximate what the tool will
@@ -174,7 +180,8 @@ file.
 - optional `event.runId`
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
-  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), and diagnostic `ctx.trace`
+  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), `ctx.toolKind`,
+  `ctx.toolInputKind`, and diagnostic `ctx.trace`
 
 It can return:
 
@@ -189,6 +196,7 @@ type BeforeToolCallResult = {
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
+    allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (
       decision: "allow-once" | "allow-always" | "deny" | "timeout" | "cancelled",
@@ -204,10 +212,16 @@ Hook guard behavior for typed lifecycle hooks:
 - `params` rewrites the tool parameters for execution.
 - `requireApproval` pauses the agent run and asks the user through plugin
   approvals. The `/approve` command can approve both exec and plugin approvals.
+  In Codex app-server report-mode native `PreToolUse` relays, this is deferred
+  to the matching app-server approval request; see [Codex harness runtime](/plugins/codex-harness-runtime#hook-boundaries).
 - A lower-priority `block: true` can still block after a higher-priority hook
   requested approval.
 - `onResolution` receives the resolved approval decision - `allow-once`,
   `allow-always`, `deny`, `timeout`, or `cancelled`.
+
+See [Plugin permission requests](/plugins/plugin-permission-requests) for
+approval routing, decision behavior, and when to use `requireApproval` instead
+of optional tools or exec approvals.
 
 Bundled plugins that need host-level policy can register trusted tool policies
 with `api.registerTrustedToolPolicy(...)`. These run before ordinary
@@ -371,6 +385,8 @@ Use message hooks for channel-level routing and delivery policy:
 - `message_received`: observe inbound content, sender, `threadId`, `messageId`,
   `senderId`, optional run/session correlation, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
+- `reply_payload_sending`: rewrite normalized `ReplyPayload` objects (including
+  `presentation`, `delivery`, media refs, and text) or return `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
 
 For audio-only TTS replies, `content` may contain the hidden spoken transcript
@@ -392,6 +408,13 @@ Decision rules:
 - `message_sending` with `cancel: false` is treated as no decision.
 - Rewritten `content` continues to lower-priority hooks unless a later hook
   cancels delivery.
+- `reply_payload_sending` runs after payload normalization and before channel
+  delivery, including replies routed back to the originating channel. Handlers
+  run sequentially and each handler sees the latest payload produced by
+  higher-priority handlers.
+- `reply_payload_sending` payloads do not expose runtime trust markers such as
+  `trustedLocalMedia`; plugins can edit payload shape but cannot grant local
+  media trust.
 - `message_sending` can return `cancelReason` and bounded `metadata` with a
   cancellation. New message lifecycle APIs expose this as a suppressed delivery
   outcome with reason `cancelled_by_message_sending_hook`; legacy direct

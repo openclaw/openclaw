@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
-import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList, uniqueStrings } from "../shared/string-normalization.js";
+import { scanDirectoryWithSummary } from "../skills/security/scanner.js";
 import {
   findBlockedPackageDirectoryInPath,
   findBlockedPackageFileAliasInPath,
@@ -365,8 +367,8 @@ function readPositiveIntegerEnv(name: string, fallback: number): number {
   if (!rawValue) {
     return fallback;
   }
-  const parsedValue = Number.parseInt(rawValue, 10);
-  if (!Number.isFinite(parsedValue) || parsedValue < 1) {
+  const parsedValue = parseStrictPositiveInteger(rawValue);
+  if (parsedValue === undefined) {
     return fallback;
   }
   return parsedValue;
@@ -823,22 +825,13 @@ async function scanDirectoryTarget(params: {
   }
 }
 
-function readStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
 function collectPackageExecutableScanEntries(params: {
   extensions: string[];
   packageMetadata?: PackageExecutableScanMetadata;
 }): string[] {
   const entries: string[] = [];
   const metadata = params.packageMetadata;
-  const runtimeExtensions = readStringList(metadata?.runtimeExtensions);
+  const runtimeExtensions = normalizeTrimmedStringList(metadata?.runtimeExtensions);
   for (const [index, extensionEntry] of params.extensions.entries()) {
     entries.push(extensionEntry);
     const runtimeEntry = runtimeExtensions[index];
@@ -859,7 +852,7 @@ function collectPackageExecutableScanEntries(params: {
   } else if (setupEntry) {
     entries.push(...listBuiltRuntimeEntryCandidates(setupEntry));
   }
-  return [...new Set(entries)];
+  return uniqueStrings(entries);
 }
 
 async function resolveRuntimeGraphFileCandidate(filePath: string): Promise<string | undefined> {

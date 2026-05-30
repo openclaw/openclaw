@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -537,6 +538,37 @@ describe("emitExecSystemEvent", () => {
     expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
   });
 
+  it("routes single-owner dmScope=main direct exec events to the agent main session", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:main:telegram:default:direct:123",
+      contextKey: "exec:run-dm",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
+      eventRouting: {
+        dmScope: "main",
+        allowFrom: ["123"],
+        channel: "telegram",
+        accountId: "default",
+      },
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:main:main",
+      contextKey: "exec:run-dm",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
+  });
+
   it("keeps wake unscoped for non-agent session keys", () => {
     emitExecSystemEvent("Exec finished", {
       sessionKey: "global",
@@ -689,6 +721,48 @@ describe("buildExecExitOutcome", () => {
 });
 
 describe("runExecProcess POSIX command wrapper", () => {
+  it("normalizes non-finite and oversized exec timeouts before spawning", async () => {
+    supervisorMock.spawn.mockResolvedValue({
+      runId: "mock-run",
+      startedAtMs: Date.now(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel: vi.fn(),
+    });
+
+    const baseParams = {
+      command: "echo test",
+      workdir: "/tmp",
+      env: { PATH: "/usr/bin" },
+      pathPrepend: [],
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+    };
+
+    await runExecProcess({
+      ...baseParams,
+      timeoutSec: Number.POSITIVE_INFINITY,
+    });
+    await runExecProcess({
+      ...baseParams,
+      timeoutSec: 3_000_000,
+    });
+
+    expect(supervisorMock.spawn.mock.calls[0]?.[0].timeoutMs).toBeUndefined();
+    expect(supervisorMock.spawn.mock.calls[1]?.[0].timeoutMs).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
   it("wraps command with PATH export if OPENCLAW_PREPEND_PATH is present", async () => {
     if (process.platform === "win32") {
       return;
@@ -727,7 +801,9 @@ describe("runExecProcess POSIX command wrapper", () => {
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];
 
     const commandStr = spawnCall.argv.join(" ");
-    expect(commandStr).toContain('export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo test');
+    expect(commandStr).toContain(
+      'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo test',
+    );
   });
 
   it("does not wrap command on Windows", async () => {

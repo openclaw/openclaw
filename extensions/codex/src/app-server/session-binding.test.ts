@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearCodexAppServerBinding,
+  clearCodexAppServerBindingForThread,
   readCodexAppServerBinding,
   resolveCodexAppServerBindingPath,
   writeCodexAppServerBinding,
@@ -51,7 +52,7 @@ describe("codex app-server session binding", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("round-trips the thread binding beside the PI session file", async () => {
+  it("round-trips the thread binding beside the session file", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-123",
@@ -60,6 +61,7 @@ describe("codex app-server session binding", () => {
       modelProvider: "openai",
       dynamicToolsFingerprint: "tools-v1",
       userMcpServersFingerprint: "user-mcp-v1",
+      nativeHookRelayGeneration: "generation-v1",
     });
 
     const binding = await readCodexAppServerBinding(sessionFile);
@@ -72,6 +74,7 @@ describe("codex app-server session binding", () => {
     expect(binding?.modelProvider).toBe("openai");
     expect(binding?.dynamicToolsFingerprint).toBe("tools-v1");
     expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
+    expect(binding?.nativeHookRelayGeneration).toBe("generation-v1");
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
     expect(bindingStat.isFile()).toBe(true);
   });
@@ -298,6 +301,28 @@ describe("codex app-server session binding", () => {
   it("clears missing bindings without throwing", async () => {
     const sessionFile = path.join(tempDir, "missing.json");
     await clearCodexAppServerBinding(sessionFile);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+  });
+
+  it("clears a binding only when the thread matches", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-current",
+      cwd: tempDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+    });
+
+    await expect(
+      clearCodexAppServerBindingForThread(sessionFile, "thread-transient"),
+    ).resolves.toBe(false);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-current",
+    });
+
+    await expect(clearCodexAppServerBindingForThread(sessionFile, "thread-current")).resolves.toBe(
+      true,
+    );
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 });

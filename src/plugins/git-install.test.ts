@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runCommandWithTimeoutMock = vi.fn();
 const installPluginFromInstalledPackageDirMock = vi.fn();
@@ -103,9 +103,25 @@ describe("parseGitPluginSpec", () => {
 });
 
 describe("installPluginFromGitSpec", () => {
-  beforeEach(() => {
+  const tempDirs: string[] = [];
+
+  beforeEach(async () => {
     runCommandWithTimeoutMock.mockReset();
     installPluginFromInstalledPackageDirMock.mockReset();
+    const globalConfigRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-git-install-npmrc-"),
+    );
+    tempDirs.push(globalConfigRoot);
+    const globalConfig = path.join(globalConfigRoot, "global-npmrc");
+    await fs.writeFile(globalConfig, "", "utf8");
+    vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
   });
 
   it("clones, checks out refs, installs from the clone, and returns commit metadata", async () => {

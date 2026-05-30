@@ -174,11 +174,11 @@ describe("model provider localService config", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts bundled provider alias timeout overlays without custom provider fields", () => {
+  it("accepts bundled provider timeout overlays without custom provider fields", () => {
     const result = validateConfigObjectRaw({
       models: {
         providers: {
-          "z.ai": {
+          zai: {
             timeoutSeconds: 600,
           },
         },
@@ -187,8 +187,8 @@ describe("model provider localService config", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.models?.providers?.["z.ai"]?.models).toEqual([]);
-      expect(result.config.models?.providers?.["z.ai"]?.baseUrl).toBe("");
+      expect(result.config.models?.providers?.zai?.models).toEqual([]);
+      expect(result.config.models?.providers?.zai?.baseUrl).toBe("");
     }
   });
 
@@ -425,6 +425,7 @@ describe("diagnostics.otel.captureContent", () => {
         toolInputs: true,
         toolOutputs: true,
         systemPrompt: false,
+        toolDefinitions: true,
       },
     ]) {
       const result = OpenClawSchema.safeParse({
@@ -1142,7 +1143,7 @@ describe("config paths", () => {
 describe("config strict validation", () => {
   it("rejects unknown fields", () => {
     const res = validateConfigObject({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(false);
@@ -1267,6 +1268,24 @@ describe("config strict validation", () => {
     expect(raw.messages.tts).not.toHaveProperty("providers");
   });
 
+  it("reports retired plugin model refs without an agents section", () => {
+    const raw = {
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            config: {
+              summaryModel: "anthropic/claude-opus-4-5",
+            },
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+
+    expect(issuePaths(issues)).toContain("plugins");
+    expect(issuePaths(issues)).not.toContain("agents");
+  });
+
   it("reports retired queue steering modes without read-time auto-migration", async () => {
     const raw = {
       messages: {
@@ -1298,7 +1317,7 @@ describe("config strict validation", () => {
           },
           list: [
             {
-              id: "pi",
+              id: "openclaw",
               sandbox: {
                 perSession: false,
               },

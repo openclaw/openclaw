@@ -663,6 +663,9 @@ function createSetupEntryChannelPluginFixture(params: {
   bundledSetupEntryId?: string;
   splitBundledSetupSecrets?: boolean;
   bundledSetupRuntimeMarker?: string;
+  bundledSetupRuntimeRoutePath?: string;
+  bundledSetupRuntimeRegisterError?: string;
+  bundledSetupRuntimeLateRoutePath?: string;
   bundledSetupRuntimeError?: string;
   bundledFullRuntimeMarker?: string;
   requireBundledFullRuntimeBeforeLoad?: boolean;
@@ -825,7 +828,34 @@ module.exports = {
   },`
         : ""
   }
-};`
+	  ${
+      params.bundledSetupRuntimeRoutePath
+        ? `registerSetupRuntime: (api) => {
+	    api.registerHttpRoute({
+	      path: ${JSON.stringify(params.bundledSetupRuntimeRoutePath)},
+	      auth: "plugin",
+	      handler: async () => true,
+	    });
+	    ${
+        params.bundledSetupRuntimeRegisterError
+          ? `throw new Error(${JSON.stringify(params.bundledSetupRuntimeRegisterError)});`
+          : ""
+      }
+	    ${
+        params.bundledSetupRuntimeLateRoutePath
+          ? `queueMicrotask(() => {
+	      api.registerHttpRoute({
+	        path: ${JSON.stringify(params.bundledSetupRuntimeLateRoutePath)},
+	        auth: "plugin",
+	        handler: async () => true,
+	      });
+	    });`
+          : ""
+      }
+	  },`
+        : ""
+    }
+	};`
       : `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
 module.exports = {
   plugin: {
@@ -1116,6 +1146,115 @@ describe("loadOpenClawPlugins", () => {
 
     expect(fs.existsSync(path.join(aliasDir, "sentinel.txt"))).toBe(true);
     expect(fs.readFileSync(path.join(aliasDir, "core.js"), "utf8")).toContain("core.js");
+  });
+
+  it("keeps private local-only plugin-sdk artifacts out of package dist aliases", () => {
+    const packageRoot = makeTempDir();
+    const distRoot = path.join(packageRoot, "dist");
+    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
+    const aliasRoot = path.join(distRoot, "extensions", "node_modules", "openclaw");
+    const aliasDir = path.join(aliasRoot, "plugin-sdk");
+    mkdirSafe(pluginSdkDir);
+    mkdirSafe(aliasDir);
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "openclaw",
+          version: "2026.4.22",
+          type: "module",
+          exports: {
+            "./plugin-sdk": "./dist/plugin-sdk/index.js",
+            "./plugin-sdk/string-coerce-runtime": "./dist/plugin-sdk/string-coerce-runtime.js",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const root = true;\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "string-coerce-runtime.js"),
+      "export const publicRuntime = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "ssrf-runtime-internal.js"),
+      "export const internal = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(aliasDir, "ssrf-runtime-internal.js"),
+      "export const staleInternal = true;\n",
+      "utf8",
+    );
+
+    ensureOpenClawPluginSdkAlias(distRoot);
+
+    const aliasPackage = JSON.parse(
+      fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
+    ) as { exports?: Record<string, string> };
+    expect(aliasPackage.exports).toEqual({
+      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
+    });
+    expect(fs.existsSync(path.join(aliasDir, "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasDir, "string-coerce-runtime.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasDir, "ssrf-runtime-internal.js"))).toBe(false);
+  });
+
+  it("keeps private local-only plugin-sdk artifacts out of legacy package dist aliases", () => {
+    const packageRoot = makeTempDir();
+    const distRoot = path.join(packageRoot, "dist");
+    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
+    const aliasRoot = path.join(distRoot, "extensions", "node_modules", "openclaw");
+    const aliasDir = path.join(aliasRoot, "plugin-sdk");
+    mkdirSafe(pluginSdkDir);
+    mkdirSafe(aliasDir);
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.22", type: "module" }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const root = true;\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "string-coerce-runtime.js"),
+      "export const publicRuntime = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginSdkDir, "ssrf-runtime-internal.js"),
+      "export const internal = true;\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(aliasDir, "ssrf-runtime-internal.js"),
+      "export const staleInternal = true;\n",
+      "utf8",
+    );
+
+    ensureOpenClawPluginSdkAlias(distRoot);
+
+    const aliasPackage = JSON.parse(
+      fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
+    ) as { exports?: Record<string, string> };
+    expect(aliasPackage.exports).toEqual({
+      "./plugin-sdk": "./plugin-sdk/index.js",
+      "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
+    });
+    expect(fs.existsSync(path.join(aliasDir, "index.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasDir, "string-coerce-runtime.js"))).toBe(true);
+    expect(fs.existsSync(path.join(aliasDir, "ssrf-runtime-internal.js"))).toBe(false);
+  });
+
+  it("keeps private QA plugin-sdk filenames out of bundled source markers", () => {
+    const source = fs.readFileSync(new URL("./plugin-sdk-dist-alias.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("qa-channel.js");
+    expect(source).not.toContain("qa-channel-protocol.js");
+    expect(source).not.toContain("qa-lab.js");
+    expect(source).not.toContain("qa-runtime.js");
   });
 
   it("disables bundled plugins by default", () => {
@@ -1517,6 +1656,85 @@ describe("loadOpenClawPlugins", () => {
             name: "allowed-config-path.ping",
             owner: { kind: "plugin", pluginId: "allowed-config-path" },
           },
+        ]);
+      },
+    },
+    {
+      label: "adapts returned plugin gateway method values into responses",
+      run: async () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "returned-gateway-method",
+          filename: "returned-gateway-method.cjs",
+          body: `module.exports = {
+  id: "returned-gateway-method",
+  register(api) {
+    api.registerGatewayMethod("returned-gateway-method.status", async () => ({ ok: true, status: "ready" }));
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["returned-gateway-method"],
+            },
+          },
+        });
+
+        const responses: unknown[] = [];
+        await registry.gatewayHandlers["returned-gateway-method.status"]?.({
+          params: {},
+          respond: (ok: boolean, payload: unknown, error?: unknown) =>
+            responses.push({ ok, payload, error }),
+        } as never);
+
+        expect(responses).toEqual([
+          { ok: true, payload: { ok: true, status: "ready" }, error: undefined },
+        ]);
+      },
+    },
+    {
+      label: "keeps explicit plugin gateway responses authoritative",
+      run: async () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "explicit-gateway-method",
+          filename: "explicit-gateway-method.cjs",
+          body: `module.exports = {
+  id: "explicit-gateway-method",
+  register(api) {
+    api.registerGatewayMethod("explicit-gateway-method.status", ({ respond }) => {
+      respond(true, { status: "responded" });
+      return { status: "returned" };
+    });
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["explicit-gateway-method"],
+            },
+          },
+        });
+
+        const responses: unknown[] = [];
+        await registry.gatewayHandlers["explicit-gateway-method.status"]?.({
+          params: {},
+          respond: (ok: boolean, payload: unknown, error?: unknown) =>
+            responses.push({ ok, payload, error }),
+        } as never);
+
+        expect(responses).toEqual([
+          { ok: true, payload: { status: "responded" }, error: undefined },
         ]);
       },
     },
@@ -2113,8 +2331,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
         expect(getGlobalHookRunner()).toBeNull();
       },
     },
-  ] as const)("handles config-path and scoped plugin loads: $label", ({ run }) => {
-    run();
+  ] as const)("handles config-path and scoped plugin loads: $label", async ({ run }) => {
+    await run();
   });
 
   it("treats an explicit empty plugin scope as scoped-empty instead of unscoped", () => {
@@ -2834,7 +3052,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
       "loaded",
     );
     expect(scoped.embeddingProviders.map((entry) => entry.provider.id)).toEqual(["snapshot"]);
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["active"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "active",
+    ]);
     expect(getEmbeddingProvider("snapshot")).toBeUndefined();
   });
 
@@ -2878,7 +3099,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
       "loaded",
     );
     expect(scoped.embeddingProviders.map((entry) => entry.provider.id)).toEqual(["shared"]);
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["shared"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "shared",
+    ]);
     expect(getEmbeddingProvider("shared")?.id).toBe("shared");
   });
 
@@ -2917,7 +3141,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.plugins.find((entry) => entry.id === "failing-embedding")?.status).toBe(
       "error",
     );
-    expect(listEmbeddingProviders()).toStrictEqual([]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toStrictEqual([
+      "openai-compatible",
+    ]);
   });
 
   it("clears newly-registered memory plugin registries when plugin register fails", () => {
@@ -5285,6 +5511,41 @@ module.exports = {
       expectSetupRuntimeLoaded: true,
     },
     {
+      name: "runs bundled setupEntry setup-runtime registrations before deferred full loads",
+      fixture: {
+        id: "setup-runtime-bundled-route-test",
+        label: "Setup Runtime Bundled Route Test",
+        packageName: "@openclaw/setup-runtime-bundled-route-test",
+        fullBlurb: "full entry should defer while configured",
+        setupBlurb: "setup runtime route",
+        configured: true,
+        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+        useBundledSetupEntryContract: true,
+        bundledSetupRuntimeRoutePath: "/setup-runtime-route",
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          preferSetupRuntimeForChannelPlugins: true,
+          config: {
+            channels: {
+              "setup-runtime-bundled-route-test": {
+                enabled: true,
+                token: "configured",
+              },
+            },
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-bundled-route-test"],
+            },
+          },
+        }),
+      expectFullLoaded: false,
+      expectSetupLoaded: true,
+      expectedChannels: 1,
+      expectedSetupRuntimeRoutePath: "/setup-runtime-route",
+    },
+    {
       name: "merges bundled runtime plugin into setup-runtime channel loads",
       fixture: {
         id: "setup-runtime-bundled-runtime-merge-test",
@@ -5388,6 +5649,7 @@ module.exports = {
       expectedSetupSecretId,
       expectSetupRuntimeLoaded,
       expectBundledFullRuntimeLoaded,
+      expectedSetupRuntimeRoutePath,
     }) => {
       const built = createSetupEntryChannelPluginFixture(fixture);
       const registry = load({ pluginDir: built.pluginDir });
@@ -5415,6 +5677,14 @@ module.exports = {
         expect(
           registry.channels[0]?.plugin.secrets?.secretTargetRegistryEntries?.some(
             (entry) => entry.id === expectedSetupSecretId,
+          ),
+        ).toBe(true);
+      }
+      if (expectedSetupRuntimeRoutePath) {
+        expect(
+          registry.httpRoutes.some(
+            (route) =>
+              route.pluginId === fixture.id && route.path === expectedSetupRuntimeRoutePath,
           ),
         ).toBe(true);
       }
@@ -5487,6 +5757,97 @@ module.exports = {
     ).toContain("broken setup runtime setter");
     expect(registry.plugins.find((entry) => entry.id === "setup-runtime-helper-test")?.status).toBe(
       "loaded",
+    );
+  });
+
+  it("rolls back setup-runtime registrations when setup side effects fail", () => {
+    const built = createSetupEntryChannelPluginFixture({
+      id: "setup-runtime-route-error-test",
+      label: "Setup Runtime Route Error Test",
+      packageName: "@openclaw/setup-runtime-route-error-test",
+      fullBlurb: "full runtime plugin",
+      setupBlurb: "setup runtime route",
+      configured: true,
+      startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+      useBundledSetupEntryContract: true,
+      bundledSetupRuntimeRoutePath: "/setup-runtime-route-error",
+      bundledSetupRuntimeRegisterError: "broken setup-runtime registrar",
+    });
+    const helperPlugin = writePlugin({
+      id: "setup-runtime-route-helper-test",
+      filename: "setup-runtime-route-helper-test.cjs",
+      body: `module.exports = { id: "setup-runtime-route-helper-test", register() {} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "setup-runtime-route-error-test": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+        plugins: {
+          load: { paths: [built.pluginDir, helperPlugin.file] },
+          allow: ["setup-runtime-route-error-test", "setup-runtime-route-helper-test"],
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.status,
+    ).toBe("error");
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.error,
+    ).toContain("broken setup-runtime registrar");
+    expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-route-error")).toBe(
+      false,
+    );
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-helper-test")?.status,
+    ).toBe("loaded");
+  });
+
+  it("closes setup-runtime registration APIs after synchronous registration", async () => {
+    const built = createSetupEntryChannelPluginFixture({
+      id: "setup-runtime-late-route-test",
+      label: "Setup Runtime Late Route Test",
+      packageName: "@openclaw/setup-runtime-late-route-test",
+      fullBlurb: "full runtime plugin",
+      setupBlurb: "setup runtime route",
+      configured: true,
+      startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+      useBundledSetupEntryContract: true,
+      bundledSetupRuntimeRoutePath: "/setup-runtime-sync-route",
+      bundledSetupRuntimeLateRoutePath: "/setup-runtime-late-route",
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "setup-runtime-late-route-test": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+        plugins: {
+          load: { paths: [built.pluginDir] },
+          allow: ["setup-runtime-late-route-test"],
+        },
+      },
+    });
+
+    await Promise.resolve();
+
+    expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-sync-route")).toBe(
+      true,
+    );
+    expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-late-route")).toBe(
+      false,
     );
   });
 
@@ -5803,6 +6164,333 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "startup-artifact-test")?.status).toBe(
       "loaded",
     );
+  });
+
+  it("prefers package-local dist artifacts for bundled source checkout plugins", () => {
+    const repoRoot = makeTempDir();
+    const sourceDir = path.join(repoRoot, "extensions", "startup-package-artifact-test");
+    const runtimeDir = path.join(sourceDir, "dist");
+    mkdirSafe(sourceDir);
+    mkdirSafe(runtimeDir);
+    fs.writeFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "startup-package-artifact-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify(
+        {
+          openclaw: {
+            extensions: ["./index.ts"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "index.ts"),
+      'throw new Error("source TS should not load during gateway startup");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeDir, "index.js"),
+      'module.exports = { id: "startup-package-artifact-test", register() {} };\n',
+      "utf-8",
+    );
+
+    const registry = withEnv(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      },
+      () =>
+        loadOpenClawPlugins({
+          cache: false,
+          preferBuiltPluginArtifacts: true,
+          onlyPluginIds: ["startup-package-artifact-test"],
+          config: {
+            plugins: {
+              allow: ["startup-package-artifact-test"],
+              entries: {
+                "startup-package-artifact-test": {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        }),
+    );
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "startup-package-artifact-test")?.status,
+    ).toBe("loaded");
+  });
+
+  it("prefers package-local dist artifacts over workspace source TS when requested", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const distDir = path.join(pluginDir, "dist");
+    mkdirSafe(distDir);
+    mkdirSafe(path.join(pluginDir, "src"));
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          openclaw: {
+            extensions: ["./src/index.mts"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "workspace-artifact-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "src", "index.mts"),
+      'throw new Error("workspace source TS should not load during gateway startup");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(distDir, "index.mjs"),
+      'export default { id: "workspace-artifact-test", register() {} };\n',
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferBuiltPluginArtifacts: true,
+      config: {
+        plugins: {
+          allow: ["workspace-artifact-test"],
+          load: { paths: [pluginDir] },
+          entries: {
+            "workspace-artifact-test": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "workspace-artifact-test")?.status).toBe(
+      "loaded",
+    );
+  });
+
+  it("probes supported package-local dist artifact extensions before source TS", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const distDir = path.join(pluginDir, "dist");
+    mkdirSafe(distDir);
+    mkdirSafe(path.join(pluginDir, "src"));
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          openclaw: {
+            extensions: ["./src/index.ts"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "workspace-artifact-extension-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "src", "index.ts"),
+      'throw new Error("workspace source TS should not load during gateway startup");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(distDir, "index.mjs"),
+      'export default { id: "workspace-artifact-extension-test", register() {} };\n',
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferBuiltPluginArtifacts: true,
+      config: {
+        plugins: {
+          allow: ["workspace-artifact-extension-test"],
+          load: { paths: [pluginDir] },
+          entries: {
+            "workspace-artifact-extension-test": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "workspace-artifact-extension-test")?.status,
+    ).toBe("loaded");
+  });
+
+  it("does not replace explicit JavaScript entries with package-local dist artifacts", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const distDir = path.join(pluginDir, "dist");
+    mkdirSafe(distDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          openclaw: {
+            extensions: ["./index.js"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "workspace-explicit-js-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      'export default { id: "workspace-explicit-js-test", register() {} };\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(distDir, "index.js"),
+      'throw new Error("explicit JS entry should not be replaced by dist");\n',
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferBuiltPluginArtifacts: true,
+      config: {
+        plugins: {
+          allow: ["workspace-explicit-js-test"],
+          load: { paths: [pluginDir] },
+          entries: {
+            "workspace-explicit-js-test": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "workspace-explicit-js-test")?.status,
+    ).toBe("loaded");
+  });
+
+  it("keeps package-local dist artifacts inside the plugin root boundary", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const outsideDistDir = makeTempDir();
+    mkdirSafe(path.join(pluginDir, "src"));
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          openclaw: {
+            extensions: ["./src/index.mts"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "workspace-artifact-symlink-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "src", "index.mts"),
+      'throw new Error("workspace source TS should not load during gateway startup");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(outsideDistDir, "index.mjs"),
+      'export default { id: "workspace-artifact-symlink-test", register() {} };\n',
+      "utf-8",
+    );
+    try {
+      fs.symlinkSync(outsideDistDir, path.join(pluginDir, "dist"), "dir");
+    } catch {
+      return;
+    }
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferBuiltPluginArtifacts: true,
+      config: {
+        plugins: {
+          allow: ["workspace-artifact-symlink-test"],
+          load: { paths: [pluginDir] },
+          entries: {
+            "workspace-artifact-symlink-test": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "workspace-artifact-symlink-test")?.status,
+    ).not.toBe("loaded");
+    expectDiagnosticContaining({ registry, message: "escapes" });
   });
 
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
@@ -7212,14 +7900,16 @@ module.exports = {
       body: `module.exports = { id: "runtime-introspection", register(api) {
   const runtime = api.runtime ?? {};
   const keys = Object.keys(runtime);
-  if (!keys.includes("channel")) {
-    throw new Error("runtime channel key missing");
-  }
-  if (!("channel" in runtime)) {
-    throw new Error("runtime channel missing from has check");
-  }
-  if (!Object.getOwnPropertyDescriptor(runtime, "channel")) {
-    throw new Error("runtime channel descriptor missing");
+  for (const key of ["channel", "mediaUnderstanding", "llm"]) {
+    if (!keys.includes(key)) {
+      throw new Error("runtime " + key + " key missing");
+    }
+    if (!(key in runtime)) {
+      throw new Error("runtime " + key + " missing from has check");
+    }
+    if (!Object.getOwnPropertyDescriptor(runtime, key)) {
+      throw new Error("runtime " + key + " descriptor missing");
+    }
   }
 } };`,
     });

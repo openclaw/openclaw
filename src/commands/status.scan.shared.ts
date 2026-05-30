@@ -1,14 +1,17 @@
 import { existsSync } from "node:fs";
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -120,7 +123,11 @@ async function applyLocalStatusRpcFallback(params: {
   };
   timeoutMs: number;
   timeoutMsExplicit: boolean;
+  enabled?: boolean;
 }): Promise<GatewayProbeResult | null> {
+  if (params.enabled === false) {
+    return params.gatewayProbe;
+  }
   if (!shouldTryLocalStatusRpcFallback(params)) {
     return params.gatewayProbe;
   }
@@ -148,13 +155,17 @@ async function applyLocalStatusRpcFallback(params: {
     ...params.gatewayProbe,
     ok: true,
     status,
-    auth:
-      auth.capability === "unknown"
-        ? {
-            ...auth,
-            capability: "read_only",
-          }
-        : auth,
+    ...(auth
+      ? {
+          auth:
+            auth.capability === "unknown"
+              ? {
+                  ...auth,
+                  capability: "read_only",
+                }
+              : auth,
+        }
+      : {}),
   };
 }
 
@@ -193,6 +204,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     probeWhenRemoteUrlMissing?: boolean;
     resolveAuthWhenRemoteUrlMissing?: boolean;
     mergeAuthWarningIntoProbeError?: boolean;
+    localStatusRpcFallback?: boolean;
   };
 }): Promise<GatewayProbeSnapshot> {
   const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
@@ -236,6 +248,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayProbeAuth: gatewayProbeAuthResolution.auth,
     timeoutMs: probeTimeoutMs,
     timeoutMsExplicit,
+    enabled: params.opts.localStatusRpcFallback !== false,
   });
   if (
     (params.opts.mergeAuthWarningIntoProbeError ?? true) &&

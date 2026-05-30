@@ -1,10 +1,10 @@
-import { z } from "zod";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
-} from "../shared/net/redact-sensitive-url.js";
+} from "@openclaw/net-policy/redact-sensitive-url";
+import { z } from "zod";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
@@ -87,7 +87,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.basePath": "/openclaw",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
-  "gateway.push.apns.relay.baseUrl": "https://relay.example.com",
+  "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };
