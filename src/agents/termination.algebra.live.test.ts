@@ -15,8 +15,8 @@
  *   4. A hallucinating prompt never exceeds the MaxIterations budget — safety holds
  */
 
-import type { Api, Message, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import type { Message, Model } from "../llm/types.js";
 import {
   computeGroundednessScore,
   evaluateGroundedness,
@@ -60,7 +60,7 @@ type LoopResult = {
 };
 
 async function runLiveLoop(
-  model: { apiKey: string; model: Model<Api> },
+  model: { apiKey: string; model: Model },
   systemPrompt: string,
   userPrompt: string,
   cond: TerminationCondition,
