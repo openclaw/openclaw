@@ -148,6 +148,27 @@ describe("exec PATH login shell merge", () => {
     envSnapshot.restore();
   });
 
+  it("strips malformed XML arg-value suffixes from exec command and routing options", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-xml-"));
+    try {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const result = await tool.execute("call-xml-suffix", {
+        command: "echo ok</arg_value>>",
+        workdir: `${tempDir}</arg_value>>`,
+        host: "gateway</arg_value>>",
+        security: "full</arg_value>>",
+        ask: "off</arg_value>>",
+        node: "ignored-node</arg_value>>",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      });
+      const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+      expect(value).toBe("ok");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("merges login-shell PATH for host=gateway", async () => {
     if (isWin) {
       return;
