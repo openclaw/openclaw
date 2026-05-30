@@ -30,7 +30,7 @@ Treat them differently from normal config:
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
+`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the model-visible tool surface for every turn. When Code Mode or Tool Search is enabled, those tools can still stay in the hidden catalog behind the compact controls. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
 
 ### Why these three tools
 
@@ -40,7 +40,7 @@ These three tools have the largest descriptions and the most parameter shapes in
 - The model picking the right tool vs. emitting malformed tool calls because there are too many similar-looking schemas.
 - The Chat Completions adapter staying inside the server's structured-output limits vs. tripping a 400 on tool-call payload size.
 
-Removing them does not silently rewire OpenClaw — it just makes the tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools available.
+Removing them does not silently rewire OpenClaw — it just makes the visible tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools available. With Code Mode or Tool Search, the compact control can still search for and call hidden catalog tools that policy allowed for the run.
 
 ### When to turn it on
 
@@ -94,7 +94,7 @@ Restart the Gateway after changing the flag, then confirm the trimmed tool list 
 openclaw status --deep
 ```
 
-The deep status output lists the active agent tools; `browser`, `cron`, and `message` should be absent when lean mode is on.
+The deep status output lists the active model-visible agent tools; `browser`, `cron`, and `message` should be absent when lean mode is on. If Code Mode or Tool Search is enabled, they may still be available through the hidden catalog.
 
 ## Experimental does not mean hidden
 

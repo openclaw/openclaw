@@ -245,14 +245,17 @@ function applyModelProviderToolPolicy(
     agentDir?: string;
     modelCompat?: ModelCompatConfig;
     suppressManagedWebSearch?: boolean;
+    deferLocalModelLeanToolFilter?: boolean;
   },
 ): AnyAgentTool[] {
-  tools = filterLocalModelLeanTools({
-    tools,
-    config: params?.config,
-    agentId: params?.agentId,
-    sessionKey: params?.sessionKey,
-  });
+  if (params?.deferLocalModelLeanToolFilter !== true) {
+    tools = filterLocalModelLeanTools({
+      tools,
+      config: params?.config,
+      agentId: params?.agentId,
+      sessionKey: params?.sessionKey,
+    });
+  }
 
   if (
     params?.suppressManagedWebSearch !== false &&
@@ -490,6 +493,8 @@ export function createOpenClawCodingTools(options?: {
   forceHeartbeatTool?: boolean;
   /** If false, build plugin tools only while preserving the shared policy pipeline. */
   includeCoreTools?: boolean;
+  /** Keep local-lean denied tools available for hidden catalog registration. */
+  deferLocalModelLeanToolFilter?: boolean;
   /** Include Tool Search control tools when enabled for this run. */
   includeToolSearchControls?: boolean;
   /** Executes cataloged tools through the active agent run lifecycle. */
@@ -1063,6 +1068,7 @@ export function createOpenClawCodingTools(options?: {
     agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
     suppressManagedWebSearch: options?.suppressManagedWebSearch,
+    deferLocalModelLeanToolFilter: options?.deferLocalModelLeanToolFilter,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
   // Sender identity is carried for command/channel-action auth; tool visibility

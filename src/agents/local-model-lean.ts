@@ -49,3 +49,16 @@ export function filterLocalModelLeanTools(params: {
   }
   return params.tools.filter((tool) => !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(tool.name));
 }
+
+export function filterLocalModelLeanPreCatalogTools(params: {
+  tools: AnyAgentTool[];
+  controlsEnabled: boolean;
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}): AnyAgentTool[] {
+  if (params.controlsEnabled) {
+    return params.tools;
+  }
+  return filterLocalModelLeanTools(params);
+}

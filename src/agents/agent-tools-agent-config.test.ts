@@ -198,6 +198,37 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).not.toContain("message");
   });
 
+  it("can defer lean local-model filtering for hidden catalog registration", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "local",
+            default: true,
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:local:main",
+      workspaceDir: "/tmp/test",
+      agentDir: "/tmp/agent-local",
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+      deferLocalModelLeanToolFilter: true,
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toContain("browser");
+    expect(toolNames).toContain("cron");
+    expect(toolNames).toContain("message");
+  });
+
   it("should allow apply_patch for OpenAI models when write is allow-listed", () => {
     const cfg: OpenClawConfig = {
       tools: {
