@@ -175,6 +175,7 @@ describe("Codex app-server native code mode config", () => {
       apps: { _default: { enabled: false } },
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
     expect(request.personality).toBe("none");
   });
@@ -213,6 +214,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.apply_patch_streaming_events": true,
     });
   });
 
@@ -231,6 +233,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": true,
+      "features.apply_patch_streaming_events": true,
     });
   });
 
@@ -244,6 +247,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
   });
 
@@ -305,6 +309,7 @@ describe("Codex app-server native code mode config", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
   });
 
@@ -325,6 +330,7 @@ describe("Codex app-server native code mode config", () => {
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
   });
 });
@@ -442,6 +448,7 @@ describe("Codex app-server turn params", () => {
       config: {
         "features.code_mode": true,
         "features.code_mode_only": false,
+        "features.apply_patch_streaming_events": true,
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",

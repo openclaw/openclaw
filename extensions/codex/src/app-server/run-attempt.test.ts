@@ -612,6 +612,7 @@ describe("runCodexAppServerAttempt", () => {
             config?: {
               "features.code_mode"?: boolean;
               "features.code_mode_only"?: boolean;
+              "features.apply_patch_streaming_events"?: boolean;
             };
           }
         | undefined;
@@ -622,6 +623,7 @@ describe("runCodexAppServerAttempt", () => {
       expect(startParams?.cwd).toBe("/workspace");
       expect(startParams?.config?.["features.code_mode"]).toBe(true);
       expect(startParams?.config?.["features.code_mode_only"]).toBe(false);
+      expect(startParams?.config?.["features.apply_patch_streaming_events"]).toBe(true);
       expect(startParams?.dynamicTools?.map((tool) => tool.name)).toEqual(["message"]);
       expect(startParams?.environments).toEqual([
         { environmentId: environmentAddParams?.environmentId, cwd: "/workspace" },
@@ -935,6 +937,7 @@ describe("runCodexAppServerAttempt", () => {
       },
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.mcpServersFingerprint).toBe("mcp-v1");
@@ -4201,6 +4204,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeConfig?.["features.hooks"]).toBe(true);
     expect(resumeConfig?.["features.code_mode"]).toBe(true);
     expect(resumeConfig?.["features.code_mode_only"]).toBe(false);
+    expect(resumeConfig?.["features.apply_patch_streaming_events"]).toBe(true);
     expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
