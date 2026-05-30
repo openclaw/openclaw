@@ -31,14 +31,29 @@ type TailSelection = {
 };
 
 type FollowState = {
+  cursor: TrajectoryCursor | null;
+  fileState: FollowFileState | null;
   offset: number;
   pending: string;
   selection: TailSelection;
 };
 
 type TrajectorySnapshot = {
-  lines: string[];
+  events: TrajectoryEvent[];
+  fileState: FollowFileState | null;
   offset: number;
+};
+
+type FollowFileState = {
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  size: number;
+};
+
+type TrajectoryCursor = {
+  seq: number | null;
+  tsMs: number;
 };
 
 const DEFAULT_TAIL_COUNT = 80;
@@ -90,6 +105,69 @@ function parseTrajectoryEventLine(line: string): TrajectoryEvent | null {
   } catch {
     return null;
   }
+}
+
+function parseTrajectoryEventLines(lines: string[]): TrajectoryEvent[] {
+  return lines.flatMap((line) => {
+    const event = parseTrajectoryEventLine(line);
+    return event ? [event] : [];
+  });
+}
+
+function eventSequence(event: TrajectoryEvent): number | null {
+  const seq = event.sourceSeq ?? event.seq;
+  return Number.isFinite(seq) ? seq : null;
+}
+
+function eventTimestampMs(event: TrajectoryEvent): number {
+  const parsed = Date.parse(event.ts);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function eventCursor(event: TrajectoryEvent): TrajectoryCursor {
+  return {
+    seq: eventSequence(event),
+    tsMs: eventTimestampMs(event),
+  };
+}
+
+function compareCursors(left: TrajectoryCursor, right: TrajectoryCursor): number {
+  if (left.seq !== null && right.seq !== null && left.seq !== right.seq) {
+    return left.seq - right.seq;
+  }
+  const byTimestamp = left.tsMs - right.tsMs;
+  if (byTimestamp !== 0) {
+    return byTimestamp;
+  }
+  if (left.seq !== null && right.seq !== null) {
+    return left.seq - right.seq;
+  }
+  return 0;
+}
+
+function maxCursorValue(
+  current: TrajectoryCursor | null,
+  candidate: TrajectoryCursor,
+): TrajectoryCursor {
+  return !current || compareCursors(candidate, current) > 0 ? candidate : current;
+}
+
+function maxCursor(current: TrajectoryCursor | null, event: TrajectoryEvent): TrajectoryCursor {
+  return maxCursorValue(current, eventCursor(event));
+}
+
+function maxCursorFromEvents(events: TrajectoryEvent[]): TrajectoryCursor | null {
+  return events.reduce<TrajectoryCursor | null>((cursor, event) => maxCursor(cursor, event), null);
+}
+
+function eventsAfterCursor(
+  events: TrajectoryEvent[],
+  cursor: TrajectoryCursor | null,
+): TrajectoryEvent[] {
+  if (!cursor) {
+    return events;
+  }
+  return events.filter((event) => compareCursors(eventCursor(event), cursor) > 0);
 }
 
 function formatTimestamp(ts: string): string {
@@ -182,25 +260,51 @@ function formatProgressLine(event: TrajectoryEvent): string {
 
 function readTrajectorySnapshot(filePath: string): TrajectorySnapshot {
   try {
+    const stat = fs.statSync(filePath);
     const text = fs.readFileSync(filePath, "utf8");
     return {
-      lines: text.split(/\r?\n/u).filter((line) => line.trim().length > 0),
+      events: parseTrajectoryEventLines(text.split(/\r?\n/u)),
+      fileState: fileStateFromStat(stat),
       offset: Buffer.byteLength(text, "utf8"),
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { lines: [], offset: 0 };
+      return { events: [], fileState: null, offset: 0 };
     }
     throw error;
   }
 }
 
-function renderLines(lines: string[], runtime: RuntimeEnv): void {
-  for (const line of lines) {
-    const event = parseTrajectoryEventLine(line);
-    if (event) {
-      runtime.log(formatProgressLine(event));
+function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): TrajectoryCursor | null {
+  let cursor: TrajectoryCursor | null = null;
+  for (const event of events) {
+    runtime.log(formatProgressLine(event));
+    cursor = maxCursor(cursor, event);
+  }
+  return cursor;
+}
+
+function fileStateFromStat(stat: fs.Stats): FollowFileState {
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+  };
+}
+
+function sameFileIdentity(left: FollowFileState | null, right: FollowFileState): boolean {
+  return Boolean(left && left.dev === right.dev && left.ino === right.ino);
+}
+
+function readFollowFileState(filePath: string): FollowFileState | null {
+  try {
+    return fileStateFromStat(fs.statSync(filePath));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
     }
+    throw error;
   }
 }
 
@@ -267,53 +371,80 @@ function statFileSize(filePath: string): number {
   }
 }
 
-function readNewFollowLines(state: FollowState): string[] {
-  let size: number;
-  try {
-    size = fs.statSync(state.selection.trajectoryPath).size;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-  if (size < state.offset) {
+function readNewFollowEvents(state: FollowState): TrajectoryEvent[] {
+  const fileState = readFollowFileState(state.selection.trajectoryPath);
+  if (!fileState) {
+    state.fileState = null;
     state.offset = 0;
     state.pending = "";
-  }
-  if (size === state.offset) {
     return [];
   }
+
+  const replaced = !sameFileIdentity(state.fileState, fileState);
+  const truncated = fileState.size < state.offset;
+  const possiblyRewrittenSameSize =
+    fileState.size === state.offset && state.fileState?.mtimeMs !== fileState.mtimeMs;
+
+  if (replaced || truncated || possiblyRewrittenSameSize) {
+    const snapshot = readTrajectorySnapshot(state.selection.trajectoryPath);
+    state.fileState = snapshot.fileState;
+    state.offset = snapshot.offset;
+    state.pending = "";
+    return eventsAfterCursor(snapshot.events, state.cursor);
+  }
+
+  if (fileState.size === state.offset) {
+    state.fileState = fileState;
+    return [];
+  }
+
   const fd = fs.openSync(state.selection.trajectoryPath, "r");
   try {
-    const buffer = Buffer.alloc(size - state.offset);
+    const buffer = Buffer.alloc(fileState.size - state.offset);
     fs.readSync(fd, buffer, 0, buffer.length, state.offset);
-    state.offset = size;
+    state.offset = fileState.size;
+    state.fileState = fileState;
     const combined = `${state.pending}${buffer.toString("utf8")}`;
     const lines = combined.split(/\r?\n/u);
     state.pending = lines.pop() ?? "";
-    return lines.filter((line) => line.trim().length > 0);
+    return parseTrajectoryEventLines(lines);
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+function renderFollowEvents(
+  events: TrajectoryEvent[],
+  state: FollowState,
+  runtime: RuntimeEnv,
+): void {
+  const cursor = renderEvents(events, runtime);
+  if (cursor) {
+    state.cursor = maxCursorValue(state.cursor, cursor);
   }
 }
 
 async function followSelections(
   selections: TailSelection[],
   runtime: RuntimeEnv,
-  initialOffsets: Map<string, number>,
+  initialSnapshots: Map<string, TrajectorySnapshot>,
 ): Promise<void> {
-  const states = selections.map((selection) => ({
-    offset: initialOffsets.get(selection.trajectoryPath) ?? statFileSize(selection.trajectoryPath),
-    pending: "",
-    selection,
-  }));
+  const states = selections.map((selection): FollowState => {
+    const snapshot = initialSnapshots.get(selection.trajectoryPath);
+    return {
+      cursor: snapshot ? maxCursorFromEvents(snapshot.events) : null,
+      fileState: snapshot?.fileState ?? readFollowFileState(selection.trajectoryPath),
+      offset: snapshot?.offset ?? statFileSize(selection.trajectoryPath),
+      pending: "",
+      selection,
+    };
+  });
 
   await new Promise<void>((resolve) => {
     const interval = setInterval(() => {
       for (const state of states) {
         try {
-          renderLines(readNewFollowLines(state), runtime);
+          renderFollowEvents(readNewFollowEvents(state), state, runtime);
         } catch (error) {
           runtime.error(
             `Failed to read trajectory progress for ${state.selection.key}: ${formatErrorMessage(
@@ -388,15 +519,14 @@ export async function sessionsTailCommand(
     return;
   }
 
-  const followOffsets = new Map<string, number>();
+  const followSnapshots = new Map<string, TrajectorySnapshot>();
   for (const selection of selected) {
     const snapshot = readTrajectorySnapshot(selection.trajectoryPath);
-    followOffsets.set(selection.trajectoryPath, snapshot.offset);
-    const lines = snapshot.lines;
-    renderLines(tailCount > 0 ? lines.slice(-tailCount) : [], runtime);
+    followSnapshots.set(selection.trajectoryPath, snapshot);
+    renderEvents(tailCount > 0 ? snapshot.events.slice(-tailCount) : [], runtime);
   }
 
   if (opts.follow) {
-    await followSelections(selected, runtime, followOffsets);
+    await followSelections(selected, runtime, followSnapshots);
   }
 }

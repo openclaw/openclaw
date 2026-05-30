@@ -237,6 +237,47 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("bash ok");
   });
 
+  it("continues following when a bounded trajectory window is rewritten", async () => {
+    const runtime = makeRuntime();
+    writeJsonl(trajectoryPath, [
+      makeEvent({
+        sourceSeq: 1,
+        type: "session.started",
+        ts: "2026-05-18T12:04:17.000Z",
+      }),
+    ]);
+    const rewrittenEvent = makeEvent({
+      sourceSeq: 2,
+      type: "tool.result",
+      ts: "2026-05-18T12:04:21.000Z",
+      data: { name: "python", success: true },
+    });
+    let rewritten = false;
+    vi.mocked(runtime.log).mockImplementation((message) => {
+      if (!rewritten && String(message).includes("session.started")) {
+        rewritten = true;
+        const nextPath = path.join(tmpDir, "session-one.next.trajectory.jsonl");
+        writeJsonl(nextPath, [rewrittenEvent]);
+        fs.renameSync(nextPath, trajectoryPath);
+      }
+    });
+
+    const run = sessionsTailCommand(
+      { store: storePath, sessionKey, tail: "1", follow: true },
+      runtime,
+    );
+    try {
+      await waitForRuntimeOutput(runtime, "python ok");
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    const output = runtimeOutput(runtime);
+    expect(output).toContain("tool.result");
+    expect(output).toContain("python ok");
+  });
+
   it("resolves the target store from a fully qualified non-default agent session key", async () => {
     const runtime = makeRuntime();
     const opsSessionKey = "agent:ops:telegram:direct:owner";
