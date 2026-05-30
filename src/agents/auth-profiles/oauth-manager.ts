@@ -79,19 +79,22 @@ export class OAuthManagerRefreshError extends Error {
       typeof params.cause === "object" && params.cause !== null
         ? (params.cause as { code?: unknown; lockPath?: unknown; cause?: unknown })
         : undefined;
+    const isRefreshContention = structuredCause?.code === "refresh_contention";
     const delegatedCause =
-      structuredCause?.code === "refresh_contention" && structuredCause.cause
-        ? structuredCause.cause
-        : params.cause;
+      isRefreshContention && structuredCause.cause ? structuredCause : params.cause;
     const storedCredential = params.refreshedStore.profiles[params.profileId];
     const secrets = collectOAuthCredentialSecrets(
       params.credential,
       ...(params.attemptedCredentials ?? []),
       storedCredential?.type === "oauth" ? storedCredential : undefined,
     );
-    const causeMessage = formatRedactedOAuthRefreshError(params.cause, secrets);
+    const causeMessage = formatRedactedOAuthRefreshError(params.cause, secrets, {
+      includeCauses: !isRefreshContention,
+    });
     super(`OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`, {
-      cause: createRedactedOAuthRefreshCause(delegatedCause, secrets),
+      cause: createRedactedOAuthRefreshCause(delegatedCause, secrets, {
+        includeCauses: !isRefreshContention,
+      }),
     });
     this.name = "OAuthManagerRefreshError";
     this.#credential = params.credential;
@@ -185,9 +188,12 @@ function redactOAuthCredentialSecrets(message: string, secrets: string[]): strin
   return redacted;
 }
 
-function formatRawErrorMessage(error: unknown): string {
+function formatRawErrorMessage(error: unknown, options: { includeCauses?: boolean } = {}): string {
   if (error instanceof Error) {
     let formatted = error.message || error.name || "Error";
+    if (options.includeCauses === false) {
+      return formatted;
+    }
     let cause: unknown = error.cause;
     const seen = new Set<unknown>([error]);
     while (cause && !seen.has(cause)) {
@@ -206,6 +212,20 @@ function formatRawErrorMessage(error: unknown): string {
     }
     return formatted;
   }
+  if (options.includeCauses === false && typeof error === "object" && error !== null) {
+    const structured = error as Record<string, unknown>;
+    if (typeof structured.message === "string" && structured.message.length > 0) {
+      return structured.message;
+    }
+    const sanitized = Object.fromEntries(
+      Object.entries(structured).filter(([key]) => key !== "cause" && key !== "lockPath"),
+    );
+    try {
+      return JSON.stringify(sanitized);
+    } catch {
+      return "unserializable error object";
+    }
+  }
   if (
     typeof error === "string" ||
     typeof error === "number" ||
@@ -221,12 +241,22 @@ function formatRawErrorMessage(error: unknown): string {
   }
 }
 
-function formatRedactedOAuthRefreshError(error: unknown, secrets: string[]): string {
-  return redactSensitiveText(redactOAuthCredentialSecrets(formatRawErrorMessage(error), secrets));
+function formatRedactedOAuthRefreshError(
+  error: unknown,
+  secrets: string[],
+  options: { includeCauses?: boolean } = {},
+): string {
+  return redactSensitiveText(
+    redactOAuthCredentialSecrets(formatRawErrorMessage(error, options), secrets),
+  );
 }
 
-function createRedactedOAuthRefreshCause(cause: unknown, secrets: string[]): Error {
-  const redacted = formatRedactedOAuthRefreshError(cause, secrets);
+function createRedactedOAuthRefreshCause(
+  cause: unknown,
+  secrets: string[],
+  options: { includeCauses?: boolean } = {},
+): Error {
+  const redacted = formatRedactedOAuthRefreshError(cause, secrets, options);
   const sanitized = new Error(redacted);
   if (cause instanceof Error && cause.name) {
     sanitized.name = cause.name;

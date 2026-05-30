@@ -157,6 +157,11 @@ function extractErrorMessage(error: unknown): string {
   return formatErrorMessage(error);
 }
 
+function stripOAuthRefreshFailurePrefix(message: string, provider: string): string {
+  const prefix = `OAuth token refresh failed for ${provider}: `;
+  return message.startsWith(prefix) ? message.slice(prefix.length) : message;
+}
+
 export function isRefreshTokenReusedError(error: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(extractErrorMessage(error));
   return (
@@ -488,7 +493,10 @@ export async function resolveApiKeyForProfile(
       }
     }
 
-    const message = extractErrorMessage(surfacedMessageError);
+    const message =
+      error instanceof OAuthManagerRefreshError && error.code === "refresh_contention"
+        ? stripOAuthRefreshFailurePrefix(error.message, cred.provider)
+        : extractErrorMessage(surfacedMessageError);
     const hint = await formatAuthDoctorHint({
       cfg,
       store: refreshedStore,

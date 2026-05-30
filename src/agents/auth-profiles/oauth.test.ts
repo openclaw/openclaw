@@ -1,5 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { FILE_LOCK_TIMEOUT_ERROR_CODE } from "../../infra/file-lock.js";
+import { clearRuntimeAuthProfileStoreSnapshots, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 
 vi.mock("../cli-credentials.js", () => ({
@@ -9,11 +14,15 @@ vi.mock("../cli-credentials.js", () => ({
   resetCliCredentialCachesForTest: () => undefined,
 }));
 
-vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
-    params.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
+const providerRuntimeMocks = vi.hoisted(() => ({
+  buildProviderAuthDoctorHintWithPlugin: vi.fn(async () => ""),
+  formatProviderAuthProfileApiKeyWithPlugin: vi.fn(
+    async (params: { context?: { access?: string } }) => params.context?.access,
+  ),
+  refreshProviderOAuthCredentialWithPlugin: vi.fn(async () => null),
 }));
+
+vi.mock("../../plugins/provider-runtime.runtime.js", () => providerRuntimeMocks);
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 
@@ -111,6 +120,14 @@ async function expectResolvedApiKey(params: {
 }
 
 beforeAll(loadOAuthModuleForTest);
+
+beforeEach(() => {
+  providerRuntimeMocks.buildProviderAuthDoctorHintWithPlugin.mockResolvedValue("");
+  providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockImplementation(
+    async (params: { context?: { access?: string } }) => params.context?.access,
+  );
+  providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockResolvedValue(null);
+});
 
 afterAll(() => {
   vi.doUnmock("../cli-credentials.js");
@@ -491,5 +508,77 @@ describe("resolveApiKeyForProfile secret refs", () => {
         process.env.GITHUB_TOKEN = previous;
       }
     }
+  });
+});
+
+describe("resolveApiKeyForProfile refresh diagnostics", () => {
+  it("surfaces refresh contention once without lock-path details", async () => {
+    const profileId = "openai-codex:default";
+    const provider = "openai-codex";
+    const lockPath = "/tmp/openclaw-refresh-contention.lock";
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-refresh-contention-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const agentDir = path.join(tempRoot, "agents", "default", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    const lockCause = Object.assign(new Error(`file lock timeout for ${lockPath}`), {
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+      lockPath,
+    });
+    providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockRejectedValue(
+      Object.assign(
+        new Error(
+          `OAuth refresh failed (refresh_contention): another process is already refreshing ${provider} for ${profileId}. Please wait for the in-flight refresh to finish and retry.`,
+          { cause: lockCause },
+        ),
+        {
+          code: "refresh_contention",
+          cause: lockCause,
+        },
+      ),
+    );
+
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider,
+          access: "expired-access",
+          refresh: "refresh-token",
+          expires: Date.now() - 60_000,
+        },
+      },
+    };
+    saveAuthProfileStore(store, agentDir, { filterExternalAuthProfiles: false });
+
+    try {
+      await resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, provider, "oauth"),
+        store,
+        profileId,
+        agentDir,
+        forceRefresh: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toContain(
+        `OAuth token refresh failed for ${provider}: OAuth refresh failed (refresh_contention)`,
+      );
+      expect(message.match(/OAuth token refresh failed/g)?.length).toBe(1);
+      expect(message.match(/OAuth refresh failed \(refresh_contention\)/g)?.length).toBe(1);
+      expect(message).not.toContain(lockPath);
+      expect(message).not.toContain("file lock timeout");
+      return;
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+    throw new Error("expected OAuth refresh contention failure");
   });
 });
