@@ -36,6 +36,9 @@ import { resolveCodexAppServerBindingPath } from "./session-binding.js";
 
 setupRunAttemptTestHooks();
 
+const tinyPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
 describe("runCodexAppServerAttempt turn watches", () => {
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
     let handleRequest:
@@ -153,6 +156,55 @@ describe("runCodexAppServerAttempt turn watches", () => {
 
     expect(result.timedOut).toBe(true);
     expect(result.itemLifecycle.completedCount).toBe(1);
+    expect(result.promptTimeoutOutcome).toEqual({
+      message:
+        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+      replayInvalid: true,
+      livenessState: "abandoned",
+    });
+  });
+
+  it("preserves raw image-generation media when Codex never sends turn completion", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "state"));
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 5 } },
+      turnAssistantCompletionIdleTimeoutMs: 1_000,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "ig_raw_1",
+          type: "image_generation_call",
+          status: "generating",
+          result: tinyPngBase64,
+          revised_prompt: "A tiny blue square",
+        },
+      },
+    });
+
+    const result = await run;
+    const mediaUrl = result.toolMediaUrls?.[0];
+
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
     expect(result.promptTimeoutOutcome).toEqual({
       message:
         "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
