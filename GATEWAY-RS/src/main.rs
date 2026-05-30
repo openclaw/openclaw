@@ -6,10 +6,12 @@ pub mod handlers;
 pub mod registry;
 pub mod sessions;
 pub mod tasks;
+pub mod llm;
 
 use std::net::SocketAddr;
 use crate::models::config::OpenClawConfig;
 use crate::state::AppState;
+use crate::llm::OpenAIClient;
 use std::sync::Arc;
 use anyhow::Result;
 use std::fs;
@@ -29,7 +31,16 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let config = load_config().await;
-    let state = Arc::new(AppState::new(config));
+
+    // Setup LLM client
+    let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+    let llm_client = Arc::new(OpenAIClient {
+        api_key,
+        base_url: "https://api.openai.com/v1".to_string(),
+        client: reqwest::Client::new(),
+    });
+
+    let state = Arc::new(AppState::new(config, llm_client));
 
     let app = http::create_router(state);
 

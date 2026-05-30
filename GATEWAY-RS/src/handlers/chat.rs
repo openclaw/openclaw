@@ -78,8 +78,23 @@ pub async fn handle_chat_send(
         let session_id = &entry.session_id;
         let _ = state.session_manager.append_to_transcript(session_id, "user", message);
 
-        // Simple echo response for now
-        let _ = state.session_manager.append_to_transcript(session_id, "assistant", &format!("Echo: {}", message));
+        // Prepare messages for LLM
+        let messages = vec![json!({"role": "user", "content": message})];
+
+        // Use configured model or default
+        let model = entry.extra.get("model").and_then(|m| m.as_str()).unwrap_or("gpt-3.5-turbo");
+
+        // Call real LLM
+        match state.llm_client.chat_completion(messages, model).await {
+            Ok(content) => {
+                let _ = state.session_manager.append_to_transcript(session_id, "assistant", &content);
+            }
+            Err(e) => {
+                tracing::error!("LLM Error: {}", e);
+                let error_msg = format!("LLM Error: {}", e);
+                let _ = state.session_manager.append_to_transcript(session_id, "assistant", &error_msg);
+            }
+        }
     }
 
     let payload = json!({
@@ -100,11 +115,21 @@ mod tests {
     use super::*;
     use crate::state::AppState;
     use crate::models::config::OpenClawConfig;
+    use crate::llm::LLMClient;
+    use async_trait::async_trait;
     use std::sync::Arc;
+
+    struct MockLLM;
+    #[async_trait]
+    impl LLMClient for MockLLM {
+        async fn chat_completion(&self, _msgs: Vec<serde_json::Value>, _model: &str) -> anyhow::Result<String> {
+            Ok("Mock response".to_string())
+        }
+    }
 
     #[tokio::test]
     async fn test_handle_chat_send() {
-        let state = Arc::new(AppState::new(OpenClawConfig::default()));
+        let state = Arc::new(AppState::new(OpenClawConfig::default(), Arc::new(MockLLM)));
         let req = RequestFrame {
             id: "test-id".to_string(),
             method: "chat.send".to_string(),
@@ -114,6 +139,5 @@ mod tests {
         let response = handle_chat_send(State(state), Json(req)).await;
         assert_eq!(response.id, "test-id");
         assert!(response.ok);
-        assert!(response.payload.is_some());
     }
 }

@@ -9,12 +9,13 @@ pub async fn handle_models_list(
 ) -> Json<ResponseFrame> {
     let config = state.config.read().await;
 
-    // Extract models from config
-    let models = config.extra.get("models")
-        .and_then(|m| m.get("list"))
-        .and_then(|l| l.as_array())
-        .cloned()
-        .unwrap_or_default();
+    // Extract models from config models.list
+    let mut models = Vec::new();
+    if let Some(models_val) = config.extra.get("models") {
+        if let Some(list) = models_val.get("list").and_then(|l| l.as_array()) {
+            models = list.clone();
+        }
+    }
 
     let payload = json!({
         "models": models

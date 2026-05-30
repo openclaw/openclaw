@@ -17,3 +17,6 @@ jsonwebtoken = "9"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 bytes = "1"
+reqwest = { version = "0.13.4", features = ["json"] }
+async-trait = "0.1.89"
+mockall = "0.14.0"

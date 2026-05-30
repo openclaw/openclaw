@@ -32,11 +32,18 @@ impl SessionManager {
         Ok(())
     }
 
-    pub fn list_sessions(&self, _agent_id: Option<&str>) -> Result<Vec<Value>> {
+    pub fn list_sessions(&self, agent_id: Option<&str>) -> Result<Vec<Value>> {
         let store = self.load_store()?;
         let mut result = Vec::new();
 
         for (key, entry) in store.sessions {
+            // Filter by agent_id if provided
+            if let Some(aid) = agent_id {
+                if entry.agent_id.as_deref() != Some(aid) {
+                    continue;
+                }
+            }
+
             let mut row = json!(entry);
             row["key"] = json!(key);
 
@@ -80,6 +87,12 @@ impl SessionManager {
                                 }
                             }
                         }
+                    } else if let Some(text) = msg.get("text").and_then(|t| t.as_str()) {
+                         let mut title = text.chars().take(60).collect::<String>();
+                         if text.len() > 60 {
+                             title.push('…');
+                         }
+                         return Some(title);
                     }
                 }
             }
@@ -113,7 +126,7 @@ impl SessionManager {
 
     pub fn append_to_transcript(&self, session_id: &str, role: &str, text: &str) -> Result<()> {
         let path = format!("transcripts/{}.jsonl", session_id);
-        let _ = fs::create_dir_all("transcripts");
+        let _ = fs::create_dir_all("transcripts")?;
 
         let mut file = OpenOptions::new()
             .create(true)
