@@ -1023,6 +1023,35 @@ describe("loadOpenClawPlugins", () => {
     expect(metrics.loadAndRegisterMs).toEqual(expect.any(Number));
   });
 
+  it("resolves ${ENV_VAR} references in plugin config before handing config to the plugin", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "env-config-probe",
+      filename: "env-config-probe.cjs",
+      body: `module.exports = {
+  id: "env-config-probe",
+  register(api) {
+    globalThis.__ENV_CONFIG_PROBE = api.pluginConfig;
+  },
+};`,
+    });
+    const probe = globalThis as unknown as Record<string, unknown>;
+    delete probe.__ENV_CONFIG_PROBE;
+    withEnv({ ENV_CONFIG_PROBE_SECRET: "resolved-secret-value" }, () => {
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["env-config-probe"],
+          entries: {
+            "env-config-probe": { config: { apiKey: "${ENV_CONFIG_PROBE_SECRET}" } },
+          },
+        },
+      });
+    });
+    // Before the fix, the plugin received the literal "${ENV_CONFIG_PROBE_SECRET}".
+    expect(probe.__ENV_CONFIG_PROBE).toMatchObject({ apiKey: "resolved-secret-value" });
+  });
+
   it("emits loader startup trace failure counts for load and register failures", () => {
     useNoBundledPlugins();
     const loadFailPlugin = writePlugin({

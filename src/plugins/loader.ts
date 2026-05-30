@@ -6,6 +6,7 @@ import {
   listRegisteredAgentHarnesses,
   restoreRegisteredAgentHarnesses,
 } from "../agents/harness/registry.js";
+import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
@@ -1494,21 +1495,31 @@ function validatePluginConfig(params: {
   cacheKey?: string;
   value?: unknown;
 }): { ok: boolean; value?: Record<string, unknown>; errors?: string[] } {
+  // Resolve ${ENV_VAR} references in plugin config before validation and handoff.
+  // Depending on the config-delivery path, plugin entry config can reach this
+  // point with ${VAR} references unresolved; substitute here so plugins always
+  // receive resolved values (parity with provider config). Missing vars are left
+  // as their literal placeholder rather than throwing, matching read-time config
+  // substitution; this is a no-op when the config is already resolved.
+  const value =
+    params.value === undefined
+      ? undefined
+      : resolveConfigEnvVars(params.value, process.env, { onMissing: () => undefined });
   const schema = params.schema;
   if (!schema) {
-    return { ok: true, value: params.value as Record<string, unknown> | undefined };
+    return { ok: true, value: value as Record<string, unknown> | undefined };
   }
   if (isEmptyPluginConfigJsonSchema(schema)) {
     if (
-      params.value === undefined ||
-      (params.value &&
-        typeof params.value === "object" &&
-        !Array.isArray(params.value) &&
-        Object.keys(params.value).length === 0)
+      value === undefined ||
+      (value &&
+        typeof value === "object" &&
+        !Array.isArray(value) &&
+        Object.keys(value).length === 0)
     ) {
       return { ok: true, value: {} };
     }
-    if (!params.value || typeof params.value !== "object" || Array.isArray(params.value)) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
       return { ok: false, errors: ["<root>: must be object"] };
     }
     return { ok: false, errors: ["<root>: config must be empty"] };
@@ -1517,7 +1528,7 @@ function validatePluginConfig(params: {
   const result = validateJsonSchemaValue({
     schema,
     cacheKey,
-    value: params.value ?? {},
+    value: value ?? {},
     applyDefaults: true,
   });
   if (result.ok) {
