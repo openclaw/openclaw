@@ -2563,7 +2563,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    const updates = reasoningDraftStream.update.mock.calls.map((call) => String(call[0]));
+    const updates = reasoningDraftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("pnpm test -- --run");
     expect(updates.at(-1)).toContain("🛠️ completed");
   });
