@@ -98,6 +98,9 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+          "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
+          "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
+          "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
           "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
           "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
         },
@@ -1147,6 +1150,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         cfg: expect.any(Object),
         sessionKey: "agent:main:test",
         messageProvider: undefined,
+        currentChannelId: undefined,
+        currentThreadTs: undefined,
+        currentMessageId: undefined,
         accountId: undefined,
         inboundEventKind: undefined,
         sourceReplyDeliveryMode: undefined,
@@ -1289,11 +1295,17 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: createCliBackendConfig(),
         currentInboundEventKind: "room_event",
         messageChannel: "telegram",
+        currentChannelId: "telegram:-100123:topic:42",
+        currentThreadTs: "42",
+        currentMessageId: "reply-message-1",
         sourceReplyDeliveryMode: "message_tool_only",
       });
 
       expect(context.preparedBackend.env).toMatchObject({
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
+        OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",
+        OPENCLAW_MCP_CURRENT_THREAD_TS: "42",
+        OPENCLAW_MCP_CURRENT_MESSAGE_ID: "reply-message-1",
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
         OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
       });
@@ -1433,7 +1445,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: createCliBackendConfig(),
       });
 
-      expect(transcriptCheck).toHaveBeenCalledWith({ sessionId: "stale-claude-sid" });
+      expect(transcriptCheck).toHaveBeenCalledWith({
+        sessionId: "stale-claude-sid",
+        workspaceDir: dir,
+      });
       expect(context.reusableCliSession).toEqual({ invalidatedReason: "missing-transcript" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1481,7 +1496,64 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: createCliBackendConfig(),
       });
 
-      expect(transcriptCheck).toHaveBeenCalledWith({ sessionId: "live-claude-sid" });
+      expect(transcriptCheck).toHaveBeenCalledWith({
+        sessionId: "live-claude-sid",
+        workspaceDir: dir,
+      });
+      expect(context.reusableCliSession).toEqual({ sessionId: "live-claude-sid" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("checks claude-cli transcript content under the resolved cwd", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const taskDir = path.join(dir, "task");
+    fs.mkdirSync(taskDir, { recursive: true });
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              resumeArgs: ["--resume", "{sessionId}"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      const transcriptCheck = vi.fn(async () => true);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        cwd: taskDir,
+        prompt: "follow-up",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-77011-cwd",
+        cliSessionBinding: { sessionId: "live-claude-sid", cwdHash: hashCliSessionText(taskDir) },
+        cliSessionId: "live-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      expect(transcriptCheck).toHaveBeenCalledWith({
+        sessionId: "live-claude-sid",
+        workspaceDir: taskDir,
+      });
       expect(context.reusableCliSession).toEqual({ sessionId: "live-claude-sid" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

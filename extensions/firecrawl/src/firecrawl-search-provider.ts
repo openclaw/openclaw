@@ -1,11 +1,6 @@
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
-import {
-  createWebSearchProviderContractFields,
-  type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
-
-const FIRECRAWL_CREDENTIAL_PATH = "plugins.entries.firecrawl.config.webSearch.apiKey";
-const FIRECRAWL_FETCH_CREDENTIAL_PATH = "plugins.entries.firecrawl.config.webFetch.apiKey";
+import { type WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
+import { buildFirecrawlWebSearchProviderBase } from "../web-search-shared.js";
 
 type FirecrawlClientModule = typeof import("./firecrawl-client.js");
 
@@ -14,20 +9,6 @@ let firecrawlClientModulePromise: Promise<FirecrawlClientModule> | undefined;
 function loadFirecrawlClientModule(): Promise<FirecrawlClientModule> {
   firecrawlClientModulePromise ??= import("./firecrawl-client.js");
   return firecrawlClientModulePromise;
-}
-
-function getConfiguredFetchCredentialFallback(config?: {
-  plugins?: { entries?: { firecrawl?: { config?: unknown } } };
-}) {
-  const apiKey = (
-    config?.plugins?.entries?.firecrawl?.config as { webFetch?: { apiKey?: unknown } } | undefined
-  )?.webFetch?.apiKey;
-  return apiKey === undefined
-    ? undefined
-    : {
-        path: FIRECRAWL_FETCH_CREDENTIAL_PATH,
-        value: apiKey,
-      };
 }
 
 const GenericFirecrawlSearchSchema = {
@@ -46,24 +27,7 @@ const GenericFirecrawlSearchSchema = {
 
 export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    id: "firecrawl",
-    label: "Firecrawl Search",
-    hint: "Structured results with optional result scraping",
-    onboardingScopes: ["text-inference"],
-    credentialLabel: "Firecrawl API key",
-    envVars: ["FIRECRAWL_API_KEY"],
-    placeholder: "fc-...",
-    signupUrl: "https://www.firecrawl.dev/",
-    docsUrl: "https://docs.openclaw.ai/tools/firecrawl",
-    autoDetectOrder: 60,
-    credentialPath: FIRECRAWL_CREDENTIAL_PATH,
-    ...createWebSearchProviderContractFields({
-      credentialPath: FIRECRAWL_CREDENTIAL_PATH,
-      searchCredential: { type: "scoped", scopeId: "firecrawl" },
-      configuredCredential: { pluginId: "firecrawl" },
-      selectionPluginId: "firecrawl",
-    }),
-    getConfiguredCredentialFallback: getConfiguredFetchCredentialFallback,
+    ...buildFirecrawlWebSearchProviderBase(),
     createTool: (ctx) => ({
       description:
         "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",

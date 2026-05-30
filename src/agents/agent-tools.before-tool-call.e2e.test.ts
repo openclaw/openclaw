@@ -13,11 +13,11 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -1474,7 +1474,11 @@ describe("before_tool_call requireApproval handling", () => {
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
-    expect(result).toEqual({ blocked: false, params: { command: "echo ok" } });
+    expect(result).toEqual({
+      blocked: false,
+      params: { command: "echo ok" },
+      approvalResolution: "allow-always",
+    });
     expect(onResolution).toHaveBeenCalledWith("allow-always");
   });
 
@@ -1511,7 +1515,11 @@ describe("before_tool_call requireApproval handling", () => {
         }),
       ]);
 
-      expect(result).toEqual({ blocked: false, params: {} });
+      expect(result).toEqual({
+        blocked: false,
+        params: {},
+        approvalResolution: "allow-once",
+      });
       expect(onResolution).toHaveBeenCalledWith("allow-once");
     } finally {
       if (timeoutId) {

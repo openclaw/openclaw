@@ -250,6 +250,25 @@ describe("phone-control plugin", () => {
     });
   });
 
+  it("rejects invalid arm durations without mutating phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const typoRes = await command.handler({
+        ...createCommandContext("arm writes forever"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+      const overflowRes = await command.handler({
+        ...createCommandContext("arm writes 9007199254740993d"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      expect(typoRes?.text ?? "").toContain("Invalid duration");
+      expect(overflowRes?.text ?? "").toContain("Invalid duration");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
   it("allows external owner callers without gateway scopes to mutate phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({

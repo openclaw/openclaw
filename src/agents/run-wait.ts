@@ -2,7 +2,10 @@ import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import { parseFiniteNumber } from "../shared/number-coercion.js";
-import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "./run-termination.js";
+import {
+  buildAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "./agent-run-terminal-outcome.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
@@ -66,14 +69,20 @@ function normalizeAgentWaitResult(
   wait?: RawAgentWaitResponse,
 ): AgentWaitResult {
   const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;
-  const abortedStopReason = isAbortedAgentStopReason(stopReason);
-  const error =
-    abortedStopReason && typeof wait?.error !== "string" ? AGENT_RUN_ABORTED_ERROR : wait?.error;
-  const normalized = normalizeBlockedLivenessWaitStatus({
-    status: abortedStopReason ? "error" : status,
-    livenessState: wait?.livenessState,
-    error,
-  });
+  const terminalOutcome =
+    status === "pending"
+      ? undefined
+      : buildAgentRunTerminalOutcome({
+          status,
+          error: wait?.error,
+          stopReason,
+          livenessState: wait?.livenessState,
+          timeoutPhase: wait?.timeoutPhase,
+          providerStarted: wait?.providerStarted,
+          startedAt: wait?.startedAt,
+          endedAt: wait?.endedAt,
+        });
+  const normalized = normalizeTerminalOutcomeForWait(terminalOutcome, status, wait?.livenessState);
   return {
     status: normalized.status,
     error: normalized.error,
@@ -86,6 +95,21 @@ function normalizeAgentWaitResult(
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
   };
+}
+
+function normalizeTerminalOutcomeForWait(
+  outcome: AgentRunTerminalOutcome | undefined,
+  fallbackStatus: AgentWaitResult["status"],
+  livenessState?: unknown,
+): { status: AgentWaitResult["status"]; error?: string } {
+  if (outcome?.reason === "hard_timeout") {
+    return { status: outcome.status, error: outcome.error };
+  }
+  return normalizeBlockedLivenessWaitStatus({
+    status: outcome?.status ?? fallbackStatus,
+    livenessState,
+    error: outcome?.error,
+  });
 }
 
 const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [

@@ -27,12 +27,9 @@ jobs:
     if: >-
       ${{
         github.event_name == 'issue_comment' ||
-        (
-          !(
-            (github.event.action == 'labeled' || github.event.action == 'unlabeled') &&
-            github.event.label.name == 'dependency-guard-backfill'
-          ) &&
-          !(endsWith(github.actor, '[bot]') && (github.event.action == 'labeled' || github.event.action == 'unlabeled'))
+        !(
+          endsWith(github.actor, '[bot]') &&
+          (github.event.action == 'labeled' || github.event.action == 'unlabeled')
         )
       }}
     env:

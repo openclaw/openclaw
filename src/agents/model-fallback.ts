@@ -690,13 +690,13 @@ export function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefi
 }
 
 export const testing = {
-  resolveFallbackCandidates,
+  resolveFallbackCandidates: resolveModelCandidateChain,
   resolveImageFallbackCandidates,
   resolveCooldownDecision,
   resolveSessionSuspensionReason,
 } as const;
 
-function resolveFallbackCandidates(
+export function resolveModelCandidateChain(
   params: {
     cfg: OpenClawConfig | undefined;
     provider: string;
@@ -1142,7 +1142,7 @@ export async function runWithModelFallback<T>(
     abortSignal?: AbortSignal;
   } & ModelManifestNormalizationContext,
 ): Promise<ModelFallbackRunResult<T>> {
-  const candidates = resolveFallbackCandidates({
+  const candidates = resolveModelCandidateChain({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,

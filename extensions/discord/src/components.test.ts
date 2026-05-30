@@ -7,8 +7,14 @@ let resolveDiscordComponentEntry: typeof import("./components-registry.js").reso
 let resolveDiscordComponentEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordComponentEntryWithPersistence;
 let resolveDiscordModalEntry: typeof import("./components-registry.js").resolveDiscordModalEntry;
 let resolveDiscordModalEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordModalEntryWithPersistence;
+let buildDiscordComponentCustomId: typeof import("./components.js").buildDiscordComponentCustomId;
 let buildDiscordComponentMessage: typeof import("./components.js").buildDiscordComponentMessage;
 let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDiscordComponentMessageFlags;
+let buildDiscordModalCustomId: typeof import("./components.js").buildDiscordModalCustomId;
+let parseDiscordComponentCustomId: typeof import("./components.js").parseDiscordComponentCustomId;
+let parseDiscordComponentCustomIdForInteraction: typeof import("./components.js").parseDiscordComponentCustomIdForInteraction;
+let parseDiscordModalCustomId: typeof import("./components.js").parseDiscordModalCustomId;
+let parseDiscordModalCustomIdForInteraction: typeof import("./components.js").parseDiscordModalCustomIdForInteraction;
 let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
 
 beforeAll(async () => {
@@ -20,11 +26,57 @@ beforeAll(async () => {
     resolveDiscordModalEntry,
     resolveDiscordModalEntryWithPersistence,
   } = await import("./components-registry.js"));
-  ({ buildDiscordComponentMessage, buildDiscordComponentMessageFlags, readDiscordComponentSpec } =
-    await import("./components.js"));
+  ({
+    buildDiscordComponentCustomId,
+    buildDiscordComponentMessage,
+    buildDiscordComponentMessageFlags,
+    buildDiscordModalCustomId,
+    parseDiscordComponentCustomId,
+    parseDiscordComponentCustomIdForInteraction,
+    parseDiscordModalCustomId,
+    parseDiscordModalCustomIdForInteraction,
+    readDiscordComponentSpec,
+  } = await import("./components.js"));
 });
 
 describe("discord components", () => {
+  it("round-trips custom id values that contain separators", () => {
+    const componentId = "button=a;two space%3B";
+    const modalId = "modal=x;y space%3D";
+
+    const componentCustomId = buildDiscordComponentCustomId({ componentId, modalId });
+    expect(componentCustomId).not.toContain(componentId);
+    expect(componentCustomId).toContain("space");
+    expect(parseDiscordComponentCustomId(componentCustomId)).toEqual({ componentId, modalId });
+    expect(parseDiscordComponentCustomIdForInteraction(componentCustomId).data).toMatchObject({
+      cid: componentId,
+      mid: modalId,
+    });
+
+    const modalCustomId = buildDiscordModalCustomId(modalId);
+    expect(modalCustomId).not.toContain(modalId);
+    expect(modalCustomId).toContain("space");
+    expect(parseDiscordModalCustomId(modalCustomId)).toBe(modalId);
+    expect(parseDiscordModalCustomIdForInteraction(modalCustomId).data).toMatchObject({
+      mid: modalId,
+    });
+  });
+
+  it("keeps legacy percent-like custom id values raw", () => {
+    expect(buildDiscordComponentCustomId({ componentId: "button_v1" })).toBe(
+      "occomp:cid=button_v1",
+    );
+    expect(buildDiscordComponentCustomId({ componentId: "button=v1" })).toBe(
+      "occomp:cid=button=v1",
+    );
+    expect(buildDiscordModalCustomId("modal_v1")).toBe("ocmodal:mid=modal_v1");
+    expect(buildDiscordModalCustomId("modal=v1")).toBe("ocmodal:mid=modal=v1");
+    expect(parseDiscordComponentCustomId("occomp:cid=button%3Bv1")).toEqual({
+      componentId: "button%3Bv1",
+    });
+    expect(parseDiscordModalCustomId("ocmodal:mid=modal%3Dv1")).toBe("modal%3Dv1");
+  });
+
   it("builds v2 containers with modal trigger", () => {
     const spec = readDiscordComponentSpec({
       text: "Choose a path",
@@ -93,6 +145,28 @@ describe("discord components", () => {
       disabled: true,
     });
     expect(result.entries).toHaveLength(0);
+  });
+
+  it("omits unset optional fields from persisted button entries", () => {
+    const spec = readDiscordComponentSpec({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [{ label: "Allow Once", style: "success" }],
+        },
+      ],
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const result = buildDiscordComponentMessage({ spec });
+    const entry = result.entries[0];
+    if (!entry) {
+      throw new Error("Expected button entry");
+    }
+
+    expect(Object.entries(entry).filter(([, value]) => value === undefined)).toEqual([]);
   });
 
   it("requires options for modal select fields", () => {

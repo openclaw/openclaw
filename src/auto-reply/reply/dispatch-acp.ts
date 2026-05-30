@@ -429,6 +429,7 @@ export async function tryDispatchAcpReply(params: {
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
     abortSignal: params.abortSignal,
+    runId: params.runId,
   });
 
   const identityPendingBeforeTurn = isSessionIdentityPending(

@@ -9,6 +9,7 @@ import {
   updateSessionStore,
   rewriteSessionFileForNewSessionId,
 } from "../../config/sessions.js";
+import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -101,6 +102,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
+  const activeSessionFile = normalizeOptionalString(result.meta.agentMeta?.sessionFile);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
@@ -135,6 +137,22 @@ export async function updateSessionStoreAfterAgentRun(params: {
           contextTokens,
         }),
   };
+  if (entry.sessionId !== sessionId) {
+    next.sessionFile =
+      activeSessionFile ??
+      resolveCompactionSessionFile({
+        entry,
+        sessionKey,
+        storePath,
+        newSessionId: sessionId,
+      });
+    next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
+    next.usageFamilySessionIds = Array.from(
+      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, sessionId]),
+    );
+  } else if (activeSessionFile) {
+    next.sessionFile = activeSessionFile;
+  }
   if (preserveRuntimeModel) {
     // Keep the pre-existing runtime model and context window so a background
     // heartbeat turn using a different model does not bleed into the main
@@ -268,6 +286,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
     : removeLifecycleStateFromMetadataPatch(next);
+  const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   const persisted = await updateSessionStore(
     storePath,
     (store) => {
@@ -278,7 +297,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
       store[sessionKey] = merged;
       return merged;
     },
-    { takeCacheOwnership: true },
+    {
+      takeCacheOwnership: true,
+      maintenanceConfig,
+      resolveSingleEntryPersistence: (entry) => (entry ? { sessionKey, entry } : undefined),
+    },
   );
   if (persisted) {
     sessionStore[sessionKey] = persisted;

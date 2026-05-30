@@ -10,6 +10,7 @@ export type SubagentAnnounceDeliveryResult = {
   deliveredAt?: number;
   enqueuedAt?: number;
   error?: string;
+  terminal?: boolean;
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
@@ -91,7 +92,7 @@ export async function runSubagentAnnounceDispatch(params: {
 
   const primaryDirect = await params.direct();
   appendPhase("direct-primary", primaryDirect);
-  if (primaryDirect.delivered) {
+  if (primaryDirect.delivered || primaryDirect.terminal) {
     return withPhases(primaryDirect);
   }
 

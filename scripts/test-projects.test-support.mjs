@@ -37,7 +37,10 @@ import {
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
 import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
-import { resolveUnitFastTestIncludePattern } from "../test/vitest/vitest.unit-fast-paths.mjs";
+import {
+  resolveUnitFastTestIncludePattern,
+  resolveUnitFastTimerTestIncludePattern,
+} from "../test/vitest/vitest.unit-fast-paths.mjs";
 import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
@@ -127,6 +130,7 @@ const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.conf
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
+const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
 const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
@@ -320,6 +324,7 @@ const VITEST_CONFIG_BY_KIND = {
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
+  unitFastFakeTimers: UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG,
   unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
   unitSrc: UNIT_SRC_VITEST_CONFIG,
   unitSupport: UNIT_SUPPORT_VITEST_CONFIG,
@@ -1505,6 +1510,9 @@ function classifyTarget(arg, cwd) {
   if (relative.startsWith("src/plugins/contracts/")) {
     return "contractsPlugin";
   }
+  if (resolveUnitFastTimerTestIncludePattern(relative)) {
+    return "unitFastFakeTimers";
+  }
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
   }
@@ -1684,6 +1692,10 @@ function resolveLightLaneIncludePatterns(kind, targetArg, cwd) {
     const includePattern = resolveUnitFastTestIncludePattern(relative);
     return includePattern ? [includePattern] : null;
   }
+  if (kind === "unitFastFakeTimers") {
+    const includePattern = resolveUnitFastTimerTestIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
   if (kind === "pluginSdkLight") {
     const includePattern = resolvePluginSdkLightIncludePattern(relative);
     return includePattern ? [includePattern] : null;
@@ -1804,6 +1816,7 @@ export function buildVitestRunPlans(
   const nonTargetArgs = activeForwardedArgs.filter((arg) => !activeTargetArgs.includes(arg));
   const orderedKinds = [
     "unitFast",
+    "unitFastFakeTimers",
     "default",
     "boundary",
     "toolingIsolated",

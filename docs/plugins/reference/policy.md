@@ -18,6 +18,8 @@ Adds policy-backed doctor checks for workspace conformance.
 
 plugin
 
+<!-- openclaw-plugin-reference:manual-start -->
+
 ## Behavior
 
 The Policy plugin contributes doctor health checks for policy-managed OpenClaw
@@ -33,6 +35,11 @@ OpenClaw settings and workspace declarations as evidence, and reports drift
 through `openclaw policy check` and `openclaw doctor --lint`. A clean policy
 check emits policy, evidence, findings, and attestation hashes that operators
 can record for audit.
+
+`openclaw policy compare --baseline <file>` compares one policy file to another
+policy file. It is config-level conformance only: it uses policy rule metadata
+to verify that the checked policy is not missing or weaker than the authored
+baseline, and it does not inspect runtime state, credentials, or secret values.
 
 Tool posture rules can require approved profiles, workspace-only filesystem
 tools, bounded exec security/ask/host settings, disabled elevated mode, exact
@@ -57,6 +64,8 @@ evidence. Every scope present in `policy.jsonc` must be valid and enforceable
 for its selector. Overlay rules are additional claims, so they do not weaken
 top-level policy and can produce their own findings when the same observed
 config violates both scopes.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 ## Related docs
 

@@ -1,4 +1,5 @@
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -68,13 +69,7 @@ function withLoopbackBrowserAuthImpl(
   // Sandbox bridge servers can run with per-process ephemeral auth on dynamic ports.
   // Fall back to the in-memory registry if config auth is not available.
   try {
-    const parsed = new URL(url);
-    const port =
-      parsed.port && Number.parseInt(parsed.port, 10) > 0
-        ? Number.parseInt(parsed.port, 10)
-        : parsed.protocol === "https:"
-          ? 443
-          : 80;
+    const { port } = parseBrowserHttpUrl(url, "browser control URL");
     const bridgeAuth = deps.getBridgeAuthForPort(port);
     if (bridgeAuth?.token) {
       headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
@@ -164,8 +159,7 @@ function appendBrowserToolModelHint(message: string): string {
 type BrowserFetchFailureKind = "timeout" | "aborted" | "persistent";
 
 function resolveBrowserFetchTimeoutMs(timeoutMs: number | undefined): number {
-  const parsed = parseFiniteNumber(timeoutMs);
-  return Math.max(1, Math.floor(parsed ?? 5000));
+  return resolveTimerTimeoutMs(timeoutMs, 5000);
 }
 
 function classifyBrowserFetchFailure(err: unknown): BrowserFetchFailureKind {

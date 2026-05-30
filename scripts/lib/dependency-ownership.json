@@ -72,11 +72,6 @@
       "class": "core-runtime",
       "risk": ["network", "proxy"]
     },
-    "ipaddr.js": {
-      "owner": "core:ssrf-guard",
-      "class": "core-runtime",
-      "risk": ["network-policy"]
-    },
     "jiti": {
       "owner": "core:plugin-loader",
       "class": "core-runtime",

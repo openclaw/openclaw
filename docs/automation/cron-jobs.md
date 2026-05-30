@@ -42,6 +42,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - Cron runs **inside the Gateway** process (not inside the model).
 - Job definitions persist at `~/.openclaw/cron/jobs.json` so restarts do not lose schedules.
 - Runtime execution state persists next to it in `~/.openclaw/cron/jobs-state.json`. If you track cron definitions in git, track `jobs.json` and gitignore `jobs-state.json`.
+- If `jobs.json` contains malformed rows, the Gateway keeps valid jobs running, removes the malformed rows from the active store, and saves the raw rows beside it in `jobs-quarantine.json` for later repair or review.
 - After the split, older OpenClaw versions can read `jobs.json` but may treat jobs as fresh because runtime fields now live in `jobs-state.json`.
 - When `jobs.json` is edited while the Gateway is running or stopped, OpenClaw compares the changed schedule fields with pending runtime slot metadata and clears stale `nextRunAtMs` values. Pure formatting or key-order-only rewrites preserve the pending slot.
 - All cron executions create [background task](/automation/tasks) records.
@@ -144,6 +145,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 `--model` uses the selected allowed model as that job's primary model. It is not the same as a chat-session `/model` override: configured fallback chains still apply when the job primary fails. If the requested model is not allowed or cannot be resolved, cron fails the run with an explicit validation error instead of silently falling back to the job's agent/default model selection.
 
 Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.
+
+Local-provider preflight checks walk configured fallbacks before marking a cron run `skipped`; `fallbacks: []` keeps that preflight path strict.
 
 Model-selection precedence for isolated jobs is:
 

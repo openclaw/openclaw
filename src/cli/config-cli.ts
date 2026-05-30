@@ -23,6 +23,7 @@ import {
   coerceSecretRef,
   isValidEnvSecretRefId,
   resolveSecretInputRef,
+  type PluginIntegrationSecretProviderConfig,
   type SecretProviderConfig,
   type SecretRef,
   type SecretRefSource,
@@ -34,8 +35,13 @@ import {
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  isPluginIntegrationSecretProviderConfig,
+  resolveSecretProviderIntegrationConfig,
+} from "../secrets/provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -347,6 +353,15 @@ function parseBracketPathSegment(raw: string, fullPath: string): string {
   return trimmed;
 }
 
+// A buffered key with characters that are all whitespace is stray text between a
+// "."/"]" and the next "."/"[" boundary (e.g. "agents.list[0] .id" or "agents.list[0] [1]").
+// Pushing it would silently collapse into a different key, so reject it like an empty segment.
+function assertNotWhitespaceSegment(current: string, raw: string): void {
+  if (current.length > 0 && !current.trim()) {
+    throw new Error(`Invalid path (empty segment): ${raw}`);
+  }
+}
+
 function parsePath(raw: string): PathSegment[] {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -354,6 +369,10 @@ function parsePath(raw: string): PathSegment[] {
   }
   const parts: string[] = [];
   let current = "";
+  // Tracks whether a bracket segment was emitted since the last "." boundary, so
+  // "foo[0].bar" is accepted while empty key segments (leading/trailing/double dots,
+  // whitespace-only segments) are rejected instead of silently collapsed.
+  let segmentEmitted = false;
   let i = 0;
   while (i < trimmed.length) {
     const ch = trimmed[i];
@@ -366,14 +385,26 @@ function parsePath(raw: string): PathSegment[] {
       continue;
     }
     if (ch === ".") {
+      assertNotWhitespaceSegment(current, raw);
+      if (!segmentEmitted && !current.trim()) {
+        throw new Error(`Invalid path (empty segment): ${raw}`);
+      }
       if (current) {
         parts.push(current);
       }
       current = "";
+      segmentEmitted = false;
       i += 1;
       continue;
     }
     if (ch === "[") {
+      // A bracket may start the path ("[0]"), follow a key ("foo[0]"), or follow
+      // another bracket ("foo[0][1]"), but a bracket right after a "." boundary with
+      // no key (e.g. "gateway.[port]") is an empty segment, same as a double dot.
+      assertNotWhitespaceSegment(current, raw);
+      if (!current.trim() && !segmentEmitted && parts.length > 0) {
+        throw new Error(`Invalid path (empty segment): ${raw}`);
+      }
       if (current) {
         parts.push(current);
       }
@@ -387,11 +418,15 @@ function parsePath(raw: string): PathSegment[] {
         throw new Error(`Invalid path (empty "[]"): ${raw}`);
       }
       parts.push(parseBracketPathSegment(inside, raw));
+      segmentEmitted = true;
       i = close + 1;
       continue;
     }
     current += ch;
     i += 1;
+  }
+  if (!segmentEmitted && !current.trim()) {
+    throw new Error(`Invalid path (empty segment): ${raw}`);
   }
   if (current) {
     parts.push(current);
@@ -1830,6 +1865,68 @@ function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSe
   }));
 }
 
+function collectPluginIntegrationProviderErrors(params: {
+  config: OpenClawConfig;
+  operations: ConfigSetOperation[];
+}): ConfigSetDryRunError[] {
+  const providers = params.config.secrets?.providers ?? {};
+  let validateAllProviders = false;
+  const touchedProviderAliases = new Set<string>();
+  for (const operation of params.operations) {
+    if (operation.touchedProviderAlias) {
+      touchedProviderAliases.add(operation.touchedProviderAlias);
+    }
+    if (operation.assignedRef) {
+      touchedProviderAliases.add(operation.assignedRef.provider);
+    }
+    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
+      touchedProviderAliases.add(ref.provider);
+    }
+    if (touchesSecretProviderCollection(operation.setPath)) {
+      validateAllProviders = true;
+    }
+  }
+  if (!validateAllProviders && touchedProviderAliases.size === 0) {
+    return [];
+  }
+  const integrationProviders: Array<{
+    alias: string;
+    provider: PluginIntegrationSecretProviderConfig;
+  }> = [];
+  for (const [alias, provider] of Object.entries(providers)) {
+    if (!validateAllProviders && !touchedProviderAliases.has(alias)) {
+      continue;
+    }
+    if (isPluginIntegrationSecretProviderConfig(provider)) {
+      integrationProviders.push({ alias, provider });
+    }
+  }
+  if (integrationProviders.length === 0) {
+    return [];
+  }
+  const manifestRegistry = loadPluginMetadataSnapshot({
+    config: params.config,
+    env: process.env,
+  }).manifestRegistry;
+  const errors: ConfigSetDryRunError[] = [];
+  for (const { alias, provider } of integrationProviders) {
+    const resolved = resolveSecretProviderIntegrationConfig({
+      manifestRegistry,
+      providerAlias: alias,
+      providerConfig: provider,
+      config: params.config,
+      env: process.env,
+    });
+    if (!resolved.ok) {
+      errors.push({
+        kind: "schema",
+        message: `secrets.providers.${alias}: ${resolved.reason}`,
+      });
+    }
+  }
+  return errors;
+}
+
 function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {
   const deduped: ConfigSetDryRunError[] = [];
   const seen = new Set<string>();
@@ -1947,6 +2044,10 @@ async function runConfigOperations(params: {
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
     (line) => line.trim(),
   );
+  const pluginIntegrationProviderErrors = collectPluginIntegrationProviderErrors({
+    config: nextConfig,
+    operations,
+  });
 
   if (options.dryRun) {
     const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
@@ -1977,6 +2078,7 @@ async function runConfigOperations(params: {
         })),
       );
     }
+    errors.push(...pluginIntegrationProviderErrors);
     if (requiresFullSchemaValidation) {
       errors.push(
         ...collectDryRunSchemaErrors({
@@ -2005,7 +2107,10 @@ async function runConfigOperations(params: {
       configPath: shortenHomePath(snapshot.path),
       inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
-        schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
+        schema:
+          requiresFullSchemaValidation ||
+          policyIssueLines.length > 0 ||
+          pluginIntegrationProviderErrors.length > 0,
         resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
         resolvabilityComplete:
           (hasJsonMode || hasBuilderMode || hasUnsetMode) &&
@@ -2053,6 +2158,14 @@ async function runConfigOperations(params: {
   }
   if (policyIssueLines.length > 0) {
     throw new Error(formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines));
+  }
+  if (pluginIntegrationProviderErrors.length > 0) {
+    throw new Error(
+      [
+        "Config validation failed: plugin-managed SecretRef provider integration is invalid.",
+        ...pluginIntegrationProviderErrors.map((error) => `- ${error.message}`),
+      ].join("\n"),
+    );
   }
 
   await replaceConfigFile({

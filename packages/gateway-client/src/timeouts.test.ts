@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  getConnectChallengeTimeoutMsFromEnv,
+  getPreauthHandshakeTimeoutMsFromEnv,
   MAX_SAFE_TIMEOUT_DELAY_MS,
   resolveFiniteTimeoutDelayMs,
+  resolveConnectChallengeTimeoutMs,
+  resolvePreauthHandshakeTimeoutMs,
   resolveSafeTimeoutDelayMs,
 } from "./timeouts.js";
 
@@ -33,5 +37,53 @@ describe("resolveFiniteTimeoutDelayMs", () => {
   it("still clamps finite overrides through safe timer bounds", () => {
     expect(resolveFiniteTimeoutDelayMs(3_000_000_000, 10_000)).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
     expect(resolveFiniteTimeoutDelayMs(-5, 10_000, { minMs: 0 })).toBe(0);
+  });
+});
+
+describe("gateway client handshake timeouts", () => {
+  it("caps preauth handshake timeout env and config values to the safe timer range", () => {
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "3000000000",
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+    expect(
+      resolvePreauthHandshakeTimeoutMs({
+        env: {},
+        configuredTimeoutMs: 3_000_000_000,
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
+  it("accepts existing strict timeout env integer forms", () => {
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: " +75000 ",
+      }),
+    ).toBe(75_000);
+    expect(
+      getConnectChallengeTimeoutMsFromEnv({
+        OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: " 015000 ",
+      }),
+    ).toBe(15_000);
+  });
+
+  it("caps connect challenge timeout env and explicit values to the safe timer range", () => {
+    expect(
+      getConnectChallengeTimeoutMsFromEnv({
+        OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "3000000000",
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+    expect(
+      resolveConnectChallengeTimeoutMs(3_000_000_000, {
+        env: {},
+        configuredTimeoutMs: 3_000_000_000,
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+    expect(
+      resolveConnectChallengeTimeoutMs(undefined, {
+        env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "3000000000" },
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
   });
 });

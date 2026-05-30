@@ -3,6 +3,10 @@ import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 export const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 export const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 export const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
+// Native Codex can stream a large custom tool input after a raw assistant
+// progress item. Forwarded deltas count as activity, but older native paths may
+// not surface them, so keep this terminal guard conservative.
+export const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
 export const CODEX_POST_REASONING_SOURCE_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
 export const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
@@ -91,7 +95,11 @@ export function resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
   value: number | undefined,
   fallbackMs: number,
 ): number {
-  return resolvePositiveIntegerTimeoutMs(value, fallbackMs);
+  const defaultMs = Math.max(
+    resolvePositiveIntegerTimeoutMs(undefined, fallbackMs),
+    CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS,
+  );
+  return resolvePositiveIntegerTimeoutMs(value, defaultMs);
 }
 
 export function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {

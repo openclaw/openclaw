@@ -6,6 +6,7 @@ import {
   stringEnum,
 } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
 
 const BROWSER_ACT_KINDS = [
   "click",
@@ -79,8 +80,8 @@ const BrowserActSchema = Type.Object({
   // fill - use permissive array of objects
   fields: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
   // resize
-  width: optionalPositiveIntegerSchema(),
-  height: optionalPositiveIntegerSchema(),
+  width: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
+  height: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
   // wait
   timeMs: optionalNonNegativeIntegerSchema(),
   selector: Type.Optional(Type.String()),
@@ -143,8 +144,8 @@ export const BrowserToolSchema = Type.Object({
   endRef: Type.Optional(Type.String()),
   values: Type.Optional(Type.Array(Type.String())),
   fields: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
-  width: optionalPositiveIntegerSchema(),
-  height: optionalPositiveIntegerSchema(),
+  width: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
+  height: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
   timeMs: optionalNonNegativeIntegerSchema(),
   textGone: Type.Optional(Type.String()),
   loadState: Type.Optional(Type.String()),

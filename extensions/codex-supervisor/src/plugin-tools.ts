@@ -1,4 +1,5 @@
 import { jsonResult, readStringParam, type AnyAgentTool } from "openclaw/plugin-sdk/core";
+import { asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import { Type } from "typebox";
 import {
   redactCodexSupervisorEndpoint,
@@ -13,6 +14,7 @@ const EmptyParamsSchema = Type.Object({}, { additionalProperties: false });
 const SessionsListParamsSchema = Type.Object(
   {
     include_stored: Type.Optional(Type.Boolean()),
+    max_stored_sessions: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
   },
   { additionalProperties: false },
 );
@@ -65,6 +67,21 @@ function asRecord(params: unknown): Record<string, unknown> {
 
 function readBooleanParam(params: Record<string, unknown>, key: string): boolean {
   return params[key] === true;
+}
+
+function readIntegerParam(params: Record<string, unknown>, key: string): number | undefined {
+  const value = params[key];
+  if (value === undefined) {
+    return undefined;
+  }
+  const integer = asSafeIntegerInRange(value, { min: 1, max: 1000 });
+  if (integer === undefined) {
+    if (typeof value === "number" && Number.isInteger(value)) {
+      throw new Error(`${key} must be between 1 and 1000`);
+    }
+    throw new Error(`${key} must be an integer`);
+  }
+  return integer;
 }
 
 function readModeParam(params: Record<string, unknown>): CodexSupervisorTurnMode | undefined {
@@ -122,6 +139,7 @@ export function createCodexSupervisorTools({
         const params = asRecord(rawParams);
         const result = await supervisor.listSessionSnapshot({
           includeStored: readBooleanParam(params, "include_stored"),
+          maxStoredSessions: readIntegerParam(params, "max_stored_sessions"),
         });
         return jsonResult({
           summary: `codex sessions: ${result.sessions.length}`,

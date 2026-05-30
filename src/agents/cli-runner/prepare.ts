@@ -21,6 +21,7 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
+import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
@@ -54,7 +55,6 @@ import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { resolveSkillsPromptForRun } from "../skills.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -277,6 +277,10 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+          OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
+          OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
+          OPENCLAW_MCP_CURRENT_MESSAGE_ID:
+            params.currentMessageId != null ? String(params.currentMessageId) : "",
           OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
           OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
         }
@@ -351,6 +355,9 @@ export async function prepareCliRunContext(
           cfg: params.config ?? getRuntimeConfig(),
           sessionKey: params.sessionKey ?? "",
           messageProvider: params.messageChannel ?? params.messageProvider,
+          currentChannelId: params.currentChannelId,
+          currentThreadTs: params.currentThreadTs,
+          currentMessageId: params.currentMessageId,
           accountId: params.agentAccountId,
           inboundEventKind: params.currentInboundEventKind,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -375,6 +382,7 @@ export async function prepareCliRunContext(
     isClaudeCliProvider(params.provider) &&
     !(await prepareDeps.claudeCliSessionTranscriptHasContent({
       sessionId: candidateClaudeCliSessionId,
+      workspaceDir: cwd,
     }));
   const reusableCliSession: CliReusableSession = claudeCliTranscriptMissing
     ? { invalidatedReason: "missing-transcript" }

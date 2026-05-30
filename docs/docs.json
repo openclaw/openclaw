@@ -1228,6 +1228,7 @@
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
+                  "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
@@ -1332,6 +1333,7 @@
                 "group": "Agent coordination",
                 "pages": [
                   "tools/agent-send",
+                  "tools/goal",
                   "tools/steer",
                   "tools/subagents",
                   "tools/acp-agents",
