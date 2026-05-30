@@ -72,7 +72,7 @@ type SkillProposalScopeOptions = {
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
-const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 512;
+const MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES = 160;
 
 export async function listSkillProposals(
   options: SkillProposalScopeOptions = {},

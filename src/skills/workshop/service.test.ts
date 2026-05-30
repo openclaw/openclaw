@@ -636,7 +636,7 @@ describe("skill workshop proposals", () => {
       proposeCreateSkill({
         workspaceDir,
         name: "Oversized Description",
-        description: "x".repeat(513),
+        description: "x".repeat(161),
         content: "# Oversized Description\n",
       }),
     ).rejects.toThrow("proposal description is too large");
@@ -652,7 +652,7 @@ describe("skill workshop proposals", () => {
       reviseSkillProposal({
         workspaceDir,
         proposalId: proposal.record.id,
-        description: "x".repeat(513),
+        description: "x".repeat(161),
         content: "# Description Revision\n",
       }),
     ).rejects.toThrow("proposal description is too large");

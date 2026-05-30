@@ -144,7 +144,7 @@ listing manifest and can be rebuilt from proposal folders when missing or stale.
 proposal is applied as an active `SKILL.md`.
 
 Proposal bodies honor `skills.workshop.maxSkillBytes`, and proposal
-descriptions are capped at 512 bytes because they can appear in discovery and
+descriptions are capped at 160 bytes because they can appear in discovery and
 listing output.
 
 Proposal folders can also carry support files under `assets/`, `examples/`,

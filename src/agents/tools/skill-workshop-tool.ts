@@ -77,7 +77,11 @@ const SkillWorkshopToolSchema = Type.Object(
       }),
     ),
     description: Type.Optional(
-      Type.String({ description: "Skill description for action=create or action=revise." }),
+      Type.String({
+        maxLength: 160,
+        description:
+          "Skill description for action=create or action=revise. Keep it concise; max 160 bytes.",
+      }),
     ),
     skill_name: Type.Optional(
       Type.String({ description: "Existing skill name or key for action=update." }),
@@ -85,7 +89,7 @@ const SkillWorkshopToolSchema = Type.Object(
     proposal_content: Type.Optional(
       Type.String({
         description:
-          "Full proposed procedure markdown for action=create, action=update, or action=revise. It will be stored as PROPOSAL.md.",
+          "Full proposed procedure markdown for action=create, action=update, or action=revise. It will be stored as PROPOSAL.md. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
       }),
     ),
     support_files: Type.Optional(
