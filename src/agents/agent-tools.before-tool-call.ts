@@ -946,7 +946,7 @@ export async function runBeforeToolCallHook(args: {
         params,
       };
     }
-    let trustedApprovalParams: unknown | undefined;
+    let trustedApprovalParams: unknown;
     let trustedApprovalResolution: PluginApprovalResolution | undefined;
     if (trustedPolicyResult?.requireApproval) {
       const approvalOutcome = await resolveBeforeToolCallApprovalOutcome({
