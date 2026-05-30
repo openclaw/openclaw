@@ -9,6 +9,8 @@ const labelItem = {
 };
 
 describe("label-open-issues helpers", () => {
+  // Timeout tests below advance fake timers explicitly so CI shard load cannot
+  // turn a bounded request-timeout assertion into a wall-clock wait.
   afterEach(() => {
     vi.useRealTimers();
   });
