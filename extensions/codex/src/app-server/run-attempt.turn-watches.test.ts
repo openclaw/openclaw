@@ -1589,6 +1589,114 @@ describe("runCodexAppServerAttempt turn watches", () => {
     expect(result.promptError).toBeNull();
   });
 
+  it("keeps the post-tool guard armed for patch update snapshots", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    setCodexAppServerClientFactoryForTest(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session-patch-snapshot-timeout.jsonl"),
+      path.join(tempDir, "workspace-patch-snapshot-timeout"),
+    );
+    params.timeoutMs = 2_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 500,
+      turnAssistantCompletionIdleTimeoutMs: 5,
+      postToolRawAssistantCompletionIdleTimeoutMs: 50,
+      turnTerminalIdleTimeoutMs: 1_000,
+    });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
+
+    await handleRequest?.({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "already sent" },
+      },
+    });
+    await notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "message",
+          id: "raw-status-1",
+          role: "assistant",
+          content: [{ type: "output_text", text: "I'm writing a large patch now." }],
+        },
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await notify({
+      method: "item/fileChange/patchUpdated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "ctc-large-edit-1",
+        changes: [],
+      },
+    });
+
+    const result = await run;
+    expect(result.timedOut).toBe(true);
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    const completionWarnCall = warn.mock.calls.find(
+      ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+    );
+    const completionWarnData = completionWarnCall?.[1] as
+      | {
+          lastActivityReason?: string;
+          lastNotificationMethod?: string;
+          timeoutMs?: number;
+        }
+      | undefined;
+    expect(completionWarnData?.timeoutMs).toBe(50);
+    expect(completionWarnData?.lastActivityReason).toBe(
+      "notification:item/fileChange/patchUpdated",
+    );
+    expect(completionWarnData?.lastNotificationMethod).toBe("item/fileChange/patchUpdated");
+  });
+
   it("keeps the post-tool guard armed for scoped native response deltas", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:

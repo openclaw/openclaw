@@ -185,6 +185,14 @@ export function isNativeResponseStreamDeltaNotification(
   return notification.method.startsWith("response.") && notification.method.endsWith(".delta");
 }
 
+export function isFileChangePatchUpdatedNotification(
+  notification: CodexServerNotification,
+): boolean {
+  return (
+    notification.method === "item/fileChange/patchUpdated" && isJsonObject(notification.params)
+  );
+}
+
 export function isRawAssistantProgressNotification(notification: CodexServerNotification): boolean {
   if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
     return false;
