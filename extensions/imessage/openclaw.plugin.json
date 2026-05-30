@@ -1,0 +1,12 @@
+{
+  "id": "imessage",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["imessage"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
