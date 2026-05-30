@@ -256,6 +256,42 @@ describe("SessionHistorySseState", () => {
     expect(mirror["__openclaw"]?.seq).toBe(2);
   });
 
+  test("mirrors sessions_yield tool details when content is redacted", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "start worker" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          toolCallId: "call-yield-details",
+          content: [{ type: "text", text: "[tool result pruned]" }],
+          details: {
+            status: "yielded",
+            message: "Waiting from details.",
+          },
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(snapshot.history.messages).toHaveLength(3);
+    const mirror = snapshot.history.messages[2] as {
+      content?: Array<{ text?: string }>;
+      openclawVisibleToolMirror?: { toolName?: string; toolCallId?: string };
+      ["__openclaw"]?: { seq?: number };
+    };
+    expect(mirror.content?.[0]?.text).toBe("Waiting from details.");
+    expect(mirror.openclawVisibleToolMirror).toEqual({
+      toolName: "sessions_yield",
+      toolCallId: "call-yield-details",
+    });
+    expect(mirror["__openclaw"]?.seq).toBe(2);
+  });
+
   test("emits sessions_yield visible mirror for inline replay appends", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
       target: { sessionId: "sess-main" },
@@ -293,6 +329,63 @@ describe("SessionHistorySseState", () => {
       toolName: "sessions_yield",
       toolCallId: "call-yield-inline",
     });
+  });
+
+  test("does not duplicate sessions_yield mirrors on later inline appends", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "start worker" }],
+          __openclaw: { seq: 1 },
+        },
+      ],
+    });
+
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "toolResult",
+          toolName: "sessions_yield",
+          toolCallId: "call-yield-inline",
+          content: JSON.stringify({
+            status: "yielded",
+            message: "Still waiting for child completion.",
+          }),
+        },
+        messageSeq: 2,
+      }),
+    ).toEqual({ shouldRefresh: true });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "The child session finished." }],
+      },
+      messageSeq: 3,
+    });
+
+    expect(appended?.messageSeq).toBe(3);
+    const mirrors = state.snapshot().messages.filter((message) => {
+      const entry = message as {
+        content?: Array<{ text?: string }>;
+        openclawVisibleToolMirror?: { toolName?: string; toolCallId?: string };
+      };
+      return entry.openclawVisibleToolMirror?.toolName === "sessions_yield";
+    });
+    expect(mirrors).toHaveLength(1);
+    expect(
+      (
+        mirrors[0] as {
+          content?: Array<{ text?: string }>;
+          openclawVisibleToolMirror?: { toolName?: string; toolCallId?: string };
+        }
+      ).content?.[0]?.text,
+    ).toBe("Still waiting for child completion.");
+    expect(state.snapshot().messages.at(-1)?.content?.[0]?.text).toBe(
+      "The child session finished.",
+    );
   });
 
   test("does not coerce partial cursor values", () => {

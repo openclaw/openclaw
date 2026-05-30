@@ -37,6 +37,7 @@ type VisibleToolMirror = {
   toolName: string;
   text: string;
   anchor: Record<string, unknown>;
+  transcriptAnchor?: Record<string, unknown>;
 };
 
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
@@ -737,7 +738,7 @@ function isSuccessfulMessageToolResultPayload(message: Record<string, unknown>):
 function readToolResultPayloadRecord(
   message: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  for (const field of ["result", "output", "content", "text"] as const) {
+  for (const field of ["details", "result", "output", "content", "text"] as const) {
     const record = readMaybeJsonRecord(message[field]);
     if (record) {
       return record;
@@ -823,7 +824,8 @@ function buildVisibleToolMirror(mirrorInput: VisibleToolMirror): Record<string, 
       mirror[field] = mirrorInput.anchor[field];
     }
   }
-  const transcriptMeta = readRecord(mirrorInput.anchor["__openclaw"]);
+  const transcriptAnchor = mirrorInput.transcriptAnchor ?? mirrorInput.anchor;
+  const transcriptMeta = readRecord(transcriptAnchor["__openclaw"]);
   if (transcriptMeta) {
     mirror["__openclaw"] = { ...transcriptMeta };
   }
@@ -834,11 +836,28 @@ function buildMessageToolVisibleReplyMirror(
   pending: PendingMessageToolVisibleReply,
 ): Record<string, unknown> {
   return buildVisibleToolMirror({
-    anchor: pending.completionAnchor ?? pending.anchor,
+    anchor: pending.anchor,
+    transcriptAnchor: pending.completionAnchor ?? pending.anchor,
     text: pending.text,
     toolName: "message",
     ...(pending.toolCallId ? { toolCallId: pending.toolCallId } : {}),
   });
+}
+
+function isMatchingVisibleToolMirror(message: unknown, mirror: VisibleToolMirror): boolean {
+  const record = readRecord(message);
+  if (!record || record.role !== "assistant") {
+    return false;
+  }
+  const marker = readRecord(record.openclawVisibleToolMirror);
+  if (!marker || normalizeOptionalString(marker.toolName)?.toLowerCase() !== mirror.toolName) {
+    return false;
+  }
+  const markerCallId = normalizeOptionalString(marker.toolCallId);
+  if (mirror.toolCallId ? markerCallId !== mirror.toolCallId : markerCallId) {
+    return false;
+  }
+  return extractAssistantTextForSilentCheck(record) === mirror.text;
 }
 
 function mirrorVisibleToolReplies(messages: unknown[]): unknown[] {
@@ -869,7 +888,8 @@ function mirrorVisibleToolReplies(messages: unknown[]): unknown[] {
     clearPending();
   };
 
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
     const record = readRecord(message);
     if (!record) {
       next.push(message);
@@ -879,6 +899,9 @@ function mirrorVisibleToolReplies(messages: unknown[]): unknown[] {
     const immediateMirror = extractSessionsYieldVisibleMirror(record);
     if (immediateMirror) {
       next.push(message);
+      if (isMatchingVisibleToolMirror(messages[i + 1], immediateMirror)) {
+        continue;
+      }
       next.push(buildVisibleToolMirror(immediateMirror));
       changed = true;
       continue;

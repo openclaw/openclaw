@@ -717,13 +717,18 @@ describe("gateway server chat", () => {
           },
         ],
         timestamp: 2,
+        createdAt: "tool-call-created-at",
+        agentId: "tool-call-agent",
       },
       {
         role: "toolResult",
         toolName: "message",
         toolCallId: "call-message-1",
         content: { ok: true, messageId: "24268", chatId: "8455538490" },
-        timestamp: 3,
+        timestamp: 99,
+        createdAt: "tool-result-created-at",
+        agentId: "tool-result-agent",
+        __openclaw: { seq: 3 },
       },
       {
         role: "assistant",
@@ -733,15 +738,25 @@ describe("gateway server chat", () => {
     ]);
 
     expect(collectHistoryTextValues(historyMessages)).toEqual(["Evo, you there?", replyText]);
-    expect(
-      historyMessages.some((message) => {
-        if (!message || typeof message !== "object") {
-          return false;
+    const mirror = historyMessages.find((message) => {
+      if (!message || typeof message !== "object") {
+        return false;
+      }
+      const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
+      return entry.role === "assistant" && Boolean(entry.openclawMessageToolMirror);
+    }) as
+      | {
+          timestamp?: unknown;
+          createdAt?: unknown;
+          agentId?: unknown;
+          ["__openclaw"]?: { seq?: unknown };
         }
-        const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
-        return entry.role === "assistant" && Boolean(entry.openclawMessageToolMirror);
-      }),
-    ).toBe(true);
+      | undefined;
+    expect(mirror).toBeDefined();
+    expect(mirror?.timestamp).toBe(2);
+    expect(mirror?.createdAt).toBe("tool-call-created-at");
+    expect(mirror?.agentId).toBe("tool-call-agent");
+    expect(mirror?.["__openclaw"]?.seq).toBe(3);
   });
 
   test("chat.history mirrors sessions_yield status messages for replay", async () => {
