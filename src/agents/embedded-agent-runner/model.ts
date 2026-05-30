@@ -74,6 +74,12 @@ type ProviderRuntimeHooks = {
   normalizeProviderTransportWithPlugin: typeof normalizeProviderTransportWithPlugin;
 };
 
+type StaticCatalogFallbackModel = Model & {
+  compat?: ModelCompatConfig;
+  contextTokens?: number;
+  mediaInput?: ModelMediaInputConfig;
+};
+
 const TARGET_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin,
   prepareProviderDynamicModel,
@@ -989,14 +995,16 @@ function resolveConfiguredFallbackModel(params: {
   }
   const staticCatalogModel = configuredModel
     ? undefined
-    : resolveBundledStaticCatalogModel({
+    : (resolveBundledStaticCatalogModel({
         provider,
         modelId,
         cfg,
         workspaceDir,
         includeRuntimeDiscovery: true,
-      });
+      }) as StaticCatalogFallbackModel | undefined);
   const metadataModel = configuredModel ?? staticCatalogModel;
+  const fallbackCompat = configuredModel?.compat ?? staticCatalogModel?.compat;
+  const fallbackMediaInput = configuredModel?.mediaInput ?? staticCatalogModel?.mediaInput;
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
@@ -1009,7 +1017,7 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     modelId,
     providerParams: providerConfig?.params,
-    configuredParams: metadataModel?.params,
+    configuredParams: configuredModel?.params,
   });
   const fallbackTransport = resolveProviderTransport({
     provider,
@@ -1036,7 +1044,7 @@ function resolveConfiguredFallbackModel(params: {
   });
   const fallbackReasoning = resolveConfiguredFallbackReasoning({
     provider,
-    compat: metadataModel?.compat,
+    compat: fallbackCompat,
     reasoning: metadataModel?.reasoning,
   });
   return normalizeResolvedModel({
@@ -1080,8 +1088,8 @@ function resolveConfiguredFallbackModel(params: {
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
-          compat: metadataModel?.compat,
-          mediaInput: metadataModel?.mediaInput,
+          compat: fallbackCompat,
+          mediaInput: fallbackMediaInput,
         } as Model,
         providerRequest,
       ),
