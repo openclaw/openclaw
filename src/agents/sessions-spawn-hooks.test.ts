@@ -83,6 +83,7 @@ async function spawn(params?: {
   toolCallId?: string;
   task?: string;
   label?: string;
+  model?: string;
   runTimeoutSeconds?: number;
   thread?: boolean;
   mode?: "run" | "session";
@@ -97,6 +98,7 @@ async function spawn(params?: {
     {
       task: params?.task ?? "do thing",
       ...(params?.label ? { label: params.label } : {}),
+      ...(params?.model ? { model: params.model } : {}),
       ...(typeof params?.runTimeoutSeconds === "number"
         ? { runTimeoutSeconds: params.runTimeoutSeconds }
         : {}),
@@ -246,6 +248,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   it("runs subagent_spawning and emits subagent_spawned with requester metadata", async () => {
     const result = await spawn({
       label: "research",
+      model: "openai-codex/gpt-5.4",
       runTimeoutSeconds: 1,
       thread: true,
       agentAccountId: "work",
@@ -254,7 +257,16 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       context: "isolated",
     });
 
-    expectFields(result, { status: "accepted", runId: "run-1" }, "spawn result");
+    expectFields(
+      result,
+      {
+        status: "accepted",
+        runId: "run-1",
+        resolvedModel: "openai-codex/gpt-5.4",
+        resolvedProvider: "openai-codex",
+      },
+      "spawn result",
+    );
     expect(hookRunnerMocks.runSubagentSpawning).toHaveBeenCalledTimes(1);
     const [spawningEvent, spawningContext] = (hookRunnerMocks.runSubagentSpawning.mock.calls.at(
       0,
@@ -299,6 +311,8 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         label: "research",
         mode: "session",
         threadRequested: true,
+        resolvedModel: "openai-codex/gpt-5.4",
+        resolvedProvider: "openai-codex",
       },
       "spawned event",
     );

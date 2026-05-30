@@ -59,6 +59,28 @@ const ERROR_LOG_ALLOW_PATTERNS = [
 
 let callGatewayModulePromise;
 
+function usage() {
+  return `Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs
+
+Runs the external Kitchen Sink plugin RPC walk against a built OpenClaw entry.
+
+Environment:
+  OPENCLAW_ENTRY                         Built OpenClaw entrypoint. Defaults to dist/index.mjs or dist/index.js.
+  OPENCLAW_KITCHEN_SINK_NPM_SPEC         Plugin package spec. Default: npm:@openclaw/kitchen-sink@latest.
+  OPENCLAW_KITCHEN_SINK_PLUGIN_ID        Plugin id. Default: openclaw-kitchen-sink-fixture.
+  OPENCLAW_KITCHEN_SINK_RPC_READY_MS     Gateway readiness timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS   OpenClaw command timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS   Plugin install timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_CALL_MS      RPC call timeout.
+  OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB      Gateway RSS ceiling.
+  OPENCLAW_KITCHEN_SINK_KEEP_TMP=1       Preserve the isolated temp home.
+`;
+}
+
+export function shouldPrintHelp(argv) {
+  return argv.some((arg) => arg === "--help" || arg === "-h");
+}
+
 export function readPositiveInt(raw, fallback) {
   const text = String(raw || "").trim();
   if (!/^\d+$/u.test(text)) {
@@ -512,9 +534,22 @@ export async function fetchJson(url, options = {}) {
 }
 
 export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_MAX_BYTES) {
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength) {
+    const parsedContentLength = Number(contentLength);
+    if (Number.isFinite(parsedContentLength) && parsedContentLength > byteLimit) {
+      await response.body?.cancel?.().catch(() => undefined);
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+  }
+
   const reader = response.body?.getReader?.();
   if (!reader) {
-    return await response.text();
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > byteLimit) {
+      throw createFetchBodyTooLargeError(byteLimit);
+    }
+    return text;
   }
   const chunks = [];
   let totalBytes = 0;
@@ -527,13 +562,17 @@ export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_M
     totalBytes += chunk.byteLength;
     if (totalBytes > byteLimit) {
       await reader.cancel().catch(() => undefined);
-      throw Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
-        code: "ETOOBIG",
-      });
+      throw createFetchBodyTooLargeError(byteLimit);
     }
     chunks.push(chunk);
   }
   return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+function createFetchBodyTooLargeError(byteLimit) {
+  return Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
 }
 
 function configureKitchenSink(env, port) {
@@ -720,12 +759,15 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
     throw exitedBeforeReadyError();
   }
   while (Date.now() - started < timeoutMs) {
+    const remainingMs = Math.max(1, timeoutMs - (Date.now() - started));
     if (hasChildExited(child)) {
       throw exitedBeforeReadyError();
     }
     try {
       const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
+        attempts: 1,
         fetchImpl: options.fetchImpl,
+        timeoutMs: Math.min(FETCH_TIMEOUT_MS, remainingMs),
       });
       if (readyz.ok) {
         return;
@@ -737,7 +779,8 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
     if (logReportedReady()) {
       lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
-    await delay(pollDelayMs);
+    const nextDelayMs = Math.min(pollDelayMs, Math.max(1, timeoutMs - (Date.now() - started)));
+    await delay(nextDelayMs);
   }
   if (hasChildExited(child)) {
     throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
@@ -1505,5 +1548,9 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
+  if (shouldPrintHelp(process.argv.slice(2))) {
+    process.stdout.write(usage());
+  } else {
+    await main();
+  }
 }

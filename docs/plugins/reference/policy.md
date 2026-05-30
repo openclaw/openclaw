@@ -18,6 +18,8 @@ Adds policy-backed doctor checks for workspace conformance.
 
 plugin
 
+<!-- openclaw-plugin-reference:manual-start -->
+
 ## Behavior
 
 The Policy plugin contributes doctor health checks for policy-managed OpenClaw
@@ -62,6 +64,8 @@ evidence. Every scope present in `policy.jsonc` must be valid and enforceable
 for its selector. Overlay rules are additional claims, so they do not weaken
 top-level policy and can produce their own findings when the same observed
 config violates both scopes.
+
+<!-- openclaw-plugin-reference:manual-end -->
 
 ## Related docs
 

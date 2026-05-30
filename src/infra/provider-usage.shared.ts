@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
@@ -10,6 +10,7 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   minimax: "MiniMax",
   "openai-codex": "Codex",
   xiaomi: "Xiaomi",
+  "xiaomi-token-plan": "Xiaomi Token Plan",
   zai: "z.ai",
 };
 
@@ -20,14 +21,24 @@ export const usageProviders: UsageProviderId[] = [
   "minimax",
   "openai-codex",
   "xiaomi",
+  "xiaomi-token-plan",
   "zai",
 ];
 
-export function resolveUsageProviderId(provider?: string | null): UsageProviderId | undefined {
+export function resolveUsageProviderId(
+  provider?: string | null,
+  options?: { credentialType?: string | null },
+): UsageProviderId | undefined {
   if (!provider) {
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
+  if (
+    normalized === "openai" &&
+    (options?.credentialType === "oauth" || options?.credentialType === "token")
+  ) {
+    return "openai-codex";
+  }
   if (
     normalized === "minimax-portal" ||
     normalized === "minimax-cn" ||

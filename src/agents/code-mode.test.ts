@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   applyCodeModeCatalog,
@@ -93,7 +93,12 @@ async function runUntilCompleted(params: {
 }
 
 describe("Code Mode", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
     testing.setTypescriptRuntimeForTest(null);
@@ -404,6 +409,45 @@ describe("Code Mode", () => {
     ]);
   });
 
+  it("fails yield suspension when snapshot expiry would exceed the Date range", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    let details: Record<string, unknown>;
+    try {
+      details = resultDetails(
+        await codeModeTools[0].execute("code-call-yield-overflow", {
+          code: 'await yield_control("pause"); return "done";',
+        }),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(details.status).toBe("failed");
+    expect(details.error).toBe("code mode run expiry is unavailable.");
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("expires suspended runs with invalid expiry timestamps", async () => {
+    const { tools: codeModeTools } = createCodeModeHarness();
+    testing.activeRuns.set("invalid-expiry-run", {
+      expiresAt: 8_640_000_000_000_001,
+    } as never);
+
+    await expect(
+      codeModeTools[1].execute("code-wait-invalid-expiry", { runId: "invalid-expiry-run" }),
+    ).rejects.toThrow("code mode run is unavailable or expired");
+    expect(testing.activeRuns.has("invalid-expiry-run")).toBe(false);
+  });
+
   it("rejects wait calls from a different session scope", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -495,7 +539,6 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
         },
       },
     } as never;
@@ -538,10 +581,17 @@ describe("Code Mode", () => {
     );
     expect(first.status).toBe("waiting");
     expect(first.pendingToolCalls).toHaveLength(2);
+    const runId = first.runId;
+    expect(typeof runId).toBe("string");
+    if (typeof runId !== "string") {
+      throw new Error("expected code mode run id");
+    }
 
-    const second = resultDetails(
-      await codeModeTools[1].execute("code-wait-timeout", { runId: first.runId }),
-    );
+    const activeRun = testing.activeRuns.get(runId);
+    expect(activeRun).toBeDefined();
+    activeRun!.config.timeoutMs = 100;
+
+    const second = resultDetails(await codeModeTools[1].execute("code-wait-timeout", { runId }));
 
     expect(second.status).toBe("waiting");
     expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "call" })]);

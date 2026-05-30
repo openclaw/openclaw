@@ -9,6 +9,7 @@ import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
 } from "../../gateway/server-methods/types.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnv } from "../../test-utils/env.js";
 import { cleanupReplacedPluginHostRegistry } from "../host-hook-cleanup.js";
 import {
@@ -455,6 +456,14 @@ describe("plugin scheduled turns", () => {
         },
       }),
     ).resolves.toBeUndefined();
+    expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
+  });
+
+  it("rejects delayed schedules that cannot fit in the Date timestamp range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
+
+    await expect(scheduleWorkflowTurn({ schedule: { delayMs: 1 } })).resolves.toBeUndefined();
     expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
   });
 

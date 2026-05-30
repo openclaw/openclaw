@@ -1,9 +1,10 @@
 function parseStrictPositiveInteger(value: string): number | undefined {
-  if (!/^[1-9]\d*$/u.test(value)) {
+  const trimmed = value.trim();
+  if (!/^\+?\d+$/u.test(trimmed)) {
     return undefined;
   }
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
@@ -19,6 +20,21 @@ export function resolveSafeTimeoutDelayMs(delayMs: number, opts?: { minMs?: numb
   );
   const candidateMs = Number.isFinite(delayMs) ? Math.floor(delayMs) : minMs;
   return Math.min(MAX_SAFE_TIMEOUT_DELAY_MS, Math.max(minMs, candidateMs));
+}
+
+export function addSafeTimeoutDelayGraceMs(
+  delayMs: number,
+  graceMs: number,
+  opts?: { minMs?: number },
+): number {
+  if (!Number.isFinite(delayMs) || !Number.isFinite(graceMs)) {
+    return resolveSafeTimeoutDelayMs(MAX_SAFE_TIMEOUT_DELAY_MS, opts);
+  }
+  const withGrace = delayMs + graceMs;
+  return resolveSafeTimeoutDelayMs(
+    Number.isFinite(withGrace) ? withGrace : MAX_SAFE_TIMEOUT_DELAY_MS,
+    opts,
+  );
 }
 
 export function resolveFiniteTimeoutDelayMs(
@@ -48,7 +64,7 @@ export function getConnectChallengeTimeoutMsFromEnv(
   if (raw) {
     const parsed = parseStrictPositiveInteger(raw);
     if (parsed !== undefined) {
-      return parsed;
+      return resolveSafeTimeoutDelayMs(parsed);
     }
   }
   return undefined;
@@ -56,7 +72,7 @@ export function getConnectChallengeTimeoutMsFromEnv(
 
 function normalizePositiveTimeoutMs(timeoutMs: unknown): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? timeoutMs
+    ? resolveSafeTimeoutDelayMs(timeoutMs)
     : undefined;
 }
 
@@ -90,7 +106,7 @@ export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = pro
   if (configuredTimeout) {
     const parsed = parseStrictPositiveInteger(configuredTimeout);
     if (parsed !== undefined) {
-      return parsed;
+      return resolveSafeTimeoutDelayMs(parsed);
     }
   }
   return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
@@ -106,7 +122,7 @@ export function resolvePreauthHandshakeTimeoutMs(params?: {
   if (configuredTimeout) {
     const parsed = parseStrictPositiveInteger(configuredTimeout);
     if (parsed !== undefined) {
-      return parsed;
+      return resolveSafeTimeoutDelayMs(parsed);
     }
   }
   const configured = normalizePositiveTimeoutMs(params?.configuredTimeoutMs);

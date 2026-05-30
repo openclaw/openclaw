@@ -10,6 +10,7 @@ import {
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
+import { resolveTimestampMsToIsoString } from "../../shared/number-coercion.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   appendJsonlEntry,
@@ -350,7 +351,7 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     type: "message",
     id: messageId,
     ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
-    timestamp: new Date(now).toISOString(),
+    timestamp: resolveTimestampMsToIsoString(now),
     message: finalMessage,
   };
   await appendJsonlEntry(params.transcriptPath, entry);

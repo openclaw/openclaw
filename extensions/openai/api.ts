@@ -12,7 +12,6 @@ export {
 export { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 export { loginOpenAICodexOAuth } from "./openai-codex-oauth.runtime.js";
 export { refreshOpenAICodexToken } from "./openai-codex-provider.runtime.js";
-export { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
-export { buildOpenAIProvider } from "./openai-provider.js";
+export { buildOpenAICodexProviderPlugin, buildOpenAIProvider } from "./openai-provider.js";
 export { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 export { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";

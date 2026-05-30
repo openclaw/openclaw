@@ -1,6 +1,7 @@
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
+import { isFutureDateTimestampMs } from "../shared/number-coercion.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { ChatRunState } from "./server-chat-state.js";
@@ -36,7 +37,12 @@ export function startGatewayMaintenanceTimers(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: Pick<
     ChatRunState,
-    "abortedRuns" | "deltaLastBroadcastText" | "agentDeltaSentAt" | "bufferedAgentEvents"
+    | "abortedRuns"
+    | "bufferUpdatedAt"
+    | "clearRun"
+    | "deltaLastBroadcastText"
+    | "agentDeltaSentAt"
+    | "bufferedAgentEvents"
   >;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
@@ -119,7 +125,7 @@ export function startGatewayMaintenanceTimers(params: {
         return false;
       }
       const expiresAtMs = (payload as { expiresAtMs?: unknown }).expiresAtMs;
-      return typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs) && expiresAtMs > now;
+      return isFutureDateTimestampMs(expiresAtMs, { nowMs: now });
     };
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
@@ -167,15 +173,6 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
 
-    const clearAgentThrottleStateForRun = (runId: string) => {
-      params.chatRunState.agentDeltaSentAt.delete(runId);
-      params.chatRunState.agentDeltaSentAt.delete(`${runId}:assistant`);
-      params.chatRunState.agentDeltaSentAt.delete(`${runId}:thinking`);
-      params.chatRunState.bufferedAgentEvents.delete(runId);
-      params.chatRunState.bufferedAgentEvents.delete(`${runId}:assistant`);
-      params.chatRunState.bufferedAgentEvents.delete(`${runId}:thinking`);
-    };
-
     const resolveAgentThrottleRunId = (key: string) => {
       if (key.endsWith(":assistant")) {
         return key.slice(0, -":assistant".length);
@@ -187,19 +184,15 @@ export function startGatewayMaintenanceTimers(params: {
     };
 
     for (const [runId, entry] of params.chatAbortControllers) {
-      if (now <= entry.expiresAtMs) {
+      if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
         continue;
       }
       abortChatRunById(
         {
           chatAbortControllers: params.chatAbortControllers,
           chatRunBuffers: params.chatRunBuffers,
-          chatDeltaSentAt: params.chatDeltaSentAt,
-          chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
-          chatDeltaLastBroadcastText: params.chatRunState.deltaLastBroadcastText,
-          agentDeltaSentAt: params.chatRunState.agentDeltaSentAt,
-          bufferedAgentEvents: params.chatRunState.bufferedAgentEvents,
           chatAbortedRuns: params.chatRunState.abortedRuns,
+          clearChatRunState: params.chatRunState.clearRun,
           removeChatRun: params.removeChatRun,
           agentRunSeq: params.agentRunSeq,
           broadcast: params.broadcast,
@@ -215,11 +208,7 @@ export function startGatewayMaintenanceTimers(params: {
         continue;
       }
       params.chatRunState.abortedRuns.delete(runId);
-      params.chatRunBuffers.delete(runId);
-      params.chatDeltaSentAt.delete(runId);
-      params.chatDeltaLastBroadcastLen.delete(runId);
-      params.chatRunState.deltaLastBroadcastText.delete(runId);
-      clearAgentThrottleStateForRun(runId);
+      params.chatRunState.clearRun(runId);
     }
 
     // Prune expired control-plane rate-limit buckets to prevent unbounded
@@ -239,11 +228,19 @@ export function startGatewayMaintenanceTimers(params: {
       if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      params.chatRunBuffers.delete(runId);
-      params.chatDeltaSentAt.delete(runId);
-      params.chatDeltaLastBroadcastLen.delete(runId);
-      params.chatRunState.deltaLastBroadcastText.delete(runId);
-      clearAgentThrottleStateForRun(runId);
+      params.chatRunState.clearRun(runId);
+    }
+    for (const [runId, lastUpdatedAt] of params.chatRunState.bufferUpdatedAt) {
+      if (params.chatRunState.abortedRuns.has(runId)) {
+        continue;
+      }
+      if (params.chatAbortControllers.has(runId)) {
+        continue;
+      }
+      if (now - lastUpdatedAt <= ABORTED_RUN_TTL_MS) {
+        continue;
+      }
+      params.chatRunState.clearRun(runId);
     }
     for (const [key, lastSentAt] of params.chatRunState.agentDeltaSentAt) {
       const runId = resolveAgentThrottleRunId(key);
@@ -256,8 +253,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (now - lastSentAt <= ABORTED_RUN_TTL_MS) {
         continue;
       }
-      params.chatRunState.agentDeltaSentAt.delete(key);
-      params.chatRunState.bufferedAgentEvents.delete(key);
+      params.chatRunState.clearRun(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();

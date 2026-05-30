@@ -142,6 +142,7 @@ observation-only.
 **Subagents**
 
 - `subagent_spawning` / `subagent_delivery_target` / `subagent_spawned` / `subagent_ended` - coordinate subagent routing and completion delivery
+- `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
 
 **Lifecycle**
 

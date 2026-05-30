@@ -30,6 +30,23 @@ function requireFirstPostJsonRequest(label: string): Record<string, unknown> {
   return requireRecord(call[0], label);
 }
 
+function streamingResponse(params: {
+  body: string;
+  headers?: HeadersInit;
+  onCancel: () => void;
+}): Response {
+  const encoded = new TextEncoder().encode(params.body);
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+    },
+    cancel() {
+      params.onCancel();
+    },
+  });
+  return new Response(stream, { headers: params.headers });
+}
+
 describe("together video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildTogetherVideoGenerationProvider());
@@ -83,6 +100,47 @@ describe("together video generation provider", () => {
       status: "completed",
       videoUrl: "https://example.com/together.mp4",
     });
+  });
+
+  it("bounds downloaded videos before materializing them", async () => {
+    let canceled = false;
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "video_oversized",
+          status: "in_progress",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "video_oversized",
+          status: "completed",
+          outputs: { video_url: "https://example.com/oversized.mp4" },
+        }),
+      })
+      .mockResolvedValueOnce(
+        streamingResponse({
+          body: "x".repeat(32),
+          headers: { "content-type": "video/mp4" },
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+
+    const provider = buildTogetherVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "together",
+        model: "Wan-AI/Wan2.2-T2V-A14B",
+        prompt: "oversized video",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.00001 } } },
+      }),
+    ).rejects.toThrow("Together generated video download exceeds");
+    expect(canceled).toBe(true);
   });
 
   it("uses the video API endpoint when the shared Together text base URL is configured", async () => {

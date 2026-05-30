@@ -413,6 +413,20 @@ describe("active-memory plugin", () => {
     expect(lastEmbeddedRunParams().authProfileFailurePolicy).toBe("local");
   });
 
+  it("runs recall on a dedicated active-memory lane", async () => {
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(lastEmbeddedRunParams().lane).toBe("active-memory");
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
@@ -4114,6 +4128,50 @@ describe("active-memory plugin", () => {
     );
     expect(cached?.status).toBe("ok");
     expect(cached?.summary).toBe("memory 1");
+  });
+
+  it("drops cached active-memory results when the current clock is not a valid date timestamp", () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const cacheKey = testing.buildCacheKey({
+      agentId: "main",
+      sessionKey: "agent:main:invalid-clock-cache",
+      query: "cache invalid clock prompt",
+    });
+    testing.setCachedResult(
+      cacheKey,
+      {
+        status: "ok",
+        elapsedMs: 1,
+        rawReply: "memory",
+        summary: "memory",
+      },
+      15_000,
+    );
+
+    nowSpy.mockReturnValue(Number.NaN);
+
+    expect(testing.getCachedResult(cacheKey)).toBeUndefined();
+  });
+
+  it("does not cache active-memory results when the expiry timestamp would exceed the valid date range", () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const cacheKey = testing.buildCacheKey({
+      agentId: "main",
+      sessionKey: "agent:main:overflow-cache",
+      query: "cache overflow prompt",
+    });
+    testing.setCachedResult(
+      cacheKey,
+      {
+        status: "ok",
+        elapsedMs: 1,
+        rawReply: "memory",
+        summary: "memory",
+      },
+      15_000,
+    );
+
+    expect(testing.getCachedResult(cacheKey)).toBeUndefined();
   });
 
   it("skips recall after consecutive timeouts when circuit breaker trips (#74054)", async () => {

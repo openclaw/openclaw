@@ -2,8 +2,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { registerGoogleMeetCli } from "./cli.js";
+import { registerGoogleMeetCli, testing } from "./cli.js";
 import { resolveGoogleMeetConfig } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
@@ -500,6 +501,31 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it.each(["0", "1.5", "9007199254740993"])(
+    "rejects invalid Meet API page sizes: %s",
+    async (pageSize) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        setupCli({}).parseAsync(
+          [
+            "googlemeet",
+            "artifacts",
+            "--access-token",
+            "token",
+            "--conference-record",
+            "rec-1",
+            "--page-size",
+            pageSize,
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("page-size must be a positive integer");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("prints markdown artifact and attendance output", async () => {
     stubMeetArtifactsApi();
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));
@@ -973,6 +999,31 @@ describe("google-meet CLI", () => {
     ).rejects.toThrow("timeout-ms must be a positive number");
 
     expect(testListen).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "-1", "1e3"])("rejects invalid auth callback timeouts: %s", async (timeoutSec) => {
+    await expect(
+      setupCli({}).parseAsync(
+        ["googlemeet", "auth", "login", "--client-id", "client-id", "--timeout-sec", timeoutSec],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("timeout-sec must be a positive number");
+  });
+
+  it("caps auth callback timeout seconds", () => {
+    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs(undefined)).toBe(300_000);
+    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs("1.5")).toBe(1_500);
+    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs(String(Number.MAX_SAFE_INTEGER))).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+  });
+
+  it("caps gateway command timeout milliseconds", () => {
+    expect(testing.resolveGoogleMeetGatewayTimeoutMs(undefined)).toBe(5_000);
+    expect(testing.resolveGoogleMeetGatewayTimeoutMs(1.5)).toBe(2);
+    expect(testing.resolveGoogleMeetGatewayTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
   });
 
   it("prints a dry-run export manifest without writing files", async () => {

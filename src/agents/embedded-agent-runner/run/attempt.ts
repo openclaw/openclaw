@@ -39,6 +39,11 @@ import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugi
 import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
+import {
+  resolveProviderRuntimePluginHandle,
+  type ProviderRuntimePluginHandle,
+} from "../../../plugins/provider-hook-runtime.js";
 import {
   extractModelCompat,
   resolveToolCallArgumentsEncoding,
@@ -52,6 +57,12 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
+import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
+import {
+  applySkillEnvOverrides,
+  applySkillEnvOverridesFromSnapshot,
+} from "../../../skills/runtime/env-overrides.js";
 import {
   buildTrajectoryArtifacts,
   buildTrajectoryRunMetadata,
@@ -135,6 +146,7 @@ import {
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "../../local-model-lean.js";
@@ -160,11 +172,6 @@ import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
-import {
-  applySkillEnvOverrides,
-  applySkillEnvOverridesFromSnapshot,
-  resolveSkillsPromptForRun,
-} from "../../skills.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
 import {
   isSubagentEnvelopeSession,
@@ -234,10 +241,9 @@ import {
   updateActiveEmbeddedRunSessionFile,
   updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
-import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
+import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resetEmbeddedAgentBaseStreamFnCacheForTest,
@@ -779,6 +785,36 @@ export async function runEmbeddedAttempt(
   }
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  let currentPluginMetadataSnapshotResolved = false;
+  let currentPluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  const getCurrentAttemptPluginMetadataSnapshot = () => {
+    if (!currentPluginMetadataSnapshotResolved) {
+      currentPluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: process.env,
+        workspaceDir: effectiveWorkspace,
+      });
+      currentPluginMetadataSnapshotResolved = true;
+    }
+    return currentPluginMetadataSnapshot;
+  };
+  let providerRuntimeHandle: ProviderRuntimePluginHandle | undefined;
+  const getProviderRuntimeHandle = () => {
+    if (providerRuntimeHandle?.plugin) {
+      return providerRuntimeHandle;
+    }
+    const resolvedHandle = resolveProviderRuntimePluginHandle({
+      provider: params.provider,
+      modelId: params.modelId,
+      config: params.config,
+      workspaceDir: effectiveWorkspace,
+      env: process.env,
+    });
+    if (resolvedHandle.plugin) {
+      providerRuntimeHandle = resolvedHandle;
+    }
+    return resolvedHandle;
+  };
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -1061,6 +1097,7 @@ export async function runEmbeddedAttempt(
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             exec: {
               ...params.execOverrides,
+              config: params.config,
               elevated: params.bashElevated,
             },
             sandbox,
@@ -1315,6 +1352,7 @@ export async function runEmbeddedAttempt(
       modelId: params.modelId,
       modelApi: params.model.api,
       model: params.model,
+      runtimeHandle: getProviderRuntimeHandle(),
     });
     const clientTools = toolsEnabled && !isRawModelRun ? params.clientTools : undefined;
     const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
@@ -1394,6 +1432,7 @@ export async function runEmbeddedAttempt(
             modelId: params.modelId,
             modelApi: params.model.api,
             model: params.model,
+            runtimeHandle: getProviderRuntimeHandle(),
           })
         : filteredBundledTools;
     const projectedUncompactedEffectiveTools = filterLocalModelLeanTools({
@@ -1540,6 +1579,7 @@ export async function runEmbeddedAttempt(
       modelId: params.modelId,
       modelApi: params.model.api,
       model: params.model,
+      runtimeHandle: getProviderRuntimeHandle(),
     });
 
     const machineName = await getMachineDisplayName();
@@ -1557,7 +1597,18 @@ export async function runEmbeddedAttempt(
             accountId: params.agentAccountId,
           })
         : undefined;
-    const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
+    const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
+      config: params.config,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      sandboxAvailable: sandbox?.enabled === true,
+      execOverrides: params.execOverrides,
+    });
+    const sandboxInfo = buildEmbeddedSandboxInfo(
+      sandbox,
+      params.bashElevated,
+      sandboxInfoExecPolicy,
+    );
     const reasoningTagHint = isReasoningTagProvider(params.provider, {
       config: params.config,
       workspaceDir: effectiveWorkspace,
@@ -1565,6 +1616,7 @@ export async function runEmbeddedAttempt(
       modelId: params.modelId,
       modelApi: params.model.api,
       model: params.model,
+      runtimeHandle: getProviderRuntimeHandle(),
     });
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
@@ -1668,6 +1720,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         config: params.config,
         workspaceDir: effectiveWorkspace,
+        runtimeHandle: getProviderRuntimeHandle(),
         context: promptContributionContext,
       });
 
@@ -1676,7 +1729,11 @@ export async function runEmbeddedAttempt(
     );
     const attemptSystemPrompt = buildAttemptSystemPrompt({
       isRawModelRun,
-      transformProviderSystemPrompt,
+      transformProviderSystemPrompt: (transformParams) =>
+        transformProviderSystemPrompt({
+          ...transformParams,
+          runtimeHandle: getProviderRuntimeHandle(),
+        }),
       embeddedSystemPrompt: {
         config: params.config,
         agentId: sessionAgentId,
@@ -1889,11 +1946,7 @@ export async function runEmbeddedAttempt(
         cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
-        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-          config: params.config,
-          env: process.env,
-          workspaceDir: effectiveWorkspace,
-        }),
+        pluginMetadataSnapshot: getCurrentAttemptPluginMetadataSnapshot(),
         contextTokenBudget: params.contextTokenBudget,
       });
       const autoCompactionGuardArgs = {
@@ -2400,6 +2453,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         config: params.config,
         workspaceDir: effectiveWorkspace,
+        runtimeHandle: getProviderRuntimeHandle(),
       });
       if (providerTextTransforms) {
         activeSession.agent.streamFn = wrapStreamFnTextTransforms({
@@ -2723,6 +2777,8 @@ export async function runEmbeddedAttempt(
               await updateSessionStoreEntry({
                 storePath,
                 sessionKey: params.sessionKey,
+                skipMaintenance: true,
+                takeCacheOwnership: true,
                 update: async (entry) => {
                   if (entry.quotaSuspension?.state !== "resuming") {
                     return null;
@@ -3195,6 +3251,7 @@ export async function runEmbeddedAttempt(
             sessionFile: params.sessionFile,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
+            agentId: sessionAgentId,
           });
           if (truncationResult.truncated) {
             preflightRecovery = {
@@ -3857,6 +3914,7 @@ export async function runEmbeddedAttempt(
               sessionFile: params.sessionFile,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
+              agentId: sessionAgentId,
             });
             if (truncationResult.truncated) {
               preflightRecovery = {
@@ -4336,33 +4394,26 @@ export async function runEmbeddedAttempt(
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
-        // Run agent_end hooks to allow plugins to analyze the conversation
-        // This is fire-and-forget, so we don't await
-        // Run even on compaction timeout so plugins can log/cleanup
-        if (hookRunner?.hasHooks("agent_end")) {
-          hookRunner
-            .runAgentEnd(
-              {
-                messages: messagesSnapshot,
-                success: !aborted && !promptError,
-                error: promptError ? formatErrorMessage(promptError) : undefined,
-                durationMs: Date.now() - promptStartedAt,
-              },
-              {
-                runId: params.runId,
-                trace: freezeDiagnosticTraceContext(diagnosticTrace),
-                agentId: hookAgentId,
-                sessionKey: params.sessionKey,
-                sessionId: params.sessionId,
-                workspaceDir: params.workspaceDir,
-                trigger: params.trigger,
-                ...buildAgentHookContextChannelFields(params),
-              },
-            )
-            .catch((err) => {
-              log.warn(`agent_end hook failed: ${err}`);
-            });
-        }
+        runAgentEndSideEffects({
+          event: {
+            messages: messagesSnapshot,
+            success: !aborted && !promptError,
+            error: promptError ? formatErrorMessage(promptError) : undefined,
+            durationMs: Date.now() - promptStartedAt,
+          },
+          ctx: {
+            runId: params.runId,
+            trace: freezeDiagnosticTraceContext(diagnosticTrace),
+            agentId: hookAgentId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            workspaceDir: params.workspaceDir,
+            trigger: params.trigger,
+            ...(params.config ? { config: params.config } : {}),
+            ...buildAgentHookContextChannelFields(params),
+          },
+          hookRunner,
+        });
       } finally {
         clearTimeout(abortTimer);
         if (abortWarnTimer) {

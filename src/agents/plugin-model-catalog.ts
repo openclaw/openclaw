@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 export const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 export const PLUGIN_MODEL_CATALOG_GENERATED_BY = "openclaw-plugin-model-catalog-v1";
@@ -14,6 +14,12 @@ export type PluginModelCatalogMetadataSnapshot = Pick<PluginMetadataSnapshot, "o
     }>;
   };
   normalizePluginId?: (pluginId: string) => string;
+};
+
+export type PluginModelCatalogFile = {
+  path: string;
+  pluginId: string;
+  relativePath: string;
 };
 
 export function encodePluginModelCatalogRelativePath(pluginId: string): string {
@@ -62,10 +68,20 @@ export function listPluginModelCatalogRelativePaths(agentDir: string): string[] 
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-export function listPluginModelCatalogPaths(agentDir: string): string[] {
+export function listPluginModelCatalogFiles(agentDir: string): PluginModelCatalogFile[] {
   return listPluginModelCatalogRelativePaths(agentDir)
-    .map((relativePath) => path.join(agentDir, relativePath))
-    .filter((catalogPath) => existsSync(catalogPath));
+    .map((relativePath) => {
+      const pluginId = decodePluginModelCatalogRelativePathPluginId(relativePath);
+      return pluginId
+        ? {
+            path: path.join(agentDir, relativePath),
+            pluginId,
+            relativePath,
+          }
+        : undefined;
+    })
+    .filter((entry): entry is PluginModelCatalogFile => entry !== undefined)
+    .filter((entry) => existsSync(entry.path));
 }
 
 export function isGeneratedPluginModelCatalog(value: unknown): boolean {
@@ -105,4 +121,29 @@ export function resolvePluginModelCatalogOwnerPluginId(params: {
   )
     ? normalizedPluginId
     : undefined;
+}
+
+export function filterGeneratedPluginModelCatalogProviders<T>(params: {
+  catalogPluginId?: string;
+  parsedCatalog?: unknown;
+  pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
+  providers: Record<string, T>;
+}): Record<string, T> {
+  if (
+    !params.catalogPluginId ||
+    !params.pluginMetadataSnapshot ||
+    (params.parsedCatalog !== undefined && !isGeneratedPluginModelCatalog(params.parsedCatalog))
+  ) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(params.providers).filter(([providerId]) => {
+      return (
+        resolvePluginModelCatalogOwnerPluginId({
+          providerId,
+          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+        }) === params.catalogPluginId
+      );
+    }),
+  );
 }
