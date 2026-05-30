@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Tool } from "./llm.js";
+import type { Tool } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
 const decimalTool = {

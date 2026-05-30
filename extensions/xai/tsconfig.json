@@ -93,6 +93,24 @@
         "../../dist/plugin-sdk/ssrf-runtime.d.ts"
       ],
       "@openclaw/qa-channel/api.js": ["../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
+      "@openclaw/llm-core": [
+        "../../dist/plugin-sdk/packages/llm-core/src/index.d.ts"
+      ],
+      "@openclaw/llm-core/diagnostics": [
+        "../../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts"
+      ],
+      "@openclaw/llm-core/event-stream": [
+        "../../dist/plugin-sdk/packages/llm-core/src/utils/event-stream.d.ts"
+      ],
+      "@openclaw/llm-core/types": [
+        "../../dist/plugin-sdk/packages/llm-core/src/types.d.ts"
+      ],
+      "@openclaw/llm-core/validation": [
+        "../../dist/plugin-sdk/packages/llm-core/src/validation.d.ts"
+      ],
+      "@openclaw/llm-core/*": [
+        "../../dist/plugin-sdk/packages/llm-core/src/*.d.ts"
+      ],
       "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
       "@openclaw/*": ["../*"],
       "openclaw/plugin-sdk/qa-channel": [

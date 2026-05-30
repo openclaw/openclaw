@@ -1769,6 +1769,9 @@ importers:
 
   packages/agent-core:
     dependencies:
+      '@openclaw/llm-core':
+        specifier: workspace:*
+        version: link:../llm-core
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -1796,6 +1799,18 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+
+  packages/llm-core:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+
+  packages/llm-runtime:
+    dependencies:
+      '@openclaw/llm-core':
+        specifier: workspace:*
+        version: link:../llm-core
 
   packages/memory-host-sdk: {}
 

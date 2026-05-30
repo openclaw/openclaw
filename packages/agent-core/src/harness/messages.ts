@@ -1,4 +1,4 @@
-import type { ImageContent, Message, TextContent } from "../llm.js";
+import type { ImageContent, Message, TextContent } from "../../../llm-core/src/index.js";
 import type { AgentMessage } from "../types.js";
 import { requireSessionTimestampMs } from "./session/timestamps.js";
 

@@ -90,6 +90,18 @@
       "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
       "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
       "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+      "@openclaw/llm-core": ["../dist/plugin-sdk/packages/llm-core/src/index.d.ts"],
+      "@openclaw/llm-core/diagnostics": [
+        "../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts"
+      ],
+      "@openclaw/llm-core/event-stream": [
+        "../dist/plugin-sdk/packages/llm-core/src/utils/event-stream.d.ts"
+      ],
+      "@openclaw/llm-core/types": ["../dist/plugin-sdk/packages/llm-core/src/types.d.ts"],
+      "@openclaw/llm-core/validation": [
+        "../dist/plugin-sdk/packages/llm-core/src/validation.d.ts"
+      ],
+      "@openclaw/llm-core/*": ["../dist/plugin-sdk/packages/llm-core/src/*.d.ts"],
       "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
       "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
       "openclaw/plugin-sdk/qa-channel": ["../dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts"],
