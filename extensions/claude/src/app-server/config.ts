@@ -27,7 +27,17 @@ import type { ApprovalPolicy, SandboxPolicy } from "./types.js";
 
 export const DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY: ApprovalPolicy = "never";
 export const DEFAULT_CLAUDE_APP_SERVER_SANDBOX: SandboxPolicy = { type: "dangerFullAccess" };
-export const DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS = 600_000;
+// Hard per-turn ceiling enforced via setTimeout(() => ac.abort(), …) at the
+// top of run-attempt.ts. Independent of the heartbeat-protected idle
+// watchdog (turnIdleTimeoutMs) below: heartbeats keep the idle timer alive
+// during long Task subagent runs / bash steps, but this outer deadline
+// fires regardless and tears the turn down. 10 minutes was too tight for
+// agents that dispatch native Task subagents (Tank's PR-cluster work
+// regularly exceeded that). 30 minutes matches codex's
+// CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS (extensions/codex/src/app-server/
+// attempt-timeouts.ts). Operators wanting longer or shorter caps can set
+// pluginConfig.appServer.turnTimeoutMs explicitly.
+export const DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS = 30 * 60_000;
 export const DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS = 90_000;
 
 export const CLAUDE_APP_SERVER_CONFIG_KEYS = [
