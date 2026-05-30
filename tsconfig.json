@@ -37,6 +37,18 @@
       "@openclaw/llm-runtime": ["./packages/llm-runtime/src/index.ts"],
       "@openclaw/llm-runtime/*": ["./packages/llm-runtime/src/*"],
       "@openclaw/model-catalog-core": ["./packages/model-catalog-core/src/index.ts"],
+      "@openclaw/model-catalog-core/configured-model-refs": [
+        "./packages/model-catalog-core/src/configured-model-refs.ts"
+      ],
+      "@openclaw/model-catalog-core/provider-id": [
+        "./packages/model-catalog-core/src/provider-id.ts"
+      ],
+      "@openclaw/model-catalog-core/provider-model-id-normalization": [
+        "./packages/model-catalog-core/src/provider-model-id-normalization.ts"
+      ],
+      "@openclaw/model-catalog-core/provider-model-id-normalize": [
+        "./packages/model-catalog-core/src/provider-model-id-normalize.ts"
+      ],
       "@openclaw/model-catalog-core/*": ["./packages/model-catalog-core/src/*"],
       "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
       "@openclaw/gateway-client/*": ["./packages/gateway-client/src/*"],
