@@ -272,7 +272,7 @@ describe("state poll store", () => {
       updatedAt: string;
     }>("msteams", {
       namespace: "poll-vote-buckets",
-      maxEntries: 40_000,
+      maxEntries: 1_024_000,
       env,
     });
     await voteBucketStore.register(`${pollHash}:${bucket}`, {
