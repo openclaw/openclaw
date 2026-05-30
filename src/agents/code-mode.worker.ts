@@ -295,13 +295,14 @@ async function createVm(params: {
 }): Promise<VmRun> {
   const startedAt = Date.now();
   let timedOut = false;
+  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
   const vm = await QuickJS.create({
     wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
-      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      timedOut = deadlineReached();
       return timedOut;
     },
   });
@@ -325,7 +326,7 @@ async function createVm(params: {
     hostRequest.dispose();
   }
   vm.evalCode(CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
-  return { vm, didTimeout: () => timedOut };
+  return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
 
 async function restoreVm(params: {
@@ -335,6 +336,7 @@ async function restoreVm(params: {
 }): Promise<VmRun> {
   const startedAt = Date.now();
   let timedOut = false;
+  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
     wasm: await getQuickJsWasmModule(),
@@ -342,7 +344,7 @@ async function restoreVm(params: {
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
-      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      timedOut = deadlineReached();
       return timedOut;
     },
   });
@@ -354,7 +356,7 @@ async function restoreVm(params: {
       config: params.config,
     }),
   );
-  return { vm, didTimeout: () => timedOut };
+  return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
 
 function takeOutput(vm: QuickJS): unknown[] {

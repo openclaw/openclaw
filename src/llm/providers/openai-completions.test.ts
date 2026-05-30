@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Context, Model } from "../types.js";
-import { streamOpenAICompletions } from "./openai-completions.js";
+import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
 
 const context = {
   messages: [{ role: "user", content: "hi", timestamp: 1 }],
@@ -37,5 +37,22 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     expect(capturedMaxTokens).toBe(32_000);
+  });
+
+  it("forwards simple stop sequences to request params", async () => {
+    let capturedStop: unknown;
+    const stream = streamSimpleOpenAICompletions(createModel(32_000), context, {
+      apiKey: "sk-test",
+      stop: ["STOP"],
+      onPayload(payload) {
+        capturedStop = (payload as { stop?: unknown }).stop;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedStop).toEqual(["STOP"]);
   });
 });

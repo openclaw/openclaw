@@ -762,6 +762,8 @@ describe("Session Store Cache", () => {
         },
       }),
     });
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(cached["session:2"].skillsSnapshot?.prompt).toBe(prompt);
     await fs.promises.rm(path.join(testDir, "skills-prompts"), {
       recursive: true,
       force: true,

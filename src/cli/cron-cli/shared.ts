@@ -10,7 +10,10 @@ import {
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { timestampMsToIsoString } from "../../shared/number-coercion.js";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "../../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -204,7 +207,8 @@ export function parseAt(input: string, tz?: string): string | null {
   const durationInput = raw.startsWith("+") ? raw.slice(1) : raw;
   const dur = parseDurationMs(durationInput);
   if (dur !== null) {
-    return timestampMsToIsoString(Date.now() + dur) ?? null;
+    const expiresAt = resolveExpiresAtMsFromDurationMs(dur);
+    return timestampMsToIsoString(expiresAt) ?? null;
   }
   return null;
 }

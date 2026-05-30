@@ -11,6 +11,12 @@ import type {
   Tool,
   ToolResultMessage,
 } from "../../llm-core/src/index.js";
+import type {
+  BashExecutionMessage,
+  BranchSummaryMessage,
+  CompactionSummaryMessage,
+  CustomMessage,
+} from "./harness/message-types.js";
 
 /**
  * Stream function used by the agent loop.
@@ -302,7 +308,10 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
  * ```
  */
 export interface CustomAgentMessages extends Record<never, never> {
-  // Empty by default - apps extend via declaration merging
+  bashExecution: BashExecutionMessage;
+  custom: CustomMessage;
+  branchSummary: BranchSummaryMessage;
+  compactionSummary: CompactionSummaryMessage;
 }
 
 /**

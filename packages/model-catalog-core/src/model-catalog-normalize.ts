@@ -1,44 +1,66 @@
 import {
-  MODEL_APIS,
-  isModelThinkingFormat,
-  type ModelApi,
-  type ModelCompatConfig,
-  type ModelImageInputConfig,
-  type ModelMediaInputConfig,
-} from "../config/types.models.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  normalizeOptionalTrimmedStringList,
-  normalizeTrimmedStringList,
-} from "../shared/string-normalization.js";
-import { isRecord } from "../utils.js";
-import {
   buildModelCatalogMergeKey,
   buildModelCatalogRef,
   normalizeModelCatalogProviderId,
-} from "./refs.js";
-import type {
-  ModelCatalog,
-  ModelCatalogAlias,
-  ModelCatalogCost,
-  ModelCatalogDiscovery,
-  ModelCatalogInput,
-  ModelCatalogModel,
-  ModelCatalogProvider,
-  ModelCatalogSource,
-  ModelCatalogStatus,
-  ModelCatalogSuppression,
-  ModelCatalogTieredCost,
-  NormalizedModelCatalogRow,
-} from "./types.js";
+} from "./model-catalog-refs.js";
+import {
+  MODEL_CATALOG_APIS,
+  isModelCatalogThinkingFormat,
+  type ModelCatalog,
+  type ModelCatalogAlias,
+  type ModelCatalogApi,
+  type ModelCatalogCompatConfig,
+  type ModelCatalogCost,
+  type ModelCatalogDiscovery,
+  type ModelCatalogImageInputConfig,
+  type ModelCatalogInput,
+  type ModelCatalogMediaInputConfig,
+  type ModelCatalogModel,
+  type ModelCatalogProvider,
+  type ModelCatalogSource,
+  type ModelCatalogStatus,
+  type ModelCatalogSuppression,
+  type ModelCatalogTieredCost,
+  type NormalizedModelCatalogRow,
+} from "./model-catalog-types.js";
 
 const MODEL_CATALOG_INPUTS = new Set(["text", "image", "document"]);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
 const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
-const MODEL_CATALOG_APIS = new Set<string>(MODEL_APIS);
+const MODEL_CATALOG_API_SET = new Set<string>(MODEL_CATALOG_APIS);
 const DEFAULT_MODEL_INPUT: ModelCatalogInput[] = ["text"];
 const DEFAULT_MODEL_STATUS: ModelCatalogStatus = "available";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBlockedObjectKey(key: string): boolean {
+  return key === "__proto__" || key === "prototype" || key === "constructor";
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeTrimmedStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    const normalized = normalizeOptionalString(entry);
+    return normalized ? [normalized] : [];
+  });
+}
+
+function normalizeOptionalTrimmedStringList(value: unknown): string[] | undefined {
+  const normalized = normalizeTrimmedStringList(value);
+  return normalized.length > 0 ? normalized : undefined;
+}
 
 function normalizeSafeRecordKey(value: unknown): string {
   const key = normalizeOptionalString(value) ?? "";
@@ -81,9 +103,9 @@ function mergeStringMaps(
   return { ...base, ...override };
 }
 
-function normalizeModelCatalogApi(value: unknown): ModelApi | undefined {
+function normalizeModelCatalogApi(value: unknown): ModelCatalogApi | undefined {
   const api = normalizeOptionalString(value) ?? "";
-  return MODEL_CATALOG_APIS.has(api) ? (api as ModelApi) : undefined;
+  return MODEL_CATALOG_API_SET.has(api) ? (api as ModelCatalogApi) : undefined;
 }
 
 function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | undefined {
@@ -165,7 +187,7 @@ function normalizeModelCatalogCost(value: unknown): ModelCatalogCost | undefined
   return Object.keys(cost).length > 0 ? cost : undefined;
 }
 
-function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefined {
+function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -230,11 +252,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
   }
 
   const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";
-  if (isModelThinkingFormat(thinkingFormat)) {
+  if (isModelCatalogThinkingFormat(thinkingFormat)) {
     compat.thinkingFormat = thinkingFormat;
   }
 
-  return Object.keys(compat).length > 0 ? (compat as ModelCompatConfig) : undefined;
+  return Object.keys(compat).length > 0 ? (compat as ModelCatalogCompatConfig) : undefined;
 }
 
 function normalizeModelCatalogStatus(value: unknown): ModelCatalogStatus | undefined {
@@ -242,7 +264,9 @@ function normalizeModelCatalogStatus(value: unknown): ModelCatalogStatus | undef
   return MODEL_CATALOG_STATUSES.has(status) ? (status as ModelCatalogStatus) : undefined;
 }
 
-function normalizeModelCatalogImageTokenMode(value: unknown): ModelImageInputConfig["tokenMode"] {
+function normalizeModelCatalogImageTokenMode(
+  value: unknown,
+): ModelCatalogImageInputConfig["tokenMode"] {
   const tokenMode = normalizeOptionalString(value) ?? "";
   if (tokenMode === "tile" || tokenMode === "detail" || tokenMode === "provider") {
     return tokenMode;
@@ -250,7 +274,7 @@ function normalizeModelCatalogImageTokenMode(value: unknown): ModelImageInputCon
   return undefined;
 }
 
-function normalizeModelCatalogMediaInput(value: unknown): ModelMediaInputConfig | undefined {
+function normalizeModelCatalogMediaInput(value: unknown): ModelCatalogMediaInputConfig | undefined {
   if (!isRecord(value) || !isRecord(value.image)) {
     return undefined;
   }

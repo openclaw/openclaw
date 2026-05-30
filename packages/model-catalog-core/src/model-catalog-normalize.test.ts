@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildModelCatalogMergeKey,
-  buildModelCatalogRef,
-  normalizeModelCatalog,
-  normalizeModelCatalogRows,
-} from "./index.js";
+import { normalizeModelCatalog, normalizeModelCatalogRows } from "./index.js";
+import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 
 describe("model catalog normalization", () => {
   it("normalizes catalog ownership, aliases, suppressions, and row fields", () => {

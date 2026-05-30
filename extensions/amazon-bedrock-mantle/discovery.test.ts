@@ -563,6 +563,24 @@ describe("bedrock mantle discovery", () => {
     expect(tokenProvider).toHaveBeenCalledTimes(1);
   });
 
+  it("omits Mantle runtime IAM token expiry when the process clock is invalid", async () => {
+    const tokenProvider = vi.fn(async () => "bedrock-api-key-invalid-clock"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    const resolved = await resolveMantleRuntimeBearerToken({
+      apiKey: MANTLE_IAM_TOKEN_MARKER,
+      env: {
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      now: () => Number.NaN,
+      tokenProviderFactory,
+    });
+    expect(resolved).toEqual({
+      apiKey: "bedrock-api-key-invalid-clock",
+    });
+    expect(tokenProvider).toHaveBeenCalledTimes(1);
+  });
+
   it("returns null for unsupported regions", async () => {
     const provider = await resolveImplicitMantleProvider({
       env: {

@@ -591,6 +591,10 @@ function buildParams(
     params.temperature = options.temperature;
   }
 
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop = options.stop;
+  }
+
   if (context.tools && context.tools.length > 0) {
     params.tools = convertTools(context.tools, compat);
     if (compat.zaiToolStream) {

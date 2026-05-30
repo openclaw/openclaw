@@ -143,6 +143,7 @@ describe("config schema", () => {
       | undefined;
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("toolFilter");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
   });
 

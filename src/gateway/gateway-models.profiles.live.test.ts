@@ -3112,11 +3112,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
             break;
           }
-          if (
-            model.provider === "anthropic" &&
-            params.allowNotFoundSkip &&
-            isAnthropicModelUnavailableDrift(message)
-          ) {
+          if (model.provider === "anthropic" && isAnthropicModelUnavailableDrift(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (anthropic model unavailable)`);
             break;

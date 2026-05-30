@@ -78,6 +78,14 @@ describe("workboard gateway methods", () => {
       "workboard.notifications.subscribe",
       "workboard.notifications.list",
       "workboard.notifications.delete",
+      "workboard.notifications.events",
+      "workboard.notifications.advance",
+      "workboard.cards.attachments.list",
+      "workboard.cards.attachments.get",
+      "workboard.cards.attachments.add",
+      "workboard.cards.attachments.delete",
+      "workboard.cards.workerLog",
+      "workboard.cards.protocolViolation",
       "workboard.cards.archive",
       "workboard.cards.export",
     ]);
@@ -89,9 +97,21 @@ describe("workboard gateway methods", () => {
     expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.create")?.opts).toEqual({ scope: "operator.write" });
     expect(methods.get("workboard.cards.runs")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workboard.cards.attachments.get")?.opts).toEqual({
+      scope: "operator.read",
+    });
+    expect(methods.get("workboard.cards.attachments.add")?.opts).toEqual({
+      scope: "operator.write",
+    });
     expect(methods.get("workboard.boards.upsert")?.opts).toEqual({ scope: "operator.write" });
     expect(methods.get("workboard.notifications.list")?.opts).toEqual({
       scope: "operator.read",
+    });
+    expect(methods.get("workboard.notifications.events")?.opts).toEqual({
+      scope: "operator.read",
+    });
+    expect(methods.get("workboard.notifications.advance")?.opts).toEqual({
+      scope: "operator.write",
     });
 
     const createHandler = methods.get("workboard.cards.create")?.handler;
@@ -108,6 +128,14 @@ describe("workboard gateway methods", () => {
     expect(listRespond.mock.calls[0]?.[1]).toMatchObject({
       cards: [expect.objectContaining({ title: "Investigate queue drift" })],
     });
+
+    const eventsRespond = vi.fn();
+    await methods.get("workboard.notifications.events")?.handler({
+      params: { advance: true },
+      respond: eventsRespond,
+    } as never);
+    expect(eventsRespond.mock.calls[0]?.[0]).toBe(false);
+    expect(eventsRespond.mock.calls[0]?.[2]?.message).toContain("workboard.notifications.advance");
   });
 
   it("stores metadata updates through dedicated card methods", async () => {

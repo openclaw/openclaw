@@ -78,10 +78,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireContentItem(
-  content: Array<{ type?: string; text?: string; name?: string }> | unknown[],
-  index = 0,
-) {
+function requireContentItem(content: unknown[], index = 0) {
   return requireRecord(content[index], `content item ${index}`);
 }
 
@@ -89,20 +86,14 @@ function wrappedPluginSystemContext(text: string): string {
   return wrapPluginSystemContextSection(text) ?? "";
 }
 
-function expectSingleTextContent(
-  content: Array<{ type?: string; text?: string }> | unknown[],
-  textFragment: string,
-) {
+function expectSingleTextContent(content: unknown[], textFragment: string) {
   expect(content).toHaveLength(1);
   const item = requireContentItem(content);
   expect(item.type).toBe("text");
   expect(item.text).toContain(textFragment);
 }
 
-function expectSingleToolCallContent(
-  content: Array<{ type?: string; name?: string }> | unknown[],
-  name: string,
-) {
+function expectSingleToolCallContent(content: unknown[], name: string) {
   expect(content).toHaveLength(1);
   const item = requireContentItem(content);
   expect(item.type).toBe("toolCall");

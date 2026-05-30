@@ -11,7 +11,8 @@ import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
+import { planManifestModelCatalogRows } from "../model-catalog/index.js";
+import type { ModelCatalogCost } from "../model-catalog/types.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {

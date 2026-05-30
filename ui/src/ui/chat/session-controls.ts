@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
 import { createChatSessionsLoadOverrides } from "../app-chat.ts";
@@ -810,6 +811,7 @@ function renderChatModelSelect(state: AppViewState) {
         data-chat-model-select="true"
         aria-label=${t("chat.selectors.model")}
         title=${selectedLabel}
+        .value=${live(currentOverride)}
         ?disabled=${disabled}
         @change=${async (e: Event) => {
           const next = (e.target as HTMLSelectElement).value.trim();

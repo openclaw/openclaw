@@ -51,7 +51,7 @@ import {
 } from "./changed-lanes.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
-  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveVitestCliEntry,
   resolveVitestNodeArgs,
 } from "./run-vitest.mjs";
@@ -732,9 +732,11 @@ const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
-export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(
-  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(900_000);
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS = String(
+  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
 );
 const EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD = 12;
 const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
@@ -2321,19 +2323,34 @@ export function applyDefaultMultiSpecVitestCachePaths(specs, params = {}) {
 
 export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
   const baseEnv = params.env ?? process.env;
-  if (Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+  if (
+    Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY) &&
+    Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY)
+  ) {
     return specs;
   }
   return specs.map((spec) => {
-    if (spec.watchMode || Object.hasOwn(spec.env ?? {}, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+    if (spec.watchMode) {
       return spec;
+    }
+    const env = spec.env ?? {};
+    const nextEnv = { ...env };
+    if (
+      !Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY) &&
+      !Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)
+    ) {
+      nextEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY] = DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS;
+    }
+    if (
+      !Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY) &&
+      !Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY)
+    ) {
+      nextEnv[VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY] =
+        DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS;
     }
     return {
       ...spec,
-      env: {
-        ...spec.env,
-        [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
-      },
+      env: nextEnv,
     };
   });
 }

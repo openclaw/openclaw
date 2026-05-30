@@ -173,6 +173,16 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
     },
   },
+  gatewayWatch: {
+    "runtime-postbuild": {
+      OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+    },
+  },
+  cliStartup: {
+    "runtime-postbuild": {
+      OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+    },
+  },
 };
 
 export function buildAllUsage() {

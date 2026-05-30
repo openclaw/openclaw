@@ -177,6 +177,10 @@ export type SpawnSubagentResult = {
   mode?: SpawnSubagentMode;
   taskName?: string;
   note?: string;
+  /** Fully resolved model ref applied to the spawned child session. */
+  resolvedModel?: string;
+  /** Provider prefix parsed from resolvedModel when the ref includes one. */
+  resolvedProvider?: string;
   modelApplied?: boolean;
   error?: string;
   attachments?: {
@@ -221,6 +225,20 @@ function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): st
   }
   const { runId } = response as { runId?: unknown };
   return typeof runId === "string" && runId ? runId : undefined;
+}
+
+function buildResolvedSubagentModelMetadata(
+  resolvedModel?: string,
+): Pick<SpawnSubagentResult, "resolvedModel" | "resolvedProvider"> {
+  const modelRef = resolvedModel?.trim();
+  if (!modelRef) {
+    return {};
+  }
+  const { provider } = splitModelRef(modelRef);
+  return {
+    resolvedModel: modelRef,
+    ...(provider ? { resolvedProvider: provider } : {}),
+  };
 }
 
 function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
@@ -926,6 +944,7 @@ export async function spawnSubagentDirect(
     };
   }
   const { resolvedModel, thinkingOverride } = plan;
+  const resolvedModelMetadata = buildResolvedSubagentModelMetadata(resolvedModel);
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
       const target = resolveGatewaySessionStoreTarget({
@@ -1337,6 +1356,7 @@ export async function spawnSubagentDirect(
           },
           threadRequested: requestThreadBinding,
           mode: spawnMode,
+          ...resolvedModelMetadata,
         },
         {
           runId: childRunId,
@@ -1370,6 +1390,7 @@ export async function spawnSubagentDirect(
     note: preparedSpawnContext.forkFallbackNote
       ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
       : acceptedNote,
+    ...resolvedModelMetadata,
     modelApplied: resolvedModel ? modelApplied : undefined,
     attachments: attachmentsReceipt,
   };

@@ -40,6 +40,15 @@
       "@openclaw/model-catalog-core/configured-model-refs": [
         "./packages/model-catalog-core/src/configured-model-refs.ts"
       ],
+      "@openclaw/model-catalog-core/model-catalog-normalize": [
+        "./packages/model-catalog-core/src/model-catalog-normalize.ts"
+      ],
+      "@openclaw/model-catalog-core/model-catalog-refs": [
+        "./packages/model-catalog-core/src/model-catalog-refs.ts"
+      ],
+      "@openclaw/model-catalog-core/model-catalog-types": [
+        "./packages/model-catalog-core/src/model-catalog-types.ts"
+      ],
       "@openclaw/model-catalog-core/provider-id": [
         "./packages/model-catalog-core/src/provider-id.ts"
       ],
