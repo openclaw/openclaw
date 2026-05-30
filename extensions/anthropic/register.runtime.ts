@@ -29,10 +29,12 @@ import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { buildAnthropicInteractiveCliBackend } from "./cli-backend-interactive.js";
 import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_INTERACTIVE_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
 } from "./cli-shared.js";
@@ -259,15 +261,24 @@ function resolveAnthropic46ForwardCompatModel(params: {
   }
   templateIds.push(...params.fallbackTemplateIds);
 
+  // Preserve the caller's CLI-runtime provider on the cloned forward-compat
+  // model. Without this, a ctx.provider of "claude-cli" or
+  // "claude-cli-interactive" would normalize back to the anthropic provider
+  // on the clone, and the runtime selection contract would route the turn
+  // to the wrong backend.
+  const ctxProviderId = normalizeLowercaseStringOrEmpty(params.ctx.provider);
+  const cliProviderPatch =
+    ctxProviderId === CLAUDE_CLI_BACKEND_ID
+      ? { provider: CLAUDE_CLI_BACKEND_ID }
+      : ctxProviderId === CLAUDE_CLI_INTERACTIVE_BACKEND_ID
+        ? { provider: CLAUDE_CLI_INTERACTIVE_BACKEND_ID }
+        : undefined;
   return cloneFirstTemplateModel({
     providerId: PROVIDER_ID,
     modelId: trimmedModelId,
     templateIds,
     ctx: params.ctx,
-    patch:
-      normalizeLowercaseStringOrEmpty(params.ctx.provider) === CLAUDE_CLI_BACKEND_ID
-        ? { provider: CLAUDE_CLI_BACKEND_ID }
-        : undefined,
+    patch: cliProviderPatch,
   });
 }
 
@@ -684,7 +695,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     id: providerId,
     label: "Anthropic",
     docsPath: "/providers/models",
-    hookAliases: [CLAUDE_CLI_BACKEND_ID],
+    hookAliases: [CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_INTERACTIVE_BACKEND_ID],
     envVars: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     oauthProfileIdRepairs: [
       {
@@ -791,11 +802,12 @@ export function buildAnthropicProvider(): ProviderPlugin {
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
-    resolveSyntheticAuth: ({ provider }) =>
-      normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
+    resolveSyntheticAuth: ({ provider }) => {
+      const p = normalizeLowercaseStringOrEmpty(provider);
+      return p === CLAUDE_CLI_BACKEND_ID || p === CLAUDE_CLI_INTERACTIVE_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
-        : undefined,
-    // Publish Claude CLI rows through the provider catalog hook.
+        : undefined;
+    },
     augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
@@ -817,6 +829,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   api.registerCliBackend(buildAnthropicCliBackend());
+  api.registerCliBackend(buildAnthropicInteractiveCliBackend());
   api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
 }

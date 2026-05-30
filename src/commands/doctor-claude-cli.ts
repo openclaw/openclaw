@@ -27,6 +27,21 @@ import {
 import { shortenHomePath } from "../utils.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
+const CLAUDE_CLI_INTERACTIVE_PROVIDER = "claude-cli-interactive";
+// The interactive backend is a claude-cli variant (same Claude binary, auth, and
+// workspace), so doctor diagnostics must recognise BOTH provider ids — otherwise
+// interactive-backend users silently miss the Claude binary/auth/workspace checks.
+function isClaudeCliFamilyProvider(id: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(id);
+  return normalized === CLAUDE_CLI_PROVIDER || normalized === CLAUDE_CLI_INTERACTIVE_PROVIDER;
+}
+function isClaudeCliFamilyModelRef(ref: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(ref);
+  return (
+    normalized?.startsWith(`${CLAUDE_CLI_PROVIDER}/`) === true ||
+    normalized?.startsWith(`${CLAUDE_CLI_INTERACTIVE_PROVIDER}/`) === true
+  );
+}
 
 type ClaudeCliReadableCredential =
   | Pick<OAuthCredential, "type" | "expires">
@@ -38,18 +53,18 @@ function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
   const primary = resolvePrimaryStringValue(
     cfg.agents?.defaults?.model as string | { primary?: string; fallbacks?: string[] } | undefined,
   );
-  if (normalizeOptionalLowercaseString(primary)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {
+  if (isClaudeCliFamilyModelRef(primary)) {
     return true;
   }
   return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
-    normalizeOptionalLowercaseString(key)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`),
+    isClaudeCliFamilyModelRef(key),
   );
 }
 
 function resolveClaudeCliCommand(cfg: OpenClawConfig): string {
   const configured = cfg.agents?.defaults?.cliBackends ?? {};
   for (const [key, entry] of Object.entries(configured)) {
-    if (normalizeOptionalLowercaseString(key) !== CLAUDE_CLI_PROVIDER) {
+    if (!isClaudeCliFamilyProvider(key)) {
       continue;
     }
     const command = normalizeOptionalString(entry?.command);
@@ -135,8 +150,8 @@ function formatProjectDirHealthLine(
 
 function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
   const agentIds = listAgentIds(cfg);
-  const runtimeAgentIds = agentIds.filter(
-    (agentId) => resolveModelAgentRuntimeMetadata({ cfg, agentId }).id === CLAUDE_CLI_PROVIDER,
+  const runtimeAgentIds = agentIds.filter((agentId) =>
+    isClaudeCliFamilyProvider(resolveModelAgentRuntimeMetadata({ cfg, agentId }).id),
   );
   if (runtimeAgentIds.length > 0) {
     return runtimeAgentIds;
@@ -262,9 +277,9 @@ export function noteClaudeCliHealth(
         "openclaw models auth login --provider anthropic --method cli --set-default",
       )}.`,
     );
-  } else if (storedProfile.provider !== CLAUDE_CLI_PROVIDER) {
+  } else if (!isClaudeCliFamilyProvider(storedProfile.provider)) {
     lines.push(
-      `- OpenClaw auth profile: ${CLAUDE_CLI_PROFILE_ID} is wired to provider "${storedProfile.provider}" instead of "${CLAUDE_CLI_PROVIDER}".`,
+      `- OpenClaw auth profile: ${CLAUDE_CLI_PROFILE_ID} is wired to provider "${storedProfile.provider}" instead of "${CLAUDE_CLI_PROVIDER}"/"${CLAUDE_CLI_INTERACTIVE_PROVIDER}".`,
     );
     fixHints.push(
       `- Fix: rerun ${formatCliCommand(

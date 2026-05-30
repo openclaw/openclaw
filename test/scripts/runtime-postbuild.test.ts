@@ -38,6 +38,10 @@ describe("runtime postbuild static assets", () => {
     expect(listStaticExtensionAssetOutputs()).toEqual([
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/anthropic/interactive-proxy/cert-manager.ts",
+      "dist/extensions/anthropic/interactive-proxy/mitm-server.ts",
+      "dist/extensions/anthropic/interactive-proxy/tty-spoof.cjs",
+      "dist/extensions/anthropic/interactive-proxy/wrapper.ts",
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);

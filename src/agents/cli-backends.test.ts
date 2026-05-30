@@ -29,6 +29,11 @@ function createBackendEntry(params: {
   config: CliBackendConfig;
   bundleMcp?: boolean;
   bundleMcpMode?: CliBundleMcpMode;
+  modelProvider?: string;
+  inheritUserConfigFrom?: {
+    backendId: string;
+    filterArgs?: (args: readonly string[]) => readonly string[];
+  };
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   prepareExecution?: () => Promise<null>;
@@ -46,6 +51,10 @@ function createBackendEntry(params: {
       config: params.config,
       ...(params.bundleMcp ? { bundleMcp: params.bundleMcp } : {}),
       ...(params.bundleMcpMode ? { bundleMcpMode: params.bundleMcpMode } : {}),
+      ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
+      ...(params.inheritUserConfigFrom
+        ? { inheritUserConfigFrom: params.inheritUserConfigFrom }
+        : {}),
       ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
       ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
@@ -1022,5 +1031,66 @@ describe("resolveCliBackendConfig alias precedence", () => {
 
     expect(resolved?.config.command).toBe("kimi-canonical");
     expect(resolved?.config.args).toEqual(["--canonical"]);
+  });
+});
+
+// Contract coverage for the `inheritUserConfigFrom` plugin surface: a variant
+// backend with no direct user override inherits the override configured for a
+// sibling backend, `filterArgs` sanitizes the inherited args, and a direct
+// override always wins. This is the compatibility surface plugin authors rely
+// on (e.g. claude-cli-interactive inheriting claude-cli) — see
+// docs/plugins/cli-backend-plugins.md.
+describe("resolveCliBackendConfig inheritUserConfigFrom contract", () => {
+  function registerVariant(filterArgs?: (args: readonly string[]) => readonly string[]) {
+    runtimeBackendEntries.unshift(
+      createRuntimeBackendEntry({
+        pluginId: "test",
+        id: "variant-cli",
+        config: { command: "variant-bin", args: ["base-arg"], output: "jsonl" },
+        modelProvider: "anthropic",
+        inheritUserConfigFrom: { backendId: "claude-cli", ...(filterArgs ? { filterArgs } : {}) },
+      }),
+    );
+  }
+  const overrideOnClaudeCli = (config: CliBackendConfig): OpenClawConfig => ({
+    agents: { defaults: { cliBackends: { "claude-cli": config } } },
+  });
+
+  it("inherits a sibling's user override when the variant has no direct override", () => {
+    registerVariant();
+    const cfg = overrideOnClaudeCli({ command: "claude-custom", args: ["--from-sibling"] });
+    const resolved = requireCliBackendConfig("variant-cli", cfg);
+    // The inherited override replaces args wholesale; command comes from it too.
+    expect(resolved.config.args).toEqual(["--from-sibling"]);
+    expect(resolved.config.command).toBe("claude-custom");
+  });
+
+  it("applies filterArgs to sanitize the inherited args", () => {
+    registerVariant((args) => args.filter((a) => a !== "-p"));
+    const cfg = overrideOnClaudeCli({ command: "claude-custom", args: ["-p", "--keep", "value"] });
+    const resolved = requireCliBackendConfig("variant-cli", cfg);
+    expect(resolved.config.args).toEqual(["--keep", "value"]);
+  });
+
+  it("prefers a direct override on the variant over the inherited sibling override", () => {
+    registerVariant();
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "sibling-bin", args: ["--from-sibling"] },
+            "variant-cli": { command: "direct-bin", args: ["--direct"] },
+          },
+        },
+      },
+    };
+    const resolved = requireCliBackendConfig("variant-cli", cfg);
+    expect(resolved.config.args).toEqual(["--direct"]);
+  });
+
+  it("exposes the variant as an anthropic runtime alias via modelProvider", () => {
+    registerVariant();
+    const resolved = requireCliBackendConfig("variant-cli");
+    expect(resolved.modelProvider).toBe("anthropic");
   });
 });
