@@ -9,7 +9,10 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   // npm-shrinkwrap.json is the canonical npm published-package lockfile.
   // Check it before the packageManager field so a pnpm development workspace
   // does not misidentify a package that was installed by npm.
-  if (files.includes("npm-shrinkwrap.json")) {
+  // Guard against a pnpm monorepo that also ships npm-shrinkwrap.json: if
+  // pnpm-lock.yaml is present alongside npm-shrinkwrap.json, this is a pnpm
+  // development workspace, not an npm-installed package.
+  if (files.includes("npm-shrinkwrap.json") && !files.includes("pnpm-lock.yaml")) {
     return "npm";
   }
 
