@@ -850,7 +850,10 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
   const gatewayMethodDispatch = normalizeTrimmedStringList(value.gatewayMethodDispatch);
-  const tools = normalizeTrimmedStringList(value.tools);
+  const tools =
+    value.tools === true
+      ? ["*"]
+      : normalizeTrimmedStringList(value.tools);
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),

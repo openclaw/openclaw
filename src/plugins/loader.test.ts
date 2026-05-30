@@ -3625,7 +3625,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       registry.diagnostics.some(
         (entry) =>
           entry.pluginId === "undeclared-tool-owner" &&
-          entry.message === "plugin must declare contracts.tools before registering agent tools",
+          entry.message === 'plugin must declare contracts.tools before registering agent tools. Set contracts.tools to true (allow any) or an array of tool names, e.g. ["my_tool"]',
       ),
     ).toBe(true);
   });

@@ -6,6 +6,17 @@ export function normalizePluginToolContractNames(
   return normalizePluginToolNames(contracts?.tools);
 }
 
+/**
+ * Returns true when the plugin declared `contracts.tools: true` (wildcard),
+ * meaning any tool name is allowed without explicit enumeration.
+ */
+export function isWildcardToolContract(
+  contracts: Pick<PluginManifestContracts, "tools"> | undefined,
+): boolean {
+  const names = contracts?.tools;
+  return Array.isArray(names) && names.length === 1 && names[0] === "*";
+}
+
 export function normalizePluginToolNames(names: readonly string[] | undefined): string[] {
   const normalized = new Set<string>();
   for (const name of names ?? []) {

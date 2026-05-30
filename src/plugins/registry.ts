@@ -146,6 +146,7 @@ import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   findUndeclaredPluginToolNames,
+  isWildcardToolContract,
   normalizePluginToolContractNames,
   normalizePluginToolNames,
 } from "./tool-contracts.js";
@@ -575,12 +576,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const declaredNames = normalizePluginToolContractNames(record.contracts);
-    if (declaredNames.length === 0) {
+    const wildcard = isWildcardToolContract(record.contracts);
+    if (declaredNames.length === 0 && !wildcard) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: "plugin must declare contracts.tools before registering agent tools",
+        message:
+          'plugin must declare contracts.tools before registering agent tools. Set contracts.tools to true (allow any) or an array of tool names, e.g. ["my_tool"]',
       });
       return;
     }
@@ -594,18 +597,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
 
     const normalized = normalizePluginToolNames(names);
-    const undeclared = findUndeclaredPluginToolNames({
-      declaredNames,
-      toolNames: normalized,
-    });
-    if (undeclared.length > 0) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+    if (!wildcard) {
+      const undeclared = findUndeclaredPluginToolNames({
+        declaredNames,
+        toolNames: normalized,
       });
-      return;
+      if (undeclared.length > 0) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+        });
+        return;
+      }
     }
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
@@ -2015,18 +2020,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const declaredNames = normalizePluginToolContractNames(record.contracts);
-    const undeclared = findUndeclaredPluginToolNames({
-      declaredNames,
-      toolNames: [toolName],
-    });
-    if (undeclared.length > 0) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin must declare contracts.tools for tool metadata: ${undeclared.join(", ")}`,
+    if (!isWildcardToolContract(record.contracts)) {
+      const undeclared = findUndeclaredPluginToolNames({
+        declaredNames,
+        toolNames: [toolName],
       });
-      return;
+      if (undeclared.length > 0) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `plugin must declare contracts.tools for tool metadata: ${undeclared.join(", ")}`,
+        });
+        return;
+      }
     }
     // Uniqueness is scoped to (pluginId + toolName): different plugins may each
     // register metadata under the same toolName for their own tools, but a given
