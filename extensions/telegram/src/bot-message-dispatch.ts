@@ -121,6 +121,7 @@ import {
   resolveInterleavedProgressEnabled,
   resolveInterleavedToolLine,
   stripFinalAnswerFromInterleavedBody,
+  stripReasoningHeader,
 } from "./interleaved-progress.js";
 import {
   createLaneDeliveryStateTracker,
@@ -1901,7 +1902,7 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                         if (interleavedProgressEnabled) {
                           const appended = appendInterleavedReasoning(
-                            segment.update.text,
+                            stripReasoningHeader(segment.update.text),
                             segment.update.replace ? { replace: true } : undefined,
                           );
                           if (appended) {

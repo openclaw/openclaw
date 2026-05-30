@@ -2563,6 +2563,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const lastReasoningUpdate = String(reasoningDraftStream.update.mock.calls.at(-1)?.[0]);
     expect(lastReasoningUpdate).toContain("tool: Exec");
     expect(lastReasoningUpdate).toContain("Final check");
+    expect(lastReasoningUpdate.match(/Thinking/gu)?.length).toBe(1);
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
   });
 
