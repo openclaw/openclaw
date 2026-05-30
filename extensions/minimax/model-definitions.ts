@@ -65,16 +65,19 @@ export function buildMinimaxModelDefinition(params: {
   id: string;
   name?: string;
   reasoning?: boolean;
+  input?: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
   contextWindow: number;
   maxTokens: number;
 }): ModelDefinitionConfig {
-  const catalog = MINIMAX_TEXT_MODEL_CATALOG[params.id as MinimaxCatalogId];
+  const catalog = MINIMAX_TEXT_MODEL_CATALOG[params.id as MinimaxCatalogId] as
+    | { name: string; reasoning: boolean; input?: readonly ("text" | "image")[] }
+    | undefined;
   return {
     id: params.id,
     name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,
     reasoning: params.reasoning ?? catalog?.reasoning ?? false,
-    input: ["text"],
+    input: params.input ?? (catalog?.input ? [...catalog.input] : ["text"]),
     cost: params.cost,
     contextWindow: params.contextWindow,
     maxTokens: params.maxTokens,
@@ -82,10 +85,13 @@ export function buildMinimaxModelDefinition(params: {
 }
 
 export function buildMinimaxApiModelDefinition(modelId: string): ModelDefinitionConfig {
+  const catalog = MINIMAX_TEXT_MODEL_CATALOG[modelId as MinimaxCatalogId] as
+    | { contextWindow?: number; maxTokens?: number }
+    | undefined;
   return buildMinimaxModelDefinition({
     id: modelId,
     cost: resolveMinimaxApiCost(modelId),
-    contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+    contextWindow: catalog?.contextWindow ?? DEFAULT_MINIMAX_CONTEXT_WINDOW,
+    maxTokens: catalog?.maxTokens ?? DEFAULT_MINIMAX_MAX_TOKENS,
   });
 }

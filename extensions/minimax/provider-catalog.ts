@@ -34,6 +34,8 @@ function buildMinimaxModel(params: {
   reasoning: boolean;
   input: ModelDefinitionConfig["input"];
   cost: ModelDefinitionConfig["cost"];
+  contextWindow?: number;
+  maxTokens?: number;
 }): ModelDefinitionConfig {
   return {
     id: params.id,
@@ -41,8 +43,8 @@ function buildMinimaxModel(params: {
     reasoning: params.reasoning,
     input: params.input,
     cost: params.cost,
-    contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
-    maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+    contextWindow: params.contextWindow ?? DEFAULT_MINIMAX_CONTEXT_WINDOW,
+    maxTokens: params.maxTokens ?? DEFAULT_MINIMAX_MAX_TOKENS,
   };
 }
 
@@ -51,18 +53,30 @@ function buildMinimaxTextModel(params: {
   name: string;
   reasoning: boolean;
   cost: ModelDefinitionConfig["cost"];
+  input?: ModelDefinitionConfig["input"];
+  contextWindow?: number;
+  maxTokens?: number;
 }): ModelDefinitionConfig {
-  return buildMinimaxModel({ ...params, input: ["text"] });
+  return buildMinimaxModel({ ...params, input: params.input ?? ["text"] });
 }
 
 function buildMinimaxCatalog(): ModelDefinitionConfig[] {
   return MINIMAX_TEXT_MODEL_ORDER.map((id) => {
-    const model = MINIMAX_TEXT_MODEL_CATALOG[id];
+    const model = MINIMAX_TEXT_MODEL_CATALOG[id] as {
+      name: string;
+      reasoning: boolean;
+      input?: readonly ("text" | "image")[];
+      contextWindow?: number;
+      maxTokens?: number;
+    };
     return buildMinimaxTextModel({
       id,
       name: model.name,
       reasoning: model.reasoning,
       cost: resolveMinimaxApiCost(id),
+      input: model.input ? [...model.input] : undefined,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
     });
   });
 }
