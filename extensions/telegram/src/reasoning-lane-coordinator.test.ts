@@ -6,8 +6,6 @@ import {
 
 describe("stripReasoningTagsForInterleaved", () => {
   it("keeps only the in-tag reasoning, dropping answer prose after </think>", () => {
-    // The answer after the closing tag must NOT land in the Thinking lane — it
-    // is delivered once via the answer lane.
     expect(stripReasoningTagsForInterleaved("<think>planning</think>Done")).toBe("planning");
   });
 
@@ -19,6 +17,10 @@ describe("stripReasoningTagsForInterleaved", () => {
 
   it("keeps an unclosed (streaming) reasoning tag's content", () => {
     expect(stripReasoningTagsForInterleaved("<think>still thinking")).toBe("still thinking");
+  });
+
+  it("suppresses partial reasoning tag prefixes", () => {
+    expect(stripReasoningTagsForInterleaved("  <thi")).toBe("");
   });
 
   it("is a no-op for tag-free text (interactive backend thinking_delta)", () => {

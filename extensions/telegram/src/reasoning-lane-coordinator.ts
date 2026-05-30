@@ -18,20 +18,22 @@ const REASONING_TAG_PREFIXES = [
 ];
 const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
-function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
+function readThinkingTagsOutsideCode(text: string): { hasTags: boolean; text: string } {
   if (!text) {
-    return "";
+    return { hasTags: false, text: "" };
   }
   const codeRegions = findCodeRegions(text);
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
+  let hasTags = false;
   THINKING_TAG_RE.lastIndex = 0;
   for (const match of text.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
     if (isInsideCode(idx, codeRegions)) {
       continue;
     }
+    hasTags = true;
     if (inThinking) {
       result += text.slice(lastIndex, idx);
     }
@@ -42,34 +44,21 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   if (inThinking) {
     result += text.slice(lastIndex);
   }
-  return result.trim();
+  return { hasTags, text: result.trim() };
 }
 
-function hasThinkingTagOutsideCode(text: string): boolean {
-  const codeRegions = findCodeRegions(text);
-  THINKING_TAG_RE.lastIndex = 0;
-  for (const match of text.matchAll(THINKING_TAG_RE)) {
-    if (!isInsideCode(match.index ?? 0, codeRegions)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// Project a reasoning-stream payload to the plain prose shown in the interleaved
-// lane. When the payload carries reasoning tags (e.g. `<think>reason</think>`)
-// keep ONLY the in-tag reasoning and drop any answer prose after `</think>`, so
-// answer text is never persisted into the Thinking lane (the answer is delivered
-// once via the answer lane). Untagged payloads are entirely reasoning and pass
-// through unchanged; literal tags inside code regions are content, not markers,
-// so a fenced `<think>` is preserved. This mirrors splitTelegramReasoningText,
-// which the default lane uses to format the same payloads as `Thinking\n\n_..._`.
+// Interleaved Thinking keeps only tagged reasoning; answer prose stays in the answer lane.
 export function stripReasoningTagsForInterleaved(text: string): string {
   if (!text) {
     return text;
   }
-  if (hasThinkingTagOutsideCode(text)) {
-    return extractThinkingFromTaggedStreamOutsideCode(text);
+  const trimmed = text.trim();
+  if (isPartialReasoningTagPrefix(trimmed)) {
+    return "";
+  }
+  const tagged = readThinkingTagsOutsideCode(text);
+  if (tagged.hasTags) {
+    return tagged.text;
   }
   return text;
 }
@@ -112,7 +101,8 @@ export function splitTelegramReasoningText(
     return { reasoningText: trimmed };
   }
 
-  const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
+  const tagged = readThinkingTagsOutsideCode(text);
+  const taggedReasoning = tagged.text;
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
   if (isReasoning === true) {

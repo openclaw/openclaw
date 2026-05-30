@@ -102,9 +102,6 @@ describe("telegram custom commands schema", () => {
     });
   });
 
-  // Upgrade safety: a pre-existing config that predates the interleaved-progress
-  // keys must still validate, and their absence must leave the feature OFF — so
-  // upgrading the binary changes nothing for users who never opted in.
   it("accepts an existing config without the interleaved keys (upgrade-safe, defaults off)", () => {
     const res = TelegramConfigSchema.safeParse({
       streaming: { mode: "partial", preview: { toolProgress: true } },

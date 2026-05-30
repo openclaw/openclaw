@@ -68,21 +68,9 @@ export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
   nativeToolProgress?: boolean;
   /** Telegram sender/user IDs allowed to use native DM preview tool progress. */
   nativeToolProgressAllowFrom?: Array<string | number>;
-  /**
-   * Opt-in: render reasoning + structured runtime events (tool/plan/approval/
-   * command/patch) into a single durable live "interleaved progress" message
-   * instead of the separate preview tool-progress lane. Default off; requires
-   * preview tool progress to be enabled and a reasoning lane to be available.
-   * Projection-only — does not change prompts, routing, tools, or auth.
-   */
+  /** Opt-in durable Thinking message for reasoning + structured runtime progress. */
   interleavedProgress?: boolean;
-  /**
-   * Opt-in (requires `interleavedProgress`): include each tool call's sanitized
-   * args/detail in the interleaved lane instead of the tool name only, matching
-   * what the default tool-progress lane shows. Still sanitized — secret-looking
-   * values are redacted and `commandText` is honoured; this never surfaces raw
-   * command output.
-   */
+  /** Opt-in sanitized tool args/detail inside the interleaved Thinking message. */
   interleavedToolArgs?: boolean;
 };
 

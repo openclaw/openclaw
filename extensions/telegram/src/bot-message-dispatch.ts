@@ -1220,35 +1220,16 @@ export const dispatchTelegramMessage = async ({
     await lane.stream.flush();
   };
 
-  // ── Opt-in interleaved progress lane ────────────────────────────────────
-  // Projection-only. When channels.telegram.streaming.preview.interleavedProgress
-  // is enabled, reasoning text and structured runtime events (tool/item/plan/
-  // approval/command/patch) are rendered into ONE durable live message on the
-  // reasoning lane — CLI-style — instead of the separate tool-progress lane.
-  // Default off; gated on tool-progress already being enabled and a reasoning
-  // lane existing. Never changes prompts, routing, tools, auth, or default
-  // visibility. Every event line is whitespace-collapsed and length-capped, and
-  // callers fall back to pushStreamToolProgress when this returns false.
   const interleavedProgressEnabled = resolveInterleavedProgressEnabled({
     toolProgressEnabled: streamToolProgressEnabled,
     configEnabled: telegramCfg.streaming?.preview?.interleavedProgress,
     hasReasoningLane: Boolean(reasoningLane.stream),
   });
-  // Opt-in within interleaved mode: show each tool call's sanitized args/detail
-  // (via the same formatter the default lane uses) instead of the name only.
   const interleavedToolArgsEnabled =
     interleavedProgressEnabled && telegramCfg.streaming?.preview?.interleavedToolArgs === true;
   let interleavedBody = "";
-  // Chars of `interleavedBody` already committed to prior (spilled-away)
-  // messages. The current message renders `interleavedBody.slice(offset)`; when
-  // that outgrows one Telegram message the lane rotates to a fresh message and
-  // this advances, so each message only ever grows (append-only) until rotation.
   let interleavedRenderOffset = 0;
-  // Delta-append checkpoint for the reasoning stream — converts its cumulative
-  // snapshots to suffix deltas. Reply prose is not folded into the lane, so the
-  // reasoning stream is the only producer that appends prose to the body.
   let interleavedReasoningState = emptyInterleavedStreamState();
-  // Last appended status line, so consecutive identical tool lines collapse.
   let interleavedPrevStatusLine: string | undefined;
   let interleavedTimer: ReturnType<typeof setInterval> | undefined;
   let interleavedTimerStartedAt: number | undefined;
@@ -1263,23 +1244,11 @@ export const dispatchTelegramMessage = async ({
     if (!interleavedProgressEnabled || !reasoningLane.stream) {
       return false;
     }
-    // Nothing has been appended (no reasoning, tool, or status line) and no
-    // rolling timer is armed — there is nothing to show. Do not render a bare
-    // "Thinking" header and flush it as a durable message: the final-delivery
-    // flush passes through here on every final path, including turns that reach
-    // the answer with no interleaved content, which would otherwise emit an empty
-    // Thinking message above the answer.
     if (interleavedBody.trim() === "" && interleavedTimerStartedAt === undefined) {
       return false;
     }
     reasoningLane.hasStreamedMessage = true;
     reasoningLane.finalized = true;
-    // Spill into a fresh continuation message before the current one outgrows
-    // Telegram's 4096-char cap (which would make the draft stream stop editing
-    // and freeze the lane). forceNewMessage() clears the stopped flag, bumps the
-    // generation, and resets the message id so the next update() sends a new
-    // message; the per-stream delta checkpoints stay intact, so the continuation
-    // appends only new content instead of re-dumping the whole transcript.
     const spill = computeInterleavedSpill({
       body: interleavedBody,
       offset: interleavedRenderOffset,
@@ -1300,10 +1269,6 @@ export const dispatchTelegramMessage = async ({
     reasoningLane.stream.update(reasoningLane.lastPartialText);
     return true;
   };
-  // Append a status line to the interleaved body and optionally arm the rolling
-  // timer. Returns false when interleaved mode is off so callers fall back to
-  // the default tool-progress lane. Callers must pass already-safe text (tool
-  // name / event title — never raw tool args or command output).
   const appendInterleavedLine = (line: string, opts?: { startTimer?: boolean }): boolean => {
     if (!interleavedProgressEnabled) {
       return false;
@@ -1329,10 +1294,6 @@ export const dispatchTelegramMessage = async ({
     }
     return updateInterleavedLane();
   };
-  // Append the new increment of the reasoning stream into the interleaved
-  // message (delta model — see appendInterleavedDelta). Plain text: the single
-  // "Thinking" header is supplied by updateInterleavedLane. Returns false when
-  // interleaved off.
   const appendInterleavedReasoning = (
     rawText: string,
     opts?: { delta?: string; replace?: boolean },
@@ -1341,9 +1302,6 @@ export const dispatchTelegramMessage = async ({
       return false;
     }
     clearInterleavedTimer();
-    // Unwrap any <think> tag markers so the lane never shows raw tags. When this
-    // changes the text, the caller's precomputed delta no longer aligns with the
-    // cleaned cumulative snapshot, so drop it and recompute the suffix.
     const text = stripReasoningTagsForInterleaved(rawText);
     const delta = text === rawText ? opts?.delta : undefined;
     const result = appendInterleavedDelta({
@@ -1357,10 +1315,6 @@ export const dispatchTelegramMessage = async ({
     interleavedReasoningState = result.state;
     return updateInterleavedLane();
   };
-  // Remove the resolved final answer from the tail of the interleaved body and
-  // re-render, so the polished final message (delivered to the answer lane) is
-  // not duplicated in the durable thinking message. Conservative: a no-op when
-  // there is no confident tail match. Safe to call even when interleaved is off.
   const stripInterleavedFinalAnswer = (finalText: string): void => {
     if (!interleavedProgressEnabled || !finalText.trim()) {
       return;
@@ -1370,11 +1324,6 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     interleavedBody = stripped;
-    // The body tail was rewritten, so the reasoning checkpoint no longer matches
-    // it. Reset it so any late snapshot recomputes its increment against the new
-    // tail instead of re-stamping the stripped text. (Defensive: only fires for
-    // backends that bridge assistant text into the reasoning lane when thinking
-    // is redacted; the interactive backend feeds real thinking, never the answer.)
     interleavedReasoningState = emptyInterleavedStreamState();
     updateInterleavedLane();
   };
@@ -1879,16 +1828,6 @@ export const dispatchTelegramMessage = async ({
                     }
                     if (info.kind === "final") {
                       await enqueueDraftLaneEvent(async () => {});
-                      // Force the interleaved "Thinking" message to be physically
-                      // sent (awaited) BEFORE any final-answer delivery below.
-                      // Telegram orders messages by CREATION time, so if the
-                      // durable thinking message's send is still deferred
-                      // (throttle / event-loop saturation) when the final answer —
-                      // a NEW message — is created, the thinking message ends up
-                      // BELOW it ("spills after"). flushDraftLane clears the
-                      // throttle timer and awaits the send, so the thinking message
-                      // exists first. This is the single chokepoint every final
-                      // path passes through (not just deliverFinalAnswerText).
                       if (interleavedProgressEnabled && reasoningLane.stream) {
                         updateInterleavedLane();
                         await flushDraftLane(reasoningLane);
@@ -1909,17 +1848,8 @@ export const dispatchTelegramMessage = async ({
                       buttons?: TelegramInlineButtons,
                     ) => {
                       const finalText = await resolveTranscriptBackedFinalText(text);
-                      // The final answer may have streamed into the interleaved
-                      // thinking lane as trailing commentary; remove it there so
-                      // it is not duplicated by this polished answer-lane copy.
                       stripInterleavedFinalAnswer(finalText);
                       if (interleavedProgressEnabled) {
-                        // Flush the durable thinking/progress message to Telegram
-                        // (awaited) BEFORE the polished final answer is delivered,
-                        // so it sorts ABOVE the answer. updateInterleavedLane only
-                        // SCHEDULES a background send; without awaiting it here the
-                        // answer's awaited send wins the race and the thinking lane
-                        // lands after (the reported "spill after the final message").
                         await flushDraftLane(reasoningLane);
                       }
                       if (streamMode === "progress") {
@@ -1972,11 +1902,6 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
-                        // Interleaved mode keeps reply prose OUT of the thinking
-                        // message — it shows only as the polished final answer. Drop
-                        // intermediate commentary during tool progress so it is
-                        // neither folded into the thinking message nor routed to the
-                        // answer-lane / tool-progress draft mid-turn.
                         if (interleavedProgressEnabled) {
                           continue;
                         }
@@ -2152,25 +2077,7 @@ export const dispatchTelegramMessage = async ({
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>
                           enqueueDraftLaneEvent(async () => {
-                            // Interleaved mode: fold reasoning AND intermediate
-                            // assistant commentary (prose between tool calls)
-                            // into the single durable message. The final answer
-                            // that may also stream here is stripped back out at
-                            // delivery (stripInterleavedFinalAnswer) so it shows
-                            // once, polished, in the answer lane.
                             if (interleavedProgressEnabled) {
-                              // Reply prose is delivered ONLY as the polished final
-                              // answer in the answer lane — it is never folded into
-                              // the durable thinking message, which shows reasoning
-                              // + tool lines only. Folding it here made the reply
-                              // appear twice and could not be reliably de-duplicated:
-                              // the model often drafts an answer, runs tools, then
-                              // re-emits a revised version, so no exact-match strip
-                              // at delivery removes every copy. Reasoning still
-                              // streams into the lane via onReasoningStream below
-                              // (for the interactive backend the MITM proxy restores
-                              // real thinking, so reasoning arrives on its own
-                              // stream, not as assistant text).
                               return;
                             }
                             await ingestDraftLaneSegments(payload);
@@ -2179,16 +2086,6 @@ export const dispatchTelegramMessage = async ({
                   onReasoningStream: reasoningLane.stream
                     ? (payload) =>
                         enqueueDraftLaneEvent(async () => {
-                          // Interleaved mode appends reasoning into the single
-                          // durable message (no per-stream message splitting).
-                          // The reasoning stream delivers cumulative snapshots
-                          // (ReplyPayload carries no delta), so plain-text append
-                          // — which converts the snapshot to a suffix delta — is
-                          // correct. When a producer marks the snapshot with
-                          // isReasoningSnapshot (e.g. the Codex app-server
-                          // projector) it is a REPLACEMENT, which can be
-                          // non-prefix; carry that through as `replace` so the
-                          // stale snapshot is overwritten instead of left behind.
                           if (
                             appendInterleavedReasoning(
                               payload.text ?? "",
@@ -2230,9 +2127,6 @@ export const dispatchTelegramMessage = async ({
                     !isRoomEvent && Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
-                    // Sanitized detailed line (args/detail per commandText), reused
-                    // by both the interleaved lane (when interleavedToolArgs is on)
-                    // and the default tool-progress fallback below.
                     const sanitizedToolLine = formatChannelProgressDraftLineForEntry(
                       telegramCfg,
                       {
@@ -2243,16 +2137,6 @@ export const dispatchTelegramMessage = async ({
                       },
                       payload.detailMode ? { detailMode: payload.detailMode } : undefined,
                     );
-                    // Interleaved lane: name-only by default; sanitized args/detail
-                    // when interleavedToolArgs is opted in. Arms the rolling timer.
-                    // Falls back to the default tool-progress lane when off.
-                    // Non-work tools (message, reply, reaction, typing) skip both
-                    // the interleaved lane and the default progress lane.
-                    //
-                    // The fallback push is started eagerly but awaited only after
-                    // the status reaction below — its resolution depends on that
-                    // post-setTool flow, so awaiting it inline here would deadlock
-                    // (matches the upstream deferred-progressPromise ordering).
                     let progressPromise: ReturnType<typeof pushStreamToolProgress> | undefined;
                     if (toolName === undefined || isChannelProgressDraftWorkToolName(toolName)) {
                       const interleavedToolLine = resolveInterleavedToolLine({
@@ -2332,8 +2216,6 @@ export const dispatchTelegramMessage = async ({
                     if (payload.phase !== "end") {
                       return;
                     }
-                    // Title only (e.g. "ran `cmd` (exit 0)") — never the raw
-                    // command output buffer.
                     if (appendInterleavedLine(payload.title ?? "command")) {
                       return;
                     }
@@ -2396,15 +2278,9 @@ export const dispatchTelegramMessage = async ({
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
-      // Deterministic cleanup: stop the interleaved rolling timer on every exit
-      // path (success, error, abort, supersede) so no interval leaks past the run.
       clearInterleavedTimer();
       progressDraftGate.cancel();
       await draftLaneEventQueue;
-      // Send one final timer-free render so a lingering "_Ns — still running_"
-      // suffix is not persisted in the durable message. The timer is now
-      // cleared, so renderInterleavedMessage omits the suffix. Skip when
-      // superseded — that lane is discarded below.
       if (interleavedBody && !isDispatchSuperseded()) {
         updateInterleavedLane();
       }

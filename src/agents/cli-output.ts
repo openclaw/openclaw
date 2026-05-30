@@ -619,13 +619,6 @@ export function createCliJsonlStreamingParser(params: {
 }) {
   let lineBuffer = "";
   let assistantText = "";
-  let sawToolUseSinceLastText = false;
-  // A text block that starts after a tool use gets a "\n\n" paragraph break.
-  // It is DEFERRED to the block's first text_delta (rather than appended on the
-  // content_block_start, which emits no delta) so the separator lands in BOTH
-  // the cumulative text AND the emitted delta — keeping a delta-only consumer's
-  // reconstruction identical to the cumulative snapshot.
-  let pendingParagraphBreak = false;
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
@@ -668,18 +661,6 @@ export function createCliJsonlStreamingParser(params: {
       }
     }
 
-    if (parsed.type === "stream_event" && isRecord(parsed.event)) {
-      const evt = parsed.event;
-      if (evt.type === "content_block_start" && isRecord(evt.content_block)) {
-        if (isClaudeToolUseBlockType(evt.content_block.type)) {
-          sawToolUseSinceLastText = true;
-        } else if (evt.content_block.type === "text" && sawToolUseSinceLastText && assistantText) {
-          pendingParagraphBreak = true;
-          sawToolUseSinceLastText = false;
-        }
-      }
-    }
-
     if (params.onToolUseStart || params.onToolResult) {
       dispatchClaudeCliStreamingToolEvent({
         backend: params.backend,
@@ -691,7 +672,7 @@ export function createCliJsonlStreamingParser(params: {
       });
     }
 
-    let delta = parseClaudeCliStreamingDelta({
+    const delta = parseClaudeCliStreamingDelta({
       backend: params.backend,
       providerId: params.providerId,
       parsed,
@@ -701,13 +682,6 @@ export function createCliJsonlStreamingParser(params: {
     });
     if (!delta) {
       return;
-    }
-    if (pendingParagraphBreak) {
-      // Fold the deferred separator into this delta so the increment carries it
-      // (delta) and the snapshot keeps it (text) — the two stay consistent.
-      const raw = delta.delta;
-      delta = { ...delta, delta: `\n\n${raw}`, text: `${assistantText}\n\n${raw}` };
-      pendingParagraphBreak = false;
     }
     assistantText = delta.text;
     params.onAssistantDelta(delta);

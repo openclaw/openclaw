@@ -53,9 +53,6 @@ describe("resolveInterleavedProgressEnabled", () => {
   it("enables only when opted in, tool progress on, and a reasoning lane exists", () => {
     expect(resolveInterleavedProgressEnabled(base)).toBe(true);
   });
-
-  // Disabled mode preserves current behaviour exactly: the gate is off, so the
-  // renderer is inert and callers fall back to the default tool-progress lane.
   it("is disabled by default (config flag unset)", () => {
     expect(resolveInterleavedProgressEnabled({ ...base, configEnabled: undefined })).toBe(false);
   });
@@ -63,15 +60,9 @@ describe("resolveInterleavedProgressEnabled", () => {
   it("is disabled when explicitly opted out", () => {
     expect(resolveInterleavedProgressEnabled({ ...base, configEnabled: false })).toBe(false);
   });
-
-  // Tool-progress opt-out is honored: without preview tool progress the lane
-  // never engages, so it inherits every existing group/DM/visibility gate.
   it("is disabled when preview tool progress is off", () => {
     expect(resolveInterleavedProgressEnabled({ ...base, toolProgressEnabled: false })).toBe(false);
   });
-
-  // Source-delivery-suppressed / room-event paths have no reasoning lane, so
-  // the gate is off and no progress can leak through this renderer.
   it("is disabled when there is no reasoning lane (room-event / suppressed)", () => {
     expect(resolveInterleavedProgressEnabled({ ...base, hasReasoningLane: false })).toBe(false);
   });
@@ -108,8 +99,6 @@ describe("stripReasoningHeader", () => {
 });
 
 describe("renderInterleavedMessage", () => {
-  // Reasoning header is not duplicated: the body is stored header-stripped and
-  // the renderer supplies exactly one "Thinking" header.
   it("renders a single 'Thinking' header", () => {
     const out = renderInterleavedMessage({ body: "_thought_" });
     expect(out).toBe("Thinking\n\n_thought_");
@@ -120,25 +109,15 @@ describe("renderInterleavedMessage", () => {
     const out = renderInterleavedMessage({ body: "_body_", timerStartedAt: 1_000, now: 13_000 });
     expect(out).toMatch(/^Thinking\n\n_body_\n_12s — still running · \d{2}:\d{2}:\d{2}_$/u);
   });
-
-  // No-content guard: a turn that reaches final delivery with nothing appended
-  // (no reasoning/tool/status) and no running timer must render NOTHING, so the
-  // lane never flushes a bare "Thinking" header as a durable message.
   it("renders empty for an empty body with no active timer", () => {
     expect(renderInterleavedMessage({ body: "" })).toBe("");
     expect(renderInterleavedMessage({ body: "   \n  " })).toBe("");
   });
-
-  // A running timer is itself content (a tool is active), so it still renders.
   it("still renders when a timer is active even if the body is empty", () => {
     expect(renderInterleavedMessage({ body: "", timerStartedAt: 1_000, now: 4_000 })).toMatch(
       /^Thinking\n\n\n_3s — still running · \d{2}:\d{2}:\d{2}_$/u,
     );
   });
-
-  // Shorter replacement replaces instead of appending stale timer text: once the
-  // timer is cleared the rendered text drops the suffix and is a strict prefix
-  // of the timer-painted text, so a full-text lane update replaces it.
   it("drops the timer suffix when no timer is active, yielding a shorter prefix", () => {
     const withTimer = renderInterleavedMessage({
       body: "_body_",
@@ -167,10 +146,6 @@ describe("appendInterleavedDelta", () => {
     expect(second.body).toBe("step one step two");
     expect(second.state.previousText).toBe("step one step two");
   });
-
-  // THE regression: a cumulative producer re-sends the FULL text after a tool
-  // line. Delta-append must contribute only the new suffix AFTER the tool line,
-  // never re-stamp the text before it (which produced N copies across N tools).
   it("appends the suffix after a tool line, chronologically, without re-stamping", () => {
     const first = appendInterleavedDelta({
       body: "",
@@ -184,7 +159,6 @@ describe("appendInterleavedDelta", () => {
       text: "reading files and summarizing",
     });
     expect(second.body).toBe("reading files\n[12:00:01] tool: Read\n and summarizing");
-    // The pre-tool text is NOT duplicated.
     expect(second.body.match(/reading files/gu)?.length).toBe(1);
   });
 
@@ -219,11 +193,6 @@ describe("appendInterleavedDelta", () => {
     });
     expect(second.body).toBe("Done.");
   });
-
-  // Reasoning-snapshot contract: a producer (e.g. the Codex app-server projector)
-  // can emit a cumulative reasoning snapshot marked isReasoningSnapshot that does
-  // NOT prefix-extend the previous one. The dispatch carries that through as
-  // `replace`, so the stale snapshot is overwritten rather than left behind.
   it("replaces a non-prefix reasoning snapshot rather than leaving the stale one", () => {
     const first = appendInterleavedDelta({
       body: "",
@@ -256,12 +225,6 @@ describe("appendInterleavedDelta", () => {
     const out = appendInterleavedDelta({ body: "step one", state, text: "step one" });
     expect(out.body).toBe("step one");
   });
-
-  // Regression: the assistant stream is appended as ONE monotonic stream (the
-  // dispatch no longer splits each cumulative snapshot into reasoning/answer
-  // lanes — that split's boundary shifts between snapshots and re-stamps the
-  // moved fragment). A growing cumulative stream must therefore reproduce the
-  // final text EXACTLY, with no fragment appearing twice.
   it("never duplicates a fragment across a long growing cumulative stream", () => {
     const snapshots = [
       "Comparing the build to what I pushed:",
@@ -277,23 +240,14 @@ describe("appendInterleavedDelta", () => {
       state = out.state;
     }
     expect(body).toBe(snapshots[snapshots.length - 1]);
-    // The fragment that previously double-stamped appears exactly once.
     expect(body.match(/252 I saw before \+ my 3 dedup/gu)?.length).toBe(1);
   });
-
-  // Regression (Issue B): the SAME content reaches the lane via two streams —
-  // reasoning (assistant-text-as-reasoning on a redacted-thinking turn) AND
-  // assistant commentary — each with its own checkpoint, writing one body. The
-  // cross-stream tail-overlap fold must collapse them to a single clean line
-  // (the live garble was "Local HEAD … I HEAD … I checked … changed. checked …
-  // changed."), while still streaming the first arrival live.
   it("dedups identical content arriving via two separate streams into one body", () => {
     const sentence =
       "Local HEAD 61f4536 differs from last time I checked (87d3da4). Let me see what changed.";
     let body = "";
     let reasoning = emptyInterleavedStreamState();
     let assistant = emptyInterleavedStreamState();
-    // 1) reasoning stream delivers a partial snapshot
     let r = appendInterleavedDelta({
       body,
       state: reasoning,
@@ -301,8 +255,6 @@ describe("appendInterleavedDelta", () => {
     });
     body = r.body;
     reasoning = r.state;
-    // 2) assistant stream delivers the same content (its own empty baseline, and
-    //    arriving offset — without the leading "Local ")
     const a = appendInterleavedDelta({
       body,
       state: assistant,
@@ -310,7 +262,6 @@ describe("appendInterleavedDelta", () => {
     });
     body = a.body;
     assistant = a.state;
-    // 3) reasoning stream completes its cumulative snapshot
     r = appendInterleavedDelta({ body, state: reasoning, text: sentence });
     body = r.body;
     reasoning = r.state;
@@ -318,10 +269,6 @@ describe("appendInterleavedDelta", () => {
     expect(body).toBe(sentence);
     expect(body.match(/61f4536/gu)?.length).toBe(1);
   });
-
-  // Regression: short inter-tool preamble like "There" (5 chars) was not folded
-  // because the minimum overlap threshold was too high. Full-increment overlaps
-  // must always fold regardless of length.
   it("folds a short full-increment duplicate from a second stream", () => {
     let body = "";
     const r = appendInterleavedDelta({
@@ -340,8 +287,6 @@ describe("appendInterleavedDelta", () => {
     expect(body).toBe("There it is.");
     expect(body.match(/There/gu)?.length).toBe(1);
   });
-
-  // Distinct content from two streams must NOT be folded — only true overlap is.
   it("keeps distinct content from two streams (no false dedup)", () => {
     let body = "";
     const r = appendInterleavedDelta({
@@ -358,10 +303,6 @@ describe("appendInterleavedDelta", () => {
     body = a.body;
     expect(body).toBe("Considering the tradeoffs here.Now checking the second file.");
   });
-
-  // Regression: a coincidental 1-char tail/prefix touch must NOT fold. The body
-  // prose tail ends in "a" and a fresh, non-prefix fragment starts with "a" —
-  // the increment must be appended whole, not have its real first char dropped.
   it("does not fold a sub-threshold coincidental tail/prefix overlap", () => {
     const result = appendInterleavedDelta({
       body: "alpha",
@@ -370,9 +311,6 @@ describe("appendInterleavedDelta", () => {
     });
     expect(result.body).toBe("alphaand beta");
   });
-
-  // The full-tail re-send (whole prose tail repeated at the increment start) is
-  // still folded even when shorter than the partial-overlap threshold.
   it("still folds a full-tail re-send below the partial threshold", () => {
     const result = appendInterleavedDelta({
       body: "OK",
@@ -448,8 +386,6 @@ describe("stripFinalAnswerFromInterleavedBody", () => {
   });
 
   it("never strips across a tool/status checkpoint", () => {
-    // final text equals commentary that sits ABOVE a tool line — must not strip,
-    // because the tail block (after the last tool line) does not match.
     const body = "shared text\n[12:00:01] tool: Read\nother tail";
     expect(stripFinalAnswerFromInterleavedBody({ body, finalText: "shared text" })).toBe(body);
   });
@@ -467,18 +403,14 @@ describe("computeInterleavedSpill", () => {
   });
 
   it("spills into a continuation, advancing the offset and carrying recent context", () => {
-    // Lines of 100 chars each so there are clean boundaries to snap to.
     const line = `${"y".repeat(99)}\n`;
-    const body = line.repeat(60); // 6000 chars, well over the cap
+    const body = line.repeat(60);
     const result = computeInterleavedSpill({ body, offset: 0 });
     expect(result.spilled).toBe(true);
     expect(result.offset).toBeGreaterThan(0);
-    // The continuation's visible portion must fit a fresh message...
     expect(body.length - result.offset).toBeLessThanOrEqual(INTERLEAVED_MESSAGE_MAX_CHARS);
-    // ...and carry a meaningful window of recent context (~overlap, line-snapped).
     expect(body.length - result.offset).toBeGreaterThan(300);
     expect(body.length - result.offset).toBeLessThanOrEqual(INTERLEAVED_SPILL_OVERLAP_CHARS);
-    // Offset lands on a line boundary (start of a line).
     expect(result.offset === 0 || body[result.offset - 1] === "\n").toBe(true);
   });
 
@@ -492,12 +424,11 @@ describe("computeInterleavedSpill", () => {
       offset = result.offset;
       expect(body.length - offset).toBeLessThanOrEqual(INTERLEAVED_MESSAGE_MAX_CHARS);
     }
-    // It actually rotated forward over the run rather than freezing at 0.
     expect(offset).toBeGreaterThan(0);
   });
 
   it("force-advances when a single line is longer than the overlap window", () => {
-    const body = "q".repeat(INTERLEAVED_MESSAGE_MAX_CHARS + 2000); // one giant unbroken line
+    const body = "q".repeat(INTERLEAVED_MESSAGE_MAX_CHARS + 2000);
     const result = computeInterleavedSpill({ body, offset: 0 });
     expect(result.spilled).toBe(true);
     expect(body.length - result.offset).toBeLessThanOrEqual(INTERLEAVED_MESSAGE_MAX_CHARS);
