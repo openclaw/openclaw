@@ -264,6 +264,8 @@ export class OpenClawApp extends LitElement {
   @state() chatSessionPickerLoading = false;
   @state() chatSessionPickerError: string | null = null;
   @state() chatSessionPickerResult: SessionsListResult | null = null;
+  @state() chatSessionPickerRenameKey: string | null = null;
+  @state() chatSessionPickerRenameDraft = "";
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;

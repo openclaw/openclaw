@@ -2038,3 +2038,34 @@
 
 /* Mobile dropdown toggle — hidden on desktop */
 /* Mobile gear toggle + dropdown are hidden by default in layout.css */
+
+.chat-session-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-session-picker__row .chat-session-picker__option {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-session-picker__rename-trigger {
+  flex: 0 0 auto;
+}
+
+.chat-session-picker__row--renaming {
+  gap: 6px;
+}
+
+.chat-session-picker__rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}

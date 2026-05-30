@@ -1252,6 +1252,7 @@ export const zh_TW: TranslationMap = {
       sessionSearch: "搜尋工作階段",
       clearSessionSearch: "清除工作階段搜尋",
       loadMoreSessions: "載入更多工作階段",
+      renameSession: "Rename session",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

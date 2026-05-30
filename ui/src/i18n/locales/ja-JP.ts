@@ -1289,6 +1289,7 @@ export const ja_JP: TranslationMap = {
       sessionSearch: "セッションを検索",
       clearSessionSearch: "セッション検索をクリア",
       loadMoreSessions: "さらにセッションを読み込む",
+      renameSession: "Rename session",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

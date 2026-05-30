@@ -1278,6 +1278,7 @@ export const ko: TranslationMap = {
       sessionSearch: "세션 검색",
       clearSessionSearch: "세션 검색 지우기",
       loadMoreSessions: "세션 더 불러오기",
+      renameSession: "Rename session",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
