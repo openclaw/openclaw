@@ -295,7 +295,8 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "skill_research",
     label: "skill_research",
-    description: "Create, update, revise, list, or inspect Skill Workshop proposals",
+    description:
+      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

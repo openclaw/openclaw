@@ -184,9 +184,11 @@ Support files can be included under `assets/`, `examples/`, `references/`,
 scans them, verifies their hashes before apply, and writes them beside the
 active `SKILL.md` only after the proposal is applied.
 
-Agents can create or revise pending proposals through the `skill_research` tool
-when they identify reusable work, but applying, rejecting, or quarantining
-remains an explicit operator action through the CLI or Gateway.
+Agents can create, revise, list, and inspect pending proposals through the
+`skill_research` tool when they identify reusable work. If the user explicitly
+asks to approve/use/apply, reject, or quarantine a specific proposal,
+`skill_research` can also perform that proposal lifecycle action through the
+same Skill Workshop safeguards.
 
 ## Related
 

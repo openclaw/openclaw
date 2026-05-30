@@ -751,7 +751,7 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     skill_research:
-      "Create, update, revise, list, or inspect Skill Workshop proposals; never applies skills",
+      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
   };
@@ -934,7 +934,9 @@ export function buildAgentSystemPrompt(params: {
         "Use `action=list` or `action=inspect` only when you need to find or read pending proposals before revising. Do not use filesystem search for proposal discovery.",
         "If the user names an existing skill, proposal, or workflow, inspect it first when available.",
         "Generated or researched skills are pending proposals by default. Do not apply, install, approve, enable, or write into live skills unless the user explicitly asks for that separate action.",
-        "You may gather context first, but the durable proposal write must use `skill_research`.",
+        "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal. Pass `proposal_id`; if it is not known, use `action=list` or `action=inspect` first.",
+        "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands. Proposal lifecycle changes must use `skill_research`.",
+        "You may gather context first, but the durable proposal write or lifecycle change must use `skill_research`.",
         "",
       ]
     : [];

@@ -170,8 +170,10 @@ openclaw skills workshop quarantine <proposal-id>
 ```
 
 Agents can draft proposals through the `skill_research` tool when they identify
-work worth reusing and can revise pending proposals during review. The tool
-creates or revises pending proposals only; it cannot apply or delete skills.
+work worth reusing and can revise pending proposals during review. When the
+user explicitly asks to approve/use/apply, reject, or quarantine a specific
+proposal, the tool can perform that lifecycle action through Skill Workshop
+instead of shell or direct filesystem changes.
 
 ## ClawHub (install and sync)
 

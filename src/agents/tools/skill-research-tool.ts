@@ -1,16 +1,20 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  applySkillProposal,
   inspectSkillProposal,
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
+  quarantineSkillProposal,
+  rejectSkillProposal,
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
 import type {
   SkillProposalManifestEntry,
   SkillProposalReadResult,
+  SkillProposalRecord,
   SkillProposalStatus,
   SkillProposalSupportFileInput,
 } from "../../skills/workshop/types.js";
@@ -23,7 +27,16 @@ import {
   type AnyAgentTool,
 } from "./common.js";
 
-const SKILL_RESEARCH_ACTIONS = ["create", "update", "revise", "list", "inspect"] as const;
+const SKILL_RESEARCH_ACTIONS = [
+  "create",
+  "update",
+  "revise",
+  "list",
+  "inspect",
+  "apply",
+  "reject",
+  "quarantine",
+] as const;
 const SKILL_PROPOSAL_STATUSES = [
   "pending",
   "applied",
@@ -36,10 +49,13 @@ const SkillResearchToolSchema = Type.Object(
   {
     action: stringEnum(SKILL_RESEARCH_ACTIONS, {
       description:
-        "create for a new skill proposal, update for an existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery.",
+        "create for a new skill proposal, update for an existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery, apply/reject/quarantine for explicit proposal lifecycle actions.",
     }),
     proposal_id: Type.Optional(
-      Type.String({ description: "Existing proposal id for action=inspect or action=revise." }),
+      Type.String({
+        description:
+          "Existing proposal id for action=inspect, action=revise, action=apply, action=reject, or action=quarantine.",
+      }),
     ),
     name: Type.Optional(
       Type.String({
@@ -89,6 +105,11 @@ const SkillResearchToolSchema = Type.Object(
     ),
     goal: Type.Optional(Type.String({ description: "Research or improvement goal." })),
     evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
+    reason: Type.Optional(
+      Type.String({
+        description: "Optional reason for action=apply, action=reject, or action=quarantine.",
+      }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -105,7 +126,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
     name: "skill_research",
     displaySummary: "Propose a reusable skill",
     description:
-      "Create, update, revise, list, or inspect Skill Workshop proposals when reusable procedures should be captured or improved. This tool never applies proposals.",
+      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals when reusable procedures should be captured, improved, or explicitly approved.",
     parameters: SkillResearchToolSchema,
     execute: async (_toolCallId, args) => {
       const params = asToolParamsRecord(args);
@@ -131,6 +152,40 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
         return proposalResult(proposal, {
           contentText: formatProposalInspect(proposal),
           includeContent: true,
+        });
+      }
+
+      if (action === "apply") {
+        const applied = await applySkillProposal({
+          workspaceDir: options.workspaceDir,
+          proposalId: readLifecycleProposalIdParam(params),
+          reason: readStringParam(params, "reason"),
+        });
+        return actionResult(applied.record, {
+          contentText: `Applied skill proposal ${applied.record.id}.`,
+          targetSkillFile: applied.targetSkillFile,
+        });
+      }
+
+      if (action === "reject") {
+        const rejected = await rejectSkillProposal({
+          workspaceDir: options.workspaceDir,
+          proposalId: readLifecycleProposalIdParam(params),
+          reason: readStringParam(params, "reason"),
+        });
+        return actionResult(rejected, {
+          contentText: `Rejected skill proposal ${rejected.id}.`,
+        });
+      }
+
+      if (action === "quarantine") {
+        const quarantined = await quarantineSkillProposal({
+          workspaceDir: options.workspaceDir,
+          proposalId: readLifecycleProposalIdParam(params),
+          reason: readStringParam(params, "reason"),
+        });
+        return actionResult(quarantined, {
+          contentText: `Quarantined skill proposal ${quarantined.id}.`,
         });
       }
 
@@ -194,6 +249,25 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
   };
 }
 
+function actionResult(
+  record: SkillProposalRecord,
+  options: { contentText: string; targetSkillFile?: string },
+) {
+  return {
+    content: [{ type: "text" as const, text: options.contentText }],
+    details: {
+      id: record.id,
+      status: record.status,
+      kind: record.kind,
+      skillName: record.target.skillName,
+      skillKey: record.target.skillKey,
+      targetSkillFile: options.targetSkillFile ?? record.target.skillFile,
+      scanState: record.scan.state,
+      proposedVersion: record.proposedVersion,
+    },
+  };
+}
+
 function proposalResult(
   proposal: SkillProposalReadResult,
   options: { contentText?: string; includeContent?: boolean } = {},
@@ -214,6 +288,13 @@ function proposalResult(
       ...(options.includeContent ? { proposalContent: proposal.content } : {}),
     },
   };
+}
+
+function readLifecycleProposalIdParam(params: Record<string, unknown>): string {
+  return readStringParam(params, "proposal_id", {
+    required: true,
+    label: "proposal_id",
+  });
 }
 
 async function readProposalForInspect(

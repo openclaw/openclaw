@@ -696,7 +696,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["read", "skill_research"],
     });
     expect(withTool).toContain(
-      "- skill_research: Create, update, revise, list, or inspect Skill Workshop proposals",
+      "- skill_research: Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     );
     expect(withTool).toContain("## Skill Research");
     expect(withTool).toContain(
@@ -714,7 +714,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain("`action=revise` for an existing pending proposal");
     expect(withTool).toContain("pass the proposal or skill name in `name`");
     expect(withTool).toContain(
-      "You may gather context first, but the durable proposal write must use `skill_research`.",
+      "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
+    );
+    expect(withTool).toContain(
+      "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands.",
+    );
+    expect(withTool).toContain(
+      "You may gather context first, but the durable proposal write or lifecycle change must use `skill_research`.",
     );
   });
 
