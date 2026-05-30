@@ -1,3 +1,5 @@
+import { resolveCapabilityModelRefForProviders } from "../../packages/media-generation-core/src/capability-model-ref.js";
+import type { MediaGenerationNormalizationMetadataInput } from "../../packages/media-generation-core/src/normalization.js";
 import { listProfilesForProvider } from "../agents/auth-profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -12,23 +14,19 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { clampTimerTimeoutMs } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import type {
+export type {
   MediaGenerationNormalizationMetadataInput,
   MediaNormalizationEntry,
   MediaNormalizationValue,
-} from "./normalization.types.js";
+} from "../../packages/media-generation-core/src/normalization.js";
+export { hasMediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 
 export type ParsedProviderModelRef = {
   provider: string;
   model: string;
 };
-export type {
-  MediaGenerationNormalizationMetadataInput,
-  MediaNormalizationEntry,
-  MediaNormalizationValue,
-} from "./normalization.types.js";
-
 export function recordCapabilityCandidateFailure(params: {
   attempts: FallbackAttempt[];
   provider: string;
@@ -46,19 +44,25 @@ export function recordCapabilityCandidateFailure(params: {
   });
 }
 
-export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
-  entry: MediaNormalizationEntry<TValue> | undefined,
-): entry is MediaNormalizationEntry<TValue> {
-  return Boolean(
-    entry &&
-    (entry.requested !== undefined ||
-      entry.applied !== undefined ||
-      entry.derivedFrom !== undefined ||
-      (entry.supportedValues?.length ?? 0) > 0),
-  );
+const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
+
+export function resolveMediaProviderDefaultTimeoutMs(
+  timeoutMs: number | undefined,
+): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? clampTimerTimeoutMs(timeoutMs)
+    : undefined;
 }
 
-const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
+export function resolveMediaProviderRequestTimeoutMs(params: {
+  timeoutMs?: number;
+  providerDefaultTimeoutMs?: number;
+}): number | undefined {
+  return (
+    resolveMediaProviderDefaultTimeoutMs(params.timeoutMs) ??
+    resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs)
+  );
+}
 
 type CapabilityProviderCandidate = {
   id: string;
@@ -163,36 +167,6 @@ function resolveAutoCapabilityFallbackRefs(params: {
   });
 }
 
-function resolveProviderModelOnlyRef(params: {
-  raw: string;
-  providers: CapabilityProviderCandidate[];
-}): ParsedProviderModelRef | null {
-  const model = normalizeOptionalString(params.raw);
-  if (!model) {
-    return null;
-  }
-  const provider = params.providers.find((candidate) => {
-    const models = [candidate.defaultModel, ...(candidate.models ?? [])];
-    return models.some((entry) => normalizeOptionalString(entry) === model);
-  });
-  return provider ? { provider: provider.id, model } : null;
-}
-
-function hasCapabilityProviderId(params: {
-  providerId: string | undefined;
-  providers: CapabilityProviderCandidate[];
-}): boolean {
-  const providerId = normalizeOptionalString(params.providerId);
-  if (!providerId) {
-    return false;
-  }
-  return params.providers.some(
-    (provider) =>
-      provider.id === providerId ||
-      (provider.aliases ?? []).some((alias) => normalizeOptionalString(alias) === providerId),
-  );
-}
-
 export function resolveCapabilityModelCandidates(params: {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
@@ -214,20 +188,14 @@ export function resolveCapabilityModelCandidates(params: {
     if (!trimmed) {
       return null;
     }
-    const parsed = params.parseModelRef(raw);
     if (!options.useProviderMetadata) {
-      return parsed;
+      return params.parseModelRef(raw);
     }
-    if (
-      parsed &&
-      hasCapabilityProviderId({
-        providerId: parsed.provider,
-        providers: getProviders(),
-      })
-    ) {
-      return parsed;
-    }
-    return resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed;
+    return resolveCapabilityModelRefForProviders({
+      raw: trimmed,
+      providers: getProviders(),
+      parseModelRef: params.parseModelRef,
+    });
   };
   const add = (raw: string | undefined, options: { useProviderMetadata: boolean }) => {
     const candidate = resolveCandidate(raw, options);
@@ -329,6 +297,9 @@ function parseAspectRatioValue(raw?: string | null): ParsedAspectRatio | null {
 function parseSizeValue(raw?: string | null): ParsedSize | null {
   const pair = parsePositiveDimensionPair(raw, /^(\d+)\s*x\s*(\d+)$/i);
   if (!pair) {
+    return null;
+  }
+  if (!Number.isSafeInteger(pair.width) || !Number.isSafeInteger(pair.height)) {
     return null;
   }
   return {
@@ -450,6 +421,29 @@ export function resolveClosestResolution<TResolution extends string>(params: {
   if (params.requestedResolution && supported.includes(params.requestedResolution)) {
     return params.requestedResolution;
   }
+  const requestedNumeric = parseResolutionRank(params.requestedResolution);
+  if (requestedNumeric) {
+    let bestValue: TResolution | undefined;
+    let bestScore: { primary: number; secondary: number; tertiary: string } | null = null;
+    for (const candidate of supported) {
+      const candidateNumeric = parseResolutionRank(candidate);
+      if (!candidateNumeric || candidateNumeric.unit !== requestedNumeric.unit) {
+        continue;
+      }
+      const score = {
+        primary: Math.abs(candidateNumeric.value - requestedNumeric.value),
+        secondary: candidateNumeric.value < requestedNumeric.value ? 1 : 0,
+        tertiary: candidate,
+      };
+      if (compareScores(score, bestScore)) {
+        bestValue = candidate;
+        bestScore = score;
+      }
+    }
+    if (bestValue) {
+      return bestValue;
+    }
+  }
   const order: readonly string[] = params.order ?? IMAGE_RESOLUTION_ORDER;
   const requestedIndex = params.requestedResolution
     ? order.indexOf(params.requestedResolution)
@@ -476,6 +470,24 @@ export function resolveClosestResolution<TResolution extends string>(params: {
     }
   }
   return bestValue;
+}
+
+function parseResolutionRank(
+  resolution: string | undefined,
+): { value: number; unit: "K" | "P" } | undefined {
+  const match = resolution?.trim().match(/^(\d+(?:\.\d+)?)([kp])$/iu);
+  if (!match) {
+    return undefined;
+  }
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  const unit = match[2]?.toUpperCase() === "K" ? "K" : "P";
+  return {
+    value: unit === "K" ? value * 1000 : value,
+    unit,
+  };
 }
 
 export function normalizeDurationToClosestMax(

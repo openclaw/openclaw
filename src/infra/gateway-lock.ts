@@ -6,6 +6,7 @@ import net from "node:net";
 import path from "node:path";
 import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { resolveTimestampMsToIsoString } from "../shared/number-coercion.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
@@ -275,7 +276,7 @@ export async function acquireGatewayLock(
       const startTime = platform === "linux" ? readLinuxStartTime(process.pid) : null;
       const payload: LockPayload = {
         pid: process.pid,
-        createdAt: new Date(now()).toISOString(),
+        createdAt: resolveTimestampMsToIsoString(now()),
         configPath,
       };
       if (typeof startTime === "number" && Number.isFinite(startTime)) {

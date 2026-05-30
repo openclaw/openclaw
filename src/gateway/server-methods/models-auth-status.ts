@@ -1,3 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
   type AuthHealthSummary,
@@ -15,8 +17,11 @@ import {
   removeProviderAuthProfilesWithLock,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread,
+} from "../../agents/model-provider-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
@@ -25,7 +30,6 @@ import type { UsageProviderId, UsageWindow } from "../../infra/provider-usage.ty
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -89,6 +93,12 @@ let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
  */
 export function invalidateModelAuthStatusCache(): void {
   cached = null;
+  // The prepared provider-auth map (model-provider-auth.ts) was built from
+  // the pre-mutation auth state, so it must be invalidated alongside this
+  // cache whenever an auth-profile mutation lands (logout, login, token
+  // rotation, etc.). Without this, `/models` and pickers keep advertising
+  // providers the running gateway can no longer authenticate.
+  clearCurrentProviderAuthState();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {
@@ -104,12 +114,8 @@ function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps 
   return {
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
-    chatDeltaSentAt: context.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: context.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: context.agentDeltaSentAt,
-    bufferedAgentEvents: context.bufferedAgentEvents,
     chatAbortedRuns: context.chatAbortedRuns,
+    clearChatRunState: context.clearChatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     broadcast: context.broadcast,
@@ -232,7 +238,12 @@ function mapProvider(
   usageByProvider: Map<string, { windows: UsageWindow[]; plan?: string }>,
   expectsOAuthSet: Set<string>,
 ): ModelAuthStatusProvider {
-  const usageKey = resolveUsageProviderId(prov.provider);
+  const usageProfile = prov.profiles.find(
+    (profile) => profile.type === "oauth" || profile.type === "token",
+  );
+  const usageKey = resolveUsageProviderId(prov.provider, {
+    credentialType: usageProfile?.type,
+  });
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
   const rollup = aggregateOAuthStatus(prov, Date.now(), expectsOAuthSet.has(prov.provider));
   return {
@@ -321,8 +332,8 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
     out.add(id);
     if (mode === "oauth") {
       // Store normalized id so lookups against `AuthProviderHealth.provider`
-      // (which is already normalized by buildAuthHealthSummary) match even
-      // when the config uses an alias like `z.ai` that normalizes to `zai`.
+      // (which is already normalized by buildAuthHealthSummary) match despite
+      // case-only differences in config provider keys.
       expectsOAuth.add(normalizeProviderId(id));
     }
   }
@@ -380,6 +391,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       }
       await refreshActiveSecretsRuntimeSnapshot();
       invalidateModelAuthStatusCache();
+      clearCurrentProviderAuthState();
+      void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch((err) => {
+        log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
+      });
       const { runIds: abortedRunIds } = abortChatRunsForProvider(
         createAuthLogoutAbortOps(context),
         {
@@ -422,7 +437,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ...new Set(
           authHealth.profiles
             .filter((p) => p.type === "oauth" || p.type === "token")
-            .map((p) => resolveUsageProviderId(p.provider))
+            .map((p) => resolveUsageProviderId(p.provider, { credentialType: p.type }))
             .filter((id): id is UsageProviderId => Boolean(id)),
         ),
       ];

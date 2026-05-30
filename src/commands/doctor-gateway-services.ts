@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -32,7 +33,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
@@ -354,6 +354,7 @@ export async function maybeRepairGatewayServiceConfig(
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
+  options: { allowExecSecretRefs?: boolean } = {},
 ) {
   if (resolveIsNixMode(process.env)) {
     note("Nix mode detected; skip service updates.", "Gateway");
@@ -394,7 +395,9 @@ export async function maybeRepairGatewayServiceConfig(
       defaults: cfg.secrets?.defaults,
     }).ref,
   );
-  const gatewayTokenResolution = await resolveGatewayAuthTokenForService(cfg, process.env);
+  const gatewayTokenResolution = await resolveGatewayAuthTokenForService(cfg, process.env, {
+    allowExecSecretRefs: options.allowExecSecretRefs === true,
+  });
   if (gatewayTokenResolution.unavailableReason) {
     note(
       `Unable to verify gateway service token drift: ${gatewayTokenResolution.unavailableReason}`,
@@ -413,6 +416,7 @@ export async function maybeRepairGatewayServiceConfig(
     command,
     expectedGatewayToken,
     expectedManagedServiceEnvKeys,
+    expectedServicePath: expectedPlan.environment.PATH,
     expectedPort: port,
   });
   const serviceToken = readEmbeddedGatewayToken(command);

@@ -1,3 +1,7 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -7,8 +11,10 @@ import {
   normalizePluginDiscoveryResult,
   resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
+  runProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   isNonSecretApiKeyMarker,
@@ -25,7 +31,6 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -69,8 +74,8 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   if (!raw) {
     return 15_000;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+  const parsed = Number(raw);
+  return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
 function resolveProviderDiscoveryFilter(params: {
@@ -83,15 +88,12 @@ function resolveProviderDiscoveryFilter(params: {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
   if (testRaw) {
-    const ids = testRaw
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    return ids.length > 0 ? [...new Set(ids)] : undefined;
+    const ids = normalizeStringEntries(testRaw.split(","));
+    return ids.length > 0 ? uniqueStrings(ids) : undefined;
   }
   const scopedProviderIds = params.providerIds
-    ?.map((value) => value.trim())
-    .filter((value) => value.length > 0);
+    ? normalizeStringEntries([...params.providerIds])
+    : undefined;
   if (scopedProviderIds) {
     return resolveProviderPluginScopeFromProviderIds({
       providerIds: scopedProviderIds,
@@ -113,10 +115,7 @@ function resolveProviderDiscoveryFilter(params: {
   if (rawValues.length === 0) {
     return undefined;
   }
-  const ids = rawValues
-    .flatMap((value) => value.split(","))
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const ids = normalizeStringEntries(rawValues.flatMap((value) => value.split(",")));
   if (ids.length === 0) {
     return undefined;
   }
@@ -140,7 +139,7 @@ function resolveProviderPluginScopeFromProviderIds(params: {
   for (const id of params.providerIds) {
     const owners =
       params.resolveOwners?.(id) ??
-      resolveOwningPluginIdsForProvider({
+      resolveOwningPluginIdsForProviderRef({
         provider: id,
         config: params.config,
         workspaceDir: params.workspaceDir,
@@ -323,6 +322,14 @@ function hasProviderWildcardVisibility(params: {
   );
 }
 
+function hasRuntimeProviderCatalog(
+  provider: import("../plugins/types.js").ProviderPlugin,
+): boolean {
+  return (
+    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
+  );
+}
+
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   providers: import("../plugins/types.js").ProviderPlugin[],
@@ -370,17 +377,37 @@ async function resolvePluginImplicitProviders(
       };
     };
 
-    const result = await runProviderCatalogWithTimeout({
-      provider,
-      config: catalogConfig,
-      agentDir: ctx.agentDir,
-      workspaceDir: ctx.workspaceDir,
-      env: ctx.env,
-      resolveProviderApiKey: resolveCatalogProviderApiKey,
-      resolveProviderAuth: (providerId, options) =>
-        ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-      timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
-    });
+    const useStaticCatalog =
+      Boolean(provider.staticCatalog) &&
+      (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
+    let result = useStaticCatalog
+      ? await runProviderStaticCatalog({
+          provider,
+          config: catalogConfig,
+          agentDir: ctx.agentDir,
+          workspaceDir: ctx.workspaceDir,
+          env: ctx.env,
+        })
+      : await runProviderCatalogWithTimeout({
+          provider,
+          config: catalogConfig,
+          agentDir: ctx.agentDir,
+          workspaceDir: ctx.workspaceDir,
+          env: ctx.env,
+          resolveProviderApiKey: resolveCatalogProviderApiKey,
+          resolveProviderAuth: (providerId, options) =>
+            ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+          timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
+        });
+    if (!result && !useStaticCatalog && provider.staticCatalog) {
+      result = await runProviderStaticCatalog({
+        provider,
+        config: catalogConfig,
+        agentDir: ctx.agentDir,
+        workspaceDir: ctx.workspaceDir,
+        env: ctx.env,
+      });
+    }
     if (!result) {
       continue;
     }

@@ -18,6 +18,8 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
+await import("./server.js");
+
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
 const HOOK_TOKEN = "hook-secret";
 const HOOKS_MAIN_SESSION_KEY = "agent:hooks:main";
@@ -93,9 +95,17 @@ type HookCronRunCall = {
   sessionKey?: string;
   job?: {
     agentId?: string;
+    createdAtMs?: number;
     payload?: {
       externalContentSource?: string;
       model?: string;
+    };
+    schedule?: {
+      kind?: string;
+      at?: string;
+    };
+    state?: {
+      nextRunAtMs?: number;
     };
   };
 };
@@ -413,7 +423,7 @@ describe("gateway server hooks", () => {
     });
   });
 
-  test("queues direct and mapped wake payloads with owner-downgrade metadata", async () => {
+  test("queues direct and mapped wake payloads as system events", async () => {
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
@@ -433,7 +443,6 @@ describe("gateway server hooks", () => {
       const directEvents = peekSystemEventEntries(resolveMainKey());
       expect(directEvents).toHaveLength(1);
       expect(directEvents[0]?.text).toBe("Direct wake");
-      expect(directEvents[0]?.forceSenderIsOwnerFalse).toBe(true);
       drainSystemEvents(resolveMainKey());
 
       const mapped = await postHook(port, "/hooks/mapped-wake", { subject: "Email" });
@@ -442,7 +451,6 @@ describe("gateway server hooks", () => {
       const mappedEvents = peekSystemEventEntries(resolveMainKey());
       expect(mappedEvents).toHaveLength(1);
       expect(mappedEvents[0]?.text).toBe("Mapped wake: Email");
-      expect(mappedEvents[0]?.forceSenderIsOwnerFalse).toBe(true);
       drainSystemEvents(resolveMainKey());
     });
   });
@@ -792,12 +800,43 @@ describe("gateway server hooks", () => {
     });
   });
 
-  test("enforces hooks.allowedAgentIds for explicit agent routing", async () => {
+  test("dispatches agent hooks when the process clock is outside the Date range", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+      try {
+        const response = await postHook(port, "/hooks/agent", {
+          message: "Bad clock",
+          name: "Clock",
+        });
+        expect(response.status).toBe(200);
+        await waitForSystemEvent();
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+
+      const call = cronRunCall();
+      expect(call.job?.createdAtMs).toBe(0);
+      expect(call.job?.schedule).toEqual({ kind: "at", at: "1970-01-01T00:00:00.000Z" });
+      expect(call.job?.state?.nextRunAtMs).toBe(0);
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("enforces hooks.allowedAgentIds for effective agent routing", async () => {
     testState.hooksConfig = {
       enabled: true,
       token: HOOK_TOKEN,
       allowedAgentIds: ["hooks"],
       mappings: [
+        {
+          match: { path: "mapped-default" },
+          action: "agent",
+          messageTemplate: "Mapped default: {{payload.subject}}",
+        },
         {
           match: { path: "mapped" },
           action: "agent",
@@ -808,13 +847,21 @@ describe("gateway server hooks", () => {
     };
     setMainAndHooksAgents();
     await withGatewayServer(async ({ port }) => {
-      mockIsolatedRunOkOnce();
       const resNoAgent = await postHook(port, "/hooks/agent", { message: "No explicit agent" });
-      expect(resNoAgent.status).toBe(200);
-      await waitForSystemEvent();
-      const noAgentCall = cronRunCall();
-      expect(noAgentCall?.job?.agentId).toBeUndefined();
-      drainSystemEvents(resolveMainKey());
+      expect(resNoAgent.status).toBe(400);
+      const noAgentBody = (await resNoAgent.json()) as { error?: string };
+      expect(noAgentBody.error).toContain("hooks.allowedAgentIds");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+
+      const resEmptyAgent = await postHook(port, "/hooks/agent", {
+        message: "Empty agent",
+        agentId: " ",
+      });
+      expect(resEmptyAgent.status).toBe(400);
+      const emptyAgentBody = (await resEmptyAgent.json()) as { error?: string };
+      expect(emptyAgentBody.error).toContain("hooks.allowedAgentIds");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
 
       mockIsolatedRunOkOnce();
       const resAllowed = await postHook(port, "/hooks/agent", {
@@ -835,11 +882,55 @@ describe("gateway server hooks", () => {
       const deniedBody = (await resDenied.json()) as { error?: string };
       expect(deniedBody.error).toContain("hooks.allowedAgentIds");
 
+      const resMappedDefaultDenied = await postHook(port, "/hooks/mapped-default", {
+        subject: "hello",
+      });
+      expect(resMappedDefaultDenied.status).toBe(400);
+      const mappedDefaultDeniedBody = (await resMappedDefaultDenied.json()) as { error?: string };
+      expect(mappedDefaultDeniedBody.error).toContain("hooks.allowedAgentIds");
+
       const resMappedDenied = await postHook(port, "/hooks/mapped", { subject: "hello" });
       expect(resMappedDenied.status).toBe(400);
       const mappedDeniedBody = (await resMappedDenied.json()) as { error?: string };
       expect(mappedDeniedBody.error).toContain("hooks.allowedAgentIds");
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+    });
+  });
+
+  test("allows omitted agentId when the default target is allowlisted", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+      allowedAgentIds: ["main"],
+    };
+    testState.sessionConfig = { scope: "global" };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const resNoAgent = await postHook(port, "/hooks/agent", {
+        message: "Default target",
+        sessionKey: "agent:hooks:slack:channel:c123",
+      });
+      expect(resNoAgent.status).toBe(200);
+      await waitForSystemEventTexts(resolveMainKey());
+      const noAgentCall = cronRunCall();
+      expect(noAgentCall?.job?.agentId).toBeUndefined();
+      expect(noAgentCall?.sessionKey).toBe("agent:main:slack:channel:c123");
+      expect(peekSystemEventEntries("agent:main:main")).toStrictEqual([]);
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const resBlankAgent = await postHook(port, "/hooks/agent", {
+        message: "Blank target",
+        agentId: " ",
+      });
+      expect(resBlankAgent.status).toBe(200);
+      await waitForSystemEventTexts(resolveMainKey());
+      const blankAgentCall = cronRunCall();
+      expect(blankAgentCall?.job?.agentId).toBeUndefined();
+      drainSystemEvents(resolveMainKey());
     });
   });
 
@@ -853,6 +944,13 @@ describe("gateway server hooks", () => {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
     await withGatewayServer(async ({ port }) => {
+      const resNoAgent = await postHook(port, "/hooks/agent", {
+        message: "Denied by omission",
+      });
+      expect(resNoAgent.status).toBe(400);
+      const noAgentBody = (await resNoAgent.json()) as { error?: string };
+      expect(noAgentBody.error).toContain("hooks.allowedAgentIds");
+
       const resDenied = await postHook(port, "/hooks/agent", {
         message: "Denied",
         agentId: "hooks",

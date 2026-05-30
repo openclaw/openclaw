@@ -10,7 +10,9 @@ import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { finiteSecondsToTimerSafeMilliseconds } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { listAgentIds, resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
@@ -175,6 +177,10 @@ export type SpawnSubagentResult = {
   mode?: SpawnSubagentMode;
   taskName?: string;
   note?: string;
+  /** Fully resolved model ref applied to the spawned child session. */
+  resolvedModel?: string;
+  /** Provider prefix parsed from resolvedModel when the ref includes one. */
+  resolvedProvider?: string;
   modelApplied?: boolean;
   error?: string;
   attachments?: {
@@ -205,8 +211,7 @@ async function callSubagentGateway(
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
   // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" → write) keep their least-privilege scope so that the gateway does
-  // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
+  // "agent" -> write) keep their least-privilege scope.
   const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
   return await subagentSpawnDeps.callGateway({
     ...params,
@@ -220,6 +225,20 @@ function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): st
   }
   const { runId } = response as { runId?: unknown };
   return typeof runId === "string" && runId ? runId : undefined;
+}
+
+function buildResolvedSubagentModelMetadata(
+  resolvedModel?: string,
+): Pick<SpawnSubagentResult, "resolvedModel" | "resolvedProvider"> {
+  const modelRef = resolvedModel?.trim();
+  if (!modelRef) {
+    return {};
+  }
+  const { provider } = splitModelRef(modelRef);
+  return {
+    resolvedModel: modelRef,
+    ...(provider ? { resolvedProvider: provider } : {}),
+  };
 }
 
 function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
@@ -253,6 +272,9 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   }
   if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
     entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
+  }
+  if (typeof patch.spawnedCwd === "string" && patch.spawnedCwd.trim()) {
+    entry.spawnedCwd = patch.spawnedCwd.trim();
   }
   const inheritedToolDeny = normalizeInheritedToolDenylist(patch.inheritedToolDeny);
   if (inheritedToolDeny.length > 0) {
@@ -481,7 +503,9 @@ async function prepareContextEngineSubagentSpawn(params: {
         params.context.mode === "fork"
           ? params.context.forked.sessionFile
           : params.context.childEntry?.sessionFile,
-      ttlMs: params.runTimeoutSeconds > 0 ? params.runTimeoutSeconds * 1000 : undefined,
+      ttlMs: finiteSecondsToTimerSafeMilliseconds(params.runTimeoutSeconds, {
+        floorSeconds: true,
+      }),
     });
     return { status: "ok", preparation };
   } catch (err) {
@@ -816,7 +840,21 @@ export async function spawnSubagentDirect(
     };
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
-  const explicitWorkspaceDir = normalizeOptionalString(params.cwd);
+  const requestedCwd = normalizeOptionalString(params.cwd);
+  const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
+  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
+    agentGroupId: ctx.agentGroupId,
+    agentGroupChannel: ctx.agentGroupChannel,
+    agentGroupSpace: ctx.agentGroupSpace,
+    workspaceDir: ctx.workspaceDir,
+  });
+  const inheritedWorkspaceDir =
+    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
+  const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
+    config: cfg,
+    targetAgentId,
+    explicitWorkspaceDir: inheritedWorkspaceDir,
+  });
   const requesterOrigin = normalizeDeliveryContext({
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
@@ -874,6 +912,16 @@ export async function spawnSubagentDirect(
         'sessions_spawn sandbox="require" needs a sandboxed target runtime. Pick a sandboxed agentId or use sandbox="inherit".',
     };
   }
+  const spawnedWorkspaceCwd = spawnedWorkspaceDir
+    ? resolveUserPath(spawnedWorkspaceDir)
+    : undefined;
+  if (childRuntime.sandboxed && spawnedCwd && spawnedCwd !== spawnedWorkspaceCwd) {
+    return {
+      status: "forbidden",
+      error:
+        "cwd override is not supported for sandboxed subagent runs; omit cwd or use the target agent workspace as cwd",
+    };
+  }
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
   const childCapabilities = resolveSubagentCapabilities({
@@ -896,6 +944,7 @@ export async function spawnSubagentDirect(
     };
   }
   const { resolvedModel, thinkingOverride } = plan;
+  const resolvedModelMetadata = buildResolvedSubagentModelMetadata(resolvedModel);
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
       const target = resolveGatewaySessionStoreTarget({
@@ -1046,24 +1095,11 @@ export async function spawnSubagentDirect(
     | undefined;
   let attachmentAbsDir: string | undefined;
   let attachmentRootDir: string | undefined;
-  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
-    agentGroupId: ctx.agentGroupId,
-    agentGroupChannel: ctx.agentGroupChannel,
-    agentGroupSpace: ctx.agentGroupSpace,
-    workspaceDir: ctx.workspaceDir,
-  });
-  const inheritedWorkspaceDir =
-    targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
-  const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
-    config: cfg,
-    targetAgentId,
-    explicitWorkspaceDir: explicitWorkspaceDir ?? inheritedWorkspaceDir,
-  });
 
   const materializedAttachments = await materializeSubagentAttachments({
     config: cfg,
     targetAgentId,
-    workspaceDir: spawnedWorkspaceDir,
+    workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
     attachments: params.attachments,
     mountPathHint,
   });
@@ -1104,6 +1140,7 @@ export async function spawnSubagentDirect(
   const spawnLineagePatchError = await patchChildSession({
     spawnedBy: spawnedByKey,
     ...(spawnedMetadata.workspaceDir ? { spawnedWorkspaceDir: spawnedMetadata.workspaceDir } : {}),
+    ...(spawnedCwd ? { spawnedCwd } : {}),
   });
   if (spawnLineagePatchError) {
     await cleanupFailedSpawnBeforeAgentStart({
@@ -1168,6 +1205,7 @@ export async function spawnSubagentDirect(
         idempotencyKey: childIdem,
         deliver: deliverInitialChildRunDirectly,
         lane: AGENT_LANE_SUBAGENT,
+        disableMessageTool: true,
         cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
@@ -1318,6 +1356,7 @@ export async function spawnSubagentDirect(
           },
           threadRequested: requestThreadBinding,
           mode: spawnMode,
+          ...resolvedModelMetadata,
         },
         {
           runId: childRunId,
@@ -1351,6 +1390,7 @@ export async function spawnSubagentDirect(
     note: preparedSpawnContext.forkFallbackNote
       ? `${acceptedNote} ${preparedSpawnContext.forkFallbackNote}`
       : acceptedNote,
+    ...resolvedModelMetadata,
     modelApplied: resolvedModel ? modelApplied : undefined,
     attachments: attachmentsReceipt,
   };

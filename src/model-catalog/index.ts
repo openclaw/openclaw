@@ -1,9 +1,4 @@
 export { mergeModelCatalogRowsByAuthority } from "./authority.js";
-export {
-  buildModelCatalogMergeKey,
-  buildModelCatalogRef,
-  normalizeModelCatalogProviderId,
-} from "./refs.js";
 export { normalizeModelCatalog, normalizeModelCatalogRows } from "./normalize.js";
 export { loadOpenClawProviderIndex } from "./provider-index/index.js";
 export {

@@ -1,11 +1,11 @@
-import type { ErrorObject } from "ajv";
-import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import {
   ErrorCodes,
   errorShape,
+  type ValidationError,
   validateSecretsResolveParams,
   validateSecretsResolveResult,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function errorMessage(error: unknown): string {
@@ -13,7 +13,7 @@ function errorMessage(error: unknown): string {
 }
 
 function invalidSecretsResolveField(
-  errors: ErrorObject[] | null | undefined,
+  errors: ValidationError[] | null | undefined,
 ):
   | "allowedPaths"
   | "commandName"
@@ -22,23 +22,26 @@ function invalidSecretsResolveField(
   | "providerOverrides"
   | "targetIds" {
   for (const issue of errors ?? []) {
+    const instancePath = issue.instancePath ?? "";
     if (
-      issue.instancePath === "/commandName" ||
-      (issue.instancePath === "" &&
-        String((issue.params as { missingProperty?: unknown })?.missingProperty) === "commandName")
+      instancePath === "/commandName" ||
+      (instancePath === "" &&
+        (String(issue.params?.missingProperty) === "commandName" ||
+          (Array.isArray(issue.params?.requiredProperties) &&
+            issue.params.requiredProperties.includes("commandName"))))
     ) {
       return "commandName";
     }
-    if (issue.instancePath.startsWith("/allowedPaths")) {
+    if (instancePath.startsWith("/allowedPaths")) {
       return "allowedPaths";
     }
-    if (issue.instancePath.startsWith("/forcedActivePaths")) {
+    if (instancePath.startsWith("/forcedActivePaths")) {
       return "forcedActivePaths";
     }
-    if (issue.instancePath.startsWith("/optionalActivePaths")) {
+    if (instancePath.startsWith("/optionalActivePaths")) {
       return "optionalActivePaths";
     }
-    if (issue.instancePath.startsWith("/providerOverrides")) {
+    if (instancePath.startsWith("/providerOverrides")) {
       return "providerOverrides";
     }
   }

@@ -1,10 +1,10 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeProviderId } from "../provider-id.js";
 
 export type ExternalCliAuthScope = {
   providerIds: string[];
@@ -99,6 +99,7 @@ export function resolveExternalCliAuthScopeFromConfig(
   addProviderScopeFromModelConfig(providerIds, defaults?.imageGenerationModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.videoGenerationModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.musicGenerationModel);
+  addProviderScopeFromModelConfig(providerIds, defaults?.voiceModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.pdfModel);
   addExternalCliRuntimeScopeFromModelMap(providerIds, defaults?.models);
   for (const provider of Object.values(cfg.models?.providers ?? {})) {

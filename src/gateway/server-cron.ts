@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { abortAndDrainEmbeddedPiRun } from "../agents/pi-embedded.js";
+import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -23,6 +23,7 @@ import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -204,7 +205,13 @@ export function buildGatewayCronService(params: {
         });
       }
     }
-    return canonical;
+    return (
+      resolveMainScopedEventSessionKey({
+        cfg: params.runtimeConfig,
+        sessionKey: canonical,
+        agentId: params.agentId,
+      }) ?? canonical
+    );
   };
 
   const resolveCronTarget = (opts?: {
@@ -314,8 +321,6 @@ export function buildGatewayCronService(params: {
         sessionKey,
         contextKey: opts?.contextKey,
         deliveryContext: opts?.deliveryContext,
-        forceSenderIsOwnerFalse: opts?.forceSenderIsOwnerFalse,
-        trusted: opts?.forceSenderIsOwnerFalse !== true,
       });
     },
     requestHeartbeat: (opts) => {
@@ -382,7 +387,7 @@ export function buildGatewayCronService(params: {
       if (!execution?.sessionId) {
         return;
       }
-      const result = await abortAndDrainEmbeddedPiRun({
+      const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: execution.sessionId,
         sessionKey: execution.sessionKey,
         settleMs: 15_000,

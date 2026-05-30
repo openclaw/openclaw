@@ -93,6 +93,25 @@ function installDiscordRuntime(discord: Record<string, unknown>) {
   } as unknown as PluginRuntime);
 }
 
+async function expectStaleProbeMetadataCleared(statusPatches: Array<Record<string, unknown>>) {
+  await vi.waitFor(() =>
+    expect(
+      statusPatches
+        .filter(
+          (patch) =>
+            "bot" in patch &&
+            "application" in patch &&
+            patch.bot === undefined &&
+            patch.application === undefined,
+        )
+        .map((patch) => ({
+          bot: patch.bot,
+          application: patch.application,
+        })),
+    ).toEqual([{ bot: undefined, application: undefined }]),
+  );
+}
+
 type MockWithCalls = {
   mock: { calls: unknown[][] };
 };
@@ -161,7 +180,7 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
   });
 
-  it("routes read and search actions through the gateway", () => {
+  it("routes Discord message actions through the gateway", () => {
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
       "gateway",
     );
@@ -170,6 +189,15 @@ describe("discordPlugin outbound", () => {
     );
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
       "local",
+    );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "upload-file" as never })).toBe(
+      "local",
+    );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "thread-reply" as never })).toBe(
+      "local",
+    );
+    expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "channel-info" as never })).toBe(
+      "gateway",
     );
   });
 
@@ -181,28 +209,20 @@ describe("discordPlugin outbound", () => {
     );
   });
 
-  it("preserves normalized explicit Discord targets for delivery routing", () => {
-    const parseExplicitTarget = discordPlugin.messaging?.parseExplicitTarget;
-    if (!parseExplicitTarget) {
-      throw new Error("Expected discordPlugin.messaging.parseExplicitTarget to be defined");
+  it("preserves normalized Discord targets for delivery routing", () => {
+    const messaging = discordPlugin.messaging;
+    if (!messaging?.normalizeTarget || !messaging.inferTargetChatType) {
+      throw new Error("Expected discordPlugin.messaging target helpers to be defined");
     }
 
-    expect(parseExplicitTarget({ raw: "user:123" })).toEqual({
-      to: "user:123",
-      chatType: "direct",
-    });
-    expect(parseExplicitTarget({ raw: "<@!456>" })).toEqual({
-      to: "user:456",
-      chatType: "direct",
-    });
-    expect(parseExplicitTarget({ raw: "channel:789" })).toEqual({
-      to: "channel:789",
-      chatType: "channel",
-    });
-    expect(parseExplicitTarget({ raw: "1470130713209602050" })).toEqual({
-      to: "channel:1470130713209602050",
-      chatType: "channel",
-    });
+    expect(messaging.normalizeTarget("user:123")).toBe("user:123");
+    expect(messaging.inferTargetChatType({ to: "user:123" })).toBe("direct");
+    expect(messaging.normalizeTarget("<@!456>")).toBe("user:456");
+    expect(messaging.inferTargetChatType({ to: "<@!456>" })).toBe("direct");
+    expect(messaging.normalizeTarget("channel:789")).toBe("channel:789");
+    expect(messaging.inferTargetChatType({ to: "channel:789" })).toBe("channel");
+    expect(messaging.normalizeTarget("1470130713209602050")).toBe("channel:1470130713209602050");
+    expect(messaging.inferTargetChatType({ to: "1470130713209602050" })).toBe("channel");
   });
 
   it("resolves Discord usernames through the messaging target resolver", async () => {
@@ -607,22 +627,7 @@ describe("discordPlugin outbound", () => {
 
     await discordPlugin.gateway!.startAccount!(ctx);
 
-    await vi.waitFor(() =>
-      expect(
-        statusPatches
-          .filter(
-            (patch) =>
-              "bot" in patch &&
-              "application" in patch &&
-              patch.bot === undefined &&
-              patch.application === undefined,
-          )
-          .map((patch) => ({
-            bot: patch.bot,
-            application: patch.application,
-          })),
-      ).toEqual([{ bot: undefined, application: undefined }]),
-    );
+    await expectStaleProbeMetadataCleared(statusPatches);
   });
 
   it("clears stale Discord probe metadata when the async startup probe throws", async () => {
@@ -644,22 +649,7 @@ describe("discordPlugin outbound", () => {
 
     await discordPlugin.gateway!.startAccount!(ctx);
 
-    await vi.waitFor(() =>
-      expect(
-        statusPatches
-          .filter(
-            (patch) =>
-              "bot" in patch &&
-              "application" in patch &&
-              patch.bot === undefined &&
-              patch.application === undefined,
-          )
-          .map((patch) => ({
-            bot: patch.bot,
-            application: patch.application,
-          })),
-      ).toEqual([{ bot: undefined, application: undefined }]),
-    );
+    await expectStaleProbeMetadataCleared(statusPatches);
   });
 
   it("stagger starts later accounts in multi-bot setups", async () => {

@@ -13,6 +13,7 @@ import {
   type OpenClawConfig,
   type SecretInput,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultFeishuAccountId, resolveFeishuAccount } from "./accounts.js";
 import type { AppRegistrationResult } from "./app-registration.js";
 import type { FeishuConfig, FeishuDomain } from "./types.js";
@@ -26,14 +27,6 @@ const FEISHU_SETUP_FLOW_KEY = "_flow";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function normalizeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 function isFeishuConfigured(cfg: OpenClawConfig): boolean {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
@@ -258,6 +251,13 @@ function applyNewAppSecurityPolicy(
 // Scan-to-create flow
 // ---------------------------------------------------------------------------
 
+let appRegistrationModulePromise: Promise<typeof import("./app-registration.js")> | null = null;
+
+const loadAppRegistrationModule = async () => {
+  appRegistrationModulePromise ??= import("./app-registration.js");
+  return await appRegistrationModulePromise;
+};
+
 async function promptFeishuDomain(params: {
   prompter: WizardPrompter;
   initialValue?: FeishuDomain;
@@ -288,7 +288,7 @@ async function runScanToCreate(
   domain: FeishuDomain,
 ): Promise<AppRegistrationResult | null> {
   const { beginAppRegistration, initAppRegistration, pollAppRegistration, printQrCode } =
-    await import("./app-registration.js");
+    await loadAppRegistrationModule();
   try {
     await initAppRegistration(domain);
   } catch {
@@ -399,7 +399,7 @@ async function runNewAppFlow(params: {
 
     // Fetch openId via API for manual flow.
     if (appId && appSecretProbeValue) {
-      const { getAppOwnerOpenId } = await import("./app-registration.js");
+      const { getAppOwnerOpenId } = await loadAppRegistrationModule();
       scanOpenId = await getAppOwnerOpenId({
         appId,
         appSecret: appSecretProbeValue,

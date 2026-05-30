@@ -939,7 +939,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("forwards cron system events with owner-downgrade metadata", () => {
+  it("forwards cron system events to the resolved session", () => {
     const cfg = createCronConfig("server-cron-system-event");
     loadConfigMock.mockReturnValue(cfg);
 
@@ -959,8 +959,6 @@ describe("buildGatewayCronService", () => {
                   agentId?: string;
                   sessionKey?: string;
                   contextKey?: string;
-                  forceSenderIsOwnerFalse?: boolean;
-                  trusted?: boolean;
                 },
               ) => void;
             };
@@ -971,14 +969,11 @@ describe("buildGatewayCronService", () => {
       cronDeps?.enqueueSystemEvent?.("hello", {
         sessionKey: "discord:channel:ops",
         contextKey: "cron:test",
-        forceSenderIsOwnerFalse: true,
       });
 
       expect(enqueueSystemEventMock).toHaveBeenCalledWith("hello", {
         sessionKey: "agent:main:discord:channel:ops",
         contextKey: "cron:test",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       });
     } finally {
       state.cron.stop();
@@ -1029,7 +1024,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("passes custom session targets through to isolated cron runs", async () => {
+  it("passes opaque custom session targets through to isolated cron runs", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-custom-session-${Date.now()}`);
     const cfg = {
       session: {
@@ -1047,20 +1042,21 @@ describe("buildGatewayCronService", () => {
       broadcast: () => {},
     });
     try {
+      const sessionKey = "agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
       const job = await state.cron.add({
         name: "custom-session",
         enabled: true,
         schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "session:project-alpha-monitor",
+        sessionTarget: `session:${sessionKey}`,
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "hello" },
       });
 
       await state.cron.run(job.id, "force");
 
-      const options = expectIsolatedRunFields({ sessionKey: "project-alpha-monitor" });
+      const options = expectIsolatedRunFields({ sessionKey });
       expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-      expectCleanupForSessionKeys(["project-alpha-monitor"]);
+      expectCleanupForSessionKeys([sessionKey]);
     } finally {
       state.cron.stop();
     }

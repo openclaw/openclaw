@@ -1,14 +1,15 @@
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
 import { isChannelConfigured } from "../../../config/channel-configured.js";
-import { collectConfiguredModelRefs } from "../../../config/model-refs.js";
 import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
 import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
+import { normalizeNullableString as normalizeId } from "../../../shared/string-coerce.js";
 import { VERSION } from "../../../version.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
@@ -25,10 +26,6 @@ type ReleaseConfiguredPluginIds = {
   pluginIds: string[];
   channelIds: string[];
 };
-
-function normalizeId(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
 
 function isPluginsGloballyDisabled(cfg: OpenClawConfig): boolean {
   return cfg.plugins?.enabled === false;
@@ -196,9 +193,9 @@ function collectProviderPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): 
 
 function collectAgentHarnessRuntimePluginIds(
   cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
+  _env: NodeJS.ProcessEnv,
 ): string[] {
-  return collectConfiguredAgentHarnessRuntimes(cfg, env)
+  return collectConfiguredAgentHarnessRuntimes(cfg)
     .map((runtime) => AGENT_HARNESS_RUNTIME_PLUGIN_IDS[runtime])
     .filter((pluginId): pluginId is string => Boolean(pluginId))
     .toSorted((left, right) => left.localeCompare(right));

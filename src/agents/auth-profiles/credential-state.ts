@@ -1,4 +1,5 @@
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 export type AuthCredentialReasonCode =
@@ -25,7 +26,7 @@ export function resolveTokenExpiryState(
   if (typeof expires !== "number") {
     return "invalid_expires";
   }
-  if (!Number.isFinite(expires) || expires <= 0) {
+  if (!Number.isFinite(expires) || expires <= 0 || expires > MAX_DATE_TIMESTAMP_MS) {
     return "invalid_expires";
   }
   const remainingMs = expires - now;

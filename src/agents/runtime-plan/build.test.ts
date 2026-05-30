@@ -18,7 +18,10 @@ vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
-  testing: {},
+  clearProviderRuntimePluginCacheForTest: vi.fn(),
+  testing: {
+    clearProviderRuntimePluginCacheForTest: vi.fn(),
+  },
   ensureProviderRuntimePluginHandle: vi.fn(
     (params) => params.runtimeHandle ?? { provider: "openai" },
   ),
@@ -130,9 +133,10 @@ describe("AgentRuntimePlan", () => {
     });
 
     expect(plan.auth.providerForAuth).toBe("openai");
-    expect(plan.auth.authProfileProviderForAuth).toBe("openai-codex");
-    expect(plan.auth.harnessAuthProvider).toBe("openai-codex");
+    expect(plan.auth.authProfileProviderForAuth).toBe("openai");
+    expect(plan.auth.harnessAuthProvider).toBe("openai");
     expect(plan.auth.forwardedAuthProfileId).toBe("openai-codex:work");
+    expect(plan.delivery.isSilentPayload({ text: "NO_REPLY\n\nNO_REPLY" })).toBe(true);
     expect(plan.delivery.isSilentPayload({ text: '{"action":"NO_REPLY"}' })).toBe(true);
     expect(
       plan.delivery.isSilentPayload({
@@ -215,7 +219,7 @@ describe("AgentRuntimePlan", () => {
 
     expect(plan.auth.providerForAuth).toBe("openai");
     expect(plan.auth.authProfileProviderForAuth).toBe("openai");
-    expect(plan.auth.harnessAuthProvider).toBe("openai-codex");
+    expect(plan.auth.harnessAuthProvider).toBe("openai");
     expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
   });
 
@@ -241,7 +245,7 @@ describe("AgentRuntimePlan", () => {
     ]);
   });
 
-  it("does not forward non-api-key OpenAI profiles into the Codex harness auth slot", () => {
+  it("forwards OpenAI OAuth profiles into the Codex harness auth slot", () => {
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -255,16 +259,16 @@ describe("AgentRuntimePlan", () => {
       workspaceDir: "/tmp/openclaw-runtime-plan",
     });
 
-    expect(plan.auth.forwardedAuthProfileId).toBeUndefined();
+    expect(plan.auth.forwardedAuthProfileId).toBe("openai:work");
   });
 
-  it("forwards OpenAI Codex profiles for explicit OpenAI PI runs", () => {
+  it("forwards OpenAI Codex profiles for explicit OpenAI OpenClaw runs", () => {
     const plan = buildAgentRuntimePlan({
       provider: "openai",
       modelId: "gpt-5.4",
       modelApi: "openai-responses",
-      harnessId: "pi",
-      harnessRuntime: "pi",
+      harnessId: "openclaw",
+      harnessRuntime: "openclaw",
       authProfileProvider: "openai-codex",
       sessionAuthProfileId: "openai-codex:work",
       config: {},
@@ -272,7 +276,7 @@ describe("AgentRuntimePlan", () => {
     });
 
     expect(plan.auth.providerForAuth).toBe("openai");
-    expect(plan.auth.authProfileProviderForAuth).toBe("openai-codex");
+    expect(plan.auth.authProfileProviderForAuth).toBe("openai");
     expect(plan.auth.forwardedAuthProfileId).toBe("openai-codex:work");
   });
 
@@ -355,11 +359,11 @@ describe("AgentRuntimePlan", () => {
 
     expect(resolveProviderRuntimePluginHandleMock).toHaveBeenCalledWith({
       provider: "openai",
+      modelId: "gpt-5.4",
       config: suppliedHandle.config,
       workspaceDir: "/tmp/openclaw-runtime-plan",
       env: process.env,
       applyAutoEnable: undefined,
-      bundledProviderAllowlistCompat: undefined,
       bundledProviderVitestCompat: undefined,
     });
     const followupCall = latestFollowupRouteCall();
@@ -402,11 +406,11 @@ describe("AgentRuntimePlan", () => {
 
     expect(resolveProviderRuntimePluginHandleMock).toHaveBeenCalledWith({
       provider: "openai",
+      modelId: "gpt-5.4",
       config: {},
       workspaceDir: "/tmp/openclaw-runtime-plan",
       env: process.env,
       applyAutoEnable: undefined,
-      bundledProviderAllowlistCompat: undefined,
       bundledProviderVitestCompat: undefined,
     });
     const followupCall = latestFollowupRouteCall();

@@ -1,5 +1,47 @@
 # OpenClaw iOS Changelog
 
+## 2026.5.30 - 2026-05-30
+
+Maintenance update for the current OpenClaw release.
+
+- Added hosted push relay defaults, realtime Talk playback, and safer WebSocket ping handling for mobile sessions.
+- Updated App Store screenshots to cover Gateway pairing, Command, Chat, Talk, Agent, and Settings flows.
+- Highlighted realtime Talk relay, Gateway connection status, node capabilities, push wake, and privacy controls.
+
+## 2026.5.28 - 2026-05-28
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.27 - 2026-05-27
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.26 - 2026-05-26
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.25 - 2026-05-25
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.24 - 2026-05-24
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.22 - 2026-05-22
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.21 - 2026-05-21
+
+Maintenance update for the current OpenClaw release.
+
+- Added realtime Gateway Talk relay support for iOS voice sessions, including OpenAI realtime provider and voice selection controls. Thanks @Solvely-Colin.
+
+## 2026.5.20 - 2026-05-20
+
+Maintenance update for the current OpenClaw release.
+
 ## 2026.5.19 - 2026-05-19
 
 Maintenance update for the current OpenClaw release.

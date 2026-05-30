@@ -20,6 +20,13 @@ const ENV_VARS = [
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
 ] as const;
 
+let oauthRuntimeModulePromise: Promise<typeof import("./oauth.runtime.js")> | null = null;
+
+const loadOauthRuntimeModule = async () => {
+  oauthRuntimeModulePromise ??= import("./oauth.runtime.js");
+  return await oauthRuntimeModulePromise;
+};
+
 async function fetchGeminiCliUsage(ctx: ProviderFetchUsageSnapshotContext) {
   return await fetchGeminiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, PROVIDER_ID);
 }
@@ -58,7 +65,7 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
 
           const spin = ctx.prompter.progress("Starting Gemini CLI OAuth…");
           try {
-            const { loginGeminiCliOAuth } = await import("./oauth.runtime.js");
+            const { loginGeminiCliOAuth } = await loadOauthRuntimeModule();
             const result = await loginGeminiCliOAuth({
               isRemote: ctx.isRemote,
               openUrl: ctx.openUrl,
@@ -79,9 +86,8 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
               configPatch: {
                 agents: {
                   defaults: {
-                    agentRuntime: { id: PROVIDER_ID },
                     models: {
-                      [DEFAULT_MODEL]: {},
+                      [DEFAULT_MODEL]: { agentRuntime: { id: PROVIDER_ID } },
                     },
                   },
                 },
@@ -123,7 +129,7 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
     refreshOAuth: async (cred) => {
-      const { refreshGeminiCliOAuthToken } = await import("./oauth.runtime.js");
+      const { refreshGeminiCliOAuthToken } = await loadOauthRuntimeModule();
       return await refreshGeminiCliOAuthToken(cred);
     },
     resolveUsageAuth: async (ctx) => {

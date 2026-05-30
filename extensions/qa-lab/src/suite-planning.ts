@@ -1,14 +1,15 @@
 import path from "node:path";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import type { QaProviderMode } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
-const QA_MERGE_PATCH_BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
@@ -33,12 +34,16 @@ function scenarioMatchesLiveLane(params: {
   providerMode: QaProviderMode;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
+  const provider = getQaProvider(params.providerMode);
+  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
+    return false;
+  }
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     return false;
   }
-  if (getQaProvider(params.providerMode).kind !== "live") {
+  if (provider.kind !== "live") {
     return true;
   }
   const selected = splitModelRef(params.primaryModel);
@@ -102,34 +107,12 @@ function collectQaSuitePluginIds(
   ];
 }
 
-function isQaPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function applyQaMergePatch(base: unknown, patch: unknown): unknown {
-  if (!isQaPlainObject(patch)) {
-    return patch;
-  }
-  const result = isQaPlainObject(base) ? { ...base } : {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (QA_MERGE_PATCH_BLOCKED_KEYS.has(key)) {
-      continue;
-    }
-    if (value === null) {
-      delete result[key];
-      continue;
-    }
-    result[key] = isQaPlainObject(value) ? applyQaMergePatch(result[key], value) : value;
-  }
-  return result;
-}
-
 function collectQaSuiteGatewayConfigPatch(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ): Record<string, unknown> | undefined {
   let merged: Record<string, unknown> | undefined;
   for (const scenario of scenarios) {
-    if (!isQaPlainObject(scenario.gatewayConfigPatch)) {
+    if (!isQaMergePatchObject(scenario.gatewayConfigPatch)) {
       continue;
     }
     merged = applyQaMergePatch(merged ?? {}, scenario.gatewayConfigPatch) as Record<
@@ -152,6 +135,17 @@ function collectQaSuiteGatewayRuntimeOptions(
   return forwardHostHome ? { forwardHostHome: true } : undefined;
 }
 
+function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  concurrency: number;
+}) {
+  return (
+    params.scenarios.length > 1 &&
+    (params.concurrency > 1 ||
+      params.scenarios.some((scenario) => isQaMergePatchObject(scenario.gatewayConfigPatch)))
+  );
+}
+
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {
   return normalizeLowercaseStringOrEmpty(scenario.surface) === "control-ui";
 }
@@ -161,11 +155,11 @@ function normalizeQaSuiteConcurrency(
   scenarioCount: number,
   defaultConcurrency = DEFAULT_QA_SUITE_CONCURRENCY,
 ) {
-  const envValue = Number(process.env.OPENCLAW_QA_SUITE_CONCURRENCY);
+  const envValue = parseStrictNonNegativeInteger(process.env.OPENCLAW_QA_SUITE_CONCURRENCY);
   const raw =
     typeof value === "number" && Number.isFinite(value)
       ? value
-      : Number.isFinite(envValue)
+      : envValue !== undefined
         ? envValue
         : defaultConcurrency;
   return Math.max(1, Math.min(Math.floor(raw), Math.max(1, scenarioCount)));
@@ -182,11 +176,11 @@ function resolveQaSuiteWorkerStartStaggerMs(
   if (raw === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 async function mapQaSuiteWithConcurrency<T, U>(
@@ -268,5 +262,6 @@ export {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
+  shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 };

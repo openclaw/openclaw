@@ -1,4 +1,9 @@
-import { cancel, isCancel, log } from "@clack/prompts";
+import { cancel, confirm, isCancel, log } from "@clack/prompts";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { promptYesNo } from "../cli/prompt.js";
@@ -11,7 +16,6 @@ import {
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { runMigrationApply } from "./migrate/apply.js";
 import { formatMigrationPreview } from "./migrate/output.js";
 import { createMigrationPlan, resolveMigrationProvider } from "./migrate/providers.js";
@@ -52,6 +56,42 @@ function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): 
   );
 }
 
+function hasAuthCredentialCandidate(plan: MigrationPlan): boolean {
+  return plan.items.some(
+    (item) => item.kind === "auth" || item.kind === "secret" || item.sensitive === true,
+  );
+}
+
+function hasPlannedAuthCredentialItem(plan: MigrationPlan): boolean {
+  return plan.items.some(
+    (item) =>
+      item.status === "planned" &&
+      (item.kind === "auth" || item.kind === "secret" || item.sensitive === true),
+  );
+}
+
+function resolveDefaultIncludeSecrets<T extends MigrateCommonOptions & { yes?: boolean }>(
+  opts: T,
+): T {
+  if (opts.authCredentials === false) {
+    return { ...opts, includeSecrets: false };
+  }
+  if (opts.includeSecrets !== undefined) {
+    return opts;
+  }
+  return opts;
+}
+
+function shouldPromptForAuthCredentials(opts: MigrateCommonOptions & { yes?: boolean }): boolean {
+  return (
+    opts.includeSecrets === undefined &&
+    opts.authCredentials !== false &&
+    !opts.yes &&
+    !opts.json &&
+    process.stdin.isTTY
+  );
+}
+
 async function createMigrationPlanWithProgress(
   runtime: RuntimeEnv,
   opts: MigrateCommonOptions & { provider: string },
@@ -70,6 +110,46 @@ async function createMigrationPlanWithProgress(
     },
   );
   return selectMigrationItems(plan, opts);
+}
+
+async function createInteractiveMigrationPlanWithAuthPrompt(
+  runtime: RuntimeEnv,
+  opts: MigrateCommonOptions & { provider: string; yes?: boolean },
+): Promise<MigrationPlan> {
+  if (!shouldPromptForAuthCredentials(opts)) {
+    return await migratePlanCommand(runtime, resolveDefaultIncludeSecrets(opts));
+  }
+  const initialPlan = await migratePlanCommand(runtime, {
+    ...opts,
+    includeSecrets: false,
+    suppressPlanLog: true,
+  });
+  if (!hasAuthCredentialCandidate(initialPlan)) {
+    if (!opts.suppressPlanLog) {
+      log.message(formatMigrationPreview(initialPlan).join("\n"));
+    }
+    return initialPlan;
+  }
+  const includeSecrets = await confirm({
+    message: stylePromptMessage("Do you want to migrate your auth credentials as well?"),
+    initialValue: true,
+  });
+  if (isCancel(includeSecrets)) {
+    cancel(stylePromptTitle("Migration cancelled.") ?? "Migration cancelled.");
+    runtime.exit(0);
+    throw new Error("unreachable");
+  }
+  const finalPlan = includeSecrets
+    ? await migratePlanCommand(runtime, {
+        ...opts,
+        includeSecrets: true,
+        suppressPlanLog: true,
+      })
+    : initialPlan;
+  if (!opts.suppressPlanLog) {
+    log.message(formatMigrationPreview(finalPlan).join("\n"));
+  }
+  return finalPlan;
 }
 
 function assertVerifyPluginAppsProvider(providerId: string, opts: MigrateCommonOptions): void {
@@ -216,7 +296,9 @@ function hasSelectedCodexMigrationWork(plan: MigrationPlan): boolean {
   return plan.items.some(
     (item) =>
       item.status === "planned" &&
-      ((item.kind === "skill" && item.action === "copy") ||
+      (item.kind === "auth" ||
+        item.kind === "secret" ||
+        (item.kind === "skill" && item.action === "copy") ||
         (item.kind === "plugin" && item.action === "install")),
   );
 }
@@ -291,11 +373,15 @@ export async function migratePlanCommand(
       `Migration provider is required. Run ${formatCliCommand("openclaw migrate list")} to choose one.`,
     );
   }
-  assertVerifyPluginAppsProvider(providerId, opts);
-  const plan = await createMigrationPlanWithProgress(runtime, { ...opts, provider: providerId });
-  if (opts.json) {
+  const resolvedOpts = resolveDefaultIncludeSecrets(opts);
+  assertVerifyPluginAppsProvider(providerId, resolvedOpts);
+  const plan = await createMigrationPlanWithProgress(runtime, {
+    ...resolvedOpts,
+    provider: providerId,
+  });
+  if (resolvedOpts.json) {
     writeRuntimeJson(runtime, redactMigrationPlan(plan));
-  } else if (opts.suppressPlanLog !== true) {
+  } else if (resolvedOpts.suppressPlanLog !== true) {
     log.message(formatMigrationPreview(plan).join("\n"));
   }
   return plan;
@@ -330,7 +416,7 @@ export async function migrateApplyCommand(
   }
   const provider = resolveMigrationProvider(providerId, opts.configOverride);
   if (!opts.yes) {
-    const plan = await migratePlanCommand(runtime, {
+    const plan = await createInteractiveMigrationPlanWithAuthPrompt(runtime, {
       ...opts,
       provider: providerId,
       json: opts.json,
@@ -353,12 +439,23 @@ export async function migrateApplyCommand(
     }
     return await runMigrationApply({
       runtime,
-      opts: { ...opts, provider: providerId, yes: true, preflightPlan: selectedPlan },
+      opts: {
+        ...opts,
+        provider: providerId,
+        yes: true,
+        includeSecrets: opts.includeSecrets ?? hasPlannedAuthCredentialItem(selectedPlan),
+        preflightPlan: selectedPlan,
+      },
       providerId,
       provider,
     });
   }
-  return await runMigrationApply({ runtime, opts, providerId, provider });
+  return await runMigrationApply({
+    runtime,
+    opts: resolveDefaultIncludeSecrets(opts),
+    providerId,
+    provider,
+  });
 }
 
 export async function migrateDefaultCommand(
@@ -384,17 +481,24 @@ export async function migrateDefaultCommand(
     };
   }
   assertVerifyPluginAppsProvider(providerId, opts);
+  const resolvedOpts = resolveDefaultIncludeSecrets(opts);
   const plan =
     opts.json && opts.yes && !opts.dryRun
       ? selectMigrationItems(
-          await createMigrationPlan(runtime, { ...opts, provider: providerId }),
-          opts,
+          await createMigrationPlan(runtime, { ...resolvedOpts, provider: providerId }),
+          resolvedOpts,
         )
-      : await migratePlanCommand(runtime, {
-          ...opts,
-          provider: providerId,
-          json: opts.json && (opts.dryRun || !opts.yes),
-        });
+      : !opts.yes && process.stdin.isTTY
+        ? await createInteractiveMigrationPlanWithAuthPrompt(runtime, {
+            ...opts,
+            provider: providerId,
+            json: opts.json && (opts.dryRun || !opts.yes),
+          })
+        : await migratePlanCommand(runtime, {
+            ...resolvedOpts,
+            provider: providerId,
+            json: opts.json && (opts.dryRun || !opts.yes),
+          });
   if (opts.dryRun) {
     return plan;
   }
@@ -423,12 +527,13 @@ export async function migrateDefaultCommand(
       ...opts,
       provider: providerId,
       yes: true,
+      includeSecrets: opts.includeSecrets ?? hasPlannedAuthCredentialItem(selectedPlan),
       json: opts.json,
       preflightPlan: selectedPlan,
     });
   }
   return await migrateApplyCommand(runtime, {
-    ...opts,
+    ...resolvedOpts,
     provider: providerId,
     yes: true,
     json: opts.json,

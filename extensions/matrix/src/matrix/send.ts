@@ -1,7 +1,7 @@
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "../runtime-api.js";
@@ -50,6 +50,7 @@ const MATRIX_TEXT_LIMIT = 4000;
 const getCore = () => getMatrixRuntime();
 
 export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
+export { resolveMatrixMentionsForBody } from "./send/formatting.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
 export type MatrixPreparedSingleText = {

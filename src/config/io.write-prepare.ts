@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
@@ -10,6 +11,16 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
   /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
 const MANAGED_CONFIG_UNSET_PATHS = [["plugins", "installs"]] as const;
+
+type ManifestModelIdNormalizationProvider = {
+  aliases?: Record<string, string>;
+  stripPrefixes?: string[];
+  prefixWhenBare?: string;
+  prefixWhenBareAfterAliasStartsWith?: {
+    modelPrefix: string;
+    prefix: string;
+  }[];
+};
 
 function cloneUnknown<T>(value: T): T {
   return structuredClone(value);
@@ -104,11 +115,8 @@ function getPathValue(value: unknown, path: string[]): unknown {
   let current = value;
   for (const segment of path) {
     if (Array.isArray(current)) {
-      if (!isNumericPathSegment(segment)) {
-        return undefined;
-      }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseArrayIndexPathSegment(segment);
+      if (index === undefined || index >= current.length) {
         return undefined;
       }
       current = current[index];
@@ -128,11 +136,8 @@ function setPathValue(value: unknown, path: string[], nextValue: unknown): unkno
   }
   const [head, ...tail] = path;
   if (Array.isArray(value)) {
-    if (!isNumericPathSegment(head)) {
-      return value;
-    }
-    const index = Number.parseInt(head, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+    const index = parseArrayIndexPathSegment(head);
+    if (index === undefined || index >= value.length) {
       return value;
     }
     const next = [...value];
@@ -181,11 +186,8 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   }
   const [head, ...tail] = path;
   if (Array.isArray(value) || isNumericPathSegment(head)) {
-    if (!isNumericPathSegment(head)) {
-      return value;
-    }
-    const index = Number.parseInt(head, 10);
-    if (!Number.isFinite(index) || index < 0) {
+    const index = parseArrayIndexPathSegment(head);
+    if (index === undefined) {
       return value;
     }
     const next = Array.isArray(value) ? [...value] : [];
@@ -339,6 +341,7 @@ const AGENT_MODEL_CONFIG_KEYS = [
   "imageGenerationModel",
   "videoGenerationModel",
   "musicGenerationModel",
+  "voiceModel",
   "pdfModel",
 ] as const;
 
@@ -414,7 +417,10 @@ function normalizeToolsModelRefsForWrite(config: unknown): unknown {
   return normalizeModelConfigPathForWrite(config, ["tools", "subagents", "model"]);
 }
 
-function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
+function normalizeModelProviderCatalogRefsForWrite(
+  config: unknown,
+  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
+): unknown {
   const providers = getPathValue(config, ["models", "providers"]);
   if (!isRecord(providers)) {
     return config;
@@ -436,7 +442,11 @@ function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
       if (!trimmed) {
         return model;
       }
-      const id = normalizeConfiguredProviderCatalogModelId(provider, trimmed);
+      const id = normalizeConfiguredProviderCatalogModelId(
+        provider,
+        trimmed,
+        modelIdNormalizationPolicies,
+      );
       if (id === model.id) {
         return model;
       }
@@ -453,13 +463,17 @@ function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
   return mutated ? setPathValue(config, ["models", "providers"], nextProviders) : config;
 }
 
-function normalizeModelRefsForWrite(config: unknown): unknown {
+function normalizeModelRefsForWrite(
+  config: unknown,
+  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
+): unknown {
   return normalizeModelProviderCatalogRefsForWrite(
     normalizeToolsModelRefsForWrite(
       normalizeAgentListModelRefsForWrite(
         normalizeAgentModelRefsAtPathForWrite(config, ["agents", "defaults"]),
       ),
     ),
+    modelIdNormalizationPolicies,
   );
 }
 
@@ -488,11 +502,8 @@ function hasPathValue(value: unknown, path: readonly string[]): boolean {
   }
   const [head, ...tail] = path;
   if (Array.isArray(value)) {
-    if (!isNumericPathSegment(head)) {
-      return false;
-    }
-    const index = Number.parseInt(head, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+    const index = parseArrayIndexPathSegment(head);
+    if (index === undefined || index >= value.length) {
       return false;
     }
     return tail.length === 0 || hasPathValue(value[index], tail);
@@ -520,8 +531,8 @@ function mergeMissingExplicitValues(
     let changed = false;
     const next = [...currentValue];
     for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
-      const index = Number.parseInt(key, 10);
-      if (!Number.isFinite(index) || index < 0) {
+      const index = parseArrayIndexPathSegment(key);
+      if (index === undefined) {
         continue;
       }
       if (index >= next.length || next[index] === undefined) {
@@ -606,6 +617,7 @@ export function resolvePersistCandidateForWrite(params: {
   unsetPaths?: readonly string[][];
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: unknown;
+  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
@@ -633,7 +645,7 @@ export function resolvePersistCandidateForWrite(params: {
     persistedCandidate: withSchema,
     unsetPaths: params.unsetPaths,
   });
-  return normalizeModelRefsForWrite(withAuthoredParams);
+  return normalizeModelRefsForWrite(withAuthoredParams, params.modelIdNormalizationPolicies);
 }
 
 function readRootSchemaUri(value: unknown): string | undefined {
@@ -687,7 +699,11 @@ export function formatConfigValidationFailure(pathLabel: string, issueMessage: s
 }
 
 function isNumericPathSegment(raw: string): boolean {
-  return /^[0-9]+$/.test(raw);
+  return parseArrayIndexPathSegment(raw) !== undefined;
+}
+
+function parseArrayIndexPathSegment(raw: string): number | undefined {
+  return parseConfigPathArrayIndex(raw);
 }
 
 function isWritePlainObject(value: unknown): value is Record<string, unknown> {
@@ -719,11 +735,8 @@ function unsetPathForWriteAt(
   const isLeaf = depth === pathSegments.length - 1;
 
   if (Array.isArray(value)) {
-    if (!isNumericPathSegment(segment)) {
-      return { changed: false, value };
-    }
-    const index = Number.parseInt(segment, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+    const index = parseArrayIndexPathSegment(segment);
+    if (index === undefined || index >= value.length) {
       return { changed: false, value };
     }
     if (isLeaf) {

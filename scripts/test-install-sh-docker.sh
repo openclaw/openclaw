@@ -5,6 +5,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=./docker/install-sh-common/version-parse.sh
 source "$ROOT_DIR/scripts/docker/install-sh-common/version-parse.sh"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
+INSTALL_SMOKE_DOCKER_RUN_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_DOCKER_RUN_TIMEOUT:-2700s}"
+
+run_install_smoke_container() {
+  DOCKER_COMMAND_TIMEOUT="$INSTALL_SMOKE_DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run "$@"
+}
 
 resolve_default_smoke_platform() {
   local host_os
@@ -176,6 +183,24 @@ NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"
 NPM_CACHE_OWNED=0
 NPM_CACHE_PREPARED=0
 NPM_CACHE_DOCKER_ARGS=()
+INSTALL_SCRIPT_DOCKER_ARGS=(
+  -v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro"
+  -v "$ROOT_DIR/scripts/install-cli.sh:/tmp/openclaw-install-cli.sh:ro"
+)
+SMOKE_RUNNER_ENV_ARGS=()
+
+for env_name in \
+  OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING \
+  OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION \
+  OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT \
+  OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL \
+  OPENCLAW_INSTALL_SMOKE_PREVIOUS \
+  OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS; do
+  env_value="${!env_name:-}"
+  if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
+    SMOKE_RUNNER_ENV_ARGS+=(-e "$env_name")
+  fi
+done
 
 remove_owned_npm_cache() {
   if [[ "$NPM_CACHE_OWNED" != "1" || -z "$NPM_CACHE_DIR" || ! -d "$NPM_CACHE_DIR" ]]; then
@@ -223,13 +248,13 @@ restore_local_dist_from_image() {
   local container_id=""
 
   echo "==> Reuse local dist/ from Docker image: $image"
-  container_id="$(docker create "$image")"
+  container_id="$(docker_e2e_docker_cmd create "$image")"
   rm -rf "$ROOT_DIR/dist"
-  if ! docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
-    docker rm -f "$container_id" >/dev/null 2>&1 || true
+  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
+    docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
     return 1
   fi
-  docker rm -f "$container_id" >/dev/null
+  docker_e2e_docker_cmd rm -f "$container_id" >/dev/null
 }
 
 ensure_local_update_dist_import_closure() {
@@ -238,7 +263,6 @@ ensure_local_update_dist_import_closure() {
   fi
   echo "WARN: reused Docker image dist failed import-closure check; rebuilding local release artifacts" >&2
   pnpm build
-  pnpm ui:build
 }
 
 prepare_update_tarball() {
@@ -259,7 +283,6 @@ prepare_update_tarball() {
       ensure_local_update_dist_import_closure
     elif [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
       pnpm build
-      pnpm ui:build
     fi
     UPDATE_EXPECT_VERSION="$(
       node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'
@@ -399,10 +422,12 @@ else
   start_update_server
 
   echo "==> Run installer smoke test (root): $FRESH_TAG_URL"
-  docker run --rm -t \
+  run_install_smoke_container --rm -t \
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
-    "${NPM_CACHE_DOCKER_ARGS[@]}" \
+    ${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"} \
+    "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
+    ${SMOKE_RUNNER_ENV_ARGS[@]+"${SMOKE_RUNNER_ENV_ARGS[@]}"} \
     -v "${LATEST_DIR}:/out" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
@@ -419,12 +444,17 @@ else
   if [[ -f "$LATEST_FILE" ]]; then
     LATEST_VERSION="$(cat "$LATEST_FILE")"
   fi
+  public_latest_version="$(quiet_npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+  if [[ -n "$public_latest_version" ]]; then
+    LATEST_VERSION="$public_latest_version"
+  fi
 
   echo "==> Run update smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
-  docker run --rm -t \
+  run_install_smoke_container --rm -t \
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
-    "${NPM_CACHE_DOCKER_ARGS[@]}" \
+    ${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"} \
+    ${SMOKE_RUNNER_ENV_ARGS[@]+"${SMOKE_RUNNER_ENV_ARGS[@]}"} \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=update \
     -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
@@ -440,10 +470,11 @@ else
     echo "==> Skip direct npm global smoke (OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1)"
   else
     echo "==> Run direct npm global smoke (${UPDATE_BASELINE_VERSION} -> ${UPDATE_EXPECT_VERSION})"
-    docker run --rm -t \
+    run_install_smoke_container --rm -t \
       --platform "$SMOKE_PLATFORM" \
       ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
-      "${NPM_CACHE_DOCKER_ARGS[@]}" \
+      ${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"} \
+      ${SMOKE_RUNNER_ENV_ARGS[@]+"${SMOKE_RUNNER_ENV_ARGS[@]}"} \
       -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
       -e OPENCLAW_INSTALL_SMOKE_MODE=npm-global \
       -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
@@ -462,10 +493,11 @@ if [[ "$SKIP_FRESHNESS" == "1" ]]; then
 else
   prepare_npm_cache
   echo "==> Run installer npm freshness smoke"
-  docker run --rm -t \
+  run_install_smoke_container --rm -t \
     --platform "$SMOKE_PLATFORM" \
-    "${NPM_CACHE_DOCKER_ARGS[@]}" \
-    -v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro" \
+    ${NPM_CACHE_DOCKER_ARGS[@]+"${NPM_CACHE_DOCKER_ARGS[@]}"} \
+    "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
+    ${SMOKE_RUNNER_ENV_ARGS[@]+"${SMOKE_RUNNER_ENV_ARGS[@]}"} \
     -e OPENCLAW_INSTALL_URL="$FRESHNESS_INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=freshness \
@@ -495,8 +527,9 @@ else
   fi
 
   echo "==> Run installer non-root test: $INSTALL_URL"
-  docker run --rm -t \
+  run_install_smoke_container --rm -t \
     --platform "$NONROOT_PLATFORM" \
+    "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_METHOD=npm \
@@ -518,9 +551,10 @@ if [[ "$SKIP_NONROOT" == "1" ]]; then
 fi
 
 echo "==> Run CLI installer non-root test (same image)"
-docker run --rm -t \
+run_install_smoke_container --rm -t \
   --platform "$NONROOT_PLATFORM" \
   --entrypoint /bin/bash \
+  "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
   -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
   -e OPENCLAW_INSTALL_CLI_URL="$CLI_INSTALL_URL" \
   -e OPENCLAW_NO_ONBOARD=1 \

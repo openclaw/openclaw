@@ -23,9 +23,3 @@ export function registerMatrixSubagentHooks(api: OpenClawPluginApi): void {
     return handleMatrixSubagentDeliveryTarget(event);
   });
 }
-
-export {
-  handleMatrixSubagentDeliveryTarget,
-  handleMatrixSubagentEnded,
-  handleMatrixSubagentSpawning,
-} from "./src/matrix/subagent-hooks.js";

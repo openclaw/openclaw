@@ -1,15 +1,17 @@
 ---
-summary: "CLI reference for `openclaw skills` (search/install/update/list/info/check)"
+summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
-  - You want to search, install, or update skills from ClawHub
+  - You want to search ClawHub or install skills from ClawHub, Git, or local directories
+  - You want to verify a ClawHub skill with ClawHub
   - You want to debug missing binaries/env/config for skills
 title: "Skills"
 ---
 
 # `openclaw skills`
 
-Inspect local skills and install/update skills from ClawHub.
+Inspect local skills, search ClawHub, install skills from ClawHub/Git/local
+directories, verify ClawHub skills, and update ClawHub-tracked installs.
 
 Related:
 
@@ -24,6 +26,9 @@ openclaw skills search "calendar"
 openclaw skills search --limit 20 --json
 openclaw skills install <slug>
 openclaw skills install <slug> --version <version>
+openclaw skills install git:owner/repo
+openclaw skills install git:owner/repo@main
+openclaw skills install ./path/to/skill --as custom-name
 openclaw skills install <slug> --force
 openclaw skills install <slug> --agent <id>
 openclaw skills install <slug> --global
@@ -32,6 +37,11 @@ openclaw skills update <slug> --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
 openclaw skills update --all --global
+openclaw skills verify <slug>
+openclaw skills verify <slug> --version <version>
+openclaw skills verify <slug> --tag <tag>
+openclaw skills verify <slug> --card
+openclaw skills verify <slug> --global
 openclaw skills list
 openclaw skills list --eligible
 openclaw skills list --json
@@ -43,25 +53,47 @@ openclaw skills info <name> --agent <id>
 openclaw skills check
 openclaw skills check --agent <id>
 openclaw skills check --json
+openclaw skills workshop propose-create --name "qa-check" --description "QA checklist" --proposal ./PROPOSAL.md
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+openclaw skills workshop list
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+openclaw skills workshop reject <proposal-id> --reason "Not reusable"
+openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
-`search`/`install`/`update` use ClawHub directly. By default, `install` and
-`update` target the active workspace `skills/` directory; with `--global`, they
-target the shared managed skills directory. `list`/`info`/`check` still inspect
-the local skills visible to the current workspace and config. Workspace-backed
-commands resolve the target workspace from `--agent <id>`, then the current
-working directory when it is inside a configured agent workspace, then the
-default agent.
+`search`, `update`, and `verify` use ClawHub directly. `install <slug>` installs
+a ClawHub skill, `install git:owner/repo[@ref]` clones a Git skill, and
+`install ./path` copies a local skill directory. By default, `install`, `update`,
+and `verify` target the active workspace `skills/` directory; with `--global`,
+they target the shared managed skills directory. `list`/`info`/`check` still
+inspect the local skills visible to the current workspace and config.
+Workspace-backed commands resolve the target workspace from `--agent <id>`, then
+the current working directory when it is inside a configured agent workspace,
+then the default agent.
 
-This CLI `install` command downloads skill folders from ClawHub. Gateway-backed
-skill dependency installs triggered from onboarding or Skills settings use the
-separate `skills.install` request path instead.
+Git and local directory installs expect `SKILL.md` at the source root. The
+install slug comes from `SKILL.md` frontmatter `name` when it is valid, then the
+source directory or repository name; use `--as <slug>` to override it. `--version`
+is ClawHub-only. Skill installs do not support npm package specs or zip/archive
+paths, and `openclaw skills update` updates ClawHub-tracked installs only.
+
+Gateway-backed skill dependency installs triggered from onboarding or Skills
+settings use the separate `skills.install` request path instead.
 
 Notes:
 
 - `search [query...]` accepts an optional query; omit it to browse the default
   ClawHub search feed.
 - `search --limit <n>` caps returned results.
+- `install git:owner/repo[@ref]` installs a Git skill. Branch refs may contain
+  slashes, such as `git:owner/repo@feature/foo`.
+- `install ./path/to/skill` installs a local directory whose root contains
+  `SKILL.md`.
+- `install --as <slug>` overrides the inferred slug for Git and local directory
+  installs.
+- `install --version <version>` applies only to ClawHub skill slugs.
 - `install --force` overwrites an existing workspace skill folder for the same
   slug.
 - `--global` targets the shared managed skills directory and cannot be combined
@@ -72,12 +104,95 @@ Notes:
   shared managed skills directory instead of the workspace.
 - `update --all` updates tracked ClawHub installs in the selected workspace, or
   in the shared managed skills directory when combined with `--global`.
+- `verify <slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by
+  default. There is no `--json` flag because JSON is already the default.
+- `verify` uses `.clawhub/origin.json` for installed ClawHub skills, so it
+  verifies the installed version against the registry it came from. `--version`
+  and `--tag` override the version selector but keep that installed registry
+  when origin metadata exists.
+- `verify --card` prints the generated Skill Card Markdown instead of JSON. The
+  command exits non-zero when ClawHub returns `ok: false` or `decision: "fail"`;
+  unsigned signatures are informational unless ClawHub policy changes.
+- Installed ClawHub bundles can include a generated `skill-card.md`. OpenClaw
+  treats verification as a ClawHub server decision and does not reject an
+  installed skill just because that generated card changes the bundle
+  fingerprint.
 - `check --agent <id>` checks the selected agent's workspace and reports which
   ready skills are actually visible to that agent's prompt or command surface.
 - `list` is the default action when no subcommand is provided.
 - `list`, `info`, and `check` write their rendered output to stdout. With
   `--json`, that means the machine-readable payload stays on stdout for pipes
   and scripts.
+
+## Skill Workshop proposals
+
+`openclaw skills workshop` manages pending skill proposals in the selected
+workspace. Proposals are durable OpenClaw state under
+`<OPENCLAW_STATE_DIR>/skill-workshop/proposals/`; they are not active skills
+until applied. The default state directory is `~/.openclaw`. Proposal bodies
+honor `skills.workshop.maxSkillBytes`, and proposal descriptions are capped at
+160 bytes because they can appear in discovery and listing output.
+
+Create a proposal from a draft markdown file:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal ./PROPOSAL.md
+```
+
+Or create a proposal from a full draft skill directory:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal-dir ./qa-check-proposal
+```
+
+Update an existing workspace skill through the same pending path:
+
+```bash
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+```
+
+Revise a pending proposal before approval:
+
+```bash
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+```
+
+The supplied draft is stored as `PROPOSAL.md` with proposal-only frontmatter:
+
+```markdown
+---
+name: qa-check
+description: Repeatable QA checklist
+status: proposal
+version: v1
+date: "2026-05-30T00:00:00.000Z"
+---
+```
+
+Applying a proposal writes the active `SKILL.md` into the workspace `skills/`
+root, strips `status`, proposal `version`, and proposal `date` from the
+frontmatter, scans the draft, writes rollback metadata, and refuses stale
+updates when the target skill changed after the proposal was created.
+
+When `--proposal-dir` is used, the directory must contain `PROPOSAL.md`.
+Support files can be included under `assets/`, `examples/`, `references/`,
+`scripts/`, or `templates/`. OpenClaw stores support files with the proposal,
+scans them, verifies their hashes before apply, and writes them beside the
+active `SKILL.md` only after the proposal is applied.
+
+Agents can create, revise, list, and inspect pending proposals through the
+`skill_workshop` tool when the user asks for reusable work to be captured.
+Autonomous proposal capture from durable conversation signals is off by
+default and is enabled with `skills.workshop.autonomous.enabled`. If the user
+explicitly asks to approve/use/apply, reject, or quarantine a specific
+proposal, `skill_workshop` can also perform that proposal lifecycle action
+through the same Skill Workshop safeguards.
 
 ## Related
 

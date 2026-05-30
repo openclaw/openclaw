@@ -1,4 +1,4 @@
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -49,6 +49,8 @@ function resolveInjectedAssistantContent(params: {
 
 export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
+  sessionKey?: string;
+  agentId?: string;
   message: string;
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
@@ -87,7 +89,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       { role: "assistant" }
     >["content"],
     timestamp: now,
-    // Pi stopReason is a strict enum; this is not model output, but we still store it as a
+    // stopReason is a strict runner enum; this is not model output, but we still store it as a
     // normal assistant message so it participates in the session parentId chain.
     stopReason: "stop",
     usage,
@@ -118,6 +120,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     });
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       message: appendedMessage,
       messageId,
     });

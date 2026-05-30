@@ -140,6 +140,7 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
+    expect(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).toBe("2000");
     expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
     expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");
     expect(env.OPENCLAW_QA_STAGED_RUNTIME_ROOT).toBe(
@@ -147,7 +148,6 @@ describe("buildQaRuntimeEnv", () => {
     );
     expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
     expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
-    expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
     expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
     expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
   });

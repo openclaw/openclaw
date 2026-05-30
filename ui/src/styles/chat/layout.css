@@ -248,6 +248,58 @@
   animation: compaction-spin 1s linear infinite;
 }
 
+.agent-chat__goal {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  max-width: calc(100% - 20px);
+  gap: 8px;
+  margin: 0 auto 8px;
+  padding: 7px 12px;
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.agent-chat__goal-label,
+.agent-chat__goal-objective {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chat__goal-label {
+  flex: 0 1 auto;
+  font-weight: 700;
+}
+
+.agent-chat__goal-objective {
+  flex: 1 1 auto;
+  color: var(--muted);
+}
+
+.agent-chat__goal--active {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 9%, var(--card));
+  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
+}
+
+.agent-chat__goal--blocked,
+.agent-chat__goal--budget_limited,
+.agent-chat__goal--usage_limited {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, var(--card));
+  border-color: color-mix(in srgb, var(--warning) 30%, var(--border));
+}
+
+.agent-chat__goal--complete {
+  color: color-mix(in srgb, var(--success) 72%, var(--text));
+}
+
 /* Chat compose - sticky at bottom */
 .chat-compose {
   position: sticky;
@@ -701,6 +753,62 @@
   color: var(--text);
 }
 
+.agent-chat__voice-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 4px 8px;
+  background: transparent;
+}
+
+.agent-chat__voice-turn {
+  display: grid;
+  grid-template-columns: minmax(56px, max-content) minmax(0, 1fr) 12px;
+  gap: 8px;
+  align-items: baseline;
+  max-width: min(100%, 780px);
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+}
+
+.agent-chat__voice-turn--user {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+
+.agent-chat__voice-turn--assistant {
+  align-self: flex-start;
+}
+
+.agent-chat__voice-turn-speaker {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chat__voice-turn-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.agent-chat__voice-turn-stream {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
 .agent-chat__talk-options {
   display: flex;
   align-items: flex-start;
@@ -969,7 +1077,8 @@
   gap: 6px;
 }
 
-.chat-queue__steer {
+.chat-queue__steer,
+.chat-queue__retry {
   align-self: start;
   display: inline-flex;
   align-items: center;
@@ -980,7 +1089,8 @@
   line-height: 1;
 }
 
-.chat-queue__steer svg {
+.chat-queue__steer svg,
+.chat-queue__retry svg {
   width: 13px;
   height: 13px;
   fill: none;
@@ -990,7 +1100,8 @@
   stroke-linejoin: round;
 }
 
-.chat-queue__steer:hover:not(:disabled) {
+.chat-queue__steer:hover:not(:disabled),
+.chat-queue__retry:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
@@ -1308,13 +1419,219 @@
 
 .chat-controls__session-picker {
   grid-area: session;
+  position: relative;
+}
+
+.chat-controls__session-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.2;
+  cursor: pointer;
+  min-width: 0;
+  transition:
+    background var(--duration-fast) ease-out,
+    border-color var(--duration-fast) ease-out;
+}
+
+.chat-controls__session-trigger:hover:not(:disabled),
+.chat-controls__session-trigger[aria-expanded="true"] {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--input));
+  background: color-mix(in srgb, var(--bg-elevated) 90%, var(--accent-subtle) 10%);
+}
+
+.chat-controls__session-trigger:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.chat-controls__session-trigger-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.chat-controls__session-trigger-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.chat-controls__session-trigger-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+}
+
+.chat-session-picker {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(520px, calc(100vh - 132px));
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+  overflow: hidden;
+}
+
+.chat-session-picker__search-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.chat-session-picker__search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-session-picker__search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.chat-session-picker .chat-session-picker__icon-button.btn--icon {
+  flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+
+.chat-session-picker .chat-session-picker__icon-button.btn--icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-session-picker__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-session-picker__option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-session-picker__option:hover,
+.chat-session-picker__option:focus-visible {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--border) 78%, transparent);
+}
+
+.chat-session-picker__option--selected {
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.chat-session-picker__option-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.chat-session-picker__option-label,
+.chat-session-picker__option-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-session-picker__option-label {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chat-session-picker__option-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-session-picker__option-check {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.chat-session-picker__option-check svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+}
+
+.chat-session-picker__status {
+  padding: 14px 10px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.chat-session-picker__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+}
+
+.chat-session-picker__count {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .chat-controls__agent {
   grid-area: agent;
 }
 
-.chat-controls__session-row--flash .chat-controls__session-picker select {
+.chat-controls__session-row--flash .chat-controls__session-trigger {
   animation: chat-session-switch-flash 0.2s ease-out;
 }
 
@@ -1340,7 +1657,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-controls__session-row--flash .chat-controls__session-picker select {
+  .chat-controls__session-row--flash .chat-controls__session-trigger {
     animation: none;
     border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
     box-shadow: var(--focus-ring);

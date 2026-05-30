@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   applyCodeModeCatalog,
@@ -93,9 +93,15 @@ async function runUntilCompleted(params: {
 }
 
 describe("Code Mode", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
+    testing.setTypescriptRuntimeForTest(null);
   });
 
   it("resolves object config defaults", () => {
@@ -293,6 +299,45 @@ describe("Code Mode", () => {
     expect(compacted.catalogToolCount).toBe(1);
   });
 
+  it("accepts command as an exec-compatible code alias", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const result = resultDetails(
+      await tools[0].execute("code-call-command-alias", {
+        command: "return 7;",
+      }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.value).toBe(7);
+  });
+
+  it("rejects divergent code and command aliases", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    await expect(
+      tools[0].execute("code-call-divergent-alias", {
+        code: "return 1;",
+        command: "return 2;",
+      }),
+    ).rejects.toThrow("code and command must match when both are provided");
+  });
+
   it("runs JavaScript through QuickJS-WASI and resumes nested tool calls with wait", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
@@ -364,6 +409,45 @@ describe("Code Mode", () => {
     ]);
   });
 
+  it("fails yield suspension when snapshot expiry would exceed the Date range", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    let details: Record<string, unknown>;
+    try {
+      details = resultDetails(
+        await codeModeTools[0].execute("code-call-yield-overflow", {
+          code: 'await yield_control("pause"); return "done";',
+        }),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(details.status).toBe("failed");
+    expect(details.error).toBe("code mode run expiry is unavailable.");
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("expires suspended runs with invalid expiry timestamps", async () => {
+    const { tools: codeModeTools } = createCodeModeHarness();
+    testing.activeRuns.set("invalid-expiry-run", {
+      expiresAt: 8_640_000_000_000_001,
+    } as never);
+
+    await expect(
+      codeModeTools[1].execute("code-wait-invalid-expiry", { runId: "invalid-expiry-run" }),
+    ).rejects.toThrow("code mode run is unavailable or expired");
+    expect(testing.activeRuns.has("invalid-expiry-run")).toBe(false);
+  });
+
   it("rejects wait calls from a different session scope", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -401,7 +485,7 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
+          timeoutMs: 1_000,
         },
       },
     } as never;
@@ -455,7 +539,6 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
         },
       },
     } as never;
@@ -498,10 +581,17 @@ describe("Code Mode", () => {
     );
     expect(first.status).toBe("waiting");
     expect(first.pendingToolCalls).toHaveLength(2);
+    const runId = first.runId;
+    expect(typeof runId).toBe("string");
+    if (typeof runId !== "string") {
+      throw new Error("expected code mode run id");
+    }
 
-    const second = resultDetails(
-      await codeModeTools[1].execute("code-wait-timeout", { runId: first.runId }),
-    );
+    const activeRun = testing.activeRuns.get(runId);
+    expect(activeRun).toBeDefined();
+    activeRun!.config.timeoutMs = 100;
+
+    const second = resultDetails(await codeModeTools[1].execute("code-wait-timeout", { runId }));
 
     expect(second.status).toBe("waiting");
     expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "call" })]);
@@ -623,6 +713,17 @@ describe("Code Mode", () => {
   });
 
   it("supports TypeScript source transform", async () => {
+    testing.setTypescriptRuntimeForTest({
+      transpileModule: vi.fn((code: string) => ({
+        outputText: code.replace(": number", ""),
+        diagnostics: [],
+      })),
+      ScriptTarget: { ES2022: 9 },
+      ModuleKind: { ESNext: 99 },
+      ImportsNotUsedAsValues: { Remove: 0 },
+      DiagnosticCategory: { Error: 1 },
+      flattenDiagnosticMessageText: (message: unknown) => String(message),
+    } as never);
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -709,6 +810,7 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("output limit exceeded");
+    expect(details.code).toBe("output_limit_exceeded");
   });
 
   it("enforces output limits before suspending runs", async () => {
@@ -748,7 +850,52 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("output limit exceeded");
+    expect(details.code).toBe("output_limit_exceeded");
     expect(testing.activeRuns.size).toBe(beforeRunCount);
+  });
+
+  it("preserves guest output when a run fails", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await tools[0].execute("code-call-output-before-error", {
+        code: 'text("before"); throw new Error("boom");',
+      }),
+    );
+
+    expect(details.status).toBe("failed");
+    expect(details.error).toBe("boom");
+    expect(details.output).toEqual([{ type: "text", text: "before" }]);
+  });
+
+  it("classifies snapshot limit failures", async () => {
+    const config = resolveCodeModeConfig({
+      tools: { codeMode: { enabled: true, maxSnapshotBytes: 1024 } },
+    } as never);
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: 'const value = "x".repeat(100000); await yield_control("pause"); return value;',
+        config,
+        catalog: [],
+      },
+      1000,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      code: "snapshot_limit_exceeded",
+      error: "code mode snapshot limit exceeded",
+    });
   });
 
   it("terminates hostile infinite loops outside the main event loop", async () => {
@@ -789,5 +936,94 @@ describe("Code Mode", () => {
     await expect(heartbeat).resolves.toBe("main-event-loop-alive");
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("timeout exceeded");
+    expect(details.code).toBe("timeout");
+  });
+
+  it("normalizes QuickJS interrupt timeout errors", () => {
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "timeout",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "timeout",
+      error: "code mode timeout exceeded",
+    });
+
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "internal_error",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "internal_error",
+      error: "interrupted",
+    });
+  });
+
+  it("classifies missing worker runtime as unavailable", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const missingWorkerUrl = new URL("./missing-code-mode.worker.js", import.meta.url);
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: "return 1;",
+        config,
+        catalog: [],
+      },
+      500,
+      missingWorkerUrl,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      code: "runtime_unavailable",
+    });
+  });
+
+  it("classifies nonzero worker exits as unavailable", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const exitingWorkerUrl = new URL("data:text/javascript,process.exit(1)");
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: "return 1;",
+        config,
+        catalog: [],
+      },
+      500,
+      exitingWorkerUrl,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      code: "runtime_unavailable",
+    });
+  });
+
+  it("does not classify guest interrupted errors as timeouts", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: 'throw new Error("interrupted");',
+        config,
+        catalog: [],
+      },
+      10_000,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      code: "internal_error",
+      error: "interrupted",
+    });
   });
 });

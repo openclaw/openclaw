@@ -1,4 +1,4 @@
-import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -23,23 +23,31 @@ export function resolveMcpLoopbackScopedTools(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   messageProvider: string | undefined;
+  currentChannelId: string | undefined;
+  currentThreadTs: string | undefined;
+  currentMessageId: string | number | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   senderIsOwner: boolean | undefined;
 }): { agentId: string | undefined; tools: McpLoopbackTool[] } {
   const scoped = resolveGatewayScopedTools({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
+    currentChannelId: params.currentChannelId,
+    currentThreadTs: params.currentThreadTs,
+    currentMessageId: params.currentMessageId,
     accountId: params.accountId,
     inboundEventKind: params.inboundEventKind,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     senderIsOwner: params.senderIsOwner,
     surface: "loopback",
     excludeToolNames: NATIVE_TOOL_EXCLUDE,
   });
   return {
     agentId: scoped.agentId,
-    tools: applyOwnerOnlyToolPolicy(scoped.tools, params.senderIsOwner === true),
+    tools: scoped.tools,
   };
 }
 
@@ -50,15 +58,23 @@ export class McpLoopbackToolCache {
     cfg: OpenClawConfig;
     sessionKey: string;
     messageProvider: string | undefined;
+    currentChannelId: string | undefined;
+    currentThreadTs: string | undefined;
+    currentMessageId: string | number | undefined;
     accountId: string | undefined;
     inboundEventKind: InboundEventKind | undefined;
+    sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
     senderIsOwner: boolean | undefined;
   }): CachedScopedTools {
     const cacheKey = [
       params.sessionKey,
       params.messageProvider ?? "",
+      params.currentChannelId ?? "",
+      params.currentThreadTs ?? "",
+      params.currentMessageId != null ? String(params.currentMessageId) : "",
       params.accountId ?? "",
       params.inboundEventKind ?? "",
+      params.sourceReplyDeliveryMode ?? "",
       params.senderIsOwner === true ? "owner" : "non-owner",
     ].join("\u0000");
     const now = Date.now();
@@ -71,8 +87,12 @@ export class McpLoopbackToolCache {
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       messageProvider: params.messageProvider,
+      currentChannelId: params.currentChannelId,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
       accountId: params.accountId,
       inboundEventKind: params.inboundEventKind,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       senderIsOwner: params.senderIsOwner,
     });
     const nextEntry: CachedScopedTools = {

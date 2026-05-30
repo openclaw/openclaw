@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { resetAgentEventsForTest } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  resetAgentEventsForTest,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -20,13 +23,14 @@ import {
   type CodexAppServerEventProjectorOptions,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
-import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
 const TURN_ID = "turn-1";
 const tempDirs = new Set<string>();
+const tinyPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 
@@ -103,6 +107,7 @@ afterEach(async () => {
   resetGlobalHookRunner();
   resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const tempDir of tempDirs) {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -252,11 +257,15 @@ function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
 }
 
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
+  return turnWithStatus("completed", items);
+}
+
+function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotification {
   return {
     method: "turn/completed",
     params: {
       threadId: THREAD_ID,
-      turn: { id: TURN_ID, status: "completed", items },
+      turn: { id: TURN_ID, status, items },
     },
   } as ProjectorNotification;
 }
@@ -305,6 +314,22 @@ describe("CodexAppServerEventProjector", () => {
       total: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
+  });
+
+  it("suppresses mirrored user prompt when the inbound message was already persisted", async () => {
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      suppressNextUserMessagePersistence: true,
+    });
+    await projector.handleNotification(
+      turnCompleted([{ type: "agentMessage", id: "msg-1", text: "retry result" }]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["assistant"]);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain(params.prompt);
   });
 
   it("records canonical OpenAI Codex app-server turns with Codex local attribution", async () => {
@@ -497,6 +522,136 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.toolMediaUrls).toEqual([savedPath]);
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("saves raw Codex image-generation results as reply media", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
+    tempDirs.add(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "ig_raw_1",
+          status: "generating",
+          result: tinyPngBase64,
+          revised_prompt: "A tiny blue square",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const mediaUrl = result.toolMediaUrls?.[0];
+
+    expect(result.assistantTexts).toStrictEqual([]);
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+    expect(mediaUrl?.endsWith(".png")).toBe(true);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("keeps raw image-generation results replay-invalid when media save fails", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+    } as EmbeddedRunAttemptParams);
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "ig_raw_capped",
+          status: "completed",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMediaUrls).toBeUndefined();
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server raw image generation result exceeds media limit",
+      expect.objectContaining({ itemId: "ig_raw_capped" }),
+    );
+  });
+
+  it("dedupes raw and typed Codex image-generation media for the same item", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
+    tempDirs.add(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const projector = await createProjector();
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "ig_123",
+          status: "generating",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          result: tinyPngBase64,
+          savedPath,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
+  });
+
+  it("preserves distinct raw image-generation items with identical image bytes", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
+    tempDirs.add(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const projector = await createProjector();
+
+    for (const id of ["ig_raw_1", "ig_raw_2"]) {
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "image_generation_call",
+            id,
+            status: "generating",
+            result: tinyPngBase64,
+          },
+        }),
+      );
+    }
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMediaUrls).toHaveLength(2);
+    expect(new Set(result.toolMediaUrls)).toHaveLength(2);
   });
 
   it("does not append native Codex image-generation media after explicit media delivery", async () => {
@@ -572,6 +727,79 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it("does not treat app-server interrupted status as a user cancellation by itself", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.externalAbort).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.lastAssistant).toBeUndefined();
+  });
+
+  it("keeps sparse successful bash output eligible for the no-visible-answer guard", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      turnWithStatus("interrupted", [
+        {
+          type: "commandExecution",
+          id: "cmd-empty-output",
+          command:
+            "ps -eo pid,ppid,stat,cmd | rg 'venv-roadmap|pytest|run_security_contract_validation|validate_public_install|git push|apply_patch' || true",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.assistantTexts).toEqual([]);
+    expect(result.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "bash", meta: expect.stringContaining("workspace") }),
+    ]);
+  });
+
+  it("keeps explicit cancellation marked aborted for interrupted tool-only turns", async () => {
+    const projector = await createProjector();
+    projector.markAborted();
+
+    await projector.handleNotification(
+      turnWithStatus("interrupted", [
+        {
+          type: "commandExecution",
+          id: "cmd-cancelled",
+          command: "/bin/bash -lc true",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "",
+          exitCode: 0,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.aborted).toBe(true);
+    expect(result.assistantTexts).toEqual([]);
+  });
+
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
     const projector = await createProjector();
 
@@ -626,7 +854,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Run /codex account");
+    expect(result.promptError).toContain("Wait until the reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -903,36 +1131,6 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toStrictEqual([]);
   });
 
-  it("mirrors native subagent notifications before current-turn filtering", async () => {
-    const projector = await createProjector({
-      ...(await createParams()),
-      sessionKey: "agent:main:main",
-    } as EmbeddedRunAttemptParams);
-    const mirrorSpy = vi.spyOn(CodexNativeSubagentTaskMirror.prototype, "handleNotification");
-    const notification = {
-      method: "item/completed",
-      params: {
-        threadId: THREAD_ID,
-        turnId: "child-turn",
-        item: {
-          type: "collabAgentToolCall",
-          tool: "spawnAgent",
-          senderThreadId: THREAD_ID,
-          receiverThreadIds: ["child-thread"],
-          agentsStates: {
-            "child-thread": { status: "completed", message: "done" },
-          },
-        },
-      },
-    } as ProjectorNotification;
-
-    await projector.handleNotification(notification);
-
-    expect(mirrorSpy).toHaveBeenCalledWith(notification);
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
-  });
-
   it("ignores notifications that omit top-level thread and turn ids", async () => {
     const projector = await createProjector();
 
@@ -1088,7 +1286,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(onReasoningStream).toHaveBeenCalledWith({ text: "thinking" });
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "thinking",
+      isReasoningSnapshot: true,
+    });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
     expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
       "patch (in_progress)",
@@ -1111,6 +1312,94 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
     expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
+  });
+
+  it("streams accumulated reasoning snapshots grouped by Codex reasoning indexes", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 1,
+        delta: "Checking ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 0,
+        delta: "Reading ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 0,
+        delta: "files",
+      }),
+    );
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(3);
+    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
+      text: "Checking ",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
+      text: "Reading \n\nChecking ",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
+      text: "Reading files\n\nChecking ",
+      isReasoningSnapshot: true,
+    });
+  });
+
+  it("streams accumulated reasoning summaries grouped by summary section", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 1,
+        delta: "Second",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "First ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "section",
+      }),
+    );
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(3);
+    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
+      text: "Second",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
+      text: "First \n\nSecond",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
+      text: "First section\n\nSecond",
+      isReasoningSnapshot: true,
+    });
   });
 
   it("synthesizes normalized tool progress for Codex-native tool items", async () => {
@@ -1885,7 +2174,88 @@ describe("CodexAppServerEventProjector", () => {
     expect(event.params).toEqual({ query: "native tool observability" });
     expect(event.runId).toBe("run-1");
     expect(event.toolCallId).toBe("search-observed");
-    expect(event.result).toEqual({ status: "completed" });
+    expect(event.result).toEqual({
+      status: "completed",
+      durationMs: 5,
+      query: "native tool observability",
+    });
+  });
+
+  it("uses Codex web search action metadata when the top-level query is empty", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          query: "",
+          action: {
+            type: "search",
+            query: "native action query",
+            queries: ["native action query", "secondary query"],
+          },
+          status: "completed",
+          durationMs: 5,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.toolName).toBe("web_search");
+    expect(event.params).toEqual({
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
+    });
+    expect(event.result).toEqual({
+      status: "completed",
+      durationMs: 5,
+      query: "native action query",
+      queries: ["native action query", "secondary query"],
+    });
+  });
+
+  it("marks unavailable Codex web search queries explicitly", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          query: "",
+          action: { type: "other" },
+          status: "completed",
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event.params).toEqual({
+      action: "other",
+      queryUnavailable: true,
+    });
+    expect(event.result).toEqual({
+      status: "completed",
+      action: "other",
+      queryUnavailable: true,
+    });
   });
 
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
@@ -1936,6 +2306,87 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContent.toolName).toBe("browser");
     expect(toolResultContent.toolCallId).toBe("call-browser-1");
     expect(toolResultContent.content).toBe("opened");
+  });
+
+  it("does not mirror Codex-native web searches into transcript snapshots", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          status: "completed",
+          durationMs: 5,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(
+      result.messagesSnapshot.some((message) => {
+        const record = message as unknown as Record<string, unknown>;
+        if (record.role === "toolResult") {
+          return true;
+        }
+        const content = Array.isArray(record.content) ? record.content : [];
+        return content.some((entry) => {
+          return (
+            typeof entry === "object" &&
+            entry !== null &&
+            (entry as Record<string, unknown>).type === "toolCall"
+          );
+        });
+      }),
+    ).toBe(false);
+  });
+
+  it("carries async-started dynamic tool metadata into attempt results", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-image-1",
+      tool: "image_generate",
+      arguments: { action: "generate", prompt: "lighthouse" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-image-1",
+      tool: "image_generate",
+      asyncStarted: true,
+      success: true,
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+    });
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-image-1",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { action: "generate", prompt: "lighthouse" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "Background task started." }],
+          success: true,
+          durationMs: 10,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMetas).toEqual([
+      {
+        toolName: "image_generate",
+        meta: "lighthouse",
+        asyncStarted: true,
+      },
+    ]);
+    expect(result.replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
   });
 
   it("emits verbose summaries for transcript-recorded dynamic tool calls", async () => {
@@ -1991,6 +2442,95 @@ describe("CodexAppServerEventProjector", () => {
     expect(payload.text).toContain("```txt\nopened\n```");
   });
 
+  it("keeps side-effect evidence for dynamic tools that error after execution", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-process-kill",
+      tool: "process",
+      arguments: { action: "kill", sessionId: "session-1" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-process-kill",
+      tool: "process",
+      success: false,
+      terminalType: "error",
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "process exited" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("does not keep side-effect evidence for pre-execution dynamic tool errors", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-unknown-message",
+      tool: "message",
+      arguments: { action: "send", text: "hello" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-unknown-message",
+      tool: "message",
+      success: false,
+      terminalType: "error",
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: message" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+  });
+
+  it("does not mark blocked dynamic tools as side-effecting", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-bash-blocked",
+      tool: "bash",
+      arguments: { command: "touch blocked.txt" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-bash-blocked",
+      tool: "bash",
+      success: false,
+      terminalType: "blocked",
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "blocked" }],
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: false, replaySafe: true });
+  });
+
+  it("treats completed native MCP tool calls as side-effect evidence", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "mcp-1",
+          type: "mcpToolCall",
+          server: "github",
+          tool: "create_issue",
+          status: "completed",
+          arguments: { title: "check replay safety" },
+        },
+      },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.replayMetadata).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
   it("suppresses transcript progress for message-like tools", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
@@ -2021,7 +2561,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(onToolResult).not.toHaveBeenCalled();
   });
 
-  it("suppresses transcript progress for activity-log bash commands", async () => {
+  it("does not parse shell command text to suppress transcript progress", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();
     const projector = await createProjector({
@@ -2047,12 +2587,11 @@ describe("CodexAppServerEventProjector", () => {
       contentItems: [{ type: "inputText", text: "Logged: [web_search] Grilled salmon research" }],
     });
 
-    const toolEvents = onAgentEvent.mock.calls.filter(([event]) => {
-      const record = requireRecord(event, "agent event");
-      return record.stream === "tool";
-    });
-    expect(toolEvents).toHaveLength(0);
-    expect(onToolResult).not.toHaveBeenCalled();
+    expect(onAgentEvent).not.toHaveBeenCalled();
+    const toolProgressText = onToolResult.mock.calls
+      .map(([payload]) => (payload as { text?: string }).text ?? "")
+      .join("\n");
+    expect(toolProgressText).toContain("log_activity.sh");
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.messagesSnapshot.some((message) => message.role === "toolResult")).toBe(true);

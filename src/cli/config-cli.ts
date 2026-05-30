@@ -1,8 +1,14 @@
 import fs from "node:fs";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
-import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import {
+  type ConfigFileSnapshot,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+} from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import {
@@ -11,6 +17,7 @@ import {
 } from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
+import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +25,7 @@ import {
   coerceSecretRef,
   isValidEnvSecretRefId,
   resolveSecretInputRef,
+  type PluginIntegrationSecretProviderConfig,
   type SecretProviderConfig,
   type SecretRef,
   type SecretRefSource,
@@ -28,8 +36,14 @@ import {
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  isPluginIntegrationSecretProviderConfig,
+  resolveSecretProviderIntegrationConfig,
+} from "../secrets/provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -43,11 +57,13 @@ import {
   discoverConfigSecretTargets,
   resolveConfigSecretTargetByPath,
 } from "../secrets/target-registry.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type {
   ConfigSetDryRunError,
   ConfigSetDryRunInputMode,
@@ -311,7 +327,11 @@ class ConfigSetDryRunValidationError extends Error {
 }
 
 function isIndexSegment(raw: string): boolean {
-  return /^[0-9]+$/.test(raw);
+  return parseIndexSegment(raw) !== undefined;
+}
+
+function parseIndexSegment(raw: string): number | undefined {
+  return parseConfigPathArrayIndex(raw);
 }
 
 function parseBracketPathSegment(raw: string, fullPath: string): string {
@@ -333,6 +353,15 @@ function parseBracketPathSegment(raw: string, fullPath: string): string {
   return trimmed;
 }
 
+// A buffered key with characters that are all whitespace is stray text between a
+// "."/"]" and the next "."/"[" boundary (e.g. "agents.list[0] .id" or "agents.list[0] [1]").
+// Pushing it would silently collapse into a different key, so reject it like an empty segment.
+function assertNotWhitespaceSegment(current: string, raw: string): void {
+  if (current.length > 0 && !current.trim()) {
+    throw new Error(`Invalid path (empty segment): ${raw}`);
+  }
+}
+
 function parsePath(raw: string): PathSegment[] {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -340,6 +369,10 @@ function parsePath(raw: string): PathSegment[] {
   }
   const parts: string[] = [];
   let current = "";
+  // Tracks whether a bracket segment was emitted since the last "." boundary, so
+  // "foo[0].bar" is accepted while empty key segments (leading/trailing/double dots,
+  // whitespace-only segments) are rejected instead of silently collapsed.
+  let segmentEmitted = false;
   let i = 0;
   while (i < trimmed.length) {
     const ch = trimmed[i];
@@ -352,14 +385,26 @@ function parsePath(raw: string): PathSegment[] {
       continue;
     }
     if (ch === ".") {
+      assertNotWhitespaceSegment(current, raw);
+      if (!segmentEmitted && !current.trim()) {
+        throw new Error(`Invalid path (empty segment): ${raw}`);
+      }
       if (current) {
         parts.push(current);
       }
       current = "";
+      segmentEmitted = false;
       i += 1;
       continue;
     }
     if (ch === "[") {
+      // A bracket may start the path ("[0]"), follow a key ("foo[0]"), or follow
+      // another bracket ("foo[0][1]"), but a bracket right after a "." boundary with
+      // no key (e.g. "gateway.[port]") is an empty segment, same as a double dot.
+      assertNotWhitespaceSegment(current, raw);
+      if (!current.trim() && !segmentEmitted && parts.length > 0) {
+        throw new Error(`Invalid path (empty segment): ${raw}`);
+      }
       if (current) {
         parts.push(current);
       }
@@ -373,16 +418,20 @@ function parsePath(raw: string): PathSegment[] {
         throw new Error(`Invalid path (empty "[]"): ${raw}`);
       }
       parts.push(parseBracketPathSegment(inside, raw));
+      segmentEmitted = true;
       i = close + 1;
       continue;
     }
     current += ch;
     i += 1;
   }
+  if (!segmentEmitted && !current.trim()) {
+    throw new Error(`Invalid path (empty segment): ${raw}`);
+  }
   if (current) {
     parts.push(current);
   }
-  return parts.map((part) => part.trim()).filter(Boolean);
+  return normalizeStringEntries(parts);
 }
 
 function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
@@ -406,12 +455,17 @@ function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function formatDoctorHint(message: string): string {
   return `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${message}`;
+}
+
+function formatInvalidConfigRepairHint(
+  snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "warnings" | "legacyIssues">,
+  doctorMessage: string,
+): string {
+  return isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+    ? formatPluginPackagingRuntimeOutputRecoveryHint()
+    : formatDoctorHint(doctorMessage);
 }
 
 function formatUnsupportedSecretRefPolicyFailureMessage(issues: string[]): string {
@@ -443,8 +497,8 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
       if (!isIndexSegment(segment)) {
         return { found: false };
       }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseIndexSegment(segment);
+      if (index === undefined || index >= current.length) {
         return { found: false };
       }
       current = current[index];
@@ -459,7 +513,155 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
   return { found: true, value: current };
 }
 
-type SetAtPathOptions = { numericObjectKeys?: boolean };
+type JsonSchemaRecord = {
+  type?: unknown;
+  properties?: unknown;
+  additionalProperties?: unknown;
+  items?: unknown;
+  anyOf?: unknown;
+  oneOf?: unknown;
+  allOf?: unknown;
+};
+
+type SetAtPathOptions = {
+  numericObjectKeys?: boolean;
+  schema?: JsonSchemaRecord;
+};
+
+function isSchemaRecord(value: unknown): value is JsonSchemaRecord {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function schemaTypes(schema: JsonSchemaRecord): Set<string> {
+  if (typeof schema.type === "string") {
+    return new Set([schema.type]);
+  }
+  if (Array.isArray(schema.type)) {
+    return new Set(schema.type.filter((entry): entry is string => typeof entry === "string"));
+  }
+  return new Set();
+}
+
+function schemaAlternatives(
+  schema: JsonSchemaRecord,
+  seen = new Set<JsonSchemaRecord>(),
+): JsonSchemaRecord[] {
+  if (seen.has(schema)) {
+    return [];
+  }
+  seen.add(schema);
+  const alternatives: JsonSchemaRecord[] = [schema];
+  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
+    const entries = schema[key];
+    if (!Array.isArray(entries)) {
+      continue;
+    }
+    for (const entry of entries) {
+      if (isSchemaRecord(entry)) {
+        alternatives.push(...schemaAlternatives(entry, seen));
+      }
+    }
+  }
+  return alternatives;
+}
+
+function schemaLooksArray(schema: JsonSchemaRecord): boolean {
+  return (
+    schemaTypes(schema).has("array") || isSchemaRecord(schema.items) || Array.isArray(schema.items)
+  );
+}
+
+function schemaLooksObject(schema: JsonSchemaRecord): boolean {
+  const types = schemaTypes(schema);
+  return (
+    types.has("object") ||
+    isSchemaRecord(schema.properties) ||
+    schema.additionalProperties === true ||
+    isSchemaRecord(schema.additionalProperties)
+  );
+}
+
+function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSchemaRecord[] {
+  const schemas: JsonSchemaRecord[] = [];
+  for (const alternative of schemaAlternatives(schema)) {
+    if (schemaLooksArray(alternative)) {
+      const index = parseIndexSegment(segment);
+      if (index !== undefined) {
+        const indexedItem = Array.isArray(alternative.items)
+          ? alternative.items[index]
+          : alternative.items;
+        if (isSchemaRecord(indexedItem)) {
+          schemas.push(indexedItem);
+        }
+      }
+      continue;
+    }
+    const properties = isSchemaRecord(alternative.properties)
+      ? (alternative.properties as Record<string, unknown>)
+      : undefined;
+    const explicit = properties?.[segment];
+    if (isSchemaRecord(explicit)) {
+      schemas.push(explicit);
+      continue;
+    }
+    if (isSchemaRecord(alternative.additionalProperties)) {
+      schemas.push(alternative.additionalProperties);
+    }
+  }
+  return schemas;
+}
+
+function schemasAtPath(schema: JsonSchemaRecord | undefined, path: readonly PathSegment[]) {
+  if (!schema) {
+    return [];
+  }
+  let schemas = [schema];
+  for (const segment of path) {
+    schemas = schemas.flatMap((candidate) => propertySchema(candidate, segment));
+    if (schemas.length === 0) {
+      return [];
+    }
+  }
+  return schemas;
+}
+
+function schemaPrefersArrayAtPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+): boolean | undefined {
+  const candidates = schemasAtPath(schema, path).flatMap((candidate) =>
+    schemaAlternatives(candidate),
+  );
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const hasArray = candidates.some((candidate) => schemaLooksArray(candidate));
+  const hasObject = candidates.some((candidate) => schemaLooksObject(candidate));
+  if (hasArray && !hasObject) {
+    return true;
+  }
+  if (hasObject && !hasArray) {
+    return false;
+  }
+  return undefined;
+}
+
+function shouldCreateArrayForMissingPathSegment(params: {
+  path: readonly PathSegment[];
+  segmentIndex: number;
+  next?: PathSegment;
+  options?: SetAtPathOptions;
+}): boolean {
+  if (!params.next || params.options?.numericObjectKeys || !isIndexSegment(params.next)) {
+    return false;
+  }
+  const parentPath = params.path.slice(0, params.segmentIndex + 1);
+  const schemaPreference = schemaPrefersArrayAtPath(params.options?.schema, parentPath);
+  if (schemaPreference !== undefined) {
+    return schemaPreference;
+  }
+  return true;
+}
 
 function setAtPath(
   root: Record<string, unknown>,
@@ -471,12 +673,20 @@ function setAtPath(
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
     const next = path[i + 1];
-    const nextIsIndex = !options?.numericObjectKeys && Boolean(next && isIndexSegment(next));
+    const nextIsIndex = shouldCreateArrayForMissingPathSegment({
+      path,
+      segmentIndex: i,
+      next,
+      options,
+    });
     if (Array.isArray(current)) {
       if (!isIndexSegment(segment)) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
       }
-      const index = Number.parseInt(segment, 10);
+      const index = parseIndexSegment(segment);
+      if (index === undefined) {
+        throw new Error(`Expected numeric index for array segment "${segment}"`);
+      }
       const existing = current[index];
       if (!existing || typeof existing !== "object") {
         current[index] = nextIsIndex ? [] : {};
@@ -500,7 +710,10 @@ function setAtPath(
     if (!isIndexSegment(last)) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
     }
-    const index = Number.parseInt(last, 10);
+    const index = parseIndexSegment(last);
+    if (index === undefined) {
+      throw new Error(`Expected numeric index for array segment "${last}"`);
+    }
     current[index] = value;
     return;
   }
@@ -671,8 +884,8 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
       if (!isIndexSegment(segment)) {
         return { removed: false };
       }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseIndexSegment(segment);
+      if (index === undefined || index >= current.length) {
         return { removed: false };
       }
       current = current[index];
@@ -690,8 +903,8 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
     if (!isIndexSegment(last)) {
       return { removed: false };
     }
-    const index = Number.parseInt(last, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+    const index = parseIndexSegment(last);
+    if (index === undefined || index >= current.length) {
       return { removed: false };
     }
     current.splice(index, 1);
@@ -717,7 +930,7 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   for (const line of formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })) {
     runtime.error(line);
   }
-  runtime.error(formatDoctorHint("to repair, then retry."));
+  runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
   runtime.exit(1);
   return snapshot;
 }
@@ -837,8 +1050,8 @@ function parseOptionalPositiveInteger(raw: string | undefined, flag: string): nu
   if (!trimmed) {
     throw new Error(`${flag} must not be empty.`);
   }
-  const parsed = Number(trimmed);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(trimmed);
+  if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
   return parsed;
@@ -904,7 +1117,7 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
 
   let provider: SecretProviderConfig;
   if (source === "env") {
-    const allowlist = (opts.providerAllowlist ?? []).map((entry) => entry.trim()).filter(Boolean);
+    const allowlist = normalizeStringEntries(opts.providerAllowlist);
     for (const envName of allowlist) {
       if (!isValidEnvSecretRefId(envName)) {
         throw new Error(
@@ -951,10 +1164,10 @@ function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig 
       ...(opts.providerJsonOnly ? { jsonOnly: true } : {}),
       ...(providerEnv ? { env: providerEnv } : {}),
       ...(opts.providerPassEnv && opts.providerPassEnv.length > 0
-        ? { passEnv: opts.providerPassEnv.map((entry) => entry.trim()).filter(Boolean) }
+        ? { passEnv: normalizeStringEntries(opts.providerPassEnv) }
         : {}),
       ...(opts.providerTrustedDir && opts.providerTrustedDir.length > 0
-        ? { trustedDirs: opts.providerTrustedDir.map((entry) => entry.trim()).filter(Boolean) }
+        ? { trustedDirs: normalizeStringEntries(opts.providerTrustedDir) }
         : {}),
       ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
       ...(opts.providerAllowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
@@ -1425,7 +1638,11 @@ function collectDryRunRefs(params: {
     if (!ref) {
       continue;
     }
-    if (includeAllDiscoveredRefs || targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
+    if (
+      includeAllDiscoveredRefs ||
+      targetPaths.has(target.path) ||
+      providerAliases.has(ref.provider)
+    ) {
       refsByKey.set(secretRefKey(ref), ref);
     }
   }
@@ -1629,6 +1846,14 @@ function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
   ].join("\n");
 }
 
+async function loadConfigMutationSchema(): Promise<JsonSchemaRecord | undefined> {
+  try {
+    return structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as JsonSchemaRecord;
+  } catch {
+    return undefined;
+  }
+}
+
 function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRawWithPlugins(params.config);
   if (validated.ok) {
@@ -1638,6 +1863,68 @@ function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSe
     kind: "schema",
     message,
   }));
+}
+
+function collectPluginIntegrationProviderErrors(params: {
+  config: OpenClawConfig;
+  operations: ConfigSetOperation[];
+}): ConfigSetDryRunError[] {
+  const providers = params.config.secrets?.providers ?? {};
+  let validateAllProviders = false;
+  const touchedProviderAliases = new Set<string>();
+  for (const operation of params.operations) {
+    if (operation.touchedProviderAlias) {
+      touchedProviderAliases.add(operation.touchedProviderAlias);
+    }
+    if (operation.assignedRef) {
+      touchedProviderAliases.add(operation.assignedRef.provider);
+    }
+    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
+      touchedProviderAliases.add(ref.provider);
+    }
+    if (touchesSecretProviderCollection(operation.setPath)) {
+      validateAllProviders = true;
+    }
+  }
+  if (!validateAllProviders && touchedProviderAliases.size === 0) {
+    return [];
+  }
+  const integrationProviders: Array<{
+    alias: string;
+    provider: PluginIntegrationSecretProviderConfig;
+  }> = [];
+  for (const [alias, provider] of Object.entries(providers)) {
+    if (!validateAllProviders && !touchedProviderAliases.has(alias)) {
+      continue;
+    }
+    if (isPluginIntegrationSecretProviderConfig(provider)) {
+      integrationProviders.push({ alias, provider });
+    }
+  }
+  if (integrationProviders.length === 0) {
+    return [];
+  }
+  const manifestRegistry = loadPluginMetadataSnapshot({
+    config: params.config,
+    env: process.env,
+  }).manifestRegistry;
+  const errors: ConfigSetDryRunError[] = [];
+  for (const { alias, provider } of integrationProviders) {
+    const resolved = resolveSecretProviderIntegrationConfig({
+      manifestRegistry,
+      providerAlias: alias,
+      providerConfig: provider,
+      config: params.config,
+      env: process.env,
+    });
+    if (!resolved.ok) {
+      errors.push({
+        kind: "schema",
+        message: `secrets.providers.${alias}: ${resolved.reason}`,
+      });
+    }
+  }
+  return errors;
 }
 
 function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {
@@ -1719,6 +2006,7 @@ async function runConfigOperations(params: {
   // instead of snapshot.config (runtime-merged with defaults).
   // This prevents runtime defaults from leaking into the written config file (issue #6070)
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+  const mutationSchema = await loadConfigMutationSchema();
   const unsetPaths: PathSegment[][] = [];
   const explicitSetPaths: PathSegment[][] = [];
   for (const operation of operations) {
@@ -1731,6 +2019,7 @@ async function runConfigOperations(params: {
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
       mergeAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
+        schema: mutationSchema,
       });
     } else {
       assertNonDestructiveReplacement({
@@ -1741,6 +2030,7 @@ async function runConfigOperations(params: {
       });
       setAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
+        schema: mutationSchema,
       });
     }
   }
@@ -1754,6 +2044,10 @@ async function runConfigOperations(params: {
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
     (line) => line.trim(),
   );
+  const pluginIntegrationProviderErrors = collectPluginIntegrationProviderErrors({
+    config: nextConfig,
+    operations,
+  });
 
   if (options.dryRun) {
     const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
@@ -1784,6 +2078,7 @@ async function runConfigOperations(params: {
         })),
       );
     }
+    errors.push(...pluginIntegrationProviderErrors);
     if (requiresFullSchemaValidation) {
       errors.push(
         ...collectDryRunSchemaErrors({
@@ -1810,9 +2105,12 @@ async function runConfigOperations(params: {
       ok: dedupedErrors.length === 0,
       operations: operations.length,
       configPath: shortenHomePath(snapshot.path),
-      inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
+      inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
-        schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
+        schema:
+          requiresFullSchemaValidation ||
+          policyIssueLines.length > 0 ||
+          pluginIntegrationProviderErrors.length > 0,
         resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
         resolvabilityComplete:
           (hasJsonMode || hasBuilderMode || hasUnsetMode) &&
@@ -1860,6 +2158,14 @@ async function runConfigOperations(params: {
   }
   if (policyIssueLines.length > 0) {
     throw new Error(formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines));
+  }
+  if (pluginIntegrationProviderErrors.length > 0) {
+    throw new Error(
+      [
+        "Config validation failed: plugin-managed SecretRef provider integration is invalid.",
+        ...pluginIntegrationProviderErrors.map((error) => `- ${error.message}`),
+      ].join("\n"),
+    );
   }
 
   await replaceConfigFile({
@@ -2177,7 +2483,9 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
           runtime.error(`  ${line}`);
         }
         runtime.error("");
-        runtime.error(formatDoctorHint("to repair, or fix the keys above manually."));
+        runtime.error(
+          formatInvalidConfigRepairHint(snapshot, "to repair, or fix the keys above manually."),
+        );
         runtime.error(`Inspect with ${formatCliCommand("openclaw config validate")}.`);
       }
       runtime.exit(1);

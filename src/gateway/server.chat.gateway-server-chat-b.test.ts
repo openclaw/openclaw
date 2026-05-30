@@ -132,19 +132,16 @@ async function fetchHistoryMessages(
 type ConfiguredImageModelCase = {
   id: string;
   imageModel: AgentModelConfig;
-  expectedFallbacks: string[];
 };
 
 const configuredImageModelCases: ConfiguredImageModelCase[] = [
   {
     id: "with-image-fallback",
     imageModel: { primary: "openai/gpt-4o", fallbacks: ["openai/gpt-4o-mini"] },
-    expectedFallbacks: ["openai/gpt-4o-mini"],
   },
   {
     id: "without-image-fallback",
     imageModel: { primary: "openai/gpt-4o" },
-    expectedFallbacks: [],
   },
 ];
 
@@ -273,6 +270,9 @@ describe("gateway server chat", () => {
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),
         chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -365,8 +365,8 @@ describe("gateway server chat", () => {
   });
 
   test.each(configuredImageModelCases)(
-    "chat.send inlines image attachments through configured imageModel with allowlist present: $id",
-    async ({ id, imageModel, expectedFallbacks }) => {
+    "chat.send preserves text-only image uploads as MediaPaths even with configured imageModel: $id",
+    async ({ id, imageModel }) => {
       const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       try {
         testState.sessionStorePath = path.join(sessionDir, "sessions.json");
@@ -500,12 +500,13 @@ describe("gateway server chat", () => {
 
         expect(responses[0]?.ok).toBe(true);
         await vi.waitFor(() => expect(captured).toBeDefined(), FAST_WAIT_OPTS);
-        expect(captured?.replyOptions?.images).toEqual([
-          expect.objectContaining({ type: "image", mimeType: "image/png" }),
-        ]);
-        expect(captured?.replyOptions?.modelOverride).toBe("openai/gpt-4o");
-        expect(captured?.replyOptions?.modelOverrideFallbacks).toEqual(expectedFallbacks);
-        expect(captured?.ctx?.MediaPaths).toBeUndefined();
+        expect(captured?.replyOptions?.images).toBeUndefined();
+        expect(captured?.ctx?.MediaPath).toEqual(expect.any(String));
+        expect(captured?.ctx?.MediaPaths).toEqual([expect.any(String)]);
+        expect(captured?.ctx?.MediaType).toBe("image/png");
+        expect(captured?.ctx?.MediaTypes).toEqual(["image/png"]);
+        expect(captured?.ctx?.MediaStaged).toBe(true);
+        await vi.waitFor(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
       } finally {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
@@ -546,6 +547,9 @@ describe("gateway server chat", () => {
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),
         chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -663,6 +667,9 @@ describe("gateway server chat", () => {
         chatDeltaSentAt: new Map(),
         chatDeltaLastBroadcastLen: new Map(),
         chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
@@ -815,6 +822,130 @@ describe("gateway server chat", () => {
           process.env.HOME = originalHome;
         }
       }
+    });
+  });
+
+  test("chat.history overreads one local message to drop stale announce pairs at the limit boundary", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            sessionStartedAt,
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:31.000Z",
+          message: {
+            role: "user",
+            content: [
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+              "stale announce payload",
+            ].join("\n"),
+            provenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:main:subagent:child",
+              sourceTool: "subagent_announce",
+            },
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:33.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-23T04:03:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "fresh turn" }],
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 2 });
+      expect(messages).toHaveLength(1);
+      expect(JSON.stringify(messages)).not.toContain("stale announce reply");
+      expect(JSON.stringify(messages)).toContain("fresh turn");
+    });
+  });
+
+  test("chat.history does not surface an older stale assistant when overreading for pair context", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            sessionStartedAt,
+          },
+        },
+      });
+      const announce = {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceTool: "subagent_announce",
+      };
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:29.000Z",
+          message: {
+            role: "user",
+            content:
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            provenance: announce,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:30.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "older stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:31.000Z",
+          message: {
+            role: "user",
+            content:
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            provenance: announce,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:33.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "newer stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-23T04:03:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "fresh turn" }],
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 3 });
+      const serialized = JSON.stringify(messages);
+      expect(serialized).not.toContain("older stale announce reply");
+      expect(serialized).not.toContain("newer stale announce reply");
+      expect(serialized).toContain("fresh turn");
     });
   });
 

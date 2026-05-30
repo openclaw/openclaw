@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -12,6 +12,7 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { normalizeGeneratedHelpCommandArgv, normalizeRootHelpTargetArgv } from "./argv.js";
 import {
   isReservedNonPluginCommandRoot,
   shouldRegisterPrimaryCommandOnly,
@@ -22,10 +23,12 @@ import {
   consumeGatewayFastPathRootOptionToken,
   consumeGatewayRunOptionToken,
 } from "./gateway-run-argv.js";
+import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
+  resolvePrecomputedSubcommandHelpFastPath,
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
@@ -33,18 +36,25 @@ import {
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
+  shouldUseNodesHelpFastPath,
   shouldUseRootHelpFastPath,
+  shouldUseSecretsHelpFastPath,
+  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
+  resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
   shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
+  shouldUseNodesHelpFastPath,
   shouldUseRootHelpFastPath,
+  shouldUseSecretsHelpFastPath,
+  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 
 type Awaitable<T> = T | Promise<T>;
@@ -57,6 +67,16 @@ const CLI_PROXY_ENV_KEYS = [
   "https_proxy",
   "all_proxy",
 ] as const;
+
+const loadRootHelpLiveConfigModule = async () => await import("./root-help-live-config.js");
+const loadRootHelpMetadataModule = async () => await import("./root-help-metadata.js");
+const loadLoggingModule = async () => await import("../logging.js");
+const loadCliRegistryLoaderModule = async () => await import("../plugins/cli-registry-loader.js");
+const loadManifestCommandAliasesRuntimeModule = async () =>
+  await import("../plugins/manifest-command-aliases.runtime.js");
+const loadProxyLifecycleModule = async () => await import("../infra/net/proxy/proxy-lifecycle.js");
+const loadCrestodianModule = async () => await import("../crestodian/crestodian.js");
+const loadProgressModule = async () => await import("./progress.js");
 
 function createGatewayCliMainStartupTrace(argv: string[]) {
   const enabled =
@@ -133,18 +153,6 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   return sawGateway;
 }
 
-function hasJsonOutputFlag(argv: string[]): boolean {
-  for (const arg of argv) {
-    if (arg === "--") {
-      return false;
-    }
-    if (arg === "--json" || arg.startsWith("--json=")) {
-      return true;
-    }
-  }
-  return false;
-}
-
 async function tryRunGatewayRunFastPath(
   argv: string[],
   startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
@@ -166,7 +174,7 @@ async function tryRunGatewayRunFastPath(
       import("../version.js"),
       import("./banner.js"),
       import("./command-startup-policy.js"),
-      import("../logging.js"),
+      loadLoggingModule(),
     ]),
   );
   const invocation = resolveCliArgvInvocation(argv);
@@ -230,6 +238,31 @@ async function disposeCliAgentHarnesses(): Promise<void> {
     // Best-effort teardown for short-lived CLI commands. Harness plugins may
     // own subprocesses, but cleanup must not hide the command's real outcome.
   }
+}
+
+const UNCONFIGURED_CONFIG_IGNORED_KEYS = new Set(["$schema", "meta"]);
+
+function isUnconfiguredConfigSnapshot(
+  snapshot: Pick<ConfigFileSnapshot, "exists" | "valid" | "sourceConfig">,
+): boolean {
+  if (!snapshot.exists) {
+    return true;
+  }
+  if (!snapshot.valid) {
+    return false;
+  }
+  return Object.keys(snapshot.sourceConfig).every((key) =>
+    UNCONFIGURED_CONFIG_IGNORED_KEYS.has(key),
+  );
+}
+
+export async function shouldStartOnboardingForFreshInstall(argv: string[]): Promise<boolean> {
+  if (!shouldStartCrestodianForBareRoot(argv)) {
+    return false;
+  }
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  return isUnconfiguredConfigSnapshot(snapshot);
 }
 
 function pauseNonTtyStdinForCliExit(): void {
@@ -315,7 +348,7 @@ async function isPluginCliRoot(params: {
   config: OpenClawConfig;
 }): Promise<boolean | null> {
   try {
-    const { resolvePluginCliRootOwnerIds } = await import("../plugins/cli-registry-loader.js");
+    const { resolvePluginCliRootOwnerIds } = await loadCliRegistryLoaderModule();
     const ownerIds = await resolvePluginCliRootOwnerIds({
       cfg: params.config,
       env: process.env,
@@ -344,8 +377,7 @@ async function resolveCliCommandSurfaceOwner(params: {
   primary: string;
   config: OpenClawConfig;
 }): Promise<string | undefined> {
-  const { resolveManifestCliCommandSurfaceOwner } =
-    await import("../plugins/manifest-command-aliases.runtime.js");
+  const { resolveManifestCliCommandSurfaceOwner } = await loadManifestCommandAliasesRuntimeModule();
   const manifestOwner = resolveManifestCliCommandSurfaceOwner({
     command: params.primary,
     config: params.config,
@@ -355,7 +387,7 @@ async function resolveCliCommandSurfaceOwner(params: {
     return manifestOwner;
   }
   try {
-    const { resolvePluginCliRootOwnerIds } = await import("../plugins/cli-registry-loader.js");
+    const { resolvePluginCliRootOwnerIds } = await loadCliRegistryLoaderModule();
     return (
       await resolvePluginCliRootOwnerIds({
         cfg: createAllowlistAgnosticCliLookupConfig(params.config),
@@ -368,19 +400,26 @@ async function resolveCliCommandSurfaceOwner(params: {
   }
 }
 
-async function resolveUnownedCliPrimary(params: {
-  argv: string[];
-  config: OpenClawConfig;
-}): Promise<string | null> {
-  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(params.argv));
+function resolveUnownedCliPrimaryCandidate(argv: string[]): string | null {
+  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(argv));
   const { primary } = invocation;
   if (
-    invocation.hasHelpOrVersion ||
     !primary ||
     primary === "help" ||
     isReservedNonPluginCommandRoot(primary) ||
     isKnownBuiltInCommandRoot(primary)
   ) {
+    return null;
+  }
+  return primary;
+}
+
+async function resolveUnownedCliPrimary(params: {
+  argv: string[];
+  config: OpenClawConfig;
+}): Promise<string | null> {
+  const primary = resolveUnownedCliPrimaryCandidate(params.argv);
+  if (!primary) {
     return null;
   }
   const pluginRoot = await isPluginCliRoot({ primary, config: params.config });
@@ -395,7 +434,7 @@ async function resolveUnownedCliPrimaryMessage(params: {
   config: OpenClawConfig;
 }): Promise<string> {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
-    await import("../plugins/manifest-command-aliases.runtime.js");
+    await loadManifestCommandAliasesRuntimeModule();
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
   return (
     resolveMissingPluginCommandMessageFromPolicy(params.primary, params.config, {
@@ -454,7 +493,7 @@ export async function runCli(argv: string[] = process.argv) {
     }
     return;
   }
-  let normalizedArgv = parsedProfile.argv;
+  let normalizedArgv = normalizeRootHelpTargetArgv(parsedProfile.argv);
   const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
   const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   startupTrace.mark("argv");
@@ -490,7 +529,7 @@ export async function runCli(argv: string[] = process.argv) {
     const handle = proxyHandle;
     proxyHandle = null;
     if (handle) {
-      const { stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+      const { stopProxy } = await loadProxyLifecycleModule();
       await stopProxy(handle);
     }
   };
@@ -505,7 +544,7 @@ export async function runCli(argv: string[] = process.argv) {
     if (unownedPrimary) {
       throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
     }
-    const { startProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    const { startProxy } = await loadProxyLifecycleModule();
     proxyHandle = await startProxy(config?.proxy ?? undefined);
   }
 
@@ -535,12 +574,12 @@ export async function runCli(argv: string[] = process.argv) {
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
-        await import("./root-help-live-config.js");
+        await loadRootHelpLiveConfigModule();
       const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
         process.env,
       );
       if (!liveRootHelpOptions) {
-        const { outputPrecomputedRootHelpText } = await import("./root-help-metadata.js");
+        const { outputPrecomputedRootHelpText } = await loadRootHelpMetadataModule();
         if (outputPrecomputedRootHelpText()) {
           return;
         }
@@ -551,9 +590,64 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     if (shouldUseBrowserHelpFastPath(normalizedArgv)) {
-      const { outputPrecomputedBrowserHelpText } = await import("./root-help-metadata.js");
+      const { outputPrecomputedBrowserHelpText } = await loadRootHelpMetadataModule();
       if (outputPrecomputedBrowserHelpText()) {
         return;
+      }
+    }
+
+    if (shouldUseSetupOnboardConfigureHelpFastPath(normalizedArgv)) {
+      const { tryOutputSetupOnboardConfigureHelp } =
+        await import("./setup-onboard-configure-help-fast-path.js");
+      if (await tryOutputSetupOnboardConfigureHelp(normalizedArgv)) {
+        return;
+      }
+    }
+
+    if (shouldUseSecretsHelpFastPath(normalizedArgv)) {
+      const { outputPrecomputedSecretsHelpText } = await loadRootHelpMetadataModule();
+      if (outputPrecomputedSecretsHelpText()) {
+        return;
+      }
+    }
+
+    const precomputedSubcommandHelp = resolvePrecomputedSubcommandHelpFastPath(normalizedArgv);
+    if (precomputedSubcommandHelp) {
+      const { outputPrecomputedSubcommandHelpText } = await loadRootHelpMetadataModule();
+      if (outputPrecomputedSubcommandHelpText(precomputedSubcommandHelp)) {
+        return;
+      }
+    }
+
+    if (shouldUseNodesHelpFastPath(normalizedArgv)) {
+      const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
+        await loadRootHelpLiveConfigModule();
+      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
+        process.env,
+      );
+      if (!liveRootHelpOptions) {
+        const { outputPrecomputedNodesHelpText } = await loadRootHelpMetadataModule();
+        if (outputPrecomputedNodesHelpText()) {
+          return;
+        }
+      }
+    }
+
+    // Reject unowned command roots before help/version routing, so that
+    // `openclaw <typo> --help` surfaces the same Unknown command error as
+    // `openclaw <typo>` instead of silently showing generic top-level help.
+    // Runs after legitimate precomputed help fast paths so known help commands
+    // still dispatch normally. See #81077.
+    {
+      const unownedPrimaryCandidate = resolveUnownedCliPrimaryCandidate(normalizedArgv);
+      if (unownedPrimaryCandidate) {
+        const config = await readBestEffortCliConfig();
+        const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
+        if (unownedPrimary) {
+          throw new Error(
+            await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }),
+          );
+        }
       }
     }
 
@@ -564,6 +658,18 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     if (shouldRunBareRootCrestodian) {
+      if (await shouldStartOnboardingForFreshInstall(normalizedArgv)) {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          console.error(
+            "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const { setupWizardCommand } = await import("../commands/onboard.js");
+        await setupWizardCommand({});
+        return;
+      }
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.error(
           'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
@@ -571,8 +677,8 @@ export async function runCli(argv: string[] = process.argv) {
         process.exitCode = 1;
         return;
       }
-      const { runCrestodian } = await import("../crestodian/crestodian.js");
-      const { createCliProgress } = await import("./progress.js");
+      const { runCrestodian } = await loadCrestodianModule();
+      const { createCliProgress } = await loadProgressModule();
       const progress = createCliProgress({
         label: "Starting Crestodian…",
         indeterminate: true,
@@ -596,7 +702,7 @@ export async function runCli(argv: string[] = process.argv) {
     }
 
     if (shouldRunModernOnboardCrestodian) {
-      const { runCrestodian } = await import("../crestodian/crestodian.js");
+      const { runCrestodian } = await loadCrestodianModule();
       const nonInteractive = normalizedArgv.includes("--non-interactive");
       await runCrestodian({
         message: nonInteractive ? "overview" : undefined,
@@ -636,7 +742,7 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    const { createCliProgress } = await import("./progress.js");
+    const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",
       indeterminate: true,
@@ -653,7 +759,7 @@ export async function runCli(argv: string[] = process.argv) {
 
     try {
       // Capture all console output into structured logs while keeping stdout/stderr behavior.
-      const { enableConsoleCapture } = await import("../logging.js");
+      const { enableConsoleCapture } = await loadLoggingModule();
       enableConsoleCapture();
 
       const [
@@ -674,7 +780,7 @@ export async function runCli(argv: string[] = process.argv) {
           import("./failure-output.js"),
           import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
-          import("../terminal/restore.js"),
+          import("../../packages/terminal-core/src/restore.js"),
         ]),
       );
       const program = await startupTrace.measure("build-program", () => buildProgram());
@@ -708,7 +814,7 @@ export async function runCli(argv: string[] = process.argv) {
         process.exit(1);
       });
 
-      const parseArgv = rewriteUpdateFlagArgv(normalizedArgv);
+      const parseArgv = normalizeGeneratedHelpCommandArgv(rewriteUpdateFlagArgv(normalizedArgv));
       const invocation = resolveCliArgvInvocation(parseArgv);
       // Register the primary command (builtin or subcli) so help and command parsing
       // are correct even with lazy command registration.
@@ -740,33 +846,12 @@ export async function runCli(argv: string[] = process.argv) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
           const { registerPluginCliCommandsFromValidatedConfig } =
             await import("../plugins/cli.js");
-          if (!hasJsonOutputFlag(parseArgv)) {
-            return await registerPluginCliCommandsFromValidatedConfig(
-              program,
-              undefined,
-              undefined,
-              {
-                mode: "lazy",
-                primary,
-              },
-            );
-          }
-          const { loggingState } = await import("../logging/state.js");
-          const previousForceStderr = loggingState.forceConsoleToStderr;
-          loggingState.forceConsoleToStderr = true;
-          try {
-            return await registerPluginCliCommandsFromValidatedConfig(
-              program,
-              undefined,
-              undefined,
-              {
-                mode: "lazy",
-                primary,
-              },
-            );
-          } finally {
-            loggingState.forceConsoleToStderr = previousForceStderr;
-          }
+          return await withConsoleLogsRoutedToStderrForJson(parseArgv, () =>
+            registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+              mode: "lazy",
+              primary,
+            }),
+          );
         });
         if (config) {
           if (
@@ -776,7 +861,7 @@ export async function runCli(argv: string[] = process.argv) {
             )
           ) {
             const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
-              await import("../plugins/manifest-command-aliases.runtime.js");
+              await loadManifestCommandAliasesRuntimeModule();
             const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner({
               primary,
               config,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing as replyRunTesting,
@@ -10,6 +10,10 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -100,6 +104,23 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
     );
   }
   return { dir, sessionFile, storePath };
+}
+
+function createCliUserTurnRecorder(params: {
+  text: string;
+  sessionFile: string;
+  sessionKey?: string;
+  workspaceDir: string;
+}) {
+  return createUserTurnTranscriptRecorder({
+    input: { text: params.text },
+    target: {
+      transcriptPath: params.sessionFile,
+      sessionId: "s1",
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      cwd: params.workspaceDir,
+    },
+  });
 }
 
 function buildPreparedContext(params?: {
@@ -220,6 +241,16 @@ function expectTextMessage(value: unknown, fields: { role: string; content: stri
   expect(message.role).toBe(fields.role);
   expect(message.content).toBe(fields.content);
   expect(message.timestamp).toBeTypeOf("number");
+}
+
+function readTranscriptMessages(sessionFile: string): unknown[] {
+  return fs
+    .readFileSync(sessionFile, "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { message?: unknown })
+    .map((entry) => entry.message)
+    .filter(Boolean);
 }
 
 describe("runCliAgent reliability", () => {
@@ -706,8 +737,407 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("waits for agent_end hooks before resolving successful CLI runs", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    let resolved = false;
+    const run = runPreparedCliAgent(buildPreparedContext()).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({
+      payloads: [{ text: "hello from cli" }],
+    });
+    expect(resolved).toBe(true);
+  });
+
+  it("does not wait for agent_end hooks before resolving channel-backed CLI runs", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+    setHookRunnerForTest(hookRunner);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const context = buildPreparedContext();
+    let resolved = false;
+    const run = runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        messageProvider: "acp",
+        messageChannel: "telegram",
+      },
+    }).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    });
+    await vi.waitFor(() => {
+      expect(resolved).toBe(true);
+    });
+
+    await expect(run).resolves.toMatchObject({
+      payloads: [{ text: "hello from cli" }],
+    });
+    expect(callArg(hookRunner.runAgentEnd, 0, 2, "agent_end options")).toEqual({
+      unrefTimeout: true,
+    });
+
+    releaseAgentEnd();
+  });
+
+  it("persists approved CLI user turns before model execution", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "display prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
+          onUserMessagePersisted,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(onUserMessagePersisted).toHaveBeenCalledOnce();
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: "user",
+          content: "display prompt",
+        }),
+      );
+
+      const messages = readTranscriptMessages(sessionFile);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          content: "display prompt",
+        }),
+      );
+      expect(JSON.stringify(messages)).not.toContain("runtime prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes cwd to approved CLI user-turn persistence", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-persist-cwd-"));
+    let capturedTarget: unknown;
+    const recorder = {
+      message: undefined,
+      resolveMessage: vi.fn(async () => undefined),
+      markRuntimePersistencePending: vi.fn(),
+      markRuntimePersisted: vi.fn(),
+      markBlocked: vi.fn(),
+      hasPersisted: vi.fn(() => false),
+      isBlocked: vi.fn(() => false),
+      hasRuntimePersistencePending: vi.fn(() => false),
+      waitForRuntimePersistence: vi.fn(async () => undefined),
+      persistApproved: vi.fn(async (options?: { target?: unknown }) => {
+        capturedTarget =
+          typeof options?.target === "function" ? await options.target() : options?.target;
+        return {
+          sessionFile,
+          sessionEntry: undefined,
+          messageId: "message-1",
+          message: {
+            role: "user",
+            content: "display prompt",
+          },
+        };
+      }),
+      persistFallback: vi.fn(async () => undefined),
+    } as unknown as UserTurnTranscriptRecorder;
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli-cwd",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          cwd: taskDir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: recorder,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(recorder.persistApproved).toHaveBeenCalledOnce();
+      expect(capturedTarget).toEqual(
+        expect.objectContaining({
+          transcriptPath: sessionFile,
+          sessionId: context.params.sessionId,
+          sessionKey: "agent:main:main",
+          cwd: taskDir,
+        }),
+      );
+    } finally {
+      fs.rmSync(taskDir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an existing user-turn recorder for approved CLI persistence", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "recorder display prompt",
+        media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+        timestamp: 123,
+        idempotencyKey: "cli-recorder:user",
+      },
+      target: {
+        transcriptPath: sessionFile,
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: dir,
+      },
+      updateMode: "none",
+    });
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli-recorder",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: recorder,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(recorder.hasPersisted()).toBe(true);
+
+      const messages = readTranscriptMessages(sessionFile);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "recorder display prompt",
+          MediaPath: "/tmp/image.png",
+          MediaType: "image/png",
+          timestamp: 123,
+          idempotencyKey: "cli-recorder:user",
+        }),
+      ]);
+      expect(JSON.stringify(messages)).not.toContain("legacy display prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fail CLI execution when persistence notification fails", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello despite notification failure",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-notify-fail",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "display prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
+          onUserMessagePersisted: () => {
+            throw new Error("notification failed");
+          },
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello despite notification failure" }]);
+      expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not execute the CLI when approved user turn persistence fails", async () => {
+    supervisorSpawnMock.mockClear();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-persist-fail-"));
+    const blockedParent = path.join(dir, "not-a-directory");
+    fs.writeFileSync(blockedParent, "occupied", "utf-8");
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-fails",
+      });
+
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            agentId: "main",
+            sessionFile: path.join(blockedParent, "s1.jsonl"),
+            workspaceDir: dir,
+            prompt: "runtime prompt",
+            userTurnTranscriptRecorder: createCliUserTurnRecorder({
+              text: "display prompt",
+              sessionFile: path.join(blockedParent, "s1.jsonl"),
+              sessionKey: "agent:main:main",
+              workspaceDir: dir,
+            }),
+            onUserMessagePersisted,
+          },
+        }),
+      ).rejects.toThrow();
+
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      expect(onUserMessagePersisted).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
     supervisorSpawnMock.mockClear();
+    const onUserMessagePersisted = vi.fn();
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) =>
         ["before_agent_run", "llm_input", "agent_end"].includes(hookName),
@@ -721,7 +1151,7 @@ describe("runCliAgent reliability", () => {
         },
       })),
       runLlmInput: vi.fn(async () => undefined),
-      runAgentEnd: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
     };
     setHookRunnerForTest(hookRunner);
     const { dir, sessionFile } = createSessionFile({
@@ -729,17 +1159,40 @@ describe("runCliAgent reliability", () => {
     });
 
     try {
-      const result = await runPreparedCliAgent({
-        ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" }),
+      let resolved = false;
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-blocked-cli",
+      });
+      const run = runPreparedCliAgent({
+        ...context,
         params: {
-          ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" })
-            .params,
+          ...context.params,
           agentId: "main",
           sessionFile,
           workspaceDir: dir,
           prompt: "secret prompt",
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "secret prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
+          onUserMessagePersisted,
         },
+      }).then((result) => {
+        resolved = true;
+        return result;
       });
+
+      await vi.waitFor(() => {
+        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+      });
+      await Promise.resolve();
+      expect(resolved).toBe(false);
+
+      releaseAgentEnd();
+      const result = await run;
 
       expect(result.payloads).toEqual([
         {
@@ -750,6 +1203,7 @@ describe("runCliAgent reliability", () => {
       expect(result.meta.livenessState).toBe("blocked");
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
+      expect(onUserMessagePersisted).not.toHaveBeenCalled();
       const beforeRunEvent = requireRecord(
         callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
         "before_agent_run event",
@@ -769,9 +1223,7 @@ describe("runCliAgent reliability", () => {
       expect(beforeRunContext.runId).toBe("run-blocked-cli");
       expect(beforeRunContext.agentId).toBe("main");
       expect(beforeRunContext.sessionKey).toBe("agent:main:main");
-      await vi.waitFor(() => {
-        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
-      });
+      expect(resolved).toBe(true);
       const agentEndEvent = requireRecord(
         callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
         "agent_end event",
@@ -833,18 +1285,22 @@ describe("runCliAgent reliability", () => {
       }),
     );
 
-    const result = await runPreparedCliAgent(buildPreparedContext());
-
-    expect(result.payloads).toBeUndefined();
+    await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
+      "CLI backend returned an empty response.",
+    );
     expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
   });
 
   it("emits agent_end with failure details when the CLI run fails", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => ["llm_input", "agent_end"].includes(hookName)),
       runLlmInput: vi.fn(async () => undefined),
       runLlmOutput: vi.fn(async () => undefined),
-      runAgentEnd: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(() => agentEndSettled),
     };
     setHookRunnerForTest(hookRunner);
 
@@ -861,15 +1317,22 @@ describe("runCliAgent reliability", () => {
       }),
     );
 
-    await expect(runPreparedCliAgent(buildPreparedContext())).rejects.toThrow(
-      "rate limit exceeded",
-    );
+    let settled = false;
+    const run = runPreparedCliAgent(buildPreparedContext()).finally(() => {
+      settled = true;
+    });
 
     await vi.waitFor(() => {
       expect(hookRunner.runLlmInput).toHaveBeenCalledTimes(1);
       expect(hookRunner.runLlmOutput).not.toHaveBeenCalled();
       expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
     });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseAgentEnd();
+    await expect(run).rejects.toThrow("rate limit exceeded");
+    expect(settled).toBe(true);
 
     const agentEndEvent = requireRecord(
       callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),

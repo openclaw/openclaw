@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   extractShippedPluginInstallConfigRecords,
   stripShippedPluginInstallConfigRecords,
@@ -293,9 +293,11 @@ export async function migratePluginRegistryForInstall(
 
   const rawConfig = await readMigrationConfig(params);
   const config = stripShippedPluginInstallConfigRecords(rawConfig) as OpenClawConfig;
+  const durableInstallRecords =
+    params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params));
   const installRecords = {
     ...extractShippedPluginInstallConfigRecords(rawConfig),
-    ...(await loadInstalledPluginIndexInstallRecords(params)),
+    ...durableInstallRecords,
   };
   const migrationParams = {
     ...params,

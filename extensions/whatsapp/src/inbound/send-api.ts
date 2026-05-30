@@ -6,6 +6,7 @@ import type {
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
+import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
 import { toWhatsappJid, toWhatsappJidWithLid } from "../text-runtime.js";
@@ -96,11 +97,11 @@ export function createWebSendApi(params: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("image/")) {
-          payload = {
+          payload = await addWhatsAppImagePreviewFields({
             image: mediaBuffer,
             caption: resolvedPayloadText.text || undefined,
             mimetype: mediaType,
-          };
+          });
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
         } else if (mediaType.startsWith("video/")) {
@@ -175,10 +176,9 @@ export function createWebSendApi(params: {
       fromMe: boolean,
       participant?: string,
     ): Promise<WhatsAppSendResult> => {
-      // chatJid is typically already a JID (group or DM); pass through
-      // unchanged. The participant is a sender id and stays PN-shaped to match
-      // how the existing inbound flow stores it.
-      const jid = toWhatsappJid(chatJid);
+      // Resolve DM targets through the same LID-aware path as normal sends so
+      // reactions land on the delivered WhatsApp message key.
+      const jid = resolveOutboundJid(chatJid);
       const result = await params.sock.sendMessage(jid, {
         react: {
           text: emoji,

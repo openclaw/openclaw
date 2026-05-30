@@ -1,6 +1,10 @@
+import {
+  buildModelCatalogMergeKey,
+  normalizeModelCatalogProviderId,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeModelCatalogProviderRows } from "./normalize.js";
-import { buildModelCatalogMergeKey, normalizeModelCatalogProviderId } from "./refs.js";
 import type {
   ModelCatalog,
   ModelCatalogAlias,
@@ -11,7 +15,10 @@ import type {
 type ManifestModelCatalogPlugin = {
   id: string;
   providers?: readonly string[];
-  modelCatalog?: Pick<ModelCatalog, "providers" | "aliases" | "suppressions" | "discovery">;
+  modelCatalog?: Pick<
+    ModelCatalog,
+    "providers" | "aliases" | "suppressions" | "discovery" | "runtimeAugment"
+  >;
 };
 
 type ManifestModelCatalogRegistry = {
@@ -156,7 +163,9 @@ function planManifestModelCatalogPluginEntries(params: {
 }
 
 function buildOwnedProviderSet(plugin: ManifestModelCatalogPlugin): ReadonlySet<string> {
-  return new Set((plugin.providers ?? []).map(normalizeModelCatalogProviderId).filter(Boolean));
+  return new Set(
+    normalizeUniqueStringEntries((plugin.providers ?? []).map(normalizeModelCatalogProviderId)),
+  );
 }
 
 function buildModelCatalogProviderAliasTargets(

@@ -1,35 +1,5 @@
 import { execFile } from "node:child_process";
 import {
-  createConfigIO,
-  parseConfigJson5,
-  readConfigFileSnapshot,
-  readConfigFileSnapshotForWrite,
-  resolveConfigSnapshotHash,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
-import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyMergePatch } from "../../config/merge-patch.js";
-import {
-  redactConfigObject,
-  redactConfigSnapshot,
-  restoreRedactedValues,
-} from "../../config/redact-snapshot.js";
-import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
-import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
-import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import {
-  prepareSecretsRuntimeSnapshot,
-  type PreparedSecretsRuntimeSnapshot,
-} from "../../secrets/runtime.js";
-import { diffConfigPaths } from "../config-diff.js";
-import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
-import {
-  formatControlPlaneActor,
-  resolveControlPlaneActor,
-  summarizeChangedPaths,
-} from "../control-plane-audit.js";
-import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -40,7 +10,46 @@ import {
   validateConfigSchemaLookupResult,
   validateConfigSchemaParams,
   validateConfigSetParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  createConfigIO,
+  parseConfigJson5,
+  readConfigFileSnapshot,
+  readConfigFileSnapshotForWrite,
+  resolveConfigSnapshotHash,
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "../../config/config.js";
+import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
+import { formatConfigIssueLines } from "../../config/issue-format.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
+import {
+  redactConfigObject,
+  redactConfigSnapshot,
+  restoreRedactedValues,
+} from "../../config/redact-snapshot.js";
+import { loadGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
+import { lookupConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
+import type { ConfigValidationIssue, OpenClawConfig } from "../../config/types.openclaw.js";
+import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  prepareSecretsRuntimeSnapshot,
+  type PreparedSecretsRuntimeSnapshot,
+} from "../../secrets/runtime.js";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "../../shared/number-coercion.js";
+import { isRecord } from "../../shared/record-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { diffConfigPaths } from "../config-diff.js";
+import { resolveConfigReloadMetadata } from "../config-reload-plan.js";
+import {
+  formatControlPlaneActor,
+  resolveControlPlaneActor,
+  summarizeChangedPaths,
+} from "../control-plane-audit.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   commitGatewayConfigWrite,
@@ -189,12 +198,66 @@ function formatConfigOpenError(error: unknown): string {
   return String(error);
 }
 
+function hasOwnRecordValue(value: unknown, key: string): boolean {
+  return isRecord(value) && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function stripBundledProviderRuntimeDefaults(params: {
+  candidate: unknown;
+  sourceConfig: unknown;
+}): unknown {
+  if (!isRecord(params.candidate)) {
+    return params.candidate;
+  }
+  const models = params.candidate.models;
+  if (!isRecord(models) || !isRecord(models.providers)) {
+    return params.candidate;
+  }
+  const sourceModels = isRecord(params.sourceConfig) ? params.sourceConfig.models : undefined;
+  const sourceProviders = isRecord(sourceModels) ? sourceModels.providers : undefined;
+
+  let nextProviders: Record<string, unknown> | undefined;
+  for (const [providerId, provider] of Object.entries(models.providers)) {
+    if (!isBuiltInModelProviderOverlayId(providerId) || !isRecord(provider)) {
+      continue;
+    }
+    const sourceProvider = isRecord(sourceProviders) ? sourceProviders[providerId] : undefined;
+    let nextProvider: Record<string, unknown> | undefined;
+    if (provider.baseUrl === "" && !hasOwnRecordValue(sourceProvider, "baseUrl")) {
+      nextProvider = { ...provider };
+      delete nextProvider.baseUrl;
+    }
+    if (
+      Array.isArray(provider.models) &&
+      provider.models.length === 0 &&
+      !hasOwnRecordValue(sourceProvider, "models")
+    ) {
+      nextProvider ??= { ...provider };
+      delete nextProvider.models;
+    }
+    if (nextProvider) {
+      nextProviders ??= { ...models.providers };
+      nextProviders[providerId] = nextProvider;
+    }
+  }
+  if (!nextProviders) {
+    return params.candidate;
+  }
+  return {
+    ...params.candidate,
+    models: {
+      ...models,
+      providers: nextProviders,
+    },
+  };
+}
+
 function parseValidateConfigFromRawOrRespond(
   params: unknown,
   requestName: string,
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
-): { config: OpenClawConfig; schema: ConfigSchemaResponse } | null {
+): { config: OpenClawConfig; writeConfig: OpenClawConfig; schema: ConfigSchemaResponse } | null {
   const rawValue = parseRawConfigOrRespond(params, requestName, respond);
   if (!rawValue) {
     return null;
@@ -214,7 +277,32 @@ function parseValidateConfigFromRawOrRespond(
     );
     return null;
   }
-  const validated = validateConfigObjectWithPlugins(restored.result);
+  const projectedValidationCandidate = snapshot.valid
+    ? applyMergePatch(
+        projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config),
+        createMergePatch(snapshot.config, restored.result),
+      )
+    : restored.result;
+  const validationCandidate = stripBundledProviderRuntimeDefaults({
+    candidate: projectedValidationCandidate,
+    sourceConfig: snapshot.parsed,
+  });
+  const sourceValidated = validateConfigObjectRawWithPlugins(validationCandidate);
+  if (!sourceValidated.ok) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        summarizeConfigValidationIssues(sourceValidated.issues),
+        {
+          details: { issues: sourceValidated.issues },
+        },
+      ),
+    );
+    return null;
+  }
+  const validated = validateConfigObjectWithPlugins(validationCandidate);
   if (!validated.ok) {
     respond(
       false,
@@ -225,14 +313,18 @@ function parseValidateConfigFromRawOrRespond(
     );
     return null;
   }
-  return { config: validated.config, schema };
+  return {
+    config: validated.config,
+    writeConfig: validationCandidate as OpenClawConfig,
+    schema,
+  };
 }
 
 function summarizeConfigValidationIssues(issues: ReadonlyArray<ConfigValidationIssue>): string {
   const trimmed = issues.slice(0, MAX_CONFIG_ISSUES_IN_ERROR_MESSAGE);
-  const lines = formatConfigIssueLines(trimmed, "", { normalizeRoot: true })
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(
+    formatConfigIssueLines(trimmed, "", { normalizeRoot: true }),
+  );
   if (lines.length === 0) {
     return "invalid config";
   }
@@ -278,16 +370,31 @@ function clearConfigSchemaResponseCache() {
 }
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
-  const now = Date.now();
-  if (configSchemaResponseCache && configSchemaResponseCache.expiresAtMs > now) {
+  const now = asDateTimestampMs(Date.now());
+  const cachedExpiresAt =
+    configSchemaResponseCache === null
+      ? undefined
+      : asDateTimestampMs(configSchemaResponseCache.expiresAtMs);
+  if (
+    configSchemaResponseCache &&
+    now !== undefined &&
+    cachedExpiresAt !== undefined &&
+    cachedExpiresAt > now
+  ) {
     return configSchemaResponseCache.response;
+  }
+  if (configSchemaResponseCache) {
+    configSchemaResponseCache = null;
   }
 
   const response = loadGatewayRuntimeConfigSchema();
-  configSchemaResponseCache = {
-    expiresAtMs: Date.now() + CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS,
-    response,
-  };
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS);
+  if (expiresAtMs !== undefined) {
+    configSchemaResponseCache = {
+      expiresAtMs,
+      response,
+    };
+  }
   return response;
 }
 
@@ -357,7 +464,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const writeResult = await commitGatewayConfigWrite({
       snapshot,
       writeOptions,
-      nextConfig: parsed.config,
+      nextConfig: parsed.writeConfig,
       context,
     });
     clearConfigSchemaResponseCache();
@@ -573,7 +680,7 @@ export const configHandlers: GatewayRequestHandlers = {
     const writeResult = await commitGatewayConfigWrite({
       snapshot,
       writeOptions,
-      nextConfig: parsed.config,
+      nextConfig: parsed.writeConfig,
       context,
       disconnectSharedAuthClients,
     });
@@ -614,14 +721,16 @@ export const configHandlers: GatewayRequestHandlers = {
       await execConfigOpenCommand(resolveConfigOpenCommand(configPath));
       respond(true, { ok: true, path: configPath }, undefined);
     } catch (error) {
+      const errorMessage = formatConfigOpenError(error);
+      const isHeadlessError =
+        errorMessage.includes("xdg-open") && errorMessage.includes("no method available");
+      const detailedError = isHeadlessError
+        ? `Cannot open file in headless environment. File path: ${configPath}. This environment appears to lack a graphical or terminal browser handler.`
+        : `Failed to open config file: ${errorMessage}`;
       context?.logGateway?.warn(
-        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${formatConfigOpenError(error)}`,
+        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${errorMessage}`,
       );
-      respond(
-        true,
-        { ok: false, path: configPath, error: "failed to open config file" },
-        undefined,
-      );
+      respond(true, { ok: false, path: configPath, error: detailedError }, undefined);
     }
   },
 };

@@ -3,10 +3,10 @@ import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
-import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import { getChatCommands } from "./commands-registry.data.js";
@@ -104,12 +104,15 @@ function listNativeSpecsFromCommands(
     .filter((command) => command.scope !== "text" && command.nativeName)
     .flatMap((command) => {
       const spec = toNativeCommandSpec(command, provider);
-      return resolveNativeNames(command, provider).map((name) => {
+      return resolveNativeNames(command, provider).map((name, index) => {
         const nativeSpec: NativeCommandSpec = {
           name,
           description: spec.description,
           acceptsArgs: spec.acceptsArgs,
         };
+        if (index > 0) {
+          nativeSpec.isAlias = true;
+        }
         if (spec.args) {
           nativeSpec.args = spec.args;
         }

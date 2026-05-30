@@ -1,12 +1,9 @@
 {
   "name": "@openclaw/anthropic-provider",
-  "version": "2026.5.19",
+  "version": "2026.5.30",
   "private": true,
   "description": "OpenClaw Anthropic provider plugin",
   "type": "module",
-  "dependencies": {
-    "@earendil-works/pi-ai": "0.75.1"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

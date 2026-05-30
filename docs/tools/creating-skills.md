@@ -21,6 +21,16 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     mkdir -p ~/.openclaw/workspace/skills/hello-world
     ```
 
+    You can group skills in subfolders when your library grows:
+
+    ```bash
+    mkdir -p ~/.openclaw/workspace/skills/personal/hello-world
+    ```
+
+    Group folders are only organizational. The skill is still named by
+    `SKILL.md` frontmatter, so `name: hello-world` is invoked as
+    `/hello-world`.
+
   </Step>
 
   <Step title="Write SKILL.md">
@@ -40,7 +50,7 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     ```
 
     Use hyphen-case with lowercase letters, digits, and hyphens for the skill
-    `name`. Keep the folder name and frontmatter `name` aligned.
+    `name`. Keep the leaf folder name and frontmatter `name` aligned.
 
   </Step>
 
@@ -52,7 +62,15 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
   </Step>
 
   <Step title="Load the skill">
-    Start a new session so OpenClaw picks up the skill:
+    Verify the skill loaded:
+
+    ```bash
+    openclaw skills list
+    ```
+
+    OpenClaw watches nested `SKILL.md` files under skills roots. If the watcher
+    is disabled or you are continuing an existing session, start a new session
+    so the model receives the refreshed skills list:
 
     ```bash
     # From chat
@@ -60,12 +78,6 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
     # Or restart the gateway
     openclaw gateway restart
-    ```
-
-    Verify the skill loaded:
-
-    ```bash
-    openclaw skills list
     ```
 
   </Step>
@@ -82,6 +94,45 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
   </Step>
 </Steps>
 
+## Propose before applying
+
+For agent-generated procedures, use a Skill Workshop proposal instead of
+writing `SKILL.md` directly:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "hello-world" \
+  --description "A simple skill that says hello." \
+  --proposal ./PROPOSAL.md
+```
+
+Use `--proposal-dir` when the proposal also has support files:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "hello-world" \
+  --description "A simple skill that says hello." \
+  --proposal-dir ./hello-world-proposal
+```
+
+The draft is stored under
+`<OPENCLAW_STATE_DIR>/skill-workshop/proposals/<proposal-id>/PROPOSAL.md` and
+stays inactive until an operator reviews and applies it. The default state
+directory is `~/.openclaw`. Proposal directories must contain `PROPOSAL.md`.
+Support files can be included under `assets/`, `examples/`, `references/`,
+`scripts/`, or `templates/`; OpenClaw stores and scans them with the proposal:
+
+```bash
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
+openclaw skills workshop apply <proposal-id>
+```
+
+When applied, OpenClaw writes the final `SKILL.md` into the workspace `skills/`
+root, writes approved support files beside it, and removes proposal-only
+frontmatter such as `status: proposal`, proposal `version`, and proposal
+`date`.
+
 ## Skill metadata reference
 
 The YAML frontmatter supports these fields:
@@ -93,6 +144,28 @@ The YAML frontmatter supports these fields:
 | `metadata.openclaw.os`              | No       | OS filter (`["darwin"]`, `["linux"]`, etc.)                    |
 | `metadata.openclaw.requires.bins`   | No       | Required binaries on PATH                                      |
 | `metadata.openclaw.requires.config` | No       | Required config keys                                           |
+
+## Advanced features
+
+Once a basic skill works, these fields help make it reliable and portable:
+
+- **Conditional activation** — use `requires.bins`, `requires.env`, or
+  `requires.config` to load the skill only when required dependencies are
+  available. See [Skills reference: gating](/tools/skills#gating).
+- **Environment and API-key wiring** — use `skills.entries.<name>.env` and
+  `skills.entries.<name>.apiKey` to inject host-side environment for a skill
+  turn. See [Skills reference: config wiring](/tools/skills#config-wiring).
+- **Invocation control** — set `user-invocable: false` to hide a slash command,
+  or `disable-model-invocation: true` to keep a command-style skill out of the
+  model prompt. See [Skills reference: frontmatter](/tools/skills#frontmatter).
+- **Direct command dispatch** — use `command-dispatch: tool` with
+  `command-tool` when a slash command should call a tool directly instead of
+  routing through the model.
+- **Portable paths** — use `{baseDir}` in `SKILL.md` when referencing scripts
+  or assets inside the skill directory.
+- **Publishing** — use the ClawHub skill when preparing a skill for publication.
+  It documents the current `clawhub publish` command shape and required
+  metadata.
 
 ## Best practices
 
@@ -111,6 +184,10 @@ The YAML frontmatter supports these fields:
 | `~/.openclaw/skills/`           | Medium     | Shared (all agents)   |
 | Bundled (shipped with OpenClaw) | Low        | Global                |
 | `skills.load.extraDirs`         | Lowest     | Custom shared folders |
+
+Each skills root can contain direct skill folders such as
+`skills/hello-world/SKILL.md` or grouped folders such as
+`skills/personal/hello-world/SKILL.md`.
 
 ## Related
 

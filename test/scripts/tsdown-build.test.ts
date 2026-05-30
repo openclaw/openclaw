@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
+  parseTsdownBuildArgs,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
   pruneUntrackedGeneratedSourceDeclarations,
@@ -14,6 +16,10 @@ import {
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const NO_MEMORY_LIMIT = {
+  cgroupMemoryLimitPaths: [],
+  procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+};
 
 async function expectPathMissing(targetPath: string) {
   let statError: unknown;
@@ -30,18 +36,58 @@ async function expectPathMissing(targetPath: string) {
 }
 
 describe("resolveTsdownBuildInvocation", () => {
+  it("parses wrapper help before any tsdown work", () => {
+    expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
+    expect(parseTsdownBuildArgs(["--format", "esm"])).toEqual({
+      forwardedArgs: ["--format", "esm"],
+      help: false,
+    });
+  });
+
+  it("prints wrapper help without invoking pnpm or tsdown", () => {
+    const result = spawnSync(process.execPath, ["scripts/tsdown-build.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/tsdown-build.mjs");
+    expect(result.stdout).not.toContain("Scope:");
+    expect(result.stdout).not.toContain("pnpm");
+  });
+
+  it("forwards explicit tsdown args after wrapper args are parsed", () => {
+    const result = resolveTsdownBuildInvocation({
+      args: ["--format", "esm"],
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.args).toContain("tsdown");
+    expect(result.args).toEqual(expect.arrayContaining(["--config-loader", "unrun", "--no-clean"]));
+    expect(result.args.slice(-2)).toEqual(["--format", "esm"]);
+  });
+
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
+    const rootDir = createTempDir("openclaw-pnpm-runner-");
+    const npmExecPath = path.join(rootDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
     const result = resolveTsdownBuildInvocation({
       platform: "win32",
       nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
+      npmExecPath,
       env: {},
+      ...NO_MEMORY_LIMIT,
     });
 
     expect(result).toEqual({
       command: "C:\\Program Files\\nodejs\\node.exe",
       args: [
-        "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
+        npmExecPath,
         "exec",
         "tsdown",
         "--config-loader",
@@ -54,7 +100,7 @@ describe("resolveTsdownBuildInvocation", () => {
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         windowsVerbatimArguments: undefined,
-        env: { NODE_OPTIONS: "--max-old-space-size=6144" },
+        env: { NODE_OPTIONS: "--max-old-space-size=8192" },
       },
     });
   });
@@ -64,9 +110,107 @@ describe("resolveTsdownBuildInvocation", () => {
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      ...NO_MEMORY_LIMIT,
     });
 
     expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+  });
+
+  it("raises inherited lower tsdown heap settings to the build default", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+  });
+
+  it("raises split inherited lower tsdown heap settings to the build default", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+  });
+
+  it("keeps default tsdown heap below the container memory limit", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+  });
+
+  it("clamps explicit tsdown heap settings to the container memory limit", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6400");
+  });
+
+  it("falls back to proc meminfo when the cgroup memory limit is unbounded", () => {
+    const fsMock = {
+      readFileSync: vi.fn((filePath: string) => {
+        if (filePath === "/test/memory.max") {
+          return "max\n";
+        }
+        if (filePath === "/test/meminfo") {
+          return "MemTotal: 7340032 kB\n";
+        }
+        throw new Error(`unexpected path ${filePath}`);
+      }),
+    };
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: fsMock,
+      cgroupMemoryLimitPaths: ["/test/memory.max"],
+      procMeminfoPath: "/test/meminfo",
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+  });
+
+  it("can run tsdown without invoking pnpm", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result).toEqual({
+      command: "/usr/bin/node",
+      args: [
+        "node_modules/tsdown/dist/run.mjs",
+        "--config-loader",
+        "unrun",
+        "--logLevel",
+        "warn",
+        "--no-clean",
+      ],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+        env: {
+          NODE_OPTIONS: "--max-old-space-size=8192",
+          OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+        },
+      },
+    });
   });
 
   it("keeps source-checkout prune best-effort", () => {
@@ -202,6 +346,9 @@ describe("createTsdownOutputScanner", () => {
 
     scanner.append("[UNRESOLVED_IMPORT] extensions/telegram/src/index.ts\n");
     scanner.append("[UNRESOLVED_IMPORT] node_modules/example/index.js\n");
+    scanner.append(
+      "[UNRESOLVED_IMPORT] ../../../../tmp/openclaw-pnpm-node-modules/baileys/lib/Utils/messages-media.js\n",
+    );
 
     expect(scanner.finish().fatalUnresolvedImport).toBeNull();
   });

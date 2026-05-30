@@ -1,6 +1,6 @@
 import process from "node:process";
+import { restoreTerminalState } from "../../packages/terminal-core/src/restore.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { restoreTerminalState } from "../terminal/restore.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -57,6 +57,7 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "ESOCKETTIMEDOUT",
   "ECONNABORTED",
   "EPIPE",
+  "ENETDOWN",
   "EHOSTUNREACH",
   "ENETUNREACH",
   "EADDRNOTAVAIL",
@@ -93,6 +94,7 @@ const TRANSIENT_SQLITE_ERRCODES = new Set([5, 6, 10, 14]);
 const BENIGN_UNCAUGHT_EXCEPTION_CODES = new Set(["EPIPE", "EIO"]);
 const BENIGN_UNCAUGHT_EXCEPTION_NETWORK_CODES = new Set([
   "ECONNREFUSED",
+  "ENETDOWN",
   "EHOSTUNREACH",
   "ENETUNREACH",
   "EADDRNOTAVAIL",
@@ -106,9 +108,10 @@ const BENIGN_UNCAUGHT_EXCEPTION_NETWORK_CODES = new Set([
 ]);
 
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
-  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|ERR_HTTP2_INVALID_SESSION)\b/i;
+  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|ENETDOWN|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|ERR_HTTP2_INVALID_SESSION)\b/i;
 const BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_CODE_RE =
-  /\b(ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|EAI_AGAIN|ENOTFOUND|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|ERR_HTTP2_INVALID_SESSION)\b/i;
+  /\b(ECONNREFUSED|ENETDOWN|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|EAI_AGAIN|ENOTFOUND|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|ERR_HTTP2_INVALID_SESSION)\b/i;
+const WS_PRE_HANDSHAKE_CLOSE_MESSAGE = "websocket was closed before the connection was established";
 
 const TRANSIENT_SQLITE_MESSAGE_CODE_RE =
   /\b(SQLITE_BUSY|SQLITE_CANTOPEN|SQLITE_IOERR|SQLITE_LOCKED)\b/i;
@@ -172,6 +175,16 @@ function isWrappedFetchFailedMessage(message: string): boolean {
   // Keep wrapped variants (for example "...: fetch failed") while avoiding broad
   // matches like "Web fetch failed (404): ..." that are not transport failures.
   return /:\s*fetch failed$/.test(message);
+}
+
+function isBenignUncaughtNetworkMessage(message: string): boolean {
+  if (BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_CODE_RE.test(message)) {
+    return true;
+  }
+
+  // `ws` emits this exact Error when close()/terminate() aborts a CONNECTING socket.
+  // Keep exact matching so arbitrary WebSocket errors still take the fatal path.
+  return message === WS_PRE_HANDSHAKE_CLOSE_MESSAGE;
 }
 
 function getErrorCause(err: unknown): unknown {
@@ -435,7 +448,7 @@ function isBenignUncaughtNetworkException(err: unknown): boolean {
       continue;
     }
     const message = normalizeLowercaseStringOrEmpty((candidate as { message?: unknown }).message);
-    if (message && BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_CODE_RE.test(message)) {
+    if (message && isBenignUncaughtNetworkMessage(message)) {
       return true;
     }
   }

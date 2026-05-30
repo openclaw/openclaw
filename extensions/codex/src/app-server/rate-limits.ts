@@ -1,3 +1,8 @@
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 const CODEX_LIMIT_ID = "codex";
@@ -41,19 +46,31 @@ export function formatCodexUsageLimitErrorMessage(params: {
     return undefined;
   }
   const nowMs = params.nowMs ?? Date.now();
-  const nextReset = selectNextRateLimitReset(params.rateLimits, nowMs);
+  const usageSummary = summarizeCodexAccountUsage(params.rateLimits, nowMs);
+  const blockingReset = selectBlockingRateLimitReset(params.rateLimits, nowMs);
+  const nextReset =
+    blockingReset ??
+    (usageSummary?.blocked ? undefined : selectNextRateLimitReset(params.rateLimits, nowMs));
   const parts = ["You've reached your Codex subscription usage limit."];
+  let recoveryAction = "Wait until Codex becomes available";
   if (nextReset) {
     parts.push(`Next reset ${formatResetTime(nextReset.resetsAtMs, nowMs)}.`);
+    recoveryAction = "Wait until the reset time";
   } else {
     const codexRetryHint = extractCodexRetryHint(message);
     if (codexRetryHint) {
       parts.push(`Codex says to try again ${codexRetryHint}.`);
+      recoveryAction = "Wait until the retry time";
     } else {
-      parts.push("Codex did not return a reset time for this limit.");
+      if (usageSummary?.blockingPeriod && usageSummary.blockingReason) {
+        parts.push(`Your ${usageSummary.blockingReason}.`);
+      }
+      parts.push("OpenClaw could not determine a reset time from Codex.");
     }
   }
-  parts.push("Run /codex account for current usage details.");
+  parts.push(
+    `${recoveryAction}, use another Codex account if available, or switch to another configured model/provider.`,
+  );
   return parts.join(" ");
 }
 
@@ -126,10 +143,12 @@ export function summarizeCodexAccountUsage(
   const blockedSnapshots = snapshots.filter(snapshotHasLimitBlock);
   const blockingSnapshot =
     blockedSnapshots.find(isCodexLimitSnapshot) ?? blockedSnapshots[0] ?? undefined;
-  const blockingReset = blockingSnapshot
-    ? selectSnapshotBlockingReset(blockingSnapshot, nowMs)
+  const blockingWindow = blockingSnapshot
+    ? selectSnapshotBlockingWindow(blockingSnapshot, nowMs)
     : undefined;
-  const blockingPeriod = formatBlockingLimitPeriod(blockingReset?.windowDurationMins);
+  const blockingReset =
+    blockingWindow && blockingWindow.resetsAtMs > nowMs ? blockingWindow : undefined;
+  const blockingPeriod = formatBlockingLimitPeriod(blockingWindow?.windowDurationMins);
   const blockedUntilText = blockingReset
     ? formatAccountResetTime(blockingReset.resetsAtMs, nowMs)
     : undefined;
@@ -310,10 +329,10 @@ function readRateLimitWindow(
     return undefined;
   }
   const resetsAt = readNumber(window, "resetsAt") ?? readNumber(window, "resets_at");
+  const resetsAtMs =
+    resolveExpiresAtMsFromEpochSeconds(resetsAt, { maxMs: MAX_DATE_TIMESTAMP_MS }) ?? 0;
   return {
-    ...(typeof resetsAt === "number" && Number.isFinite(resetsAt) && resetsAt > 0
-      ? { resetsAtMs: resetsAt * 1000 }
-      : { resetsAtMs: 0 }),
+    resetsAtMs,
     ...readOptionalNumberField(window, "usedPercent", "used_percent"),
     ...readOptionalNumberField(
       window,
@@ -424,6 +443,22 @@ function selectSnapshotBlockingReset(
       ? (left: RateLimitReset, right: RateLimitReset) => right.resetsAtMs - left.resetsAtMs
       : (left: RateLimitReset, right: RateLimitReset) => left.resetsAtMs - right.resetsAtMs;
   return candidates.toSorted(resetSort)[0];
+}
+
+function selectSnapshotBlockingWindow(
+  snapshot: JsonObject,
+  nowMs: number,
+): RateLimitReset | undefined {
+  const resetWindow = selectSnapshotBlockingReset(snapshot, nowMs);
+  if (resetWindow) {
+    return resetWindow;
+  }
+  const exhaustedWindows = readWindowEntries(snapshot)
+    .map((entry) => entry.window)
+    .filter((window) => window.usedPercent !== undefined && window.usedPercent >= 100);
+  return exhaustedWindows.toSorted(
+    (left, right) => (right.windowDurationMins ?? 0) - (left.windowDurationMins ?? 0),
+  )[0];
 }
 
 function readWindowEntries(snapshot: JsonObject): RateLimitWindowEntry[] {
@@ -573,8 +608,7 @@ function readNullableString(record: JsonObject, key: string): string | undefined
 }
 
 function readNumber(record: JsonObject, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(record[key]);
 }
 
 function normalizeText(value: string | null | undefined): string | undefined {

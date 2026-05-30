@@ -10,12 +10,12 @@ import { executePluginCommand, matchPluginCommand } from "../../plugins/commands
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
-import { rejectNonOwnerCommand } from "./command-gates.js";
 import { buildCurrentOpenClawCliCommand } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -89,11 +89,6 @@ async function handleDiagnosticsCommandWithDeps(
     );
     return { shouldContinue: false };
   }
-  const ownerGate = rejectNonOwnerCommand(params, DIAGNOSTICS_COMMAND);
-  if (ownerGate) {
-    return ownerGate;
-  }
-
   if (isCodexDiagnosticsConfirmationAction(args)) {
     const codexResult = await executeCodexDiagnosticsAddon(params, args);
     const reply = codexResult
@@ -262,7 +257,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 
@@ -456,9 +451,11 @@ async function executeCodexDiagnosticsAddon(
     isAuthorizedSender: params.command.isAuthorizedSender,
     senderIsOwner: params.command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry?.sessionFile,
+    authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
     config: params.cfg,
     from: params.command.from,

@@ -9,14 +9,17 @@ const runtime = vi.hoisted(() => ({
 const resolveControlUiLinksMock = vi.hoisted(() =>
   vi.fn((_opts?: unknown) => ({ httpUrl: "http://127.0.0.1:18789" })),
 );
+const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
+const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
 }));
 
-vi.mock("../../terminal/theme.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../terminal/theme.js")>("../../terminal/theme.js");
+vi.mock("../../../packages/terminal-core/src/theme.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../../packages/terminal-core/src/theme.js")
+  >("../../../packages/terminal-core/src/theme.js");
   return {
     ...actual,
     colorize: (_rich: boolean, _theme: unknown, text: string) => text,
@@ -46,8 +49,8 @@ vi.mock("../../daemon/restart-logs.js", () => ({
 }));
 
 vi.mock("../../daemon/systemd-hints.js", () => ({
-  isSystemdUnavailableDetail: () => false,
-  renderSystemdUnavailableHints: () => [],
+  isSystemdUnavailableDetail: isSystemdUnavailableDetailMock,
+  renderSystemdUnavailableHints: renderSystemdUnavailableHintsMock,
 }));
 
 vi.mock("../../infra/wsl.js", () => ({
@@ -87,6 +90,8 @@ describe("printDaemonStatus", () => {
     runtime.log.mockReset();
     runtime.error.mockReset();
     resolveControlUiLinksMock.mockClear();
+    isSystemdUnavailableDetailMock.mockReset().mockReturnValue(false);
+    renderSystemdUnavailableHintsMock.mockReset().mockReturnValue([]);
   });
 
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
@@ -505,5 +510,44 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Other gateway-like services detected");
     expectMockLineContains(runtime.log, "ai.openclaw.gateway.rescue");
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not print systemd user-service hints when a gateway responds", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    isSystemdUnavailableDetailMock.mockReturnValue(true);
+    renderSystemdUnavailableHintsMock.mockReturnValue(["run loginctl enable-linger"]);
+
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd user",
+            loaded: false,
+            loadedText: "not loaded",
+            notLoadedText: "not loaded",
+            runtime: { status: "unknown", detail: "systemd user services unavailable" },
+          },
+          rpc: {
+            ok: true,
+            url: "ws://127.0.0.1:18789",
+            server: { version: "2026.5.12" },
+          },
+          port: {
+            port: 18789,
+            status: "busy",
+            listeners: [],
+            hints: [],
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).not.toContain("systemd user services unavailable");
+    expect(errors).not.toContain("run loginctl enable-linger");
   });
 });

@@ -249,10 +249,30 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    get_goal: {
+      emoji: "🎯",
+      title: "Get Goal",
+      detailKeys: [],
+    },
+    create_goal: {
+      emoji: "🎯",
+      title: "Create Goal",
+      detailKeys: ["objective", "token_budget"],
+    },
+    update_goal: {
+      emoji: "🎯",
+      title: "Update Goal",
+      detailKeys: ["status"],
+    },
     update_plan: {
       emoji: "🗺️",
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
+    },
+    skill_workshop: {
+      emoji: "🧰",
+      title: "Skill Workshop",
+      detailKeys: ["action", "name", "proposal_id"],
     },
     gateway: {
       emoji: "🔌",
@@ -308,6 +328,39 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🧾",
       title: "Session History",
       detailKeys: ["sessionKey", "limit", "includeTools"],
+    },
+    transcripts: {
+      emoji: "🎙️",
+      title: "Transcripts",
+      actions: {
+        start: {
+          label: "start",
+          detailKeys: [
+            "sessionId",
+            "title",
+            "providerId",
+            "accountId",
+            "guildId",
+            "channelId",
+            "meetingUrl",
+          ],
+        },
+        stop: {
+          label: "stop",
+          detailKeys: ["sessionId"],
+        },
+        status: {
+          label: "status",
+        },
+        import: {
+          label: "import",
+          detailKeys: ["sessionId", "title", "providerId", "meetingUrl", "speakerLabel"],
+        },
+        summarize: {
+          label: "summarize",
+          detailKeys: ["sessionId"],
+        },
+      },
     },
     sessions_spawn: {
       emoji: "🧑‍🔧",

@@ -1,24 +1,27 @@
 import path from "node:path";
-import { type Api, type Model } from "@earendil-works/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
+import { resolveRuntimeSyntheticAuthProviderRefState } from "../plugins/synthetic-auth.runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
   type AuthProfileCredential,
   type AuthProfileStore,
@@ -31,7 +34,12 @@ import {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import * as cliCredentials from "./cli-credentials.js";
-import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
+import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
+import {
+  resolveEnvApiKey,
+  type EnvApiKeyLookupOptions,
+  type EnvApiKeyResult,
+} from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
@@ -54,7 +62,48 @@ export {
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
+export type RuntimeProviderAuthLookup = {
+  envApiKey: Pick<EnvApiKeyLookupOptions, "aliasMap" | "candidateMap" | "authEvidenceMap">;
+  syntheticAuthProviderRefs?: readonly string[];
+  syntheticAuthProviderRefsComplete?: boolean;
+};
+
 const log = createSubsystemLogger("model-auth");
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
+
+function directOpenAIPlatformModelRequiresApiKey(params: {
+  provider: string;
+  modelApi?: string;
+}): boolean {
+  return (
+    normalizeProviderId(params.provider) === OPENAI_PROVIDER_ID &&
+    params.modelApi !== undefined &&
+    normalizeLowercaseStringOrEmpty(params.modelApi) !== OPENAI_CODEX_RESPONSES_API
+  );
+}
+
+function isAuthModeAllowedForModel(params: {
+  provider: string;
+  modelApi?: string;
+  mode: ResolvedProviderAuth["mode"];
+}): boolean {
+  return !directOpenAIPlatformModelRequiresApiKey(params) || params.mode === "api-key";
+}
+
+function assertAuthModeAllowedForModel(params: {
+  provider: string;
+  modelApi?: string;
+  profileId: string;
+  mode: ResolvedProviderAuth["mode"];
+}): void {
+  if (isAuthModeAllowedForModel(params)) {
+    return;
+  }
+  throw new Error(
+    `Auth profile "${params.profileId}" uses ${params.mode} auth, but ${params.provider}/${params.modelApi} requires an OpenAI API key profile.`,
+  );
+}
 
 function resolveConfigAwareEnvApiKey(
   cfg: OpenClawConfig | undefined,
@@ -84,6 +133,36 @@ function resolveProviderConfig(
     (providers[normalized] as ModelProviderConfig | undefined) ??
     Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
   );
+}
+
+export function createRuntimeProviderAuthLookup(params: {
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  includePluginSyntheticAuth?: boolean;
+}): RuntimeProviderAuthLookup {
+  const env = params.env ?? process.env;
+  const lookupParams = {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env,
+  };
+  const syntheticAuthProviderRefs =
+    params.includePluginSyntheticAuth === false
+      ? undefined
+      : resolveRuntimeSyntheticAuthProviderRefState(lookupParams);
+  const authLookupMaps = resolveProviderEnvAuthLookupMaps(lookupParams);
+  return {
+    envApiKey: {
+      aliasMap: authLookupMaps.aliasMap,
+      candidateMap: authLookupMaps.envCandidateMap,
+      authEvidenceMap: authLookupMaps.authEvidenceMap,
+    },
+    syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
+      ? syntheticAuthProviderRefs.refs
+      : undefined,
+    syntheticAuthProviderRefsComplete: syntheticAuthProviderRefs?.complete,
+  };
 }
 
 export function getCustomProviderApiKey(
@@ -235,6 +314,24 @@ function resolveProviderAuthOverride(
   return undefined;
 }
 
+function shouldUseImplicitAwsSdkAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelApi: string | undefined;
+}): boolean {
+  if (params.modelApi !== "bedrock-converse-stream") {
+    return false;
+  }
+  if (normalizeProviderId(params.provider) !== "amazon-bedrock") {
+    return false;
+  }
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  return (
+    resolveProviderAuthOverride(params.cfg, params.provider) === undefined &&
+    (providerConfig === undefined || !hasExplicitProviderApiKeyConfig(providerConfig))
+  );
+}
+
 function profileTypeToAuthMode(type: AuthProfileCredential["type"]): ResolvedProviderAuth["mode"] {
   return type === "oauth" ? "oauth" : type === "token" ? "token" : "api-key";
 }
@@ -267,6 +364,9 @@ function isLocalBaseUrl(baseUrl: string): boolean {
       host === "::1" ||
       host === "::ffff:7f00:1" ||
       host === "::ffff:127.0.0.1" ||
+      host === "docker.orb.internal" ||
+      host === "host.docker.internal" ||
+      host === "host.orb.internal" ||
       host.endsWith(".local") ||
       isPrivateIpv4Host(host)
     );
@@ -339,25 +439,66 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   return Boolean(providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl));
 }
 
+function listProviderSyntheticAuthRefs(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelApi?: string;
+}): string[] {
+  const refs = [params.provider];
+  const providerConfig = resolveProviderConfig(params.cfg, params.provider);
+  if (params.modelApi) {
+    refs.push(params.modelApi);
+  }
+  if (providerConfig?.api) {
+    refs.push(providerConfig.api);
+  }
+  return normalizeUniqueStringEntries(refs.map((ref) => normalizeProviderId(ref)));
+}
+
+function shouldResolvePluginSyntheticAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  modelApi?: string;
+  runtimeLookup?: RuntimeProviderAuthLookup;
+}): boolean {
+  const syntheticAuthProviderRefs = params.runtimeLookup?.syntheticAuthProviderRefs;
+  if (!syntheticAuthProviderRefs) {
+    return true;
+  }
+  const eligibleRefs = new Set(
+    normalizeUniqueStringEntries(syntheticAuthProviderRefs.map((ref) => normalizeProviderId(ref))),
+  );
+  if (eligibleRefs.size === 0) {
+    return false;
+  }
+  return listProviderSyntheticAuthRefs(params).some((ref) => eligibleRefs.has(ref));
+}
+
 export function hasRuntimeAvailableProviderAuth(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
+  runtimeLookup?: RuntimeProviderAuthLookup;
+  modelApi?: string;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
   }
-  if (authOverride === undefined && provider === "amazon-bedrock") {
-    return true;
-  }
+  const envAuth = resolveEnvApiKey(provider, params.env, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    ...params.runtimeLookup?.envApiKey,
+  });
   if (
-    resolveEnvApiKey(provider, params.env, {
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
+    envAuth &&
+    isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     })
   ) {
     return true;
@@ -370,6 +511,11 @@ export function hasRuntimeAvailableProviderAuth(params: {
   }
   if (
     params.allowPluginSyntheticAuth !== false &&
+    shouldResolvePluginSyntheticAuth({
+      cfg: params.cfg,
+      provider,
+      runtimeLookup: params.runtimeLookup,
+    }) &&
     resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })
   ) {
     return true;
@@ -385,6 +531,7 @@ type SyntheticProviderAuthResolution = {
 function resolveProviderSyntheticRuntimeAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
 }): SyntheticProviderAuthResolution {
   const resolveFromConfig = (
     config: OpenClawConfig | undefined,
@@ -399,6 +546,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
           provider: params.provider,
           providerConfig,
         },
+        modelApi: params.modelApi,
       }) ?? undefined
     );
   };
@@ -429,6 +577,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
 }): ResolvedProviderAuth | null {
   const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
   if (syntheticProviderAuth.auth) {
@@ -506,12 +655,14 @@ function shouldDeferSyntheticProfileAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   resolvedApiKey: string | undefined;
+  modelApi?: string;
 }): boolean {
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   return (
     shouldDeferProviderSyntheticProfileAuthWithPlugin({
       provider: params.provider,
       config: params.cfg,
+      modelApi: params.modelApi,
       context: {
         config: params.cfg,
         provider: params.provider,
@@ -545,9 +696,12 @@ export async function resolveApiKeyForProvider(params: {
   /** When true, treat profileId as a user-locked selection that must not be
    *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
+  forceRefresh?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  modelApi?: string;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+  const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   let scopedStore: AuthProfileStore | undefined = params.store;
 
   if (profileId) {
@@ -558,7 +712,7 @@ export async function resolveApiKeyForProvider(params: {
     const store =
       params.store ??
       resolveScopedAuthProfileStore({
-        agentDir: params.agentDir,
+        agentDir,
         cfg,
         provider,
         profileId,
@@ -568,7 +722,8 @@ export async function resolveApiKeyForProvider(params: {
       cfg,
       store,
       profileId,
-      agentDir: params.agentDir,
+      agentDir,
+      forceRefresh: params.forceRefresh,
     });
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
@@ -581,6 +736,12 @@ export async function resolveApiKeyForProvider(params: {
       source: `profile:${resolvedProfileId}`,
       mode: mode ? profileTypeToAuthMode(mode) : "api-key",
     };
+    assertAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      profileId: resolvedProfileId,
+      mode: result.mode,
+    });
     // When the resolved key is a provider-owned synthetic profile marker and
     // the caller has not locked this profile, fall through to env/config
     // resolution so provider-owned real credentials take precedence. The auth
@@ -592,9 +753,15 @@ export async function resolveApiKeyForProvider(params: {
         cfg,
         provider,
         resolvedApiKey: resolved.apiKey,
+        modelApi: params.modelApi,
       })
     ) {
-      return resolveApiKeyForProvider({ ...params, profileId: undefined, lockedProfile: true }) //
+      return resolveApiKeyForProvider({
+        ...params,
+        store,
+        profileId: undefined,
+        lockedProfile: true,
+      }) //
         .catch(() => result);
     }
     return result;
@@ -602,7 +769,7 @@ export async function resolveApiKeyForProvider(params: {
 
   if (cfg?.auth?.profiles || cfg?.auth?.order) {
     scopedStore ??= resolveScopedAuthProfileStore({
-      agentDir: params.agentDir,
+      agentDir,
       cfg,
       provider,
       preferredProfile,
@@ -629,6 +796,9 @@ export async function resolveApiKeyForProvider(params: {
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
   }
+  if (shouldUseImplicitAwsSdkAuth({ cfg, provider, modelApi: params.modelApi })) {
+    return resolveAwsSdkAuthInfo();
+  }
   if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
     const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
     if (customKey) {
@@ -639,17 +809,21 @@ export async function resolveApiKeyForProvider(params: {
       };
     }
   }
-  const normalized = normalizeProviderId(provider);
-  if (authOverride === undefined && normalized === "amazon-bedrock") {
-    return resolveAwsSdkAuthInfo();
-  }
-
   if (params.credentialPrecedence === "env-first") {
     const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
     if (envResolved) {
       const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
         ? "oauth"
         : "api-key";
+      if (
+        !isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: resolvedMode,
+        })
+      ) {
+        return resolveApiKeyForProvider({ ...params, credentialPrecedence: "profile-first" });
+      }
       return {
         apiKey: envResolved.apiKey,
         source: envResolved.source,
@@ -678,7 +852,7 @@ export async function resolveApiKeyForProvider(params: {
   const store =
     scopedStore ??
     resolveScopedAuthProfileStore({
-      agentDir: params.agentDir,
+      agentDir,
       cfg,
       provider,
       preferredProfile,
@@ -704,7 +878,8 @@ export async function resolveApiKeyForProvider(params: {
         cfg,
         store,
         profileId: candidate,
-        agentDir: params.agentDir,
+        agentDir,
+        forceRefresh: params.forceRefresh,
       });
       if (resolved) {
         const resolvedProfileId = resolved.profileId ?? candidate;
@@ -719,10 +894,20 @@ export async function resolveApiKeyForProvider(params: {
           mode: resolvedMode,
         };
         if (
+          !isAuthModeAllowedForModel({
+            provider,
+            modelApi: params.modelApi,
+            mode: result.mode,
+          })
+        ) {
+          continue;
+        }
+        if (
           shouldDeferSyntheticProfileAuth({
             cfg,
             provider,
             resolvedApiKey: resolved.apiKey,
+            modelApi: params.modelApi,
           })
         ) {
           deferredAuthProfileResult ??= result;
@@ -740,12 +925,20 @@ export async function resolveApiKeyForProvider(params: {
     const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
       ? "oauth"
       : "api-key";
-    const result: ResolvedProviderAuth = {
-      apiKey: envResolved.apiKey,
-      source: envResolved.source,
-      mode: resolvedMode,
-    };
-    return result;
+    if (
+      isAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        mode: resolvedMode,
+      })
+    ) {
+      const result: ResolvedProviderAuth = {
+        apiKey: envResolved.apiKey,
+        source: envResolved.source,
+        mode: resolvedMode,
+      };
+      return result;
+    }
   }
 
   const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
@@ -758,7 +951,11 @@ export async function resolveApiKeyForProvider(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({
+    cfg,
+    provider,
+    modelApi: params.modelApi,
+  });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
   }
@@ -766,7 +963,7 @@ export async function resolveApiKeyForProvider(params: {
   const hasInlineConfiguredModels =
     Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
   const owningPluginIds = !hasInlineConfiguredModels
-    ? resolveOwningPluginIdsForProvider({
+    ? resolveOwningPluginIdsForProviderRef({
         provider,
         config: cfg,
       })
@@ -777,7 +974,7 @@ export async function resolveApiKeyForProvider(params: {
       config: cfg,
       context: {
         config: cfg,
-        agentDir: params.agentDir,
+        agentDir,
         env: process.env,
         provider,
         listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
@@ -788,7 +985,7 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
+  const authStorePath = resolveAuthStorePathForDisplay(agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
   throw new Error(
     [
@@ -850,10 +1047,6 @@ export function resolveModelAuthMode(
     }
   }
 
-  if (authOverride === undefined && normalizeProviderId(resolved) === "amazon-bedrock") {
-    return "aws-sdk";
-  }
-
   const envKey = resolveConfigAwareEnvApiKey(cfg, resolved, options?.workspaceDir);
   if (envKey?.apiKey) {
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
@@ -880,6 +1073,7 @@ export async function hasAvailableAuthForProvider(params: {
   store?: AuthProfileStore;
   agentDir?: string;
   workspaceDir?: string;
+  modelApi?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
 
@@ -887,7 +1081,15 @@ export async function hasAvailableAuthForProvider(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
-  if (resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir)) {
+  const envAuth = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+  if (
+    envAuth &&
+    isAuthModeAllowedForModel({
+      provider,
+      modelApi: params.modelApi,
+      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+    })
+  ) {
     return true;
   }
   if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
@@ -896,10 +1098,6 @@ export async function hasAvailableAuthForProvider(params: {
   if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
     return true;
   }
-  if (authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock") {
-    return true;
-  }
-
   const store =
     params.store ??
     resolveScopedAuthProfileStore({
@@ -925,7 +1123,15 @@ export async function hasAvailableAuthForProvider(params: {
         profileId: candidate,
         agentDir: params.agentDir,
       });
-      if (resolved) {
+      const mode = resolved?.profileType ?? store.profiles[candidate]?.type;
+      if (
+        resolved &&
+        isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: mode ? profileTypeToAuthMode(mode) : "api-key",
+        })
+      ) {
         return true;
       }
     } catch (err) {
@@ -936,7 +1142,7 @@ export async function hasAvailableAuthForProvider(params: {
 }
 
 export async function getApiKeyForModel(params: {
-  model: Model<Api>;
+  model: Model;
   cfg?: OpenClawConfig;
   profileId?: string;
   preferredProfile?: string;
@@ -956,10 +1162,11 @@ export async function getApiKeyForModel(params: {
     workspaceDir: params.workspaceDir,
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
+    modelApi: params.model.api,
   });
 }
 
-export function applyLocalNoAuthHeaderOverride<T extends Model<Api>>(
+export function applyLocalNoAuthHeaderOverride<T extends Model>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,
 ): T {
@@ -991,7 +1198,7 @@ export function applyLocalNoAuthHeaderOverride<T extends Model<Api>>(
  * available, or when the API key is a synthetic marker (e.g. local-server
  * placeholders) rather than a real credential.
  */
-export function applyAuthHeaderOverride<T extends Model<Api>>(
+export function applyAuthHeaderOverride<T extends Model>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,
   cfg: OpenClawConfig | undefined,

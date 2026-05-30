@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { InboundContext } from "./inbound-context.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
@@ -10,7 +10,10 @@ const sendMediaMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({ id: "media-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
 const sendTextMock = vi.hoisted(() =>
-  vi.fn(async (_params: unknown) => ({ id: "text-1", timestamp: "2026-04-25T00:00:00.000Z" })),
+  vi.fn(async (..._params: unknown[]) => ({
+    id: "text-1",
+    timestamp: "2026-04-25T00:00:00.000Z",
+  })),
 );
 const audioFileToSilkBase64Mock = vi.hoisted(() => vi.fn(async () => "silk-base64"));
 
@@ -78,12 +81,36 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
   };
 }
 
+function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
+  return {
+    run: vi.fn(async (rawParams: unknown) => {
+      const params = rawParams as {
+        raw: unknown;
+        adapter: {
+          ingest: (raw: unknown) => unknown;
+          resolveTurn: (...args: unknown[]) => unknown;
+        };
+      };
+      const input = await params.adapter.ingest(params.raw);
+      const turn = (await params.adapter.resolveTurn(
+        input,
+        {
+          canStartAgentTurn: true,
+          kind: "message",
+        },
+        {},
+      )) as { runDispatch: () => Promise<unknown> };
+      return { dispatchResult: await turn.runDispatch() };
+    }),
+  };
+}
+
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
   onDeliver?: (
     deliver: (
-      payload: { text?: string; audioAsVoice?: boolean },
+      payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
       info: { kind: string },
     ) => Promise<void>,
   ) => Promise<void>;
@@ -103,7 +130,12 @@ function makeRuntime(params: {
             rawParams as {
               dispatcherOptions: {
                 deliver: (
-                  payload: { text?: string; audioAsVoice?: boolean },
+                  payload: {
+                    text?: string;
+                    mediaUrl?: string;
+                    mediaUrls?: string[];
+                    audioAsVoice?: boolean;
+                  },
                   info: { kind: string },
                 ) => Promise<void>;
               };
@@ -123,27 +155,7 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      turn: {
-        run: vi.fn(async (rawParams: unknown) => {
-          const params = rawParams as {
-            raw: unknown;
-            adapter: {
-              ingest: (raw: unknown) => unknown;
-              resolveTurn: (...args: unknown[]) => unknown;
-            };
-          };
-          const input = await params.adapter.ingest(params.raw);
-          const turn = (await params.adapter.resolveTurn(
-            input,
-            {
-              kind: "message",
-              canStartAgentTurn: true,
-            },
-            {},
-          )) as { runDispatch: () => Promise<unknown> };
-          return { dispatchResult: await turn.runDispatch() };
-        }),
-      },
+      inbound: makeInboundRuntime(),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
@@ -165,6 +177,51 @@ function makeRuntime(params: {
 describe("dispatchOutbound", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps waiting past 300s when a slow provider timeout is configured", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 301_000));
+          await deliver({ text: "late answer" }, { kind: "block" });
+        },
+      });
+      let settled = false;
+
+      const dispatchPromise = dispatchOutbound(makeInbound(), {
+        runtime,
+        cfg: {
+          models: { providers: { ollama: { timeoutSeconds: 1800 } } },
+        },
+        account,
+      }).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(300_000);
+
+      expect(settled).toBe(false);
+      expect(sendTextMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await dispatchPromise;
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "late answer",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it("marks voice-only inbound as audio without adding voice paths to MediaPaths", async () => {
@@ -210,6 +267,137 @@ describe("dispatchOutbound", () => {
     expect(sentMedia?.msgId).toBe("msg-1");
     expect(sentMedia?.ttsText).toBe("read this aloud");
     expect(sendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers text-only tool progress immediately in partial streaming mode", async () => {
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+        await deliver({ text: "final answer" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: { mode: "partial" } } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
+      "Working: checking logs",
+      "final answer",
+    ]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers text-only tool progress immediately in recommended C2C streaming mode", async () => {
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+        await deliver({ text: "final answer" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: true } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
+      "Working: checking logs",
+      "final answer",
+    ]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers text-only tool progress for legacy C2C stream API accounts", async () => {
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+        await deliver({ text: "final answer" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: {
+        ...account,
+        config: { streaming: { mode: "off", c2cStreamApi: true } },
+      },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
+      "Working: checking logs",
+      "final answer",
+    ]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps immediate tool progress media-like text inert with markdown support enabled", async () => {
+    const progress = "progress ![x](http://internal.example/progress.png)";
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: progress }, { kind: "tool" });
+        await deliver({ text: "final answer" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, markdownSupport: true, config: { streaming: { mode: "partial" } } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([progress, "final answer"]);
+    expect(sendTextMock.mock.calls[0]?.[3]).toMatchObject({ forcePlainText: true });
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps text-only tool progress buffered when streaming is off", async () => {
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+        await deliver({ text: "final answer" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: false } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual(["final answer"]);
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("renews pending tool-media fallback when partial progress is delivered", async () => {
+    vi.useFakeTimers();
+    const mediaUrl = "https://example.com/progress.png";
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ mediaUrl }, { kind: "tool" });
+        await vi.advanceTimersByTimeAsync(59_000);
+        await deliver({ text: "Working: checking logs" }, { kind: "tool" });
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(sendMediaMock).not.toHaveBeenCalled();
+        await deliver({ text: "final answer" }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: { mode: "partial" } } },
+    });
+
+    expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([
+      "Working: checking logs",
+      "final answer",
+    ]);
+    expect(sendMediaMock).toHaveBeenCalledTimes(1);
   });
 
   it("marks recognized C2C framework slash commands as text commands", async () => {

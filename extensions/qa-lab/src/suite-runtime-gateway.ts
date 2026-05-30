@@ -1,7 +1,16 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { applyQaMergePatch } from "./suite-merge-patch.js";
+import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
+import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
+
+type QaGatewayMutationEnv = Pick<
+  QaSuiteRuntimeEnv,
+  "gateway" | "transport" | "providerMode" | "primaryModel" | "alternateModel"
+>;
 
 async function fetchJson<T>(url: string): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
@@ -130,52 +139,6 @@ function getGatewayRetryAfterMs(error: unknown) {
   return null;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isObjectWithStringId(value: unknown): value is { id: string } & Record<string, unknown> {
-  return isPlainObject(value) && typeof value.id === "string";
-}
-
-function applyQaMergePatch(target: unknown, patch: unknown): unknown {
-  if (Array.isArray(target) && Array.isArray(patch)) {
-    const merged = target.map((entry) => structuredClone(entry));
-    const indexById = new Map<string, number>();
-    for (const [index, entry] of merged.entries()) {
-      if (isObjectWithStringId(entry)) {
-        indexById.set(entry.id, index);
-      }
-    }
-    for (const patchEntry of patch) {
-      if (!isObjectWithStringId(patchEntry)) {
-        merged.push(structuredClone(patchEntry));
-        continue;
-      }
-      const existingIndex = indexById.get(patchEntry.id);
-      if (existingIndex === undefined) {
-        merged.push(structuredClone(patchEntry));
-        indexById.set(patchEntry.id, merged.length - 1);
-        continue;
-      }
-      merged[existingIndex] = applyQaMergePatch(merged[existingIndex], patchEntry);
-    }
-    return merged;
-  }
-  if (!isPlainObject(patch)) {
-    return structuredClone(patch);
-  }
-  const base = isPlainObject(target) ? structuredClone(target) : {};
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === null) {
-      delete base[key];
-      continue;
-    }
-    base[key] = applyQaMergePatch(base[key], value);
-  }
-  return base;
-}
-
 function areJsonValuesEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) {
     return true;
@@ -255,7 +218,7 @@ async function readConfigSnapshot(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
 }
 
 async function runConfigMutation(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">;
+  env: QaGatewayMutationEnv;
   action: "config.patch" | "config.apply";
   raw: string;
   sessionKey?: string;
@@ -269,6 +232,7 @@ async function runConfigMutation(params: {
   restartDelayMs?: number;
 }) {
   const restartDelayMs = params.restartDelayMs ?? 1_000;
+  const timeoutMs = liveTurnTimeoutMs(params.env, 180_000);
   let lastConflict: unknown = null;
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const snapshot = await readConfigSnapshot(params.env);
@@ -298,9 +262,9 @@ async function runConfigMutation(params: {
           ...(params.note ? { note: params.note } : {}),
           restartDelayMs,
         },
-        { timeoutMs: 45_000 },
+        { timeoutMs },
       );
-      await waitForConfigRestartSettle(params.env, restartDelayMs);
+      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
       return result;
     } catch (error) {
       if (isConfigHashConflict(error)) {
@@ -312,7 +276,7 @@ async function runConfigMutation(params: {
       }
       const retryAfterMs = getGatewayRetryAfterMs(error);
       if (retryAfterMs && attempt < 8) {
-        await sleep(retryAfterMs + 500);
+        await sleep(resolveQaGatewayTimeoutWithGraceMs(retryAfterMs, 500));
         await waitForGatewayHealthy(params.env, Math.max(15_000, restartDelayMs + 10_000)).catch(
           () => undefined,
         );
@@ -321,7 +285,7 @@ async function runConfigMutation(params: {
       if (!isGatewayRestartRace(error)) {
         throw error;
       }
-      await waitForConfigRestartSettle(params.env, restartDelayMs);
+      await waitForConfigRestartSettle(params.env, restartDelayMs, timeoutMs);
       return { ok: true, restarted: true };
     }
   }
@@ -329,7 +293,7 @@ async function runConfigMutation(params: {
 }
 
 async function patchConfig(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">;
+  env: QaGatewayMutationEnv;
   patch: Record<string, unknown>;
   sessionKey?: string;
   deliveryContext?: {
@@ -353,7 +317,7 @@ async function patchConfig(params: {
 }
 
 async function applyConfig(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">;
+  env: QaGatewayMutationEnv;
   nextConfig: Record<string, unknown>;
   sessionKey?: string;
   deliveryContext?: {

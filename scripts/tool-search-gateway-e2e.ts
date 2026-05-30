@@ -3,14 +3,23 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
 import { startQaMockOpenAiServer } from "../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shared/mock-auth.js";
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
+import { readPositiveIntEnv } from "./e2e/lib/env-limits.mjs";
+import { readBoundedResponseText } from "./lib/bounded-response.ts";
 
 type Lane = "normal" | "code";
+
+type FetchJsonOptions = {
+  fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  maxBodyBytes?: number;
+  timeoutMs?: number;
+};
 
 type LaneResult = {
   lane: Lane;
@@ -26,11 +35,42 @@ type LaneResult = {
 };
 
 const FAKE_PLUGIN_ID = "tool-search-e2e-fixture";
+export type ToolSearchGatewayFetchLimits = {
+  bodyMaxBytes: number;
+  timeoutMs: number;
+};
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+export function readToolSearchGatewayFetchLimits(
+  env: NodeJS.ProcessEnv = process.env,
+): ToolSearchGatewayFetchLimits {
+  return {
+    bodyMaxBytes: readPositiveIntEnv(
+      "OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_BODY_MAX_BYTES",
+      1024 * 1024,
+      env,
+    ),
+    timeoutMs: readPositiveIntEnv(
+      "OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS",
+      180_000,
+      env,
+    ),
+  };
+}
+
+const DEFAULT_FETCH_LIMITS = readToolSearchGatewayFetchLimits();
+
+function timeoutError(message: string) {
+  return Object.assign(new Error(message), { code: "ETIMEDOUT" });
+}
+
+function bodyTooLargeErrorMessage(url: string, byteLimit: number) {
+  return `HTTP response from ${url} exceeded ${byteLimit} bytes`;
 }
 
 async function freePort(): Promise<number> {
@@ -111,9 +151,46 @@ async function readSessionLogMentions(params: {
   return mentions;
 }
 
-async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(url, init);
-  const text = await response.text();
+export async function fetchJson(
+  url: string,
+  init: RequestInit = {},
+  options: FetchJsonOptions = {},
+): Promise<unknown> {
+  const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_FETCH_LIMITS.timeoutMs);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_LIMITS.bodyMaxBytes);
+  const controller = new AbortController();
+  const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
+  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setNodeTimeout(() => {
+      controller.abort(error);
+      reject(error);
+    }, timeoutMs);
+  });
+
+  let response: Response;
+  let text: string;
+  try {
+    response = await Promise.race([
+      (options.fetchImpl ?? fetch)(url, {
+        ...init,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    text = await readBoundedResponseText(response, url, maxBodyBytes, {
+      createTooLargeError(message) {
+        return Object.assign(new Error(message), { code: "ETOOBIG" });
+      },
+      formatTooLargeMessage: bodyTooLargeErrorMessage,
+      timeoutPromise,
+      signal: controller.signal,
+    });
+  } finally {
+    if (timeout) {
+      clearNodeTimeout(timeout);
+    }
+  }
   let parsed: unknown;
   try {
     parsed = text ? JSON.parse(text) : {};
@@ -213,6 +290,38 @@ async function writeConfig(params: {
     controlUiEnabled: false,
     providerMode: "mock-openai",
   });
+  const defaults = cfg.agents?.defaults ?? {};
+  cfg = {
+    ...cfg,
+    plugins: {
+      allow: [FAKE_PLUGIN_ID],
+      slots: {
+        ...cfg.plugins?.slots,
+        memory: "none",
+      },
+      entries: {
+        [FAKE_PLUGIN_ID]: {
+          enabled: true,
+        },
+      },
+    },
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...defaults,
+        memorySearch: {
+          ...defaults.memorySearch,
+          enabled: false,
+          sync: {
+            ...defaults.memorySearch?.sync,
+            onSearch: false,
+            onSessionStart: false,
+            watch: false,
+          },
+        },
+      },
+    },
+  };
   cfg = {
     ...cfg,
     tools: {
@@ -472,17 +581,18 @@ async function runLane(params: {
   }
 }
 
-async function main() {
+export async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-"));
-  const provider = await startQaMockOpenAiServer();
-  const fakeTools = buildFakeTools();
-  const fakePluginDir = await writeFakePlugin({
-    rootDir,
-    repoRoot: process.cwd(),
-    fakeTools,
-  });
-  const targetTool = "fake_plugin_tool_17";
+  let provider: Awaited<ReturnType<typeof startQaMockOpenAiServer>> | undefined;
   try {
+    provider = await startQaMockOpenAiServer();
+    const fakeTools = buildFakeTools();
+    const fakePluginDir = await writeFakePlugin({
+      rootDir,
+      repoRoot: process.cwd(),
+      fakeTools,
+    });
+    const targetTool = "fake_plugin_tool_17";
     const normal = await runLane({
       lane: "normal",
       rootDir,
@@ -541,8 +651,11 @@ async function main() {
     };
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   } finally {
-    await provider.stop();
+    await provider?.stop();
+    await fs.rm(rootDir, { force: true, recursive: true });
   }
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
+}

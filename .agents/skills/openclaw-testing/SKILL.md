@@ -68,13 +68,16 @@ scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
 pnpm changed:lanes --json
 pnpm check:changed       # changed typecheck/lint/guards; no Vitest
 pnpm test:changed        # cheap smart changed Vitest targets
+pnpm verify              # full check, then full Vitest
 OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
 pnpm test <path-or-filter> -- --reporter=verbose
 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 ```
 
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
-`pnpm test` wrapper so project routing, workers, and setup stay correct.
+`pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
+Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch
+mode and will not exit on its own.
 When the checkout is a Codex worktree, prefer the direct node harness instead:
 
 ```bash
@@ -89,6 +92,8 @@ status checks or install reconciliation in a linked worktree.
 - `pnpm check` and `pnpm check:changed` do not run Vitest tests. They are for
   typecheck, lint, and guard proof.
 - `pnpm test` and `pnpm test:changed` run Vitest tests.
+- `pnpm verify` runs `pnpm check`, then `pnpm test`, with Crabbox phase markers
+  so remote summaries show which half failed.
 - `pnpm test:changed` is intentionally cheap by default: direct test edits,
   sibling tests, explicit source mappings, and import-graph dependents.
 - `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` is the explicit broad
@@ -210,7 +215,7 @@ workflow only spends setup and queue time on that suite.
 ### Release Evidence
 
 After release-candidate validation or before a release decision, record the
-important run ids in the private `openclaw/releases-private` evidence ledger.
+important run ids in the public `openclaw/releases` evidence ledger.
 Use the manual `OpenClaw Release Evidence`
 (`openclaw-release-evidence.yml`) workflow there. It writes durable summaries
 under `evidence/<release-id>/` and commits:
@@ -233,13 +238,13 @@ short release-manager notes there. Do not store raw logs, provider
 prompts/responses, channel transcripts, signing material, or secret-bearing
 config in git; raw logs stay in Actions artifacts.
 
-When `Full Release Validation` completes and
-`OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN` is configured in the public repo, it
-requests the private `OpenClaw Release Evidence From Full Validation` workflow.
-That private workflow reads the parent full-validation run, extracts the child
-CI/release-checks/Telegram run ids from the parent logs, and opens the evidence
-PR automatically. If the token is absent or the run predates this wiring, trigger
-that private workflow manually with the full-validation run id.
+When `Full Release Validation` completes and `OPENCLAW_RELEASES_DISPATCH_TOKEN`
+is configured in the source repo, it requests the public
+`OpenClaw Release Evidence From Full Validation` workflow. That workflow reads
+the parent full-validation run, extracts the child CI/release-checks/Telegram
+run ids from the parent logs, and opens the evidence PR automatically. If the
+token is absent or the run predates this wiring, trigger that workflow manually
+with the full-validation run id.
 
 ### Release Checks
 
