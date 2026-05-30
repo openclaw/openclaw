@@ -1469,8 +1469,13 @@ export async function updateNpmInstalledPlugins(params: {
         record.source === "npm" || usedOfficialNpmFallback
           ? resolveNpmResultVersion(probe)
           : undefined;
+      const clawhubProbeVersion =
+        record.source === "clawhub" && "clawhub" in probe
+          ? (probe as { clawhub?: { version?: string } }).clawhub?.version
+          : undefined;
       const resolvedProbeVersion =
         probe.version ??
+        clawhubProbeVersion ??
         npmProbeVersion ??
         (record.source === "npm" || usedOfficialNpmFallback
           ? resolveExactNpmSpecVersion(probeSpec)
