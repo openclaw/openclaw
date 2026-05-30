@@ -20,25 +20,23 @@ describe("OpenClawApp full-message sidebar upgrade", () => {
       ok: true,
       message: { role: "assistant", content: "full assistant text" },
     }));
-    const app = new OpenClawApp() as InstanceType<typeof OpenClawApp> & {
-      maybeUpgradeSidebarToFullMessage(content: SidebarContent): Promise<void>;
-    };
+    const app = new OpenClawApp();
     app.client = { request } as never;
-    app.sidebarContent = content;
-    app.sidebarError = null;
 
-    await app.maybeUpgradeSidebarToFullMessage(content);
+    app.handleOpenSidebar(content);
 
-    expect(request).toHaveBeenCalledWith("chat.message.get", {
-      sessionKey: "main",
-      messageId: "msg-1",
-      maxChars: 500_000,
-    });
-    expect(app.sidebarContent).toMatchObject({
-      kind: "markdown",
-      content: "full assistant text",
-      rawText: "full assistant text",
-      unavailableReason: null,
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("chat.message.get", {
+        sessionKey: "main",
+        messageId: "msg-1",
+        maxChars: 500_000,
+      });
+      expect(app.sidebarContent).toMatchObject({
+        kind: "markdown",
+        content: "full assistant text",
+        rawText: "full assistant text",
+        unavailableReason: null,
+      });
     });
   });
 
@@ -60,27 +58,25 @@ describe("OpenClawApp full-message sidebar upgrade", () => {
       ok: true,
       message: { role: "assistant", text: "full canvas raw text" },
     }));
-    const app = new OpenClawApp() as InstanceType<typeof OpenClawApp> & {
-      maybeUpgradeSidebarToFullMessage(content: SidebarContent): Promise<void>;
-    };
+    const app = new OpenClawApp();
     app.client = { request } as never;
-    app.sidebarContent = content;
-    app.sidebarError = null;
 
-    await app.maybeUpgradeSidebarToFullMessage(content);
+    app.handleOpenSidebar(content);
 
-    expect(request).toHaveBeenCalledWith("chat.message.get", {
-      sessionKey: "global",
-      agentId: "work",
-      messageId: "msg-2",
-      maxChars: 500_000,
-    });
-    expect(app.sidebarContent).toMatchObject({
-      kind: "canvas",
-      docId: "preview-1",
-      entryUrl: "https://example.test/preview",
-      rawText: "full canvas raw text",
-      unavailableReason: null,
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("chat.message.get", {
+        sessionKey: "global",
+        agentId: "work",
+        messageId: "msg-2",
+        maxChars: 500_000,
+      });
+      expect(app.sidebarContent).toMatchObject({
+        kind: "canvas",
+        docId: "preview-1",
+        entryUrl: "https://example.test/preview",
+        rawText: "full canvas raw text",
+        unavailableReason: null,
+      });
     });
   });
 });
