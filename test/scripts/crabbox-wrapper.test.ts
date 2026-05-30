@@ -224,6 +224,7 @@ function runWrapper(
       PATH: [...(options.extraPathEntries ?? []), binDir, gitBinDir, process.env.PATH ?? ""]
         .filter(Boolean)
         .join(path.delimiter),
+      CRABBOX_PROVIDER: "",
       OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
       ...(options.configJson
         ? { OPENCLAW_FAKE_CRABBOX_CONFIG_JSON: JSON.stringify(options.configJson) }
