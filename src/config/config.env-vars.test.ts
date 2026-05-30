@@ -179,6 +179,7 @@ describe("config env vars", () => {
           "BRACED_REF=${SUPERMEMORY_OPENCLAW_KEY}",
           'QUOTED_REF="$SUPERMEMORY_OPENCLAW_KEY"',
           "ESCAPED_DOLLAR=$$SUPERMEMORY_OPENCLAW_KEY",
+          "EMBEDDED_DOLLAR=sm_$SUPERMEMORY_OPENCLAW_KEY",
           "VALID=ok",
           "",
         ].join("\n"),
@@ -191,6 +192,7 @@ describe("config env vars", () => {
       expect(vars.BRACED_REF).toBeUndefined();
       expect(vars.QUOTED_REF).toBeUndefined();
       expect(vars.ESCAPED_DOLLAR).toBe("$$SUPERMEMORY_OPENCLAW_KEY");
+      expect(vars.EMBEDDED_DOLLAR).toBe("sm_$SUPERMEMORY_OPENCLAW_KEY");
       expect(vars.VALID).toBe("ok");
     });
   });
