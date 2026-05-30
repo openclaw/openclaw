@@ -3,7 +3,7 @@ import {
   type ChatRunUiStatus,
 } from "../chat/run-lifecycle.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
-import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
+import { isSubagentSessionKey, normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import type {
   GatewaySessionRow,
   SessionCompactionCheckpoint,
@@ -177,15 +177,47 @@ function sessionsChangedGlobalAgentMatches(
     return true;
   }
   const eventSession = isRecord(payload.session) ? payload.session : null;
-  const rawAgentId =
-    (typeof payload.agentId === "string" && payload.agentId.trim()) ||
-    (typeof eventSession?.agentId === "string" && eventSession.agentId.trim());
-  const eventAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
+  const eventAgentId = readSessionsChangedEventAgentId(payload, eventSession);
   const selectedAgentId = resolveSelectedGlobalAgentId(state);
   if (eventAgentId) {
     return eventAgentId === selectedAgentId;
   }
   return selectedAgentId === resolveDefaultGlobalAgentId(state);
+}
+
+function readSessionsChangedEventAgentId(
+  payload: Record<string, unknown>,
+  eventSession: Record<string, unknown> | null,
+): string | null {
+  const rawAgentId =
+    (typeof payload.agentId === "string" && payload.agentId.trim()) ||
+    (typeof eventSession?.agentId === "string" && eventSession.agentId.trim());
+  return rawAgentId ? normalizeAgentId(rawAgentId) : null;
+}
+
+function sessionsChangedResultScopeMatches(
+  state: SessionsState,
+  payload: Record<string, unknown>,
+  eventSession: Record<string, unknown> | null,
+  key: string,
+  existing: GatewaySessionRow | undefined,
+): boolean {
+  const resultAgentId =
+    typeof state.sessionsResultAgentId === "string" && state.sessionsResultAgentId.trim()
+      ? normalizeAgentId(state.sessionsResultAgentId)
+      : null;
+  if (!resultAgentId) {
+    return true;
+  }
+  const eventAgentId = readSessionsChangedEventAgentId(payload, eventSession);
+  if (eventAgentId) {
+    return eventAgentId === resultAgentId;
+  }
+  const parsed = parseAgentSessionKey(key);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId) === resultAgentId;
+  }
+  return Boolean(existing);
 }
 
 function buildSelectedSessionMessageSubscriptionParams(state: SessionsState, key: string) {
@@ -465,6 +497,37 @@ function invalidateCachedChatAgentSessionRow(state: SessionsState, key: string):
   return removed;
 }
 
+function resolveCachedChatAgentSessionRowAgentId(
+  state: SessionsState,
+  row: GatewaySessionRow,
+): string | null {
+  if (row.kind === "global" || row.kind === "unknown" || row.kind === "cron") {
+    return null;
+  }
+  if (isSubagentSessionKey(row.key) || row.spawnedBy) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(row.key);
+  return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
+}
+
+function upsertCachedChatAgentSessionRow(state: SessionsState, row: GatewaySessionRow): boolean {
+  if (!state.sessionsShowArchived && isArchivedSessionRow(row)) {
+    return invalidateCachedChatAgentSessionRow(state, row.key);
+  }
+  const agentId = resolveCachedChatAgentSessionRowAgentId(state, row);
+  if (!agentId) {
+    return false;
+  }
+  state.chatAgentSessionRowsByAgent ??= {};
+  const existingRows = state.chatAgentSessionRowsByAgent[agentId] ?? [];
+  state.chatAgentSessionRowsByAgent[agentId] = [
+    row,
+    ...existingRows.filter((r) => r.key !== row.key),
+  ].toSorted(compareSessionRowsByUpdatedAt);
+  return true;
+}
+
 async function fetchSessionCompactionCheckpoints(state: SessionsState, key: string) {
   state.sessionsCheckpointLoadingKey = key;
   state.sessionsCheckpointErrorByKey = {
@@ -582,8 +645,15 @@ export function applySessionsChangedEvent(
 
   const previousRows = state.sessionsResult.sessions;
   const existingIndex = previousRows.findIndex((row) => row.key === key);
+  const existing = existingIndex >= 0 ? previousRows[existingIndex] : undefined;
   if (payload.reason === "delete") {
     const removedCachedRow = invalidateCachedChatAgentSessionRow(state, key);
+    if (
+      !sessionsChangedGlobalAgentMatches(state, payload, key) ||
+      !sessionsChangedResultScopeMatches(state, payload, eventSession, key, existing)
+    ) {
+      return removedCachedRow ? { applied: true, change: "deleted" } : { applied: false };
+    }
     if (existingIndex < 0) {
       return removedCachedRow ? { applied: true, change: "deleted" } : { applied: false };
     }
@@ -595,7 +665,9 @@ export function applySessionsChangedEvent(
     invalidateCheckpointCacheForKey(state, key);
     return { applied: true, change: "deleted" };
   }
-  const existing = existingIndex >= 0 ? previousRows[existingIndex] : undefined;
+  const matchesResultScope =
+    sessionsChangedGlobalAgentMatches(state, payload, key) &&
+    sessionsChangedResultScopeMatches(state, payload, eventSession, key, existing);
   const hasReliableSource =
     existingIndex >= 0 || eventSession !== null || typeof source.sessionId === "string";
   if (!hasReliableSource) {
@@ -634,6 +706,11 @@ export function applySessionsChangedEvent(
   }
   if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
     delete nextRow.totalTokens;
+  }
+  if (!matchesResultScope) {
+    return upsertCachedChatAgentSessionRow(state, nextRow)
+      ? { applied: true, change: existingIndex >= 0 ? "updated" : "inserted" }
+      : { applied: false };
   }
   if (!state.sessionsShowArchived && isArchivedSessionRow(nextRow)) {
     const removedCachedRow = invalidateCachedChatAgentSessionRow(state, key);
