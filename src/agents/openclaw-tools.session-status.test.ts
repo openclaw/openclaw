@@ -297,9 +297,11 @@ vi.mock("../tasks/task-owner-access.js", () => ({
 }));
 
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 beforeAll(async () => {
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
+  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
 });
 
 function resetSessionStore(store: Record<string, SessionEntry>) {
@@ -421,13 +423,21 @@ function latestMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
 
 function getSessionStatusTool(
   agentSessionKey = "main",
-  options?: { sandboxed?: boolean; activeModelProvider?: string; activeModelId?: string },
+  options?: {
+    sandboxed?: boolean;
+    activeModelProvider?: string;
+    activeModelId?: string;
+    activeDeliveryContext?: NonNullable<
+      Parameters<typeof createSessionStatusTool>[0]
+    >["activeDeliveryContext"];
+  },
 ) {
   const tool = createSessionStatusTool({
     agentSessionKey,
     sandboxed: options?.sandboxed,
     activeModelProvider: options?.activeModelProvider,
     activeModelId: options?.activeModelId,
+    activeDeliveryContext: options?.activeDeliveryContext,
     config: mockConfig as never,
   });
   expect(tool.name).toBe("session_status");
@@ -451,11 +461,137 @@ describe("session_status tool", () => {
     const tool = getSessionStatusTool();
 
     const result = await tool.execute("call1", {});
-    const details = result.details as { ok?: boolean; statusText?: string };
+    const details = result.details as {
+      ok?: boolean;
+      statusText?: string;
+      originChannel?: string;
+      activeChannel?: string;
+    };
     expect(details.ok).toBe(true);
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
     expect(details.statusText).not.toContain("OAuth/token status");
+    expect(details.originChannel).toBeUndefined();
+    expect(details.activeChannel).toBeUndefined();
+  });
+
+  it("reports origin and active delivery channels separately", async () => {
+    resetSessionStore({
+      "agent:main:discord:channel:1489550370136129537": {
+        sessionId: "s-discord-origin-webchat-active",
+        updatedAt: 10,
+        origin: { provider: "discord", accountId: "bot-primary" },
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:1489550370136129537",
+          accountId: "bot-primary",
+        },
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:discord:channel:1489550370136129537",
+      runSessionKey: "agent:main:discord:channel:1489550370136129537",
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui",
+        accountId: "browser-session",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-origin-active", {});
+    const details = result.details as {
+      ok?: boolean;
+      sessionKey?: string;
+      originChannel?: string;
+      activeChannel?: string;
+      origin?: { channel?: string; provider?: string; accountId?: string };
+      active?: { channel?: string; to?: string; accountId?: string };
+      deliveryContext?: { channel?: string; to?: string; accountId?: string };
+    };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:discord:channel:1489550370136129537");
+    expect(details.originChannel).toBe("discord");
+    expect(details.activeChannel).toBe("webchat");
+    expect(details.origin).toEqual({
+      channel: "discord",
+      provider: "discord",
+      accountId: "bot-primary",
+      threadId: undefined,
+    });
+    expect(details.active).toEqual({
+      channel: "webchat",
+      to: "control-ui",
+      accountId: "browser-session",
+      threadId: undefined,
+    });
+    expect(details.deliveryContext).toEqual({
+      channel: "discord",
+      to: "channel:1489550370136129537",
+      accountId: "bot-primary",
+    });
+  });
+
+  it("wires active delivery context from createOpenClawTools current route fields", async () => {
+    resetSessionStore({
+      "agent:main:discord:channel:1489550370136129537": {
+        sessionId: "s-discord-origin-webchat-active-factory",
+        updatedAt: 10,
+        origin: { provider: "discord", accountId: "bot-primary" },
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:1489550370136129537",
+          accountId: "bot-primary",
+          threadId: "discord-thread",
+        },
+      },
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:discord:channel:1489550370136129537",
+      runSessionKey: "agent:main:discord:channel:1489550370136129537",
+      agentChannel: "webchat",
+      agentAccountId: "browser-session",
+      agentTo: "channel:1489550370136129537",
+      agentThreadId: "discord-thread",
+      currentChannelId: "control-ui-conversation",
+      currentThreadTs: "webchat-thread",
+      config: mockConfig as never,
+      disablePluginTools: true,
+    }).find((candidate) => candidate.name === "session_status");
+    if (!tool) {
+      throw new Error("missing session_status tool");
+    }
+
+    const result = await tool.execute("call-origin-active-factory", {});
+    const details = result.details as {
+      ok?: boolean;
+      originChannel?: string;
+      activeChannel?: string;
+      active?: { channel?: string; to?: string; accountId?: string; threadId?: string | number };
+      deliveryContext?: {
+        channel?: string;
+        to?: string;
+        accountId?: string;
+        threadId?: string | number;
+      };
+    };
+    expect(details.ok).toBe(true);
+    expect(details.originChannel).toBe("discord");
+    expect(details.activeChannel).toBe("webchat");
+    expect(details.active).toEqual({
+      channel: "webchat",
+      to: "control-ui-conversation",
+      accountId: "browser-session",
+      threadId: "webchat-thread",
+    });
+    expect(details.deliveryContext).toEqual({
+      channel: "discord",
+      to: "channel:1489550370136129537",
+      accountId: "bot-primary",
+      threadId: "discord-thread",
+    });
   });
 
   it("enables transcript usage fallback for session_status", async () => {

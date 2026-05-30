@@ -616,6 +616,10 @@ describe("server-channels auto restart", () => {
       () => startAccount.mock.calls.length === 2,
       "expected explicit start to clear manual stop and restart after old task exits",
     );
+    await waitForMicrotaskCondition(() => {
+      const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+      return account?.running === true && account.restartPending === false;
+    }, "expected explicit start restart bookkeeping to settle");
 
     const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(true);
@@ -923,7 +927,8 @@ describe("server-channels auto restart", () => {
       measure: async <T>(name: string, run: () => T | Promise<T>) =>
         (await measureMock(name, run)) as T,
     };
-    const startAccount = vi.fn(async () => {});
+    const channelTask = createDeferred();
+    const startAccount = vi.fn(() => channelTask.promise);
 
     installTestRegistry(createTestPlugin({ startAccount }));
     const manager = createManager({ startupTrace });
@@ -941,6 +946,9 @@ describe("server-channels auto restart", () => {
     expect(names).toContain("channels.discord.approval-bootstrap");
     expect(names).toContain("channels.discord.start-account-handoff");
     expect(startAccount).toHaveBeenCalledTimes(1);
+
+    channelTask.resolve();
+    await flushMicrotasks();
   });
 
   it("ends startup trace spans before long-lived channel account tasks settle", async () => {
