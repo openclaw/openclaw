@@ -350,6 +350,16 @@
     return "";
   }
 
+  function renderableContentBlocks(content) {
+    if (Array.isArray(content)) {
+      return content;
+    }
+    if (typeof content === "string") {
+      return [{ type: "text", text: content }];
+    }
+    return [];
+  }
+
   function getSearchableText(entry, label) {
     const parts = [];
     if (label) {
@@ -1044,7 +1054,7 @@
       if (!result) {
         return "";
       }
-      const textBlocks = (Array.isArray(result.content) ? result.content : []).filter((c) => c.type === "text");
+      const textBlocks = renderableContentBlocks(result.content).filter((c) => c.type === "text");
       return textBlocks.map((c) => c.text).join("\n");
     };
 
@@ -1052,7 +1062,7 @@
       if (!result) {
         return [];
       }
-      return (Array.isArray(result.content) ? result.content : []).filter((c) => c.type === "image");
+      return renderableContentBlocks(result.content).filter((c) => c.type === "image");
     };
 
     const renderResultImages = () => {
@@ -1359,7 +1369,7 @@
 
       if (msg.role === "assistant") {
         let html = `<div class="assistant-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
-        const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
+        const contentBlocks = renderableContentBlocks(msg.content);
 
         for (const block of contentBlocks) {
           if (block.type === "text" && block.text.trim()) {

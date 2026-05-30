@@ -649,8 +649,60 @@ describe("export html security hardening", () => {
         systemPrompt: "",
         tools: [],
       };
-      await expect(renderTemplate(session)).resolves.toBeDefined();
+      const { document } = await renderTemplate(session);
+      if (typeof content === "string") {
+        expect(document.querySelector(".assistant-message")?.textContent).toContain(content);
+      }
     }
+  });
+
+  it("renders string tool-result content", async () => {
+    const session: SessionData = {
+      header: { id: "session-string-tool-result", timestamp: now() },
+      entries: [
+        {
+          id: "1",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "user", content: "run a command" },
+        },
+        {
+          id: "2",
+          parentId: "1",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "bash",
+                arguments: { command: "echo legacy" },
+              },
+            ],
+          },
+        },
+        {
+          id: "3",
+          parentId: "2",
+          timestamp: now(),
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            content: "legacy output",
+          },
+        },
+      ],
+      leafId: "3",
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    expect(document.querySelector(".tool-output")?.textContent).toContain("legacy output");
   });
 
   it("does not crash when user message has non-array non-string content", async () => {
