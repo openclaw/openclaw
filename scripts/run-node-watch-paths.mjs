@@ -5,10 +5,16 @@ import {
 } from "./lib/bundled-plugin-paths.mjs";
 
 const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
-  // Gateway runtime code now lives in package sources, but pnpm dev/watch still
-  // runs the root dist entrypoint. Treat these package roots like src/.
+  // Root runtime code imports these package sources through tsconfig aliases,
+  // while pnpm dev/watch still runs the root dist entrypoint. Treat them like
+  // src/ so edits restart the same process that consumes them.
   "packages/gateway-client/src",
   "packages/gateway-protocol/src",
+  "packages/markdown-core/src",
+  "packages/media-generation-core/src",
+  "packages/media-understanding-common/src",
+  "packages/terminal-core/src",
+  "packages/net-policy/src",
 ];
 
 export const runNodeSourceRoots = [

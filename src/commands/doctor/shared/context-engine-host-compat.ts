@@ -1,10 +1,10 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeEmbeddedAgentRuntime } from "../../../agents/agent-runtime-id.js";
 import { resolveDefaultAgentDir } from "../../../agents/agent-scope-config.js";
 import { resolveCliBackendConfig } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import { getRegisteredAgentHarness } from "../../../agents/harness/registry.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   buildGenericCliContextEngineHostSupport,

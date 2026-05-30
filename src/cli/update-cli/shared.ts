@@ -2,10 +2,12 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
@@ -21,7 +23,6 @@ import type { UpdateStepProgress, UpdateStepResult } from "../../infra/update-ru
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
 
@@ -60,13 +61,8 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
     return undefined;
   }
   const trimmed = timeout.trim();
-  const seconds = Number(trimmed);
-  if (
-    !/^\d+$/u.test(trimmed) ||
-    !Number.isSafeInteger(seconds) ||
-    seconds <= 0 ||
-    seconds > MAX_SAFE_TIMEOUT_SECONDS
-  ) {
+  const seconds = parseStrictPositiveInteger(trimmed);
+  if (seconds === undefined || seconds > MAX_SAFE_TIMEOUT_SECONDS) {
     defaultRuntime.error(INVALID_TIMEOUT_ERROR);
     defaultRuntime.exit(1);
     return null;

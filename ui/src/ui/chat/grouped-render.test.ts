@@ -878,6 +878,15 @@ describe("grouped chat rendering", () => {
     expect(streamingTime?.textContent?.trim()).toBe(display.label);
   });
 
+  it("omits streaming bubble class for completed stream segments", () => {
+    const container = document.createElement("div");
+
+    render(renderStreamingGroup("Completed segment", 1, false), container);
+
+    const bubble = container.querySelector(".chat-bubble");
+    expect(bubble?.classList.contains("streaming")).toBe(false);
+  });
+
   it("renders configured local user names", () => {
     const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
       const container = document.createElement("div");

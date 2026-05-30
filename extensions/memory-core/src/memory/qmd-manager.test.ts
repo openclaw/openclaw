@@ -166,7 +166,8 @@ import {
   requireNodeSqlite,
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { QmdMemoryManager } from "./qmd-manager.js";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
@@ -225,6 +226,18 @@ describe("QmdMemoryManager", () => {
   function expectMockMessageNotContains(mock: Mock, text: string): void {
     expect(mockMessages(mock).join("\n")).not.toContain(text);
   }
+
+  it("caps mcporter search process timeout grace", () => {
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(1_000)).toBe(5_000);
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(10_000)).toBe(12_000);
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(MAX_TIMER_TIMEOUT_MS - 100)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+  });
 
   async function expectPathMissing(targetPath: string): Promise<void> {
     try {
@@ -3806,6 +3819,40 @@ describe("QmdMemoryManager", () => {
     const resolvedSync = expect(syncPromise).resolves.toBeUndefined();
     await vi.advanceTimersByTimeAsync(20);
     await resolvedSync;
+    await manager.close();
+  });
+
+  it("does not store qmd embed backoff when the process clock is invalid", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const { manager } = await createManager({ mode: "status" });
+    try {
+      (
+        manager as unknown as {
+          noteEmbedFailure: (reason: string, err: unknown) => void;
+        }
+      ).noteEmbedFailure("manual", new Error("embed failed"));
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    const status = manager.status() as { custom?: { qmd?: { embedBackoffUntil?: number | null } } };
+    expect(status.custom?.qmd?.embedBackoffUntil).toBeNull();
     await manager.close();
   });
 

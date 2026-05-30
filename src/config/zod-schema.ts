@@ -357,6 +357,13 @@ const McpServerSchema = z
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
       .optional(),
+    toolFilter: z
+      .object({
+        include: z.array(z.string().trim().min(1)).min(1).optional(),
+        exclude: z.array(z.string().trim().min(1)).min(1).optional(),
+      })
+      .strict()
+      .optional(),
     codex: z
       .object({
         agents: z
@@ -1181,6 +1188,20 @@ export const OpenClawSchema = z
             maxSkillsInPrompt: z.number().int().min(0).optional(),
             maxSkillsPromptChars: z.number().int().min(0).optional(),
             maxSkillFileBytes: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
+        workshop: z
+          .object({
+            autonomous: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
+            maxPending: z.number().int().min(1).optional(),
+            maxSkillBytes: z.number().int().min(1).optional(),
           })
           .strict()
           .optional(),

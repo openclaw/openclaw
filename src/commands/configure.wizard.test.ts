@@ -63,7 +63,7 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: mocks.createClackPrompter,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 

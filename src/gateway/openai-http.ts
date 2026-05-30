@@ -85,6 +85,7 @@ type OpenAiChatCompletionRequest = {
   frequency_penalty?: unknown;
   presence_penalty?: unknown;
   seed?: unknown;
+  stop?: unknown;
 };
 
 const DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES = 20 * 1024 * 1024;
@@ -798,6 +799,28 @@ function resolveResponseFormat(value: unknown): Record<string, unknown> | undefi
   return obj;
 }
 
+function resolveStopSequences(value: unknown): string[] | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  const list = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(list)) {
+    throw new Error("stop must be a string or array of strings");
+  }
+  // OpenAI Chat Completions accepts at most 4 stop sequences.
+  if (list.length > 4) {
+    throw new Error("stop supports at most 4 sequences");
+  }
+  const sequences: string[] = [];
+  for (const item of list) {
+    if (typeof item !== "string" || item.length === 0) {
+      throw new Error("stop entries must be non-empty strings");
+    }
+    sequences.push(item);
+  }
+  return sequences.length > 0 ? sequences : undefined;
+}
+
 function resolveErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     const message = err.message.trim();
@@ -862,6 +885,18 @@ export async function handleOpenAiHttpRequest(
     });
     return true;
   }
+  let stop: string[] | undefined;
+  try {
+    stop = resolveStopSequences(payload.stop);
+  } catch (err) {
+    sendJson(res, 400, {
+      error: {
+        message: `Invalid stop: ${resolveErrorMessage(err)}`,
+        type: "invalid_request_error",
+      },
+    });
+    return true;
+  }
   const samplingError = validateOpenAiSamplingParams({
     temperature: payload.temperature,
     topP: payload.top_p,
@@ -882,7 +917,8 @@ export async function handleOpenAiHttpRequest(
     responseFormat !== undefined ||
     frequencyPenalty !== undefined ||
     presencePenalty !== undefined ||
-    seed !== undefined
+    seed !== undefined ||
+    stop !== undefined
       ? {
           ...(maxTokens !== undefined ? { maxTokens } : {}),
           ...(temperature !== undefined ? { temperature } : {}),
@@ -891,6 +927,7 @@ export async function handleOpenAiHttpRequest(
           ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
           ...(presencePenalty !== undefined ? { presencePenalty } : {}),
           ...(seed !== undefined ? { seed } : {}),
+          ...(stop !== undefined ? { stop } : {}),
         }
       : undefined;
 

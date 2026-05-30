@@ -1,3 +1,4 @@
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { resolveRuntimePolicySessionKey } from "../auto-reply/reply/runtime-policy-session-key.js";
@@ -18,7 +19,6 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,

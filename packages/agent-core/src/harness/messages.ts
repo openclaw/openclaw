@@ -1,5 +1,19 @@
-import type { ImageContent, Message, TextContent } from "../llm.js";
+import type { ImageContent, Message, TextContent } from "../../../llm-core/src/index.js";
 import type { AgentMessage } from "../types.js";
+import type {
+  BashExecutionMessage,
+  BranchSummaryMessage,
+  CompactionSummaryMessage,
+  CustomMessage,
+} from "./message-types.js";
+import { parseSessionTimestampMs, requireSessionTimestampMs } from "./session/timestamps.js";
+
+export type {
+  BashExecutionMessage,
+  BranchSummaryMessage,
+  CompactionSummaryMessage,
+  CustomMessage,
+} from "./message-types.js";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
@@ -15,50 +29,6 @@ export const BRANCH_SUMMARY_PREFIX = `The following is a summary of a branch tha
 `;
 
 export const BRANCH_SUMMARY_SUFFIX = `</summary>`;
-
-export interface BashExecutionMessage {
-  role: "bashExecution";
-  command: string;
-  output: string;
-  exitCode: number | undefined;
-  cancelled: boolean;
-  truncated: boolean;
-  fullOutputPath?: string;
-  timestamp: number;
-  excludeFromContext?: boolean;
-}
-
-export interface CustomMessage<T = unknown> {
-  role: "custom";
-  customType: string;
-  content: string | (TextContent | ImageContent)[];
-  display: boolean;
-  details?: T;
-  timestamp: number;
-}
-
-export interface BranchSummaryMessage {
-  role: "branchSummary";
-  summary: string;
-  fromId: string;
-  timestamp: number;
-}
-
-export interface CompactionSummaryMessage {
-  role: "compactionSummary";
-  summary: string;
-  tokensBefore: number;
-  timestamp: number;
-}
-
-declare module "../types.js" {
-  interface CustomAgentMessages {
-    bashExecution: BashExecutionMessage;
-    custom: CustomMessage;
-    branchSummary: BranchSummaryMessage;
-    compactionSummary: CompactionSummaryMessage;
-  }
-}
 
 export function bashExecutionToText(msg: BashExecutionMessage): string {
   let text = `Ran \`${msg.command}\`\n`;
@@ -87,7 +57,7 @@ export function createBranchSummaryMessage(
     role: "branchSummary",
     summary,
     fromId,
-    timestamp: new Date(timestamp).getTime(),
+    timestamp: requireSessionTimestampMs(timestamp, "branch summary timestamp"),
   };
 }
 
@@ -100,7 +70,7 @@ export function createCompactionSummaryMessage(
     role: "compactionSummary",
     summary,
     tokensBefore,
-    timestamp: new Date(timestamp).getTime(),
+    timestamp: requireSessionTimestampMs(timestamp, "compaction summary timestamp"),
   };
 }
 
@@ -117,8 +87,17 @@ export function createCustomMessage(
     content,
     display,
     details,
-    timestamp: new Date(timestamp).getTime(),
+    timestamp: requireSessionTimestampMs(timestamp, "custom message timestamp"),
   };
+}
+
+function normalizeCompactionSummaryTimestamp(timestamp: number | string): number {
+  if (typeof timestamp === "number") {
+    return timestamp;
+  }
+  const parsed = parseSessionTimestampMs(timestamp);
+  // Corrupt persisted rows should not abort context conversion; session order is already preserved.
+  return parsed ?? 0;
 }
 
 export function convertToLlm(messages: AgentMessage[]): Message[] {
@@ -165,7 +144,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
                 text: COMPACTION_SUMMARY_PREFIX + m.summary + COMPACTION_SUMMARY_SUFFIX,
               },
             ],
-            timestamp: m.timestamp,
+            timestamp: normalizeCompactionSummaryTimestamp(m.timestamp),
           };
         case "user":
         case "assistant":

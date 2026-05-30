@@ -42,6 +42,7 @@ import {
   resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { timestampMsToIsoString } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -502,10 +503,7 @@ function buildSessionMetadata(params: {
     normalizeOptionalString(params.row?.displayName) ||
     normalizeOptionalString(params.row?.label) ||
     params.sessionKey;
-  const updatedAt =
-    typeof params.row?.updatedAt === "number" && Number.isFinite(params.row.updatedAt)
-      ? new Date(params.row.updatedAt).toISOString()
-      : null;
+  const updatedAt = timestampMsToIsoString(params.row?.updatedAt) ?? null;
   return {
     title,
     updatedAt,
@@ -1914,7 +1912,7 @@ export class AcpGatewayAgent implements Agent {
       sessionId: session.key,
       cwd,
       title: session.derivedTitle ?? session.displayName ?? session.label ?? session.key,
-      updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
+      updatedAt: timestampMsToIsoString(session.updatedAt),
       _meta: toAcpSessionLineageMeta(session),
     };
   }

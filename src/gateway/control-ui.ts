@@ -19,6 +19,7 @@ import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
 import { detectMime } from "../media/mime.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
+import { asDateTimestampMs, resolveTimestampMsToIsoString } from "../shared/number-coercion.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
@@ -408,7 +409,14 @@ function signAssistantMediaTicketPayload(encodedPayload: string): string {
 }
 
 function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
-  const exp = nowMs + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS;
+  const now = asDateTimestampMs(nowMs);
+  if (now === undefined) {
+    return {};
+  }
+  const exp = asDateTimestampMs(now + CONTROL_UI_ASSISTANT_MEDIA_TICKET_TTL_MS);
+  if (exp === undefined) {
+    return {};
+  }
   const payload: AssistantMediaTicketPayload = {
     scope: CONTROL_UI_ASSISTANT_MEDIA_TICKET_SCOPE,
     source,
@@ -418,11 +426,15 @@ function createAssistantMediaTicket(source: string, nowMs = Date.now()) {
   const sig = signAssistantMediaTicketPayload(encodedPayload);
   return {
     mediaTicket: `v1.${encodedPayload}.${sig}`,
-    mediaTicketExpiresAt: new Date(exp).toISOString(),
+    mediaTicketExpiresAt: resolveTimestampMsToIsoString(exp),
   };
 }
 
 function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs = Date.now()) {
+  const now = asDateTimestampMs(nowMs);
+  if (now === undefined) {
+    return false;
+  }
   const parts = ticket?.split(".");
   if (!parts || parts.length !== 3 || parts[0] !== "v1") {
     return false;
@@ -446,7 +458,7 @@ function verifyAssistantMediaTicket(ticket: string | null, source: string, nowMs
       payload.source === source &&
       typeof payload.exp === "number" &&
       Number.isFinite(payload.exp) &&
-      payload.exp >= nowMs
+      payload.exp >= now
     );
   } catch {
     return false;

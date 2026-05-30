@@ -346,11 +346,17 @@ describe("browser tab routes", () => {
       body: { action: "select", index: "1e0" },
       profileCtx,
     });
+    const nullSelectResponse = await callTabsAction({
+      body: { action: "select", index: null },
+      profileCtx,
+    });
 
     expect(closeResponse.statusCode).toBe(400);
     expect(closeResponse.body).toEqual({ error: "index must be a non-negative integer" });
     expect(selectResponse.statusCode).toBe(400);
     expect(selectResponse.body).toEqual({ error: "index must be a non-negative integer" });
+    expect(nullSelectResponse.statusCode).toBe(400);
+    expect(nullSelectResponse.body).toEqual({ error: "index must be a non-negative integer" });
     expect(profileCtx.closeTab).not.toHaveBeenCalled();
     expect(profileCtx.focusTab).not.toHaveBeenCalled();
   });

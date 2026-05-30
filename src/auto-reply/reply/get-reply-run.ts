@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasSessionAutoModelFallbackProvenance,
@@ -12,7 +13,6 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -623,7 +623,7 @@ export async function runPreparedReply(
   const isWholeMessageCommand =
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
-  const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/.test(normalizedCommandBody);
+  const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   if (
     allowTextCommands &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
@@ -633,7 +633,7 @@ export async function runPreparedReply(
     typing.cleanup();
     return undefined;
   }
-  const isBareNewOrReset = /^\/(new|reset)$/.test(normalizedCommandBody);
+  const isBareNewOrReset = /^\/(new|reset)$/i.test(normalizedCommandBody);
   const isBareSessionReset =
     softResetTriggered ||
     (isNewSession &&
@@ -642,7 +642,7 @@ export async function runPreparedReply(
           baseBodyTrimmedRaw.length === 0 &&
           rawBodyTrimmed.length > 0)));
   const startupAction =
-    softResetTriggered || /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
+    softResetTriggered || /^\/reset(?:\s|$)/i.test(normalizedCommandBody) ? "reset" : "new";
   const spawnedWorkspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
     spawnedBy: sessionEntry?.spawnedBy,
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,
@@ -1216,6 +1216,7 @@ export async function runPreparedReply(
     originatingTo: ctx.OriginatingTo,
     originatingAccountId: sessionCtx.AccountId,
     originatingThreadId,
+    originatingReplyToId: sessionCtx.ReplyToId,
     originatingChatType: ctx.ChatType,
     run: {
       agentId,

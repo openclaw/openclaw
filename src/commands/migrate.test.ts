@@ -108,7 +108,7 @@ function authPlan(status: MigrationPlan["items"][number]["status"] = "skipped"):
     },
     items: [
       {
-        id: "auth:openai-codex",
+        id: "auth:openai",
         kind: "auth",
         action: status === "planned" ? "create" : "skip",
         status,

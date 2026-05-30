@@ -4,7 +4,7 @@ import type { WizardPrompter } from "../../../wizard/prompts.js";
 import { throwIfOAuthLoginAborted, withOAuthLoginAbort } from "./abort.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 type OpenAICodexOAuthFacade = {
   refreshOpenAICodexToken: (refreshToken: string) => Promise<OAuthCredentials>;

@@ -2,8 +2,10 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_READY_OUTPUT_MAX_CHARS,
+  MEMORY_SEARCH_RESPONSE_MAX_BYTES,
   hasChildExited,
   parseArgs,
+  readBoundedResponseText,
   readNumber,
   readPositiveNumber,
   stopGatewayWithRuntime,
@@ -103,6 +105,18 @@ describe("check-memory-fd-repro", () => {
     });
   });
 
+  it("stops parsing options after the argument terminator", () => {
+    expect(parseArgs(["--files", "20", "--", "--files", "99"])).toMatchObject({
+      fileCount: 20,
+    });
+
+    expect(
+      withEnv({ OPENCLAW_MEMORY_FD_REPRO_FILES: "17" }, () => parseArgs(["--", "--unknown"])),
+    ).toMatchObject({
+      fileCount: 17,
+    });
+  });
+
   it("treats signaled gateway children as exited", () => {
     expect(hasChildExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
     expect(hasChildExited({ exitCode: 0, signalCode: null })).toBe(true);
@@ -177,5 +191,45 @@ describe("check-memory-fd-repro", () => {
 
     expect(state.readySeen).toBe(true);
     expect(state.tail).toBe("w output");
+  });
+
+  it("reads memory_search response bodies under the byte cap", async () => {
+    await expect(
+      readBoundedResponseText(
+        new Response("ok"),
+        "memory_search",
+        MEMORY_SEARCH_RESPONSE_MAX_BYTES,
+      ),
+    ).resolves.toBe("ok");
+  });
+
+  it("rejects oversized memory_search response bodies from content-length", async () => {
+    const response = new Response("ignored", {
+      headers: { "content-length": String(MEMORY_SEARCH_RESPONSE_MAX_BYTES + 1) },
+    });
+
+    await expect(
+      readBoundedResponseText(response, "memory_search", MEMORY_SEARCH_RESPONSE_MAX_BYTES),
+    ).rejects.toThrow(
+      `memory_search response body exceeded ${MEMORY_SEARCH_RESPONSE_MAX_BYTES} bytes`,
+    );
+  });
+
+  it("stops reading memory_search response streams after the byte cap", async () => {
+    const chunk = new Uint8Array(MEMORY_SEARCH_RESPONSE_MAX_BYTES + 1);
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(chunk);
+          controller.close();
+        },
+      }),
+    );
+
+    await expect(
+      readBoundedResponseText(response, "memory_search", MEMORY_SEARCH_RESPONSE_MAX_BYTES),
+    ).rejects.toThrow(
+      `memory_search response body exceeded ${MEMORY_SEARCH_RESPONSE_MAX_BYTES} bytes`,
+    );
   });
 });

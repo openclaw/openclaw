@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join } from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -17,14 +18,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveDefaultAgentId,
-} from "./agent-scope.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
+import { resolveModelWorkspaceDir } from "./model-discovery-context.js";
 import {
   modelKey,
   normalizeConfiguredProviderCatalogModelId,
@@ -36,12 +34,10 @@ import {
 } from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import {
-  decodePluginModelCatalogRelativePathPluginId,
-  isGeneratedPluginModelCatalog,
-  listPluginModelCatalogPaths,
-  resolvePluginModelCatalogOwnerPluginId,
+  filterGeneratedPluginModelCatalogProviders,
+  listPluginModelCatalogFiles,
+  type PluginModelCatalogMetadataSnapshot,
 } from "./plugin-model-catalog.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 const AGENT_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -227,6 +223,7 @@ export function loadManifestModelCatalog(params: {
       id: row.id,
       name: row.name,
       provider: row.provider,
+      api: row.api,
     };
     const contextWindow = row.contextWindow ?? row.contextTokens;
     if (contextWindow) {
@@ -328,18 +325,12 @@ function readProviderCatalogRows(parsed: unknown): Record<string, Record<string,
 
 async function loadReadOnlyPersistedProviderRows(
   agentDir: string,
-  getPluginMetadataSnapshot: () => Pick<PluginMetadataSnapshot, "owners">,
+  getPluginMetadataSnapshot: () => PluginModelCatalogMetadataSnapshot,
 ): Promise<Record<string, Record<string, unknown>>> {
   const raw = await readFile(join(agentDir, "models.json"), "utf8");
   const providers = { ...readProviderCatalogRows(JSON.parse(raw) as unknown) };
-  for (const catalogPath of listPluginModelCatalogPaths(agentDir)) {
-    const catalogPluginId = decodePluginModelCatalogRelativePathPluginId(
-      relative(agentDir, catalogPath),
-    );
-    if (!catalogPluginId) {
-      continue;
-    }
-    const catalogRaw = await readFile(catalogPath, "utf8").catch(() => undefined);
+  for (const catalogFile of listPluginModelCatalogFiles(agentDir)) {
+    const catalogRaw = await readFile(catalogFile.path, "utf8").catch(() => undefined);
     if (!catalogRaw) {
       continue;
     }
@@ -349,17 +340,15 @@ async function loadReadOnlyPersistedProviderRows(
     } catch {
       continue;
     }
-    if (isGeneratedPluginModelCatalog(parsed)) {
-      for (const [providerId, provider] of Object.entries(readProviderCatalogRows(parsed))) {
-        const ownerPluginId = resolvePluginModelCatalogOwnerPluginId({
-          providerId,
-          pluginMetadataSnapshot: getPluginMetadataSnapshot(),
-        });
-        if (ownerPluginId === catalogPluginId) {
-          providers[providerId] = provider;
-        }
-      }
-    }
+    Object.assign(
+      providers,
+      filterGeneratedPluginModelCatalogProviders({
+        catalogPluginId: catalogFile.pluginId,
+        parsedCatalog: parsed,
+        pluginMetadataSnapshot: getPluginMetadataSnapshot(),
+        providers: readProviderCatalogRows(parsed),
+      }),
+    );
   }
   return providers;
 }
@@ -370,7 +359,7 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
 }): Promise<ModelCatalogEntry[]> {
   const cfg = params?.config ?? getRuntimeConfig();
   const agentDir = resolveDefaultAgentDir(cfg);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  const workspaceDir = resolveModelWorkspaceDir(cfg, undefined);
   const models: ModelCatalogEntry[] = [];
   const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
   const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
@@ -519,7 +508,7 @@ export async function loadModelCatalog(params?: {
     const sortModels = sortModelCatalogEntries;
     try {
       const cfg = params?.config ?? getRuntimeConfig();
-      const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+      const workspaceDir = resolveModelWorkspaceDir(cfg, undefined);
       let manifestMetadataSnapshot: PluginMetadataSnapshot | undefined;
       let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
       const getManifestMetadataSnapshot = () => {

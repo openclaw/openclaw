@@ -4,6 +4,7 @@ import {
   resolveChannelApprovalAdapter,
 } from "../../channels/plugins/index.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
+import { resolveExpiresAtMsFromDurationMs } from "../../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -19,6 +20,16 @@ export type PrivateCommandRouteTarget = {
   accountId?: string | null;
   threadId?: string | number | null;
 };
+
+const PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS = 5 * 60_000;
+const EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS = 0;
+
+export function resolvePrivateCommandApprovalRouteExpiresAtMs(nowMs = Date.now()): number {
+  return (
+    resolveExpiresAtMsFromDurationMs(PRIVATE_COMMAND_APPROVAL_ROUTE_TTL_MS, { nowMs }) ??
+    EXPIRED_PRIVATE_COMMAND_APPROVAL_ROUTE_EXPIRES_AT_MS
+  );
+}
 
 export async function resolvePrivateCommandRouteTargets(params: {
   commandParams: HandleCommandsParams;

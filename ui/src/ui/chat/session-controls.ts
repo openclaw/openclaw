@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
 import { createChatSessionsLoadOverrides } from "../app-chat.ts";
@@ -10,6 +11,7 @@ import {
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
+import { formatDateTimeMs } from "../format.ts";
 import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { pathForTab } from "../navigation.ts";
@@ -495,8 +497,9 @@ function formatChatSessionPickerMeta(row: SessionsListResult["sessions"][number]
       .filter(Boolean)
       .join("/"),
   ].filter(Boolean);
-  if (typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt)) {
-    parts.push(new Date(row.updatedAt).toLocaleString());
+  const updatedAt = formatDateTimeMs(row.updatedAt, undefined, "");
+  if (updatedAt) {
+    parts.push(updatedAt);
   }
   return parts.join(" · ");
 }
@@ -808,6 +811,7 @@ function renderChatModelSelect(state: AppViewState) {
         data-chat-model-select="true"
         aria-label=${t("chat.selectors.model")}
         title=${selectedLabel}
+        .value=${live(currentOverride)}
         ?disabled=${disabled}
         @change=${async (e: Event) => {
           const next = (e.target as HTMLSelectElement).value.trim();

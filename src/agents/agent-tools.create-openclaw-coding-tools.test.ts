@@ -1050,6 +1050,14 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("heartbeat_respond");
   });
 
+  it("keeps skill_workshop available under the coding profile", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+    });
+
+    expect(toolNameList(tools)).toContain("skill_workshop");
+  });
+
   it("can keep message available when a cron route needs it under a provider coding profile", () => {
     const providerProfileTools = createOpenClawCodingTools({
       config: { tools: { byProvider: { openai: { profile: "coding" } } } },

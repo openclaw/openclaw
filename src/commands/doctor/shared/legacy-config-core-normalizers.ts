@@ -1,4 +1,5 @@
-import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -8,7 +9,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 import {

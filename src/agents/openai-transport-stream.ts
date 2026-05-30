@@ -90,6 +90,7 @@ const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
+const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai", "openai-codex"]);
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
@@ -114,6 +115,7 @@ type BaseStreamOptions = {
   temperature?: number;
   topP?: number;
   maxTokens?: number;
+  stop?: string[];
   signal?: AbortSignal;
   apiKey?: string;
   cacheRetention?: "none" | "short" | "long";
@@ -1916,7 +1918,7 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
 
 function isOpenAICodexResponsesModel(model: Model): boolean {
   return (
-    model.provider === "openai-codex" &&
+    OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
     (model.api === "openai-codex-responses" || model.api === "openclaw-openai-responses-transport")
   );
 }
@@ -2989,11 +2991,25 @@ function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptio
 function resolveOpenAICompletionsMaxTokens(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
-): number | undefined {
+): { maxTokens: number | undefined; clampToModelMaxTokens: boolean } {
+  if (options?.maxTokens) {
+    return { maxTokens: options.maxTokens, clampToModelMaxTokens: true };
+  }
   const paramsMaxTokens = resolveMaxTokensParam(
     (model as { params?: Record<string, unknown> }).params,
   );
-  return (options?.maxTokens || undefined) ?? (paramsMaxTokens || undefined) ?? model.maxTokens;
+  if (paramsMaxTokens) {
+    return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false };
+  }
+  return { maxTokens: model.maxTokens, clampToModelMaxTokens: false };
+}
+
+function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number | undefined {
+  return typeof model.maxTokens === "number" &&
+    Number.isFinite(model.maxTokens) &&
+    model.maxTokens > 0
+    ? Math.floor(model.maxTokens)
+    : undefined;
 }
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
@@ -3576,6 +3592,9 @@ export function buildOpenAICompletionsParams(
   if (options?.seed !== undefined) {
     params.seed = options.seed;
   }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop = options.stop;
+  }
   if (supportsModelTools(model)) {
     if (context.tools) {
       params.tools = convertTools(context.tools, compat, model);
@@ -3601,17 +3620,33 @@ export function buildOpenAICompletionsParams(
     }
   }
   {
-    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
+    const maxTokenBudget = resolveOpenAICompletionsMaxTokens(model, options);
+    const effectiveMaxTokens = maxTokenBudget.maxTokens;
     const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
     let clampedMaxTokens = effectiveMaxTokens;
+    const modelMaxTokens = resolveOpenAICompletionsModelMaxTokens(model);
+    if (
+      maxTokenBudget.clampToModelMaxTokens &&
+      clampedMaxTokens !== undefined &&
+      modelMaxTokens !== undefined &&
+      clampedMaxTokens > modelMaxTokens
+    ) {
+      clampedMaxTokens = modelMaxTokens;
+      emitModelTransportDebug(
+        log,
+        `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+          `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
+          `modelMaxTokens=${modelMaxTokens}`,
+      );
+    }
     if (
       compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
-      effectiveMaxTokens !== undefined &&
+      clampedMaxTokens !== undefined &&
       effectiveContextTokens !== undefined
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
       const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
-      if (effectiveMaxTokens > remainingBudget) {
+      if (clampedMaxTokens > remainingBudget) {
         clampedMaxTokens = remainingBudget;
         emitModelTransportDebug(
           log,

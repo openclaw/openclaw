@@ -50,6 +50,9 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.run, jobName).toContain(
         'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
       );
+      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
+      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
+      expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
       expect(checkoutStep.run, jobName).toContain(
         "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
@@ -71,9 +74,13 @@ describe("ci workflow guards", () => {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("fetch_timeout_seconds=90");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
       expect(checkoutStep.run, jobName).toContain(
         "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+      );
+      expect(checkoutStep.run, jobName).toContain(
+        'if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then',
       );
       expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
       expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
@@ -86,10 +93,22 @@ describe("ci workflow guards", () => {
   it("bounds the Windows Crabbox hydrate main fetch", () => {
     const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
 
-    expect(workflow).toContain("$fetch = Start-Process git");
-    expect(workflow).toContain('"protocol.version=2"');
-    expect(workflow).toContain('"--no-recurse-submodules"');
+    expect(workflow).toContain("$fetchInfo = New-Object System.Diagnostics.ProcessStartInfo");
+    expect(workflow).toContain('$fetchInfo.FileName = "git"');
+    expect(workflow).toContain("$fetchInfo.WorkingDirectory = $repo");
+    expect(workflow).toContain("$fetchInfo.UseShellExecute = $false");
+    expect(workflow).not.toContain("$fetchInfo.RedirectStandardOutput = $true");
+    expect(workflow).not.toContain("$fetchInfo.RedirectStandardError = $true");
+    expect(workflow).toContain(
+      '--no-tags --no-progress --prune --no-recurse-submodules --depth=50',
+    );
+    expect(workflow).toContain("$fetch = New-Object System.Diagnostics.Process");
+    expect(workflow).toContain("$fetch.StartInfo = $fetchInfo");
     expect(workflow).toContain("$fetch.WaitForExit(30000)");
+    expect(workflow).toContain("$fetch.Kill()");
+    expect(workflow).not.toContain("StandardOutput.ReadToEnd()");
+    expect(workflow).not.toContain("StandardError.ReadToEnd()");
+    expect(workflow).toContain('throw "git fetch failed with exit code $($fetch.ExitCode)"');
     expect(workflow).toContain('throw "git fetch timed out after 30 seconds"');
     expect(workflow).not.toContain(
       'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',

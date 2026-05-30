@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
@@ -21,7 +22,6 @@ import {
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
@@ -114,12 +114,8 @@ function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps 
   return {
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
-    chatDeltaSentAt: context.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: context.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: context.agentDeltaSentAt,
-    bufferedAgentEvents: context.bufferedAgentEvents,
     chatAbortedRuns: context.chatAbortedRuns,
+    clearChatRunState: context.clearChatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     broadcast: context.broadcast,
@@ -242,7 +238,12 @@ function mapProvider(
   usageByProvider: Map<string, { windows: UsageWindow[]; plan?: string }>,
   expectsOAuthSet: Set<string>,
 ): ModelAuthStatusProvider {
-  const usageKey = resolveUsageProviderId(prov.provider);
+  const usageProfile = prov.profiles.find(
+    (profile) => profile.type === "oauth" || profile.type === "token",
+  );
+  const usageKey = resolveUsageProviderId(prov.provider, {
+    credentialType: usageProfile?.type,
+  });
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
   const rollup = aggregateOAuthStatus(prov, Date.now(), expectsOAuthSet.has(prov.provider));
   return {
@@ -436,7 +437,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ...new Set(
           authHealth.profiles
             .filter((p) => p.type === "oauth" || p.type === "token")
-            .map((p) => resolveUsageProviderId(p.provider))
+            .map((p) => resolveUsageProviderId(p.provider, { credentialType: p.type }))
             .filter((id): id is UsageProviderId => Boolean(id)),
         ),
       ];

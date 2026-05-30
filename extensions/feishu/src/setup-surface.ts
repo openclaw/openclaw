@@ -251,6 +251,13 @@ function applyNewAppSecurityPolicy(
 // Scan-to-create flow
 // ---------------------------------------------------------------------------
 
+let appRegistrationModulePromise: Promise<typeof import("./app-registration.js")> | null = null;
+
+const loadAppRegistrationModule = async () => {
+  appRegistrationModulePromise ??= import("./app-registration.js");
+  return await appRegistrationModulePromise;
+};
+
 async function promptFeishuDomain(params: {
   prompter: WizardPrompter;
   initialValue?: FeishuDomain;
@@ -281,7 +288,7 @@ async function runScanToCreate(
   domain: FeishuDomain,
 ): Promise<AppRegistrationResult | null> {
   const { beginAppRegistration, initAppRegistration, pollAppRegistration, printQrCode } =
-    await import("./app-registration.js");
+    await loadAppRegistrationModule();
   try {
     await initAppRegistration(domain);
   } catch {
@@ -392,7 +399,7 @@ async function runNewAppFlow(params: {
 
     // Fetch openId via API for manual flow.
     if (appId && appSecretProbeValue) {
-      const { getAppOwnerOpenId } = await import("./app-registration.js");
+      const { getAppOwnerOpenId } = await loadAppRegistrationModule();
       scanOpenId = await getAppOwnerOpenId({
         appId,
         appSecret: appSecretProbeValue,

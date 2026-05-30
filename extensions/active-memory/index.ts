@@ -13,7 +13,11 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asDateTimestampMs,
+  parseStrictPositiveInteger,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
@@ -44,6 +48,7 @@ const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
+const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
@@ -1359,7 +1364,12 @@ function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
   if (!cached) {
     return undefined;
   }
-  if (cached.expiresAt <= Date.now()) {
+  const now = asDateTimestampMs(Date.now());
+  if (
+    now === undefined ||
+    asDateTimestampMs(cached.expiresAt) === undefined ||
+    cached.expiresAt <= now
+  ) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
@@ -1367,19 +1377,27 @@ function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
 }
 
 function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
-  const now = Date.now();
+  const rawNow = Date.now();
+  const now = asDateTimestampMs(rawNow);
   if (
     activeRecallCache.size >= DEFAULT_MAX_CACHE_ENTRIES ||
-    now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS
+    (now !== undefined && now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS)
   ) {
     sweepExpiredCacheEntries(now);
-    lastActiveRecallCacheSweepAt = now;
+    if (now !== undefined) {
+      lastActiveRecallCacheSweepAt = now;
+    }
+  }
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (expiresAt === undefined) {
+    activeRecallCache.delete(cacheKey);
+    return;
   }
   if (activeRecallCache.has(cacheKey)) {
     activeRecallCache.delete(cacheKey);
   }
   activeRecallCache.set(cacheKey, {
-    expiresAt: now + ttlMs,
+    expiresAt,
     result,
   });
   while (activeRecallCache.size > DEFAULT_MAX_CACHE_ENTRIES) {
@@ -1391,9 +1409,13 @@ function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: nu
   }
 }
 
-function sweepExpiredCacheEntries(now = Date.now()): void {
+function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
+  if (now === undefined) {
+    activeRecallCache.clear();
+    return;
+  }
   for (const [cacheKey, cached] of activeRecallCache.entries()) {
-    if (cached.expiresAt <= now) {
+    if (asDateTimestampMs(cached.expiresAt) === undefined || cached.expiresAt <= now) {
       activeRecallCache.delete(cacheKey);
     }
   }
@@ -2540,6 +2562,7 @@ async function runRecallSubagent(params: {
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
+      lane: ACTIVE_MEMORY_RECALL_LANE,
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
