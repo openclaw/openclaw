@@ -216,12 +216,15 @@ the request reaches the provider:
 - The bootstrap truncation warning block (`agents.defaults.bootstrapPromptTruncationWarning`)
   defaults to `always` so its presence stays byte-identical across turns. The
   alternative `once` mode injects the block only on the first turn and
-  suppresses it afterwards, which mutates the cacheable prefix between turns
-  and forces a full prefill rewrite on every turn after the first. If the
-  default is reverted to `once`, OpenClaw emits a structured `prompt-cache`
-  warning describing the system-prompt digest drift before the cache miss
-  shows up as a `cacheRead` drop, so the regression is attributable to the
-  configuration change rather than a silent cache regression. See
+  suppresses it afterwards, which mutates the cacheable prefix between turn 1
+  (warning present) and turn 2 (warning absent) and forces a full prefill
+  rewrite on the first drifted turn — usually turn 2. Later turns can rebuild
+  the cache once the suppressed prefix stabilizes, but the missed cache write
+  on the drifted turn inflates token cost for that turn. If the default is
+  reverted to `once`, OpenClaw emits a structured `prompt-cache` warning
+  describing the system-prompt digest drift before the cache miss shows up as
+  a `cacheRead` drop, so the regression is attributable to the configuration
+  change rather than a silent cache regression. See
   [Context → Injected workspace files](/concepts/context#injected-workspace-files-project-context)
   for the configuration entry point.
 
