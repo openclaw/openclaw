@@ -1832,6 +1832,8 @@ importers:
 
   packages/media-generation-core: {}
 
+  packages/media-understanding-common: {}
+
   packages/memory-host-sdk: {}
 
   packages/net-policy:

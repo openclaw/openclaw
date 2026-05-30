@@ -394,6 +394,22 @@ function buildMediaGenerationCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildMediaUnderstandingCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-understanding-common/src/index.ts",
+    "active-model": "packages/media-understanding-common/src/active-model.ts",
+    defaults: "packages/media-understanding-common/src/defaults.ts",
+    errors: "packages/media-understanding-common/src/errors.ts",
+    format: "packages/media-understanding-common/src/format.ts",
+    "openai-compatible-video": "packages/media-understanding-common/src/openai-compatible-video.ts",
+    "output-extract": "packages/media-understanding-common/src/output-extract.ts",
+    "provider-id": "packages/media-understanding-common/src/provider-id.ts",
+    "provider-supports": "packages/media-understanding-common/src/provider-supports.ts",
+    types: "packages/media-understanding-common/src/types.ts",
+    video: "packages/media-understanding-common/src/video.ts",
+  };
+}
+
 function buildMarkdownCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/markdown-core/src/index.ts",
@@ -591,6 +607,12 @@ export default defineConfig([
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildMediaGenerationCoreDistEntries(),
     outDir: "packages/media-generation-core/dist",
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaUnderstandingCoreDistEntries(),
+    outDir: "packages/media-understanding-common/dist",
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

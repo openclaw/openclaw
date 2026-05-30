@@ -65,6 +65,12 @@
         "./packages/media-generation-core/src/normalization.ts"
       ],
       "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
+      "@openclaw/media-understanding-common": [
+        "./packages/media-understanding-common/src/index.ts"
+      ],
+      "@openclaw/media-understanding-common/*": [
+        "./packages/media-understanding-common/src/*"
+      ],
       "@openclaw/markdown-core": ["./packages/markdown-core/src/index.ts"],
       "@openclaw/markdown-core/code-spans": ["./packages/markdown-core/src/code-spans.ts"],
       "@openclaw/markdown-core/fences": ["./packages/markdown-core/src/fences.ts"],
