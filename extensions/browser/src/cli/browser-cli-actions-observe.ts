@@ -23,7 +23,10 @@ export function registerBrowserActionObserveCommands(
     .command("console")
     .description("Get recent console messages")
     .option("--level <level>", "Filter by level (error, warn, info)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -52,7 +55,10 @@ export function registerBrowserActionObserveCommands(
   browser
     .command("pdf")
     .description("Save page as PDF")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -79,7 +85,10 @@ export function registerBrowserActionObserveCommands(
     .command("responsebody")
     .description("Wait for a network response and return its body")
     .argument("<url>", "URL (exact, substring, or glob like **/api)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the response (default: 20000)",

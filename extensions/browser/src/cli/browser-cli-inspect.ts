@@ -42,7 +42,10 @@ export function registerBrowserInspectCommands(
   browser
     .command("screenshot")
     .description("Capture a screenshot (prints the saved path)")
-    .argument("[targetId]", "CDP target id (or unique prefix)")
+    .argument(
+      "[targetId]",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .option("--full-page", "Capture full scrollable page", false)
     .option("--ref <ref>", "ARIA ref from ai snapshot")
     .option("--element <selector>", "CSS selector for element screenshot")
@@ -84,7 +87,10 @@ export function registerBrowserInspectCommands(
     .command("snapshot")
     .description("Capture a snapshot (default: ai; aria is the accessibility tree)")
     .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .option("--limit <n>", "Max nodes (default: 500/800)")
     .option("--mode <efficient>", "Snapshot preset (efficient)")
     .option("--efficient", "Use the efficient snapshot preset", false)

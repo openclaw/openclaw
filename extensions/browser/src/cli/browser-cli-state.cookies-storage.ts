@@ -42,7 +42,10 @@ export function registerBrowserCookiesAndStorageCommands(
   const cookies = browser.command("cookies").description("Read/write cookies");
 
   cookies
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -77,7 +80,10 @@ export function registerBrowserCookiesAndStorageCommands(
     .argument("<name>", "Cookie name")
     .argument("<value>", "Cookie value")
     .option("--url <url>", "Cookie URL scope (recommended)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (name: string, value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -106,7 +112,10 @@ export function registerBrowserCookiesAndStorageCommands(
   cookies
     .command("clear")
     .description("Clear all cookies")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
@@ -134,7 +143,10 @@ export function registerBrowserCookiesAndStorageCommands(
       .command("get")
       .description(`Get ${kind}Storage (all keys or one key)`)
       .argument("[key]", "Key (optional)")
-      .option("--target-id <id>", "CDP target id (or unique prefix)")
+      .option(
+        "--target-id <id>",
+        "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+      )
       .action(async (key: string | undefined, opts, cmd2) => {
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;
@@ -169,7 +181,10 @@ export function registerBrowserCookiesAndStorageCommands(
       .description(`Set a ${kind}Storage key`)
       .argument("<key>", "Key")
       .argument("<value>", "Value")
-      .option("--target-id <id>", "CDP target id (or unique prefix)")
+      .option(
+        "--target-id <id>",
+        "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+      )
       .action(async (key: string, value: string, opts, cmd2) => {
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;
@@ -193,7 +208,10 @@ export function registerBrowserCookiesAndStorageCommands(
     cmd
       .command("clear")
       .description(`Clear all ${kind}Storage keys`)
-      .option("--target-id <id>", "CDP target id (or unique prefix)")
+      .option(
+        "--target-id <id>",
+        "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+      )
       .action(async (opts, cmd2) => {
         const parent = parentOpts(cmd2);
         const profile = parent?.browserProfile;

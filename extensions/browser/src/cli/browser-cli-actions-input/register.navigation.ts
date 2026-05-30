@@ -33,7 +33,10 @@ export function registerBrowserNavigationCommands(
     .command("navigate")
     .description("Navigate the current tab to a URL")
     .argument("<url>", "URL to navigate to")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (url: string, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
@@ -66,7 +69,10 @@ export function registerBrowserNavigationCommands(
     .description("Resize the viewport")
     .argument("<width>", "Viewport width")
     .argument("<height>", "Viewport height")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (width: string, height: string, opts, cmd) => {
       const normalizedWidth = parsePositiveInteger(width, "width");
       const normalizedHeight = parsePositiveInteger(height, "height");

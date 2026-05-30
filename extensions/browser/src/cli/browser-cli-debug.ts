@@ -75,7 +75,10 @@ export function registerBrowserDebugCommands(
     .command("highlight")
     .description("Highlight an element by ref")
     .argument("<ref>", "Ref id from snapshot")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (ref: string, opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest(parent, {
@@ -98,7 +101,10 @@ export function registerBrowserDebugCommands(
     .command("errors")
     .description("Get recent page errors")
     .option("--clear", "Clear stored errors after reading", false)
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest<{
@@ -132,7 +138,10 @@ export function registerBrowserDebugCommands(
     .description("Get recent network requests (best-effort)")
     .option("--filter <text>", "Only show URLs that contain this substring")
     .option("--clear", "Clear stored requests after reading", false)
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest<{
@@ -179,7 +188,10 @@ export function registerBrowserDebugCommands(
   trace
     .command("start")
     .description("Start trace recording")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .option("--no-screenshots", "Disable screenshots")
     .option("--no-snapshots", "Disable snapshots")
     .option("--sources", "Include sources (bigger traces)", false)
@@ -210,7 +222,10 @@ export function registerBrowserDebugCommands(
       "--out <path>",
       "Output path within openclaw temp dir (e.g. trace.zip or /tmp/openclaw/trace.zip)",
     )
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
         const result = await callDebugRequest<{ path: string }>(parent, {

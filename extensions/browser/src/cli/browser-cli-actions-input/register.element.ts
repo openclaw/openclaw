@@ -65,7 +65,10 @@ export function registerBrowserElementCommands(
     .command("click")
     .description("Click an element by ref from snapshot")
     .argument("<ref>", "Ref id from snapshot")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .option("--double", "Double click", false)
     .option("--button <left|right|middle>", "Mouse button to use")
     .option("--modifiers <list>", "Comma-separated modifiers (Shift,Alt,Meta)")
@@ -103,7 +106,10 @@ export function registerBrowserElementCommands(
     .description("Click viewport coordinates")
     .argument("<x>", "Viewport x coordinate")
     .argument("<y>", "Viewport y coordinate")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .option("--double", "Double click", false)
     .option("--button <left|right|middle>", "Mouse button to use")
     .option("--delay-ms <ms>", "Delay between mouse down/up", (v: string) =>
@@ -141,7 +147,10 @@ export function registerBrowserElementCommands(
     .argument("<text>", "Text to type")
     .option("--submit", "Press Enter after typing", false)
     .option("--slowly", "Type slowly (human-like)", false)
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (ref: string | undefined, text: string, opts, cmd) => {
       const refValue = requireRef(ref);
       if (!refValue) {
@@ -165,7 +174,10 @@ export function registerBrowserElementCommands(
     .command("press")
     .description("Press a key")
     .argument("<key>", "Key to press (e.g. Enter)")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (key: string, opts, cmd) => {
       await runElementAction({
         cmd,
@@ -178,7 +190,10 @@ export function registerBrowserElementCommands(
     .command("hover")
     .description("Hover an element by ai ref")
     .argument("<ref>", "Ref id from snapshot")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (ref: string, opts, cmd) => {
       await runElementAction({
         cmd,
@@ -191,7 +206,10 @@ export function registerBrowserElementCommands(
     .command("scrollintoview")
     .description("Scroll an element into view by ref from snapshot")
     .argument("<ref>", "Ref id from snapshot")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .option("--timeout-ms <ms>", "How long to wait for scroll (default: 20000)", (v: string) =>
       parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
@@ -219,7 +237,10 @@ export function registerBrowserElementCommands(
     .description("Drag from one ref to another")
     .argument("<startRef>", "Start ref id")
     .argument("<endRef>", "End ref id")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (startRef: string, endRef: string, opts, cmd) => {
       await runElementAction({
         cmd,
@@ -238,7 +259,10 @@ export function registerBrowserElementCommands(
     .description("Select option(s) in a select element")
     .argument("<ref>", "Ref id from snapshot")
     .argument("<values...>", "Option values to select")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--target-id <id>",
+      "Tab reference: suggested target id, tab id, label, raw target id, or unique raw prefix",
+    )
     .action(async (ref: string, values: string[], opts, cmd) => {
       await runElementAction({
         cmd,
