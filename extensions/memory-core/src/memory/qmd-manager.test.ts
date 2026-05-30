@@ -18,6 +18,15 @@ const { watchMock } = vi.hoisted(() => ({
     const watcher = new EventEmitter();
     return Object.assign(watcher, {
       close: vi.fn(async () => undefined),
+      add: vi.fn(),
+    });
+  }),
+}));
+const { nativeWatchMock } = vi.hoisted(() => ({
+  nativeWatchMock: vi.fn(() => {
+    const watcher = new EventEmitter();
+    return Object.assign(watcher, {
+      close: vi.fn(() => undefined),
     });
   }),
 }));
@@ -167,6 +176,10 @@ import {
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { QmdMemoryManager } from "./qmd-manager.js";
+import {
+  resetQmdNativeWatchFactory,
+  setQmdNativeWatchFactory,
+} from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
@@ -265,6 +278,14 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockClear();
     spawnMock.mockImplementation(() => createMockChild());
     watchMock.mockClear();
+    nativeWatchMock.mockReset();
+    nativeWatchMock.mockImplementation(() => {
+      const watcher = new EventEmitter();
+      return Object.assign(watcher, {
+        close: vi.fn(() => undefined),
+      });
+    });
+    resetQmdNativeWatchFactory();
     withFileLockMock.mockClear();
     logWarnMock.mockClear();
     logDebugMock.mockClear();
@@ -481,7 +502,7 @@ describe("QmdMemoryManager", () => {
         qmd: {
           includeDefaultMemory: false,
           update: { interval: "0s", debounceMs: 0, onBoot: false },
-          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          paths: [{ path: workspaceDir, pattern: "notes.md", name: "workspace" }],
         },
       },
     } as OpenClawConfig;
@@ -543,7 +564,7 @@ describe("QmdMemoryManager", () => {
         qmd: {
           includeDefaultMemory: false,
           update: { interval: "0s", debounceMs: 0, onBoot: false },
-          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          paths: [{ path: workspaceDir, pattern: "notes.md", name: "workspace" }],
         },
       },
     } as OpenClawConfig;
@@ -645,6 +666,383 @@ describe("QmdMemoryManager", () => {
     expect(updateCalls).toStrictEqual([]);
 
     await manager?.close();
+  });
+
+  describe("ensureWatcher native watch", () => {
+    it("uses native recursive fs.watch for glob-pattern collections on darwin", async () => {
+      setQmdNativeWatchFactory(
+        nativeWatchMock as unknown as typeof import("node:fs").watch,
+      );
+      cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: {
+                path: path.join(workspaceDir, "index.sqlite"),
+                vector: { enabled: false },
+              },
+              sync: {
+                watch: true,
+                watchDebounceMs: 25,
+                onSessionStart: false,
+                onSearch: false,
+              },
+            },
+          },
+          list: [{ id: agentId, default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 0, onBoot: false },
+            paths: [
+              { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            ],
+          },
+        },
+      } as OpenClawConfig;
+
+      const { manager } = await createManager({ mode: "full" });
+
+      // Glob-pattern collections should use native watch, not chokidar.
+      expect(nativeWatchMock).toHaveBeenCalledWith(
+        workspaceDir,
+        { recursive: true },
+        expect.any(Function),
+      );
+      expect(watchMock).not.toHaveBeenCalled();
+
+      await manager.close();
+    });
+
+    it("uses chokidar for non-glob collection patterns", async () => {
+      setQmdNativeWatchFactory(
+        nativeWatchMock as unknown as typeof import("node:fs").watch,
+      );
+      cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: {
+                path: path.join(workspaceDir, "index.sqlite"),
+                vector: { enabled: false },
+              },
+              sync: {
+                watch: true,
+                watchDebounceMs: 25,
+                onSessionStart: false,
+                onSearch: false,
+              },
+            },
+          },
+          list: [{ id: agentId, default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 0, onBoot: false },
+            paths: [
+              { path: workspaceDir, pattern: "MEMORY.md", name: "root-md" },
+            ],
+          },
+        },
+      } as OpenClawConfig;
+
+      const { manager } = await createManager({ mode: "full" });
+
+      // Non-glob patterns should use chokidar, not native watch.
+      expect(watchMock).toHaveBeenCalledTimes(1);
+      expect(nativeWatchMock).not.toHaveBeenCalled();
+
+      await manager.close();
+    });
+
+    it("uses native watch for glob dirs and chokidar for non-glob files in mixed setup", async () => {
+      setQmdNativeWatchFactory(
+        nativeWatchMock as unknown as typeof import("node:fs").watch,
+      );
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: {
+                path: path.join(workspaceDir, "index.sqlite"),
+                vector: { enabled: false },
+              },
+              sync: {
+                watch: true,
+                watchDebounceMs: 25,
+                onSessionStart: false,
+                onSearch: false,
+              },
+            },
+          },
+          list: [{ id: agentId, default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 0, onBoot: false },
+            paths: [
+              { path: workspaceDir, pattern: "MEMORY.md", name: "root-md" },
+              { path: memoryDir, pattern: "**/*.md", name: "memory-dir" },
+            ],
+          },
+        },
+      } as OpenClawConfig;
+
+      const { manager } = await createManager({ mode: "full" });
+
+      // MEMORY.md (non-glob) → chokidar
+      expect(watchMock).toHaveBeenCalledTimes(1);
+      // **/*.md (glob) → native
+      expect(nativeWatchMock).toHaveBeenCalledWith(
+        memoryDir,
+        { recursive: true },
+        expect.any(Function),
+      );
+
+      await manager.close();
+    });
+
+    it("falls back to chokidar when native watch creation fails", async () => {
+      // Make native watch throw to simulate unsupported filesystem.
+      nativeWatchMock.mockImplementation(() => {
+        throw new Error("ERR_FEATURE_UNAVAILABLE_ON_PLATFORM");
+      });
+      setQmdNativeWatchFactory(
+        nativeWatchMock as unknown as typeof import("node:fs").watch,
+      );
+      cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: {
+                path: path.join(workspaceDir, "index.sqlite"),
+                vector: { enabled: false },
+              },
+              sync: {
+                watch: true,
+                watchDebounceMs: 25,
+                onSessionStart: false,
+                onSearch: false,
+              },
+            },
+          },
+          list: [{ id: agentId, default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 0, onBoot: false },
+            paths: [
+              { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            ],
+          },
+        },
+      } as OpenClawConfig;
+
+      const { manager } = await createManager({ mode: "full" });
+
+      // Native watch was attempted but failed.
+      expect(nativeWatchMock).toHaveBeenCalled();
+      // Should fall back to chokidar.
+      expect(watchMock).toHaveBeenCalled();
+
+      await manager.close();
+    });
+
+    it("does not use native watch on Linux (falls back to chokidar)", async () => {
+      setQmdNativeWatchFactory(
+        nativeWatchMock as unknown as typeof import("node:fs").watch,
+      );
+      // Override process.platform to simulate Linux.
+      const desc = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        get: () => "linux",
+      });
+      try {
+        cfg = {
+          agents: {
+            defaults: {
+              workspace: workspaceDir,
+              memorySearch: {
+                provider: "openai",
+                model: "mock-embed",
+                store: {
+                  path: path.join(workspaceDir, "index.sqlite"),
+                  vector: { enabled: false },
+                },
+                sync: {
+                  watch: true,
+                  watchDebounceMs: 25,
+                  onSessionStart: false,
+                  onSearch: false,
+                },
+              },
+            },
+            list: [{ id: agentId, default: true, workspace: workspaceDir }],
+          },
+          memory: {
+            backend: "qmd",
+            qmd: {
+              includeDefaultMemory: false,
+              update: { interval: "0s", debounceMs: 0, onBoot: false },
+              paths: [
+                { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+              ],
+            },
+          },
+        } as OpenClawConfig;
+
+        const { manager } = await createManager({ mode: "full" });
+
+        // Linux should skip native watch and use chokidar.
+        expect(nativeWatchMock).not.toHaveBeenCalled();
+        expect(watchMock).toHaveBeenCalled();
+
+        await manager.close();
+      } finally {
+        if (desc) {
+          Object.defineProperty(process, "platform", desc);
+        }
+      }
+    });
+
+    it("closes native watchers on manager close", async () => {
+      const closeSpy = vi.fn(() => undefined);
+      const watcher = new EventEmitter();
+      Object.assign(watcher, { close: closeSpy });
+      nativeWatchMock.mockReturnValue(watcher);
+      setQmdNativeWatchFactory(
+        nativeWatchMock as unknown as typeof import("node:fs").watch,
+      );
+      cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: {
+                path: path.join(workspaceDir, "index.sqlite"),
+                vector: { enabled: false },
+              },
+              sync: {
+                watch: true,
+                watchDebounceMs: 25,
+                onSessionStart: false,
+                onSearch: false,
+              },
+            },
+          },
+          list: [{ id: agentId, default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 0, onBoot: false },
+            paths: [
+              { path: workspaceDir, pattern: "**/*.md", name: "workspace" },
+            ],
+          },
+        },
+      } as OpenClawConfig;
+
+      const { manager } = await createManager({ mode: "full" });
+      expect(nativeWatchMock).toHaveBeenCalled();
+
+      await manager.close();
+      // Native watchers should be closed on manager close.
+      expect(closeSpy).toHaveBeenCalled();
+    });
+
+    it("preserves watch sync reactivity through native watcher events", async () => {
+      vi.useFakeTimers();
+      const watcher = new EventEmitter();
+      Object.assign(watcher, { close: vi.fn(() => undefined) });
+      nativeWatchMock.mockReturnValue(watcher);
+      setQmdNativeWatchFactory(
+        nativeWatchMock as unknown as typeof import("node:fs").watch,
+      );
+      const memoryDir = path.join(workspaceDir, "memory");
+      await fs.mkdir(memoryDir, { recursive: true });
+      const notesPath = path.join(memoryDir, "notes.md");
+      await fs.writeFile(notesPath, "hello");
+      const initialStats = await fs.stat(notesPath);
+
+      cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+            memorySearch: {
+              provider: "openai",
+              model: "mock-embed",
+              store: {
+                path: path.join(workspaceDir, "index.sqlite"),
+                vector: { enabled: false },
+              },
+              sync: {
+                watch: true,
+                watchDebounceMs: 25,
+                onSessionStart: false,
+                onSearch: false,
+              },
+            },
+          },
+          list: [{ id: agentId, default: true, workspace: workspaceDir }],
+        },
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 0, onBoot: false },
+            paths: [
+              { path: memoryDir, pattern: "**/*.md", name: "memory-dir" },
+            ],
+          },
+        },
+      } as OpenClawConfig;
+
+      const { manager } = await createManager({ mode: "full" });
+      expect(nativeWatchMock).toHaveBeenCalledWith(
+        memoryDir,
+        { recursive: true },
+        expect.any(Function),
+      );
+
+      // Emit a change event through the native watcher.
+      watcher.emit("change", "notes.md");
+      expect(manager.status().dirty).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(25);
+      const updateCalls = spawnMock.mock.calls.filter(
+        (call) => call[1]?.[0] === "update",
+      );
+      expect(updateCalls).toHaveLength(1);
+
+      await manager.close();
+    });
   });
 
   it("can be configured to block startup on boot update", async () => {
