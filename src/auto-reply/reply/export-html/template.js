@@ -1044,7 +1044,7 @@
       if (!result) {
         return "";
       }
-      const textBlocks = result.content.filter((c) => c.type === "text");
+      const textBlocks = (Array.isArray(result.content) ? result.content : []).filter((c) => c.type === "text");
       return textBlocks.map((c) => c.text).join("\n");
     };
 
@@ -1052,7 +1052,7 @@
       if (!result) {
         return [];
       }
-      return result.content.filter((c) => c.type === "image");
+      return (Array.isArray(result.content) ? result.content : []).filter((c) => c.type === "image");
     };
 
     const renderResultImages = () => {
@@ -1357,8 +1357,9 @@
 
       if (msg.role === "assistant") {
         let html = `<div class="assistant-message" id="${entryId}">${copyBtnHtml}${tsHtml}`;
+        const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
 
-        for (const block of msg.content) {
+        for (const block of contentBlocks) {
           if (block.type === "text" && block.text.trim()) {
             html += `<div class="assistant-text markdown-content">${safeMarkedParse(block.text)}</div>`;
           } else if (block.type === "thinking" && block.thinking.trim()) {
@@ -1369,7 +1370,7 @@
           }
         }
 
-        for (const block of msg.content) {
+        for (const block of contentBlocks) {
           if (block.type === "toolCall") {
             html += renderToolCall(block);
           }
@@ -1474,7 +1475,7 @@
               cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
             }
           }
-          toolCalls += msg.content.filter((c) => c.type === "toolCall").length;
+          toolCalls += (Array.isArray(msg.content) ? msg.content : []).filter((c) => c.type === "toolCall").length;
         }
         if (msg.role === "toolResult") {
           toolResults++;
