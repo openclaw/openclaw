@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   shortenHomePath: vi.fn((p: string) => p),
-  checkGatewayHealth: vi.fn(),
+  callGateway: vi.fn(),
   formatCliCommand: vi.fn((cmd: string) => cmd),
 }));
 
@@ -103,8 +103,13 @@ vi.mock("../utils.js", () => ({
     typeof value === "object" && value !== null && !Array.isArray(value),
 }));
 
-vi.mock("../commands/doctor-gateway-health.js", () => ({
-  checkGatewayHealth: mocks.checkGatewayHealth,
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+  buildGatewayConnectionDetails: vi.fn(() => ({
+    message: "Gateway connection",
+    url: "ws://127.0.0.1:18789",
+    urlSource: "config",
+  })),
 }));
 
 vi.mock("../cli/command-format.js", () => ({
@@ -187,8 +192,8 @@ describe("doctor health contributions", () => {
       config: {},
       issues: [],
     });
-    mocks.checkGatewayHealth.mockReset();
-    mocks.checkGatewayHealth.mockResolvedValue({ healthOk: false });
+    mocks.callGateway.mockReset();
+    mocks.callGateway.mockResolvedValue({ ok: true });
   });
 
   afterEach(() => {
@@ -354,12 +359,11 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("suppresses unresolved SecretRef token warning when the gateway is already healthy", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-auth");
-    mocks.checkGatewayHealth.mockResolvedValue({ healthOk: true });
     const ctx = {
       cfg: {
         gateway: {
@@ -388,10 +392,11 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    expect(mocks.checkGatewayHealth).toHaveBeenCalledWith({
-      runtime: ctx.runtime,
-      cfg: ctx.cfg,
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "status",
+      params: { includeChannelSummary: false },
       timeoutMs: 3000,
+      config: ctx.cfg,
     });
     expect(mocks.note).not.toHaveBeenCalledWith(
       expect.stringContaining("Gateway token SecretRef could not be resolved"),
