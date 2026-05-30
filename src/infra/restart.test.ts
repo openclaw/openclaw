@@ -3,10 +3,16 @@ import { captureFullEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+const execFileMock = vi.hoisted(() =>
+  Object.assign(vi.fn(), {
+    [Symbol.for("nodejs.util.promisify.custom")]: vi.fn(),
+  }),
+);
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
+  execFile: execFileMock,
   spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
 }));
 
@@ -28,6 +34,7 @@ let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
 
 beforeEach(() => {
+  execFileMock.mockReset();
   spawnSyncMock.mockReset();
   resolveLsofCommandSyncMock.mockReset();
   resolveGatewayPortMock.mockReset();

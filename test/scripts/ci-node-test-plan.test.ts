@@ -577,7 +577,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
     const expectedCommandFiles = listTestFiles("src/commands")
-      .filter((file) => !commandsLightTestFiles.includes(file))
+      .filter((file) => !commandsLightTestFiles.includes(file) && !file.endsWith(".e2e.test.ts"))
       .toSorted((a, b) => a.localeCompare(b));
     expect(commandShardFiles).toEqual(expectedCommandFiles);
     expect(new Set(commandShardFiles).size).toBe(commandShardFiles.length);
