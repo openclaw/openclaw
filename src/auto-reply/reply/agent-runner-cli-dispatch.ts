@@ -96,7 +96,11 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
   const agentMeta = params.result.meta.agentMeta;
   const returnedSessionId = normalizeOptionalString(agentMeta?.cliSessionBinding?.sessionId);
   const shouldClearStoredSession = agentMeta?.clearCliSessionBinding === true;
-  if (agentMeta === undefined || (existingSessionId && returnedSessionId === existingSessionId)) {
+  if (
+    agentMeta === undefined ||
+    (!shouldClearStoredSession && existingSessionId === undefined) ||
+    returnedSessionId === existingSessionId
+  ) {
     return params.result;
   }
   if (returnedSessionId || shouldClearStoredSession) {
