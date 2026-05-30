@@ -7,7 +7,6 @@ describe("harness message timestamps", () => {
       "custom message timestamp must be a valid timestamp",
     );
   });
-
   it("normalizes persisted compaction summary timestamp strings", () => {
     const timestamp = "2026-05-30T17:00:00.000Z";
     const persistedMessages: Parameters<typeof convertToLlm>[0] = [

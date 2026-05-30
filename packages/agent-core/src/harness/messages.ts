@@ -28,6 +28,15 @@ export function asAgentMessage(message: HarnessMessage): AgentMessage {
   return message as AgentMessage;
 }
 
+function normalizeCompactionSummaryTimestamp(timestamp: number | string): number {
+  if (typeof timestamp === "number") {
+    return timestamp;
+  }
+  const parsed = parseSessionTimestampMs(timestamp);
+  // Corrupt persisted rows should not abort context conversion; session order is already preserved.
+  return parsed ?? 0;
+}
+
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
 <summary>
@@ -102,15 +111,6 @@ export function createCustomMessage(
     details,
     timestamp: requireSessionTimestampMs(timestamp, "custom message timestamp"),
   };
-}
-
-function normalizeCompactionSummaryTimestamp(timestamp: number | string): number {
-  if (typeof timestamp === "number") {
-    return timestamp;
-  }
-  const parsed = parseSessionTimestampMs(timestamp);
-  // Corrupt persisted rows should not abort context conversion; session order is already preserved.
-  return parsed ?? 0;
 }
 
 export function convertToLlm(messages: AgentMessage[]): Message[] {
