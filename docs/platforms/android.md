@@ -246,7 +246,7 @@ and whether the user has set OpenClaw as the default assistant app.
 
 ## Notification forwarding
 
-Android can forward device notifications to the gateway as events. Forwarding is configured **on the device** in the OpenClaw Android app settings (stored locally in the app's secure preferences). There are no gateway `openclaw.json` keys for it.
+Android can forward device notifications to the gateway as events. Forwarding is configured **on the device** in the OpenClaw Android app settings (stored locally in the app's preferences). There are no gateway `openclaw.json` keys for it.
 
 Available controls:
 
