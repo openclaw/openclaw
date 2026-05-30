@@ -266,6 +266,66 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(payload).toMatchObject({ prompt_cache_key: "stable-cache-key" });
   });
 
+  it("omits tool controls when no tools are available", async () => {
+    let payload: Record<string, unknown> | undefined;
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      transport: "sse",
+      onPayload: (nextPayload) => {
+        payload = nextPayload as Record<string, unknown>;
+        throw new Error("stop after payload capture");
+      },
+    });
+
+    await stream.result();
+
+    expect(payload).toBeDefined();
+    expect(payload).not.toHaveProperty("tools");
+    expect(payload).not.toHaveProperty("tool_choice");
+    expect(payload).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  it("keeps tool controls when tools are available", async () => {
+    let payload: Record<string, unknown> | undefined;
+
+    const stream = streamOpenAICodexResponses(
+      model,
+      {
+        ...context,
+        tools: [
+          {
+            name: "read",
+            description: "Read a file",
+            parameters: { type: "object", properties: { path: { type: "string" } } },
+          },
+        ],
+      },
+      {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "acct-1",
+          },
+        }),
+        transport: "sse",
+        onPayload: (nextPayload) => {
+          payload = nextPayload as Record<string, unknown>;
+          throw new Error("stop after payload capture");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(payload?.tools).toHaveLength(1);
+    expect(payload?.tool_choice).toBe("auto");
+    expect(payload?.parallel_tool_calls).toBe(true);
+  });
+
   it.each(["1.5", "0x10"])(
     "ignores invalid Retry-After header delay values: %s",
     async (retryAfter) => {

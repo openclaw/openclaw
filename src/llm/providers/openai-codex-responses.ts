@@ -491,8 +491,6 @@ function buildRequestBody(
       options?.cacheRetention === "none"
         ? undefined
         : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-    tool_choice: "auto",
-    parallel_tool_calls: true,
   };
 
   if (options?.temperature !== undefined) {
@@ -505,6 +503,8 @@ function buildRequestBody(
 
   if (context.tools && context.tools.length > 0) {
     body.tools = convertResponsesTools(context.tools, { strict: null });
+    body.tool_choice = "auto";
+    body.parallel_tool_calls = true;
   }
 
   if (options?.reasoningEffort !== undefined) {
