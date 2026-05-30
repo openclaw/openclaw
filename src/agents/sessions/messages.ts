@@ -1,10 +1,3 @@
-import type {
-  BashExecutionMessage,
-  BranchSummaryMessage,
-  CompactionSummaryMessage,
-  CustomMessage,
-} from "../../../packages/agent-core/src/harness/messages.js";
-
 export {
   bashExecutionToText,
   BRANCH_SUMMARY_PREFIX,
@@ -23,12 +16,3 @@ export type {
   CompactionSummaryMessage,
   CustomMessage,
 } from "../../../packages/agent-core/src/harness/messages.js";
-
-declare module "openclaw/plugin-sdk/agent-core" {
-  interface CustomAgentMessages {
-    bashExecution: BashExecutionMessage;
-    custom: CustomMessage;
-    branchSummary: BranchSummaryMessage;
-    compactionSummary: CompactionSummaryMessage;
-  }
-}

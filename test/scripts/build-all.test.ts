@@ -277,6 +277,28 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
+  it("skips generated static plugin assets for minimal backend-only profiles", () => {
+    for (const profile of ["gatewayWatch", "cliStartup"]) {
+      const runtimePostbuild = resolveBuildAllSteps(profile).find(
+        (step) => step.label === "runtime-postbuild",
+      );
+      if (!runtimePostbuild) {
+        throw new Error(`Missing ${profile} runtime-postbuild step`);
+      }
+
+      expect(BUILD_ALL_PROFILE_STEP_ENV[profile]["runtime-postbuild"]).toEqual({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+      });
+      expect(
+        resolveBuildAllStep(runtimePostbuild, {
+          env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },
+        }).options.env,
+      ).toMatchObject({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+      });
+    }
+  });
+
   it("writes the runtime postbuild stamp after the build stamp", () => {
     const labels = resolveBuildAllSteps("full").map((step) => step.label);
     expect(labels).toContain("runtime-postbuild");

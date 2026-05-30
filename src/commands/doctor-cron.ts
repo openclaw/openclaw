@@ -4,7 +4,11 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { legacyCronRunLogFilesExist, migrateLegacyCronRunLogsToSqlite } from "../cron/run-log.js";
 import {
+  archiveLegacyCronStoreForMigration,
+  legacyCronStoreFilesExist,
+  loadLegacyCronStoreForMigration,
   loadCronQuarantineFile,
   resolveCronQuarantinePath,
   resolveCronStorePath,
@@ -38,6 +42,12 @@ const CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT = 3;
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function formatRunLogMigrationNote(importedFiles: number): string {
+  return importedFiles > 0
+    ? ` Imported ${pluralize(importedFiles, "legacy cron run log")} into SQLite.`
+    : "";
 }
 
 function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): string[] {
@@ -134,6 +144,35 @@ function getRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
+  return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
+}
+
+function mergeLegacyCronJobs(params: {
+  currentJobs: Array<Record<string, unknown>>;
+  legacyJobs: Array<Record<string, unknown>>;
+}): { jobs: Array<Record<string, unknown>>; importedCount: number } {
+  const merged = [...params.currentJobs];
+  const currentKeys = new Set(
+    params.currentJobs.map((job) => cronJobMigrationKey(job)).filter((key) => key !== undefined),
+  );
+  let importedCount = 0;
+
+  for (const legacyJob of params.legacyJobs) {
+    const key = cronJobMigrationKey(legacyJob);
+    if (key && currentKeys.has(key)) {
+      continue;
+    }
+    if (key) {
+      currentKeys.add(key);
+    }
+    merged.push(legacyJob);
+    importedCount += 1;
+  }
+
+  return { jobs: merged, importedCount };
 }
 
 function formatProviderCounts(counts: Map<string, number>): string {
@@ -343,8 +382,22 @@ export async function maybeRepairLegacyCronStore(params: {
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
   const quarantinePath = resolveCronQuarantinePath(storePath);
   let store: Awaited<ReturnType<typeof loadCronStore>>;
+  let legacyStoreDetected = false;
+  let legacyRunLogDetected = false;
+  let legacyImportCount = 0;
   try {
+    legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
+    legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
     store = await loadCronStore(storePath);
+    if (legacyStoreDetected) {
+      const legacyStore = (await loadLegacyCronStoreForMigration(storePath)).store;
+      const merged = mergeLegacyCronJobs({
+        currentJobs: store.jobs as unknown as Array<Record<string, unknown>>,
+        legacyJobs: legacyStore.jobs as unknown as Array<Record<string, unknown>>,
+      });
+      legacyImportCount = merged.importedCount;
+      store = { version: 1, jobs: merged.jobs as unknown as CronJob[] };
+    }
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     note(
@@ -381,6 +434,49 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   if (rawJobs.length === 0) {
+    if (!legacyStoreDetected && !legacyRunLogDetected) {
+      return;
+    }
+    const previewLines: string[] = [];
+    if (legacyStoreDetected) {
+      previewLines.push("- legacy JSON cron store will be archived after SQLite migration");
+    }
+    if (legacyRunLogDetected) {
+      previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+    }
+    note(
+      [
+        `Legacy cron storage detected at ${shortenHomePath(storePath)}.`,
+        ...previewLines,
+        `Repair with ${formatCliCommand("openclaw doctor --fix")} to finish the migration.`,
+      ].join("\n"),
+      "Cron",
+    );
+    const shouldRepair = await params.prompter.confirm({
+      message: "Repair legacy cron jobs now?",
+      initialValue: true,
+    });
+    if (!shouldRepair) {
+      return;
+    }
+    if (legacyStoreDetected) {
+      await saveCronStore(storePath, { version: 1, jobs: [] });
+      await archiveLegacyCronStoreForMigration(storePath);
+    }
+    const runLogMigration = legacyRunLogDetected
+      ? await migrateLegacyCronRunLogsToSqlite(storePath)
+      : { importedFiles: 0 };
+    if (legacyStoreDetected) {
+      note(
+        `Cron store migrated to SQLite at ${shortenHomePath(storePath)}.${formatRunLogMigrationNote(runLogMigration.importedFiles)}`,
+        "Doctor changes",
+      );
+    } else {
+      note(
+        `Cron run logs migrated to SQLite at ${shortenHomePath(storePath)}.${formatRunLogMigrationNote(runLogMigration.importedFiles)}`,
+        "Doctor changes",
+      );
+    }
     return;
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
@@ -390,6 +486,16 @@ export async function maybeRepairLegacyCronStore(params: {
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
   const previewLines = formatLegacyIssuePreview(normalized.issues);
+  if (legacyStoreDetected) {
+    previewLines.unshift(
+      legacyImportCount > 0
+        ? `- ${pluralize(legacyImportCount, "legacy JSON cron job")} will be imported into SQLite`
+        : "- legacy JSON cron store will be archived after SQLite migration",
+    );
+  }
+  if (legacyRunLogDetected) {
+    previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+  }
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
@@ -400,7 +506,7 @@ export async function maybeRepairLegacyCronStore(params: {
       `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
     );
   }
-  if (previewLines.length === 0) {
+  if (previewLines.length === 0 && !legacyStoreDetected) {
     return;
   }
 
@@ -426,7 +532,12 @@ export async function maybeRepairLegacyCronStore(params: {
     legacyWebhook,
   });
   const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
-  const changed = normalized.mutated || notifyMigration.changed || dreamingMigration.changed;
+  const changed =
+    legacyStoreDetected ||
+    legacyRunLogDetected ||
+    normalized.mutated ||
+    notifyMigration.changed ||
+    dreamingMigration.changed;
   if (!changed && notifyMigration.warnings.length === 0) {
     return;
   }
@@ -436,7 +547,23 @@ export async function maybeRepairLegacyCronStore(params: {
       version: 1,
       jobs: rawJobs as unknown as CronJob[],
     });
-    note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
+    const runLogMigration = legacyRunLogDetected
+      ? await migrateLegacyCronRunLogsToSqlite(storePath)
+      : { importedFiles: 0 };
+    if (legacyStoreDetected) {
+      await archiveLegacyCronStoreForMigration(storePath);
+      note(
+        `Cron store migrated to SQLite at ${shortenHomePath(storePath)}.${formatRunLogMigrationNote(runLogMigration.importedFiles)}`,
+        "Doctor changes",
+      );
+    } else if (legacyRunLogDetected) {
+      note(
+        `Cron run logs migrated to SQLite at ${shortenHomePath(storePath)}.${formatRunLogMigrationNote(runLogMigration.importedFiles)}`,
+        "Doctor changes",
+      );
+    } else {
+      note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
+    }
     if (dreamingMigration.rewrittenCount > 0) {
       note(
         `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,

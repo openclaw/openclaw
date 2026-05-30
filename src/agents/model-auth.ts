@@ -63,7 +63,11 @@ export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 export type RuntimeProviderAuthLookup = {
-  envApiKey: Pick<EnvApiKeyLookupOptions, "aliasMap" | "candidateMap" | "authEvidenceMap">;
+  envApiKey: Pick<
+    EnvApiKeyLookupOptions,
+    "aliasMap" | "candidateMap" | "authEvidenceMap" | "skipSetupProviderFallback"
+  >;
+  setupProviderFallbackRefs?: readonly string[];
   syntheticAuthProviderRefs?: readonly string[];
   syntheticAuthProviderRefsComplete?: boolean;
 };
@@ -157,11 +161,49 @@ export function createRuntimeProviderAuthLookup(params: {
       aliasMap: authLookupMaps.aliasMap,
       candidateMap: authLookupMaps.envCandidateMap,
       authEvidenceMap: authLookupMaps.authEvidenceMap,
+      skipSetupProviderFallback: true,
     },
+    setupProviderFallbackRefs: authLookupMaps.setupProviderFallbackRefs,
     syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
       ? syntheticAuthProviderRefs.refs
       : undefined,
     syntheticAuthProviderRefsComplete: syntheticAuthProviderRefs?.complete,
+  };
+}
+
+function runtimeLookupAllowsSetupProviderFallback(params: {
+  provider: string;
+  runtimeLookup?: RuntimeProviderAuthLookup;
+}): boolean {
+  const refs = params.runtimeLookup?.setupProviderFallbackRefs;
+  if (!refs?.length) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const aliasTarget = params.runtimeLookup?.envApiKey.aliasMap?.[normalizedProvider];
+  return refs.includes(normalizedProvider) || (aliasTarget ? refs.includes(aliasTarget) : false);
+}
+
+function resolveRuntimeEnvApiKeyLookupOptions(params: {
+  provider: string;
+  runtimeLookup?: RuntimeProviderAuthLookup;
+}):
+  | Pick<
+      EnvApiKeyLookupOptions,
+      "aliasMap" | "candidateMap" | "authEvidenceMap" | "skipSetupProviderFallback"
+    >
+  | undefined {
+  const envApiKey = params.runtimeLookup?.envApiKey;
+  if (!envApiKey) {
+    return undefined;
+  }
+  const skipSetupProviderFallback =
+    envApiKey.skipSetupProviderFallback === true
+      ? !runtimeLookupAllowsSetupProviderFallback(params)
+      : envApiKey.skipSetupProviderFallback;
+  return {
+    ...envApiKey,
+    ...(skipSetupProviderFallback !== undefined ? { skipSetupProviderFallback } : {}),
   };
 }
 
@@ -491,7 +533,10 @@ export function hasRuntimeAvailableProviderAuth(params: {
   const envAuth = resolveEnvApiKey(provider, params.env, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
-    ...params.runtimeLookup?.envApiKey,
+    ...resolveRuntimeEnvApiKeyLookupOptions({
+      provider,
+      runtimeLookup: params.runtimeLookup,
+    }),
   });
   if (
     envAuth &&

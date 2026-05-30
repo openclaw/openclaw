@@ -1,3 +1,5 @@
+import { vi } from "vitest";
+
 type MockFactory<TModule extends object> =
   | Partial<TModule>
   | ((actual: TModule) => Partial<TModule>);
@@ -5,7 +7,8 @@ type MockFactory<TModule extends object> =
 let childProcessModulePromise: Promise<typeof import("node:child_process")> | null = null;
 
 const loadChildProcessModule = async () => {
-  childProcessModulePromise ??= import("node:child_process");
+  childProcessModulePromise ??=
+    vi.importActual<typeof import("node:child_process")>("node:child_process");
   return await childProcessModulePromise;
 };
 

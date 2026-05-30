@@ -172,7 +172,6 @@ export type CronServiceState = {
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
-  storeFileMtimeMs: number | null;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
@@ -188,7 +187,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,
-    storeFileMtimeMs: null,
   };
 }
 

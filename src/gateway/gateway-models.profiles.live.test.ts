@@ -1271,6 +1271,17 @@ function isGoogleModelNotFoundText(text: string): boolean {
   return false;
 }
 
+function isAnthropicModelUnavailableDrift(raw: string): boolean {
+  const msg = raw.trim();
+  if (!msg) {
+    return false;
+  }
+  if (isModelNotFoundErrorMessage(msg)) {
+    return true;
+  }
+  return /\b404 status code\b/i.test(msg) && /\bno body\b/i.test(msg);
+}
+
 function isGoogleishProvider(provider: string): boolean {
   return provider === "google" || provider.startsWith("google-");
 }
@@ -1415,6 +1426,17 @@ describe("shouldSkipEmptyResponseForLiveModel", () => {
       expect(shouldSkipEmptyResponseForLiveModel({ provider, allowNotFoundSkip })).toBe(expected);
     },
   );
+});
+
+describe("isAnthropicModelUnavailableDrift", () => {
+  it("treats Anthropic bare 404 live probe failures as model drift", () => {
+    expect(
+      isAnthropicModelUnavailableDrift(
+        "agent.wait error for runId=run-1 (error=FailoverError: 404 status code (no body))",
+      ),
+    ).toBe(true);
+    expect(isAnthropicModelUnavailableDrift("Error: 503 status code (no body)")).toBe(false);
+  });
 });
 
 describe("isEmptyStreamText", () => {
@@ -1997,7 +2019,16 @@ async function requestGatewayAgentText(params: {
   );
   const first = await Promise.race([transcriptPromise, agentWaitPromise]);
   if (first.kind === "transcript") {
-    void agentWaitPromise.catch(() => undefined);
+    // Do not start the next live probe while this run is still cleaning up.
+    // The transcript can be visible before the embedded attempt reacquires and
+    // releases its session lock, and back-to-back probes on the same session
+    // can otherwise trip the takeover fence.
+    const waitResult = await agentWaitPromise;
+    if (waitResult.kind === "agent-error") {
+      throw waitResult.error instanceof Error
+        ? waitResult.error
+        : new Error(String(waitResult.error));
+    }
     return first.text;
   }
   void transcriptPromise.catch(() => undefined);
@@ -3079,6 +3110,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (model.provider === "anthropic" && isEmptyStreamText(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
+            break;
+          }
+          if (model.provider === "anthropic" && isAnthropicModelUnavailableDrift(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (anthropic model unavailable)`);
             break;
           }
           if (

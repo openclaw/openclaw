@@ -10,7 +10,7 @@ import {
   POSIX_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../infra/shell-wrapper-resolution.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
+import { asDateTimestampMs, resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString as parseString,
@@ -108,7 +108,11 @@ function parseDecision(value: unknown): ParsedDecision {
 }
 
 function parseExpiresAtMs(value: unknown): number | undefined {
-  return asFiniteNumber(value);
+  return asDateTimestampMs(value);
+}
+
+function resolveDefaultExecApprovalExpiresAtMs(): number {
+  return resolveExpiresAtMsFromDurationMs(DEFAULT_APPROVAL_TIMEOUT_MS) ?? 0;
 }
 
 export type ExecApprovalRegistration = {
@@ -131,7 +135,7 @@ export async function registerExecApprovalRequest(
   const decision = parseDecision(registrationResult);
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
-    parseExpiresAtMs(registrationResult?.expiresAtMs) ?? Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+    parseExpiresAtMs(registrationResult?.expiresAtMs) ?? resolveDefaultExecApprovalExpiresAtMs();
   if (decision.present) {
     return { id, expiresAtMs, finalDecision: decision.value };
   }

@@ -287,6 +287,39 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     });
 
   sessionsCmd
+    .command("tail")
+    .description("Tail human-readable session trajectory progress")
+    .option("--session-key <key>", "Session key to tail (default: active sessions or latest)")
+    .option("--tail <count>", "Number of existing trajectory events to show", "80")
+    .option("--follow", "Continue following for new trajectory events", false)
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--all-agents", "Aggregate sessions across all configured agents", false)
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            store?: string;
+            agent?: string;
+            allAgents?: boolean;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsTailCommand } = await import("../../commands/sessions-tail.js");
+        await sessionsTailCommand(
+          {
+            sessionKey: opts.sessionKey as string | undefined,
+            store: (opts.store as string | undefined) ?? parentOpts?.store,
+            agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+            follow: Boolean(opts.follow),
+            tail: opts.tail as string | undefined,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  sessionsCmd
     .command("export-trajectory")
     .description("Export a redacted trajectory bundle for a stored session")
     .option("--session-key <key>", "Session key to export")

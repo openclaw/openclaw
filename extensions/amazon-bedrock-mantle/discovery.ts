@@ -179,9 +179,11 @@ export async function resolveMantleRuntimeBearerToken(params: {
     return undefined;
   }
   const refreshed = getCachedIamTokenEntry(region, now);
+  const expiresAt =
+    refreshed?.expiresAt ?? resolveExpiresAtMsFromDurationMs(IAM_TOKEN_TTL_MS, { nowMs: now });
   return {
     apiKey: refreshed?.token ?? token,
-    expiresAt: refreshed?.expiresAt ?? now + IAM_TOKEN_TTL_MS,
+    ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
 /** Reset the IAM token cache (for testing). */

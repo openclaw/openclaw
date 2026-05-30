@@ -333,6 +333,42 @@ setInterval(() => {}, 1000);
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("records resource samples for command process trees", async () => {
+    const samples: Array<{
+      aggregateRssMiB?: number;
+      elapsedMs?: number;
+      label?: string;
+      processId?: number;
+      rssMiB?: number;
+    }> = [];
+    const seenPids: number[] = [];
+
+    const result = await runCommand(process.execPath, ["-e", "setTimeout(() => {}, 50);"], {
+      resourceLabel: "plugins install",
+      resourceSampleIntervalMs: 1,
+      resourceSamples: samples,
+      sampleProcessImpl: async (pid: number) => {
+        seenPids.push(pid);
+        return {
+          aggregateRssMiB: 640,
+          cpuPercent: 12,
+          processId: pid + 1,
+          rssMiB: 512,
+        };
+      },
+    });
+
+    expect(result.stdout).toBe("");
+    expect(seenPids.length).toBeGreaterThan(0);
+    expect(samples[0]).toMatchObject({
+      aggregateRssMiB: 640,
+      label: "plugins install",
+      processId: seenPids[0]! + 1,
+      rssMiB: 512,
+    });
+    expect(samples[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
 });
 
 describe("kitchen-sink RPC caller loading", () => {

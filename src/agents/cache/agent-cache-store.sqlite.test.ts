@@ -2,9 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
+  openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -143,6 +145,124 @@ describe("SQLite agent cache store", () => {
         agentId: "main",
         scope: "other",
         currentTime: 2000,
+      }),
+    ).toBe(1);
+  });
+
+  it("rejects cache expiries outside the valid Date range", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+
+    expect(() =>
+      writeSqliteAgentCacheEntry({
+        env,
+        agentId: "main",
+        scope: "runtime",
+        key: "explicit-overflow",
+        value: "bad",
+        expiresAt: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toThrow("SQLite agent cache expiresAt must be a valid Date timestamp.");
+    expect(() =>
+      writeSqliteAgentCacheEntry({
+        env,
+        agentId: "main",
+        scope: "runtime",
+        key: "ttl-overflow",
+        value: "bad",
+        ttlMs: 1000,
+        now: () => MAX_DATE_TIMESTAMP_MS,
+      }),
+    ).toThrow("SQLite agent cache ttlMs must resolve to a valid Date timestamp.");
+  });
+
+  it("preserves explicit null cache expiry as non-expiring", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+
+    expect(
+      writeSqliteAgentCacheEntry({
+        env,
+        agentId: "main",
+        scope: "runtime",
+        key: "no-expiry",
+        value: "ok",
+        expiresAt: null,
+        now: () => 1000,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        key: "no-expiry",
+        value: "ok",
+        expiresAt: null,
+        updatedAt: 1000,
+      }),
+    );
+    expect(
+      readSqliteAgentCacheEntry({
+        env,
+        agentId: "main",
+        scope: "runtime",
+        key: "no-expiry",
+        now: () => MAX_DATE_TIMESTAMP_MS,
+      }),
+    ).toEqual(expect.objectContaining({ key: "no-expiry", expiresAt: null }));
+  });
+
+  it("hides invalid persisted expiries and ignores invalid clear clocks", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+
+    writeSqliteAgentCacheEntry({
+      env,
+      agentId: "main",
+      scope: "runtime",
+      key: "valid",
+      value: "ok",
+      ttlMs: 1000,
+      now: () => 1000,
+    });
+    writeSqliteAgentCacheEntry({
+      env,
+      agentId: "main",
+      scope: "runtime",
+      key: "invalid",
+      value: "bad",
+      now: () => 1000,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db
+      .prepare("update cache_entries set expires_at = ? where scope = ? and key = ?")
+      .run(Number.MAX_SAFE_INTEGER, "runtime", "invalid");
+
+    expect(
+      readSqliteAgentCacheEntry({
+        env,
+        agentId: "main",
+        scope: "runtime",
+        key: "invalid",
+        now: () => 1500,
+      }),
+    ).toBeNull();
+    expect(
+      listSqliteAgentCacheEntries({
+        env,
+        agentId: "main",
+        scope: "runtime",
+        now: () => 1500,
+      }).map((entry) => entry.key),
+    ).toEqual(["valid"]);
+    expect(
+      clearExpiredSqliteAgentCacheEntries({
+        env,
+        agentId: "main",
+        scope: "runtime",
+        currentTime: Number.NaN,
+      }),
+    ).toBe(0);
+    expect(
+      clearExpiredSqliteAgentCacheEntries({
+        env,
+        agentId: "main",
+        scope: "runtime",
+        currentTime: 1500,
       }),
     ).toBe(1);
   });

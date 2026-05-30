@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { MAX_DATE_TIMESTAMP_MS, MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { VERSION } from "../version.js";
 
 const { fetchWithSsrFGuardMock, shouldUseEnvHttpProxyForUrlMock } = vi.hoisted(() => ({
@@ -88,6 +88,21 @@ describe("provider operation deadlines", () => {
         defaultTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
       }),
     ).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("keeps operation deadlines inside the Date timestamp range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: 1,
+    });
+
+    expect(deadline.deadlineAtMs).toBe(MAX_DATE_TIMESTAMP_MS);
+    expect(() => resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toThrow(
+      "video generation timed out after 1ms",
+    );
   });
 
   it("clamps per-call timeouts to the remaining operation deadline", () => {

@@ -467,6 +467,20 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(createTokenMock).not.toHaveBeenCalled();
   });
 
+  it("rejects browser session creation while the process clock is invalid", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    await expect(
+      provider.createBrowserSession?.({
+        providerConfig: {
+          apiKey: "gemini-key",
+        },
+      }),
+    ).rejects.toThrow("Google realtime browser session expiry is outside the supported Date range");
+    expect(createTokenMock).not.toHaveBeenCalled();
+  });
+
   it("can opt out of Google Live session resumption and context compression", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const bridge = provider.createBridge({

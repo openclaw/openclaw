@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const execFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
-  execFile: execFileMock,
+  execFile: Object.assign(execFileMock, {
+    [Symbol.for("nodejs.util.promisify.custom")]: vi.fn(),
+  }),
 }));
 
 const originalVitest = process.env.VITEST;

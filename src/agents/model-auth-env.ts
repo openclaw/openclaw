@@ -142,6 +142,8 @@ export function resolveEnvApiKey(
 
   const setupProvider = resolvePluginSetupProvider({
     provider: normalized,
+    config: options.config,
+    workspaceDir: options.workspaceDir,
     env,
   });
   if (setupProvider?.resolveConfigApiKey) {

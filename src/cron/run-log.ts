@@ -1,18 +1,25 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import type { Insertable, Selectable } from "kysely";
 import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
-import { appendRegularFile, isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";
-import { privateFileStore } from "../infra/private-file-store.js";
+import { isPathInside } from "../infra/fs-safe.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
-import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
+import { uniqueValues } from "../shared/string-normalization.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type {
   CronDeliveryStatus,
@@ -75,6 +82,11 @@ type ReadCronRunLogAllPageOptions = Omit<ReadCronRunLogPageOptions, "jobId"> & {
   jobNameById?: Record<string, string>;
 };
 
+type CronRunLogsTable = OpenClawStateKyselyDatabase["cron_run_logs"];
+type CronRunLogDatabase = Pick<OpenClawStateKyselyDatabase, "cron_run_logs">;
+type CronRunLogRow = Selectable<CronRunLogsTable>;
+type CronRunLogInsert = Insertable<CronRunLogsTable>;
+
 const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
   "auth",
   "auth_permanent",
@@ -91,6 +103,10 @@ const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
   "unclassified",
   "unknown",
 ]);
+
+const LEGACY_CRON_RUN_LOG_ARCHIVE_SUFFIX = ".migrated";
+type CronRunLogTarget = { storePath: string; jobId: string; strictJobId: boolean };
+const runLogTargetsByPath = new Map<string, CronRunLogTarget>();
 
 function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefined {
   return typeof value === "string" && CRON_FAILOVER_REASONS.has(value as FailoverReason)
@@ -118,14 +134,11 @@ export function resolveCronRunLogPath(params: { storePath: string; jobId: string
   if (!isPathInside(runsDir, resolvedPath)) {
     throw new Error("invalid cron run log job id");
   }
+  runLogTargetsByPath.set(resolvedPath, { storePath, jobId: safeJobId, strictJobId: true });
   return resolvedPath;
 }
 
 const writesByPath = new Map<string, Promise<void>>();
-
-async function setSecureFileMode(filePath: string): Promise<void> {
-  await fs.chmod(filePath, 0o600).catch(() => undefined);
-}
 
 export const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
 export const DEFAULT_CRON_RUN_LOG_KEEP_LINES = 2_000;
@@ -166,19 +179,212 @@ async function drainPendingWrite(filePath: string): Promise<void> {
   }
 }
 
-async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLines: number }) {
-  const stat = await fs.stat(filePath).catch(() => null);
-  if (!stat || stat.size <= opts.maxBytes) {
+function cronStoreKey(storePath: string): string {
+  return path.resolve(storePath);
+}
+
+function getCronRunLogKysely(db: DatabaseSync) {
+  return getNodeSqliteKysely<CronRunLogDatabase>(db);
+}
+
+function inferCronRunLogTarget(filePath: string, jobId?: string): CronRunLogTarget {
+  const resolved = path.resolve(filePath);
+  const known = runLogTargetsByPath.get(resolved);
+  if (known && (!jobId || known.jobId === jobId)) {
+    return known;
+  }
+  const inferredJobId = assertSafeCronRunLogJobId(jobId ?? path.basename(resolved, ".jsonl"));
+  const parentDir = path.dirname(resolved);
+  const isRunsDir = path.basename(parentDir) === "runs";
+  const storeDir = isRunsDir ? path.dirname(parentDir) : parentDir;
+  const storePath = path.resolve(storeDir, "jobs.json");
+  return { storePath, jobId: inferredJobId, strictJobId: isRunsDir };
+}
+
+function normalizeNumber(value: number | bigint | null): number | undefined {
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return typeof value === "number" ? value : undefined;
+}
+
+function booleanToInteger(value: boolean | undefined): number | null {
+  return typeof value === "boolean" ? (value ? 1 : 0) : null;
+}
+
+function integerToBoolean(value: number | bigint | null): boolean | undefined {
+  const normalized = normalizeNumber(value);
+  return normalized == null ? undefined : normalized !== 0;
+}
+
+function bindCronRunLogRow(params: {
+  storeKey: string;
+  seq: number;
+  entry: CronRunLogEntry;
+}): CronRunLogInsert {
+  const entry = params.entry;
+  return {
+    store_key: params.storeKey,
+    job_id: entry.jobId,
+    seq: params.seq,
+    ts: entry.ts,
+    status: entry.status ?? null,
+    error: entry.error ?? null,
+    summary: entry.summary ?? null,
+    diagnostics_summary: entry.diagnostics?.summary ?? null,
+    delivery_status: entry.deliveryStatus ?? null,
+    delivery_error: entry.deliveryError ?? null,
+    delivered: booleanToInteger(entry.delivered),
+    session_id: entry.sessionId ?? null,
+    session_key: entry.sessionKey ?? null,
+    run_id: entry.runId ?? null,
+    run_at_ms: entry.runAtMs ?? null,
+    duration_ms: entry.durationMs ?? null,
+    next_run_at_ms: entry.nextRunAtMs ?? null,
+    model: entry.model ?? null,
+    provider: entry.provider ?? null,
+    total_tokens: entry.usage?.total_tokens ?? null,
+    entry_json: JSON.stringify(entry),
+    created_at: Date.now(),
+  };
+}
+
+function parseStoredRunLogEntry(row: CronRunLogRow): CronRunLogEntry | null {
+  const parsed = parseAllRunLogEntries(`${row.entry_json}\n`, { jobId: row.job_id })[0];
+  if (!parsed) {
+    return null;
+  }
+  return {
+    ...parsed,
+    ts: normalizeNumber(row.ts) ?? parsed.ts,
+    jobId: row.job_id,
+    status: (row.status as CronRunStatus | null) ?? parsed.status,
+    error: row.error ?? parsed.error,
+    summary: row.summary ?? parsed.summary,
+    delivered: integerToBoolean(row.delivered) ?? parsed.delivered,
+    deliveryStatus: (row.delivery_status as CronDeliveryStatus | null) ?? parsed.deliveryStatus,
+    deliveryError: row.delivery_error ?? parsed.deliveryError,
+    sessionId: row.session_id ?? parsed.sessionId,
+    sessionKey: row.session_key ?? parsed.sessionKey,
+    runId: row.run_id ?? parsed.runId,
+    runAtMs: normalizeNumber(row.run_at_ms) ?? parsed.runAtMs,
+    durationMs: normalizeNumber(row.duration_ms) ?? parsed.durationMs,
+    nextRunAtMs: normalizeNumber(row.next_run_at_ms) ?? parsed.nextRunAtMs,
+    model: row.model ?? parsed.model,
+    provider: row.provider ?? parsed.provider,
+  };
+}
+
+function readCronRunLogRows(db: DatabaseSync, storeKey: string, jobId?: string): CronRunLogRow[] {
+  let query = getCronRunLogKysely(db)
+    .selectFrom("cron_run_logs")
+    .selectAll()
+    .where("store_key", "=", storeKey);
+  if (jobId) {
+    query = query.where("job_id", "=", jobId);
+  }
+  return executeSqliteQuerySync(db, query.orderBy("ts", "asc").orderBy("seq", "asc")).rows;
+}
+
+function nextCronRunLogSeq(db: DatabaseSync, storeKey: string, jobId: string): number {
+  const row = db
+    .prepare(
+      "SELECT COALESCE(MAX(seq), 0) AS seq FROM cron_run_logs WHERE store_key = ? AND job_id = ?",
+    )
+    .get(storeKey, jobId) as { seq?: number | bigint } | undefined;
+  return (normalizeNumber(row?.seq ?? null) ?? 0) + 1;
+}
+
+function insertCronRunLogEntry(db: DatabaseSync, storeKey: string, entry: CronRunLogEntry): void {
+  const seq = nextCronRunLogSeq(db, storeKey, entry.jobId);
+  executeSqliteQuerySync(
+    db,
+    getCronRunLogKysely(db)
+      .insertInto("cron_run_logs")
+      .values(bindCronRunLogRow({ storeKey, seq, entry })),
+  );
+}
+
+function pruneCronRunLogRows(
+  db: DatabaseSync,
+  storeKey: string,
+  jobId: string,
+  keepLines: number,
+): void {
+  const keep = Math.max(1, Math.floor(keepLines));
+  db.prepare(
+    `DELETE FROM cron_run_logs
+     WHERE store_key = ? AND job_id = ?
+       AND seq NOT IN (
+         SELECT seq FROM cron_run_logs
+         WHERE store_key = ? AND job_id = ?
+         ORDER BY seq DESC
+         LIMIT ?
+       )`,
+  ).run(storeKey, jobId, storeKey, jobId, keep);
+}
+
+function importLegacyCronRunLogSync(filePath: string, target: CronRunLogTarget): void {
+  const resolved = path.resolve(filePath);
+  if (!fsSync.existsSync(resolved)) {
     return;
   }
+  const storeKey = cronStoreKey(target.storePath);
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const existingRows = readCronRunLogRows(
+      db,
+      storeKey,
+      target.strictJobId ? target.jobId : undefined,
+    );
+    const existingKeys = new Set(
+      existingRows.map((row) =>
+        [
+          row.job_id,
+          normalizeNumber(row.ts) ?? "",
+          row.run_id ?? "",
+          row.status ?? "",
+          row.summary ?? "",
+          row.error ?? "",
+        ].join("\0"),
+      ),
+    );
+    const raw = fsSync.readFileSync(resolved, "utf-8");
+    for (const entry of parseAllRunLogEntries(
+      raw,
+      target.strictJobId ? { jobId: target.jobId } : undefined,
+    )) {
+      const key = [
+        entry.jobId,
+        entry.ts,
+        entry.runId ?? "",
+        entry.status ?? "",
+        entry.summary ?? "",
+        entry.error ?? "",
+      ].join("\0");
+      if (existingKeys.has(key)) {
+        continue;
+      }
+      existingKeys.add(key);
+      insertCronRunLogEntry(db, storeKey, entry);
+    }
+  });
+  archiveLegacyCronRunLogSync(resolved);
+}
 
-  const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
-  const lines = normalizeStringEntries(raw.split("\n"));
-  const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
-  await privateFileStore(path.dirname(filePath)).writeText(
-    path.basename(filePath),
-    `${kept.join("\n")}\n`,
-  );
+async function importLegacyCronRunLog(filePath: string, target: CronRunLogTarget): Promise<void> {
+  importLegacyCronRunLogSync(filePath, target);
+}
+
+function archiveLegacyCronRunLogSync(filePath: string): void {
+  const archivePath = `${filePath}${LEGACY_CRON_RUN_LOG_ARCHIVE_SUFFIX}`;
+  if (!fsSync.existsSync(filePath) || fsSync.existsSync(archivePath)) {
+    return;
+  }
+  try {
+    fsSync.renameSync(filePath, archivePath);
+  } catch {
+    // best-effort cleanup after durable SQLite import.
+  }
 }
 
 export async function appendCronRunLog(
@@ -191,18 +397,15 @@ export async function appendCronRunLog(
   const next = prev
     .catch(() => undefined)
     .then(async () => {
-      const runDir = path.dirname(resolved);
-      await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
-      await fs.chmod(runDir, 0o700).catch(() => undefined);
-      await appendRegularFile({
-        filePath: resolved,
-        content: `${JSON.stringify(entry)}\n`,
-        rejectSymlinkParents: true,
-      });
-      await setSecureFileMode(resolved);
-      await pruneIfNeeded(resolved, {
-        maxBytes: opts?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
-        keepLines: opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+      const target = inferCronRunLogTarget(resolved, entry.jobId);
+      runOpenClawStateWriteTransaction(({ db }) => {
+        insertCronRunLogEntry(db, cronStoreKey(target.storePath), entry);
+        pruneCronRunLogRows(
+          db,
+          cronStoreKey(target.storePath),
+          entry.jobId,
+          opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+        );
       });
     });
   writesByPath.set(resolved, next);
@@ -236,16 +439,18 @@ export function readCronRunLogEntriesSync(
   opts?: { limit?: number; jobId?: string },
 ): CronRunLogEntry[] {
   const limit = Math.max(1, Math.min(5000, Math.floor(opts?.limit ?? 200)));
-  let raw: string;
-  try {
-    raw = fsSync.readFileSync(path.resolve(filePath), "utf-8");
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-  return parseAllRunLogEntries(raw, { jobId: opts?.jobId }).slice(-limit);
+  const resolved = path.resolve(filePath);
+  const target = inferCronRunLogTarget(resolved);
+  const rows = readCronRunLogRows(
+    openOpenClawStateDatabase().db,
+    cronStoreKey(target.storePath),
+    target.strictJobId ? target.jobId : undefined,
+  );
+  return rows
+    .map(parseStoredRunLogEntry)
+    .filter((entry): entry is CronRunLogEntry => entry !== null)
+    .filter((entry) => !opts?.jobId || entry.jobId === opts.jobId)
+    .slice(-limit);
 }
 
 function normalizeRunStatusFilter(status?: string): CronRunLogStatusFilter {
@@ -465,12 +670,20 @@ export async function readCronRunLogEntriesPage(
 ): Promise<CronRunLogPageResult> {
   await drainPendingWrite(filePath);
   const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? 50)));
-  const raw = await fs.readFile(path.resolve(filePath), "utf-8").catch(() => "");
+  const resolved = path.resolve(filePath);
+  const target = inferCronRunLogTarget(resolved);
   const statuses = normalizeRunStatuses(opts);
   const deliveryStatuses = normalizeDeliveryStatuses(opts);
   const query = normalizeLowercaseStringOrEmpty(opts?.query);
   const sortDir: CronRunLogSortDir = opts?.sortDir === "asc" ? "asc" : "desc";
-  const all = parseAllRunLogEntries(raw, { jobId: opts?.jobId });
+  const all = readCronRunLogRows(
+    openOpenClawStateDatabase().db,
+    cronStoreKey(target.storePath),
+    target.strictJobId ? target.jobId : undefined,
+  )
+    .map(parseStoredRunLogEntry)
+    .filter((entry): entry is CronRunLogEntry => entry !== null)
+    .filter((entry) => !opts?.jobId || entry.jobId === opts.jobId);
   const filtered = filterRunLogEntries(all, {
     runId: opts?.runId,
     statuses,
@@ -515,50 +728,9 @@ export async function readCronRunLogEntriesPageAll(
   const deliveryStatuses = normalizeDeliveryStatuses(opts);
   const query = normalizeLowercaseStringOrEmpty(opts.query);
   const sortDir: CronRunLogSortDir = opts.sortDir === "asc" ? "asc" : "desc";
-  const runsDir = path.resolve(path.dirname(path.resolve(opts.storePath)), "runs");
-  if (!(await pathExists(runsDir))) {
-    return {
-      entries: [],
-      total: 0,
-      offset: 0,
-      limit,
-      hasMore: false,
-      nextOffset: null,
-    };
-  }
-  const runsRoot = await fsRoot(runsDir).catch(() => null);
-  if (!runsRoot) {
-    return {
-      entries: [],
-      total: 0,
-      offset: 0,
-      limit,
-      hasMore: false,
-      nextOffset: null,
-    };
-  }
-  const files = await runsRoot.list(".", { withFileTypes: true }).catch(() => []);
-  const jsonlFiles = files
-    .filter((entry) => entry.isFile && entry.name.endsWith(".jsonl"))
-    .map((entry) => entry.name);
-  if (jsonlFiles.length === 0) {
-    return {
-      entries: [],
-      total: 0,
-      offset: 0,
-      limit,
-      hasMore: false,
-      nextOffset: null,
-    };
-  }
-  await Promise.all(jsonlFiles.map((fileName) => drainPendingWrite(path.join(runsDir, fileName))));
-  const chunks = await Promise.all(
-    jsonlFiles.map(async (fileName) => {
-      const raw = await runsRoot.readText(fileName).catch(() => "");
-      return parseAllRunLogEntries(raw);
-    }),
-  );
-  const all = chunks.flat();
+  const all = readCronRunLogRows(openOpenClawStateDatabase().db, cronStoreKey(opts.storePath))
+    .map(parseStoredRunLogEntry)
+    .filter((entry): entry is CronRunLogEntry => entry !== null);
   const filtered = filterRunLogEntries(all, {
     runId: opts.runId,
     statuses,
@@ -604,4 +776,33 @@ export async function readCronRunLogEntriesPageAll(
     hasMore: nextOffset < total,
     nextOffset: nextOffset < total ? nextOffset : null,
   };
+}
+
+export async function migrateLegacyCronRunLogsToSqlite(
+  storePath: string,
+): Promise<{ importedFiles: number }> {
+  const resolvedStorePath = path.resolve(storePath);
+  const runsDir = path.resolve(path.dirname(resolvedStorePath), "runs");
+  const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
+  const jsonlFiles = files.filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"));
+
+  for (const file of jsonlFiles) {
+    const jobId = path.basename(file.name, ".jsonl");
+    const logPath = path.join(runsDir, file.name);
+    await drainPendingWrite(logPath);
+    await importLegacyCronRunLog(logPath, {
+      storePath: resolvedStorePath,
+      jobId,
+      strictJobId: true,
+    });
+  }
+
+  return { importedFiles: jsonlFiles.length };
+}
+
+export async function legacyCronRunLogFilesExist(storePath: string): Promise<boolean> {
+  const resolvedStorePath = path.resolve(storePath);
+  const runsDir = path.resolve(path.dirname(resolvedStorePath), "runs");
+  const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
+  return files.some((entry) => entry.isFile() && entry.name.endsWith(".jsonl"));
 }

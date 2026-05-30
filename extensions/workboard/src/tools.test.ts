@@ -267,6 +267,12 @@ describe("workboard tools", () => {
         reason: "Too early.",
       }),
     ).rejects.toThrow(/claimed/);
+    await expect(
+      tools.get("workboard_protocol_violation")?.execute("call-unclaimed-violation", {
+        id: child.id,
+        detail: "Too early.",
+      }),
+    ).rejects.toThrow(/claimed/);
 
     const claimed = readPayload(
       await tools.get("workboard_claim")?.execute("call-3", { id: parent.id }),
@@ -353,9 +359,22 @@ describe("workboard tools", () => {
       await tools.get("workboard_board_create")?.execute("call-board", {
         id: "planning",
         name: "Planning",
+        orchestration: {
+          autoDecompose: true,
+          autoDecomposePerDispatch: 2,
+          orchestratorProfile: "planner",
+        },
       }),
     );
-    expect(boardPayload.board).toMatchObject({ id: "planning", name: "Planning" });
+    expect(boardPayload.board).toMatchObject({
+      id: "planning",
+      name: "Planning",
+      orchestration: {
+        autoDecompose: true,
+        autoDecomposePerDispatch: 2,
+        orchestratorProfile: "planner",
+      },
+    });
 
     const parent = await store.create({
       title: "Rough",
@@ -413,5 +432,31 @@ describe("workboard tools", () => {
     expect(list.subscriptions).toEqual([
       expect.objectContaining({ cardId: parent.id, target: "session:operator" }),
     ]);
+
+    const events = readPayload(
+      await tools.get("workboard_notify_advance")?.execute("call-notify-events", {
+        subscriptionId: (subscription.subscription as { id: string }).id,
+      }),
+    );
+    expect(events.events).toEqual([expect.objectContaining({ kind: "completed" })]);
+
+    const attached = readPayload(
+      await tools.get("workboard_attachment_add")?.execute("call-attach", {
+        id: parent.id,
+        fileName: "result.txt",
+        contentBase64: Buffer.from("done").toString("base64"),
+      }),
+    );
+    expect(attached.card).toMatchObject({
+      metadata: { attachments: [expect.objectContaining({ fileName: "result.txt" })] },
+    });
+    const attachmentId = (attached.card as { metadata: { attachments: Array<{ id: string }> } })
+      .metadata.attachments[0].id;
+    const attachment = readPayload(
+      await tools.get("workboard_attachment_read")?.execute("call-attachment-read", {
+        id: attachmentId,
+      }),
+    );
+    expect(Buffer.from(attachment.contentBase64 as string, "base64").toString("utf8")).toBe("done");
   });
 });

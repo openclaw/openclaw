@@ -51,6 +51,7 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { resolveExpiresAtMsFromDurationMs } from "../../shared/number-coercion.js";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -64,6 +65,19 @@ import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
+  const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
+  if (!normalizedExpiresIn) {
+    return undefined;
+  }
+  const durationMs = parseDurationMs(normalizedExpiresIn, { defaultUnit: "d" });
+  const expires = resolveExpiresAtMsFromDurationMs(durationMs);
+  if (expires === undefined) {
+    throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
+  }
+  return expires;
+}
 
 function guardCancel<T>(value: T | symbol): T {
   if (typeof value === "symbol" || isCancel(value)) {
@@ -626,12 +640,7 @@ export async function modelsAuthPasteTokenCommand(
       ? tokenInput.replaceAll(/\s+/g, "").trim()
       : (normalizeOptionalString(tokenInput) ?? "");
 
-  const expires = normalizeStringifiedOptionalString(opts.expiresIn)
-    ? Date.now() +
-      parseDurationMs(normalizeStringifiedOptionalString(opts.expiresIn) ?? "", {
-        defaultUnit: "d",
-      })
-    : undefined;
+  const expires = resolveManualTokenExpiryMs(opts.expiresIn);
 
   await upsertAuthProfileWithLockOrThrow({
     profileId,

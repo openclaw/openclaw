@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { resolveIMessageAccount } from "./accounts.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
-import { clearIMessagePrivateApiCache, probeIMessage } from "./probe.js";
+import { clearIMessagePrivateApiCache, probeIMessage, probeIMessagePrivateApi } from "./probe.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 import { probeIMessageStatusAccount } from "./status-core.js";
 
@@ -280,6 +280,31 @@ describe("probeIMessage", () => {
     });
 
     expect(runCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache unavailable private API status when the process clock is invalid", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const runCommand = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "",
+      stderr: "bridge unavailable",
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(
+      probeIMessagePrivateApi("imsg-invalid-private-status-clock", 1000),
+    ).resolves.toMatchObject({
+      available: false,
+    });
+    await expect(
+      probeIMessagePrivateApi("imsg-invalid-private-status-clock", 1000),
+    ).resolves.toMatchObject({
+      available: false,
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(4);
   });
 
   it("fails fast for default local imsg probes on non-mac hosts", async () => {

@@ -2340,6 +2340,81 @@ describe("chat session controls", () => {
     expect(rerendered.value).toBe("openai/gpt-5-mini");
   });
 
+  it("keeps the selected model visible after switching away and back to a session", async () => {
+    const sessionA = "agent:main:session-a";
+    const sessionB = "agent:main:session-b";
+    const catalog = createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG, {
+      id: "claude-opus-4.5",
+      name: "Claude Opus 4.5",
+      provider: "bedrock",
+    });
+    const { state } = createChatHeaderState({ models: catalog });
+    let rows: GatewaySessionRow[] = [
+      { key: sessionA, kind: "direct", label: "Session A", updatedAt: 2 },
+      { key: sessionB, kind: "direct", label: "Session B", updatedAt: 1 },
+    ];
+    const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === "sessions.patch") {
+        const key = typeof params.key === "string" ? params.key : "";
+        const nextModel = typeof params.model === "string" ? params.model.trim() : "";
+        rows = rows.map((row) => {
+          if (row.key !== key) {
+            return row;
+          }
+          const nextRow: GatewaySessionRow = { ...row };
+          if (!nextModel) {
+            delete nextRow.model;
+            delete nextRow.modelProvider;
+            return nextRow;
+          }
+          const slashIndex = nextModel.indexOf("/");
+          if (slashIndex > 0) {
+            nextRow.modelProvider = nextModel.slice(0, slashIndex);
+          } else {
+            delete nextRow.modelProvider;
+          }
+          nextRow.model = slashIndex > 0 ? nextModel.slice(slashIndex + 1) : nextModel;
+          return nextRow;
+        });
+        return { ok: true, key };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResultFromRows(rows);
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "tools.effective") {
+        return { agentId: "main", profile: "coding", groups: [] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    state.sessionKey = sessionA;
+    state.settings.sessionKey = sessionA;
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.value).toBe("");
+
+    modelSelect.value = "bedrock/claude-opus-4.5";
+    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    state.sessionKey = sessionB;
+    state.settings.sessionKey = sessionB;
+    render(renderChatSessionSelect(state), container);
+    expect(getChatModelSelect(container).value).toBe("");
+
+    state.sessionKey = sessionA;
+    state.settings.sessionKey = sessionA;
+    render(renderChatSessionSelect(state), container);
+
+    expect(getChatModelSelect(container).value).toBe("bedrock/claude-opus-4.5");
+  });
+
   it("uses default thinking options when the active session is absent", () => {
     const { state } = createChatHeaderState({ omitSessionFromList: true });
     state.sessionsResult = createSessionsListResult({

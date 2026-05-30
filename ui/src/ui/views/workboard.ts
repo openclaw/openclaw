@@ -3,6 +3,7 @@ import { t } from "../../i18n/index.ts";
 import {
   archiveWorkboardCard,
   deleteWorkboardCard,
+  dispatchWorkboard,
   findWorkboardSession,
   getWorkboardLifecycle,
   getWorkboardState,
@@ -143,12 +144,18 @@ function formatEventLabel(event: WorkboardEvent): string {
       return t("workboard.eventProofAdded");
     case "artifact_added":
       return t("workboard.eventArtifactAdded");
+    case "attachment_added":
+      return t("workboard.eventAttachmentAdded");
     case "diagnostic":
       return t("workboard.eventDiagnostic");
     case "notification":
       return t("workboard.eventNotification");
     case "dispatch":
       return t("workboard.eventDispatch");
+    case "orchestration":
+      return t("workboard.eventOrchestration");
+    case "protocol_violation":
+      return t("workboard.eventProtocolViolation");
     case "archived":
       return t("workboard.eventArchived");
     case "unarchived":
@@ -202,6 +209,15 @@ function renderMetadataBadges(card: WorkboardCard) {
       : null,
     metadata.artifacts?.length
       ? t("workboard.badgeArtifacts", { count: String(metadata.artifacts.length) })
+      : null,
+    metadata.attachments?.length
+      ? t("workboard.badgeAttachments", { count: String(metadata.attachments.length) })
+      : null,
+    metadata.workerLogs?.length
+      ? t("workboard.badgeWorkerLogs", { count: String(metadata.workerLogs.length) })
+      : null,
+    metadata.workerProtocol?.state
+      ? t("workboard.badgeWorkerProtocol", { state: metadata.workerProtocol.state })
       : null,
     metadata.automation?.tenant
       ? t("workboard.badgeTenant", { tenant: metadata.automation.tenant })
@@ -268,6 +284,14 @@ function matchesFilter(
       artifact.path,
       artifact.mimeType,
     ]),
+    ...(card.metadata?.attachments ?? []).flatMap((attachment) => [
+      attachment.fileName,
+      attachment.mimeType,
+      attachment.note,
+    ]),
+    ...(card.metadata?.workerLogs ?? []).map((log) => log.message),
+    card.metadata?.workerProtocol?.state,
+    card.metadata?.workerProtocol?.detail,
     card.metadata?.claim?.ownerId,
     ...(card.metadata?.diagnostics ?? []).flatMap((diagnostic) => [
       diagnostic.kind,
@@ -1130,6 +1154,22 @@ export function renderWorkboard(props: WorkboardProps) {
           >
             ${state.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
+          ${writable
+            ? html`
+                <button
+                  class="btn"
+                  ?disabled=${state.loading}
+                  @click=${() =>
+                    dispatchWorkboard({
+                      host: props.host,
+                      client: props.client,
+                      requestUpdate: props.onRequestUpdate,
+                    })}
+                >
+                  ${icons.zap} ${t("workboard.dispatch")}
+                </button>
+              `
+            : nothing}
           <button
             class="btn"
             @click=${() => {

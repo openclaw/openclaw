@@ -385,6 +385,30 @@ describe("cli credentials", () => {
     });
   });
 
+  it("rejects Codex keychain fallback expiry when the process clock is invalid", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
+    process.env.CODEX_HOME = tempHome;
+    const accountHash = "cli|";
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      execSyncMock.mockImplementation((command: unknown) => {
+        const cmd = String(command);
+        expect(cmd).toContain("Codex Auth");
+        expect(cmd).toContain(accountHash);
+        return JSON.stringify({
+          tokens: {
+            access_token: createJwtWithExp(8_700_000_000_000),
+            refresh_token: "keychain-refresh",
+          },
+        });
+      });
+
+      expect(readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock })).toBeNull();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
   it("falls back to Codex auth.json when keychain is unavailable", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;
@@ -416,6 +440,69 @@ describe("cli credentials", () => {
       expires: expSeconds * 1000,
       idToken: "file-id-token",
     });
+  });
+
+  it("rejects Codex auth.json fallback expiry when stat and process clock are invalid", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-invalid-clock-"));
+    process.env.CODEX_HOME = tempHome;
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(8_700_000_000_000),
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+    execSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    const statSyncSpy = vi.spyOn(fs, "statSync").mockImplementation(() => {
+      throw new Error("stat unavailable");
+    });
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      expect(readCodexCliCredentials({ platform: "linux", execSync: execSyncMock })).toBeNull();
+    } finally {
+      dateNowSpy.mockRestore();
+      statSyncSpy.mockRestore();
+    }
+  });
+
+  it("uses Codex auth.json fallback expiry when file mtime has fractional milliseconds", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-fractional-mtime-"));
+    process.env.CODEX_HOME = tempHome;
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(8_700_000_000_000),
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+    execSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+    const mtimeMs = Date.parse("2026-03-24T10:00:00Z") + 0.75;
+    const statSyncSpy = vi.spyOn(fs, "statSync").mockReturnValue({ mtimeMs } as fs.Stats);
+    try {
+      const creds = readCodexCliCredentials({ platform: "linux", execSync: execSyncMock });
+
+      expectFields(creds, {
+        refresh: "file-refresh",
+        provider: "openai-codex",
+        expires: Math.floor(mtimeMs) + 60 * 60 * 1000,
+      });
+    } finally {
+      statSyncSpy.mockRestore();
+    }
   });
 
   it("does not read Codex keychain when keychain prompts are disabled", () => {

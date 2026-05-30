@@ -15,6 +15,7 @@ import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -256,7 +257,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 

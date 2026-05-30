@@ -3,6 +3,7 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { asDateTimestampMs } from "../shared/number-coercion.js";
 import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
@@ -92,24 +93,25 @@ function resolveOAuthStatus(
   expiresAt: number | undefined,
   now: number,
   expiringWithinMs: number,
-): { status: AuthProfileHealthStatus; remainingMs?: number } {
-  if (!expiresAt || !Number.isFinite(expiresAt) || expiresAt <= 0) {
+): { status: AuthProfileHealthStatus; expiresAt?: number; remainingMs?: number } {
+  const normalizedExpiresAt = asDateTimestampMs(expiresAt);
+  if (normalizedExpiresAt === undefined || normalizedExpiresAt <= 0) {
     return { status: "missing" };
   }
-  const remainingMs = expiresAt - now;
-  const expiryState = resolveTokenExpiryState(expiresAt, now, {
+  const remainingMs = normalizedExpiresAt - now;
+  const expiryState = resolveTokenExpiryState(normalizedExpiresAt, now, {
     expiringWithinMs,
   });
   if (expiryState === "invalid_expires" || expiryState === "missing") {
     return { status: "missing" };
   }
   if (expiryState === "expired") {
-    return { status: "expired", remainingMs };
+    return { status: "expired", expiresAt: normalizedExpiresAt, remainingMs };
   }
   if (expiryState === "expiring") {
-    return { status: "expiring", remainingMs };
+    return { status: "expiring", expiresAt: normalizedExpiresAt, remainingMs };
   }
-  return { status: "ok", remainingMs };
+  return { status: "ok", expiresAt: normalizedExpiresAt, remainingMs };
 }
 
 function buildProfileHealth(params: {
@@ -168,14 +170,18 @@ function buildProfileHealth(params: {
         label,
       };
     }
-    const { status, remainingMs } = resolveOAuthStatus(expiresAt, now, warnAfterMs);
+    const {
+      status,
+      expiresAt: normalizedExpiresAt,
+      remainingMs,
+    } = resolveOAuthStatus(expiresAt, now, warnAfterMs);
     return {
       profileId,
       provider,
       type: "token",
       status,
       reasonCode: status === "expired" ? "expired" : undefined,
-      expiresAt,
+      expiresAt: normalizedExpiresAt,
       remainingMs,
       source,
       label,
@@ -187,17 +193,17 @@ function buildProfileHealth(params: {
     credential: healthCredential,
   });
   const oauthWarnAfterMs = Math.max(warnAfterMs, DEFAULT_OAUTH_REFRESH_MARGIN_MS);
-  const { status: rawStatus, remainingMs } = resolveOAuthStatus(
-    effectiveCredential.expires,
-    now,
-    oauthWarnAfterMs,
-  );
+  const {
+    status: rawStatus,
+    expiresAt,
+    remainingMs,
+  } = resolveOAuthStatus(effectiveCredential.expires, now, oauthWarnAfterMs);
   return {
     profileId,
     provider,
     type: "oauth",
     status: rawStatus,
-    expiresAt: effectiveCredential.expires,
+    expiresAt,
     remainingMs,
     source,
     label,
@@ -317,7 +323,8 @@ export function buildAuthHealthSummary(params: {
 
     let hasApiKeyProfile = false;
     let hasExpirableProfile = false;
-    let hasExpiredOrMissing = false;
+    let hasExpired = false;
+    let hasMissing = false;
     let hasExpiring = false;
     let earliestExpiry: number | undefined;
     for (const profile of effectiveProfiles) {
@@ -335,8 +342,10 @@ export function buildAuthHealthSummary(params: {
             ? profile.expiresAt
             : Math.min(earliestExpiry, profile.expiresAt);
       }
-      if (profile.status === "expired" || profile.status === "missing") {
-        hasExpiredOrMissing = true;
+      if (profile.status === "expired") {
+        hasExpired = true;
+      } else if (profile.status === "missing") {
+        hasMissing = true;
       } else if (profile.status === "expiring") {
         hasExpiring = true;
       }
@@ -352,8 +361,10 @@ export function buildAuthHealthSummary(params: {
       provider.remainingMs = provider.expiresAt - now;
     }
 
-    if (hasExpiredOrMissing) {
+    if (hasExpired) {
       provider.status = "expired";
+    } else if (hasMissing) {
+      provider.status = "missing";
     } else if (hasExpiring) {
       provider.status = "expiring";
     } else {
