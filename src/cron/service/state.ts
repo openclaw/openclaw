@@ -173,6 +173,12 @@ export type CronServiceState = {
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
   storeFileMtimeMs: number | null;
+  /**
+   * Cleanup function for the watchdog interval that detects stalled timer
+   * chains.  Set by `start()`, cleared by `stop()`.
+   * See: https://github.com/openclaw/openclaw/issues/73166
+   */
+  _stopWatchdog?: () => void;
 };
 
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
