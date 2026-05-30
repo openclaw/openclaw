@@ -2017,7 +2017,7 @@ export function buildVitestRunPlans(
     ];
   }
 
-  const nonTargetArgs = activeForwardedArgs.filter((arg) => !activeTargetArgs.includes(arg));
+  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
   const explicitConfigTargets = activeTargetArgs.map((targetArg) =>
     toRepoRelativeTarget(targetArg, cwd),
   );
