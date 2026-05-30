@@ -66,6 +66,16 @@ function mockClaudeCliCredentialRead() {
   );
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 describe("cli credentials", () => {
   beforeAll(async () => {
     ({
@@ -91,7 +101,7 @@ describe("cli credentials", () => {
     resetCliCredentialCachesForTest();
   });
 
-  it("updates the Claude Code keychain item in place", async () => {
+  it("updates the Claude Code keychain item in place", () => {
     mockExistingClaudeKeychainItem();
 
     const ok = writeClaudeCliKeychainCredentials(
@@ -150,7 +160,7 @@ describe("cli credentials", () => {
     },
   );
 
-  it("falls back to the file store when the keychain update fails", async () => {
+  it("falls back to the file store when the keychain update fails", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-"));
     const credPath = path.join(tempDir, ".claude", ".credentials.json");
 
@@ -205,7 +215,7 @@ describe("cli credentials", () => {
   it.each([
     {
       name: "caches Claude Code CLI credentials within the TTL window",
-      allowKeychainPromptSecondRead: false,
+      allowKeychainPromptSecondRead: true,
       advanceMs: 0,
       expectedCalls: 1,
       expectSameObject: true,
@@ -229,8 +239,21 @@ describe("cli credentials", () => {
       }
       const second = await readCachedClaudeCliCredentials(allowKeychainPromptSecondRead);
 
-      expect(first).toBeTruthy();
-      expect(second).toBeTruthy();
+      if (!first || !second) {
+        throw new Error("expected cached Claude CLI credentials to be available");
+      }
+      expectFields(first, {
+        type: "oauth",
+        provider: "anthropic",
+        access: "token-1735689600000",
+        refresh: "cached-refresh",
+      });
+      expectFields(second, {
+        type: "oauth",
+        provider: "anthropic",
+        access: expectSameObject ? "token-1735689600000" : "token-1735690500001",
+        refresh: "cached-refresh",
+      });
       if (expectSameObject) {
         expect(second).toEqual(first);
       } else {
@@ -240,7 +263,68 @@ describe("cli credentials", () => {
     },
   );
 
-  it("reads Codex credentials from keychain when available", async () => {
+  it("does not let no-keychain Claude cache misses poison keychain reads", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-cache-"));
+    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+
+    const withoutKeychain = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(withoutKeychain).toBeNull();
+    expect(execSyncMock).not.toHaveBeenCalled();
+
+    mockClaudeCliCredentialRead();
+    const withKeychain = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expectFields(withKeychain, {
+      type: "oauth",
+      provider: "anthropic",
+      refresh: "cached-refresh",
+    });
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps no-prompt Claude reads on the file credential path after a keychain read", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-cache-"));
+    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+    mockClaudeCliCredentialRead();
+
+    const withKeychain = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+    const withoutPrompt = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expectFields(withKeychain, {
+      type: "oauth",
+      provider: "anthropic",
+      refresh: "cached-refresh",
+    });
+    expect(withoutPrompt).toBeNull();
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads Codex credentials from keychain when available", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;
     const expSeconds = Math.floor(Date.parse("2026-03-23T00:48:49Z") / 1000);
@@ -263,7 +347,7 @@ describe("cli credentials", () => {
 
     const creds = readCodexCliCredentials({ platform: "darwin", execSync: execSyncMock });
 
-    expect(creds).toMatchObject({
+    expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "keychain-refresh",
       provider: "openai-codex",
@@ -272,7 +356,7 @@ describe("cli credentials", () => {
     });
   });
 
-  it("falls back to Codex auth.json when keychain is unavailable", async () => {
+  it("falls back to Codex auth.json when keychain is unavailable", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;
     const expSeconds = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
@@ -296,13 +380,133 @@ describe("cli credentials", () => {
 
     const creds = readCodexCliCredentials({ execSync: execSyncMock });
 
-    expect(creds).toMatchObject({
+    expectFields(creds, {
       access: createJwtWithExp(expSeconds),
       refresh: "file-refresh",
       provider: "openai-codex",
       expires: expSeconds * 1000,
       idToken: "file-id-token",
     });
+  });
+
+  it("does not read Codex keychain when keychain prompts are disabled", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-no-prompt-"));
+    process.env.CODEX_HOME = tempHome;
+    const expSeconds = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(expSeconds),
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+
+    const creds = readCodexCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+
+    expectFields(creds, {
+      access: createJwtWithExp(expSeconds),
+      refresh: "file-refresh",
+      provider: "openai-codex",
+    });
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let no-keychain Codex cache misses poison keychain reads", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-cache-"));
+    process.env.CODEX_HOME = tempHome;
+    const expSeconds = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
+
+    const withoutKeychain = readCodexCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+    expect(withoutKeychain).toBeNull();
+
+    execSyncMock.mockReturnValue(
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(expSeconds),
+          refresh_token: "keychain-refresh",
+        },
+      }),
+    );
+    const withKeychain = readCodexCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+
+    expectFields(withKeychain, {
+      access: createJwtWithExp(expSeconds),
+      refresh: "keychain-refresh",
+      provider: "openai-codex",
+    });
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps no-prompt Codex reads on auth.json after a keychain read", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-cache-"));
+    process.env.CODEX_HOME = tempHome;
+    const keychainExpiry = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
+    const fileExpiry = Math.floor(Date.parse("2026-03-25T12:34:56Z") / 1000);
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(fileExpiry),
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+    execSyncMock.mockReturnValue(
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(keychainExpiry),
+          refresh_token: "keychain-refresh",
+        },
+      }),
+    );
+
+    const withKeychain = readCodexCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+    const withoutPrompt = readCodexCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+
+    expectFields(withKeychain, {
+      refresh: "keychain-refresh",
+      expires: keychainExpiry * 1000,
+      provider: "openai-codex",
+    });
+    expectFields(withoutPrompt, {
+      refresh: "file-refresh",
+      expires: fileExpiry * 1000,
+      provider: "openai-codex",
+    });
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("invalidates cached Codex credentials when auth.json changes within the TTL window", () => {
@@ -332,7 +536,7 @@ describe("cli credentials", () => {
         execSync: execSyncMock,
       });
 
-      expect(first).toMatchObject({
+      expectFields(first, {
         refresh: "stale-refresh",
         expires: firstExpiry * 1000,
       });
@@ -356,7 +560,7 @@ describe("cli credentials", () => {
         execSync: execSyncMock,
       });
 
-      expect(second).toMatchObject({
+      expectFields(second, {
         refresh: "fresh-refresh",
         expires: secondExpiry * 1000,
       });
@@ -387,7 +591,7 @@ describe("cli credentials", () => {
 
       const creds = readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
 
-      expect(creds).toMatchObject({
+      expectFields(creds, {
         type: "oauth",
         provider: "google-gemini-cli",
         access: "gemini-access",
@@ -417,7 +621,7 @@ describe("cli credentials", () => {
 
       const creds = readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
 
-      expect(creds).toMatchObject({
+      expectFields(creds, {
         type: "oauth",
         provider: "google-gemini-cli",
         access: "gemini-access",

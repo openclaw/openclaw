@@ -1,4 +1,4 @@
-import type { TopLevelComponents } from "@buape/carbon";
+import type { TopLevelComponents } from "./internal/discord.js";
 
 export type DiscordComponentButtonStyle = "primary" | "secondary" | "success" | "danger" | "link";
 
@@ -25,6 +25,8 @@ export type DiscordComponentButtonSpec = {
     animated?: boolean;
   };
   disabled?: boolean;
+  /** Keep this action available after a successful interaction. */
+  reusable?: boolean;
   /** Optional allowlist of users who can interact with this button (ids or names). */
   allowedUsers?: string[];
 };
@@ -109,8 +111,6 @@ export type DiscordModalFieldSpec = {
   style?: "short" | "paragraph";
 };
 
-export type DiscordComponentModalFieldSpec = DiscordModalFieldSpec;
-
 export type DiscordModalSpec = {
   title: string;
   callbackData?: string;
@@ -143,6 +143,8 @@ export type DiscordComponentEntry = {
   agentId?: string;
   accountId?: string;
   reusable?: boolean;
+  consumptionGroupId?: string;
+  consumptionGroupEntryIds?: string[];
   allowedUsers?: string[];
   messageId?: string;
   createdAt?: number;
@@ -165,8 +167,6 @@ export type DiscordModalFieldDefinition = {
   style?: "short" | "paragraph";
 };
 
-export type DiscordComponentModalFieldDefinition = DiscordModalFieldDefinition;
-
 export type DiscordModalEntry = {
   id: string;
   title: string;
@@ -181,8 +181,6 @@ export type DiscordModalEntry = {
   expiresAt?: number;
   allowedUsers?: string[];
 };
-
-export type DiscordComponentModalEntry = DiscordModalEntry;
 
 export type DiscordComponentBuildResult = {
   components: TopLevelComponents[];

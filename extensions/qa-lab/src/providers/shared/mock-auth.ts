@@ -1,14 +1,15 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaAgentAuthDir, writeQaAuthProfiles } from "./auth-store.js";
 
 /** Providers the mock harness stages placeholder credentials for by default. */
-export const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
+const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
 
 /** Agent IDs the mock harness stages credentials under. */
-export const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
+const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
 
-export function buildQaMockProfileId(provider: string): string {
+function buildQaMockProfileId(provider: string): string {
   return `qa-mock-${provider}`;
 }
 
@@ -37,8 +38,8 @@ export async function stageQaMockAuthProfiles(params: {
   agentIds?: readonly string[];
   providers?: readonly string[];
 }): Promise<OpenClawConfig> {
-  const agentIds = [...new Set(params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS)];
-  const providers = [...new Set(params.providers ?? QA_MOCK_AUTH_PROVIDERS)];
+  const agentIds = uniqueStrings(params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS);
+  const providers = uniqueStrings(params.providers ?? QA_MOCK_AUTH_PROVIDERS);
   let next = params.cfg;
   for (const agentId of agentIds) {
     await writeQaAuthProfiles({

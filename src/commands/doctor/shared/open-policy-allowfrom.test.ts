@@ -79,10 +79,11 @@ describe("doctor open-policy allowFrom repair", () => {
 
     expect(result.changes).toEqual([
       '- channels.discord.dmPolicy: set to "open" (migrated from channels.discord.dm.policy)',
-      '- channels.discord.dm.allowFrom: added "*" (required by dmPolicy="open")',
+      "- channels.discord.dm.allowFrom: removed after moving allowlist to channels.discord.allowFrom",
+      '- channels.discord.allowFrom: added "*" (required by dmPolicy="open")',
     ]);
-    expect(result.config.channels?.discord?.allowFrom).toBeUndefined();
-    expect(result.config.channels?.discord?.dm?.allowFrom).toEqual(["123", "*"]);
+    expect(result.config.channels?.discord?.allowFrom).toEqual(["123", "*"]);
+    expect(result.config.channels?.discord?.dm).toBeUndefined();
   });
 
   it("appends wildcard to existing top-level allowFrom", () => {
@@ -108,7 +109,7 @@ describe("doctor open-policy allowFrom repair", () => {
       },
     });
 
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(result.config.channels?.discord?.allowFrom).toEqual(["*"]);
   });
 
@@ -135,8 +136,8 @@ describe("doctor open-policy allowFrom repair", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining('channels.signal.allowFrom: set to ["*"]'),
-      expect.stringContaining('Run "openclaw doctor --fix"'),
+      '- channels.signal.allowFrom: set to ["*"] (required by dmPolicy="open")',
+      '- Run "openclaw doctor --fix" to add missing allowFrom wildcards.',
     ]);
   });
 });

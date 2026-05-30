@@ -1,14 +1,14 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.gateway.isLoopbackGatewayHost
-import java.util.Base64
-import java.util.Locale
-import java.net.URI
+import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import java.net.URI
+import java.util.Base64
+import java.util.Locale
 
 internal data class GatewayEndpointConfig(
   val host: String,
@@ -56,9 +56,9 @@ internal data class GatewayScannedSetupCodeResult(
 
 private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
 private const val remoteGatewaySecurityRule =
-  "Tailscale and public mobile nodes require wss:// or Tailscale Serve. ws:// is allowed only for localhost and the Android emulator."
+  "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, the Android emulator, and private LAN IPs."
 private const val remoteGatewaySecurityFix =
-  "Use localhost/the Android emulator, or enable Tailscale Serve / expose a wss:// gateway URL."
+  "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access."
 
 internal fun resolveGatewayConnectConfig(
   useSetupCode: Boolean,
@@ -121,11 +121,9 @@ internal fun resolveGatewayConnectConfig(
   )
 }
 
-internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
-  return parseGatewayEndpointResult(rawInput).config
-}
+internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? = parseGatewayEndpointResult(rawInput).config
 
-  internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseResult {
+internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseResult {
   val raw = rawInput.trim()
   if (raw.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
 
@@ -133,31 +131,27 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
   val uri =
     runCatching { URI(normalized) }.getOrNull()
       ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
-  val host = uri.host?.trim()?.trim('[', ']').orEmpty()
+  val host =
+    uri.host
+      ?.trim()
+      ?.trim('[', ']')
+      .orEmpty()
   if (host.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
 
-  val scheme = uri.scheme?.trim()?.lowercase(Locale.US).orEmpty()
-  val tls =
-    when (scheme) {
-      "ws", "http" -> false
-      "wss", "https" -> true
-      else -> true
-    }
-  if (!tls && !isLoopbackGatewayHost(host)) {
+  val scheme =
+    uri.scheme
+      ?.trim()
+      ?.lowercase(Locale.US)
+      .orEmpty()
+  if (scheme !in setOf("ws", "wss", "http", "https")) {
+    return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
+  }
+  val tls = scheme == "wss" || scheme == "https"
+  if (!tls && !isLocalCleartextGatewayHost(host)) {
     return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INSECURE_REMOTE_URL)
   }
-  val defaultPort =
-    when (scheme) {
-      "wss", "https" -> 443
-      "ws", "http" -> 18789
-      else -> 443
-    }
-  val displayPort =
-    when (scheme) {
-      "wss", "https" -> 443
-      "ws", "http" -> 80
-      else -> 443
-    }
+  val defaultPort = if (tls) 443 else 18789
+  val displayPort = if (tls) 443 else 80
   val port = uri.port.takeIf { it in 1..65535 } ?: defaultPort
   val displayHost = if (host.contains(":")) "[$host]" else host
   val displayUrl =
@@ -199,9 +193,7 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
   }
 }
 
-internal fun resolveScannedSetupCode(rawInput: String): String? {
-  return resolveScannedSetupCodeResult(rawInput).setupCode
-}
+internal fun resolveScannedSetupCode(rawInput: String): String? = resolveScannedSetupCodeResult(rawInput).setupCode
 
 internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetupCodeResult {
   val setupCode =
@@ -220,8 +212,8 @@ internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetu
 internal fun gatewayEndpointValidationMessage(
   error: GatewayEndpointValidationError,
   source: GatewayEndpointInputSource,
-): String {
-  return when (error) {
+): String =
+  when (error) {
     GatewayEndpointValidationError.INSECURE_REMOTE_URL ->
       when (source) {
         GatewayEndpointInputSource.SETUP_CODE ->
@@ -238,25 +230,27 @@ internal fun gatewayEndpointValidationMessage(
         GatewayEndpointInputSource.MANUAL -> "Enter a valid manual endpoint to connect."
       }
   }
-}
 
-internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: Boolean): String? {
+internal fun composeGatewayManualUrl(
+  hostInput: String,
+  portInput: String,
+  tls: Boolean,
+): String? {
   val host = hostInput.trim()
   if (host.isEmpty()) return null
   val portTrimmed = portInput.trim()
-  val port = if (portTrimmed.isEmpty()) {
-    if (tls) 443 else return null
-  } else {
-    portTrimmed.toIntOrNull() ?: return null
-  }
+  val port =
+    if (portTrimmed.isEmpty()) {
+      if (tls) 443 else return null
+    } else {
+      portTrimmed.toIntOrNull() ?: return null
+    }
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
   return "$scheme://$host:$port"
 }
 
-private fun parseJsonObject(input: String): JsonObject? {
-  return runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
-}
+private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
 
 private fun resolveSetupCodeCandidate(rawInput: String): String? {
   val trimmed = rawInput.trim()
@@ -265,7 +259,10 @@ private fun resolveSetupCodeCandidate(rawInput: String): String? {
   return qrSetupCode ?: trimmed
 }
 
-private fun jsonField(obj: JsonObject, key: String): String? {
+private fun jsonField(
+  obj: JsonObject,
+  key: String,
+): String? {
   val value = (obj[key] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
   return value.ifEmpty { null }
 }

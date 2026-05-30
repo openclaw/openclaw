@@ -1,8 +1,12 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  createMessageReceiptFromOutboundResults,
+  verifyChannelMessageAdapterCapabilityProofs,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import { signalPlugin } from "./channel.js";
-import * as clientModule from "./client.js";
+import * as clientModule from "./client-adapter.js";
 import { classifySignalCliLogLine } from "./daemon.js";
 import {
   looksLikeUuid,
@@ -99,14 +103,13 @@ describe("probeSignal", () => {
     };
 
     const expected = await probeSignal("http://127.0.0.1:8080", 1000);
-    await expect(signalPlugin.status!.probeAccount!(params)).resolves.toEqual(
-      expect.objectContaining({
-        ok: expected.ok,
-        status: expected.status,
-        error: expected.error,
-        version: expected.version,
-      }),
-    );
+    const result = await signalPlugin.status!.probeAccount!(params);
+
+    expect(result.ok).toBe(expected.ok);
+    expect(result.status).toBe(expected.status);
+    expect(result.error).toBe(expected.error);
+    expect(result.version).toBe(expected.version);
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
   it("extracts version from {version} result", async () => {
@@ -217,6 +220,119 @@ describe("signal outbound", () => {
 
     expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
   });
+
+  it("preserves the local approval prompt suppressor through attached-result composition", () => {
+    const suppressor = signalPlugin.outbound?.shouldSuppressLocalPayloadPrompt;
+    if (!suppressor) {
+      throw new Error("signal outbound approval suppressor unavailable");
+    }
+
+    expect(
+      suppressor({
+        cfg: {
+          channels: {
+            signal: {
+              enabled: true,
+              allowFrom: ["+15551230000"],
+            },
+          },
+          approvals: {
+            exec: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        accountId: "default",
+        payload: {
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "exec-1",
+              approvalSlug: "exec-1",
+              approvalKind: "exec",
+              sessionKey: "agent:main:signal:+15551230000",
+            },
+          },
+        },
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "exec",
+          nativeRouteActive: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("declares message adapter durable text and media with receipt proofs", async () => {
+    const send = vi.fn(async (_to: string, _text: string, opts: { mediaUrl?: string } = {}) => {
+      const messageId = opts.mediaUrl ? "signal-media-1" : "signal-text-1";
+      return {
+        messageId,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "signal", messageId }],
+          kind: opts.mediaUrl ? "media" : "text",
+        }),
+      };
+    });
+    const deps = { signal: send };
+
+    const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "signal",
+      adapter: signalPlugin.message!,
+      proofs: {
+        text: async () => {
+          const result = await signalPlugin.message?.send?.text?.({
+            cfg: {} as OpenClawConfig,
+            to: "signal:+15555550123",
+            text: "hello",
+            deps,
+          } as Parameters<NonNullable<typeof signalPlugin.message.send.text>>[0] & {
+            deps: typeof deps;
+          });
+          expect(send).toHaveBeenCalledWith("signal:+15555550123", "hello", {
+            cfg: {},
+            maxBytes: undefined,
+            accountId: undefined,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["signal-text-1"]);
+        },
+        media: async () => {
+          const result = await signalPlugin.message?.send?.media?.({
+            cfg: {} as OpenClawConfig,
+            to: "signal:+15555550123",
+            text: "image",
+            mediaUrl: "https://example.com/image.png",
+            deps,
+          } as Parameters<NonNullable<typeof signalPlugin.message.send.media>>[0] & {
+            deps: typeof deps;
+          });
+          expect(send).toHaveBeenCalledWith("signal:+15555550123", "image", {
+            cfg: {},
+            mediaUrl: "https://example.com/image.png",
+            maxBytes: undefined,
+            accountId: undefined,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["signal-media-1"]);
+        },
+      },
+    });
+
+    expect(proofResults).toEqual([
+      { capability: "text", status: "verified" },
+      { capability: "media", status: "verified" },
+      { capability: "poll", status: "not_declared" },
+      { capability: "payload", status: "not_declared" },
+      { capability: "silent", status: "not_declared" },
+      { capability: "replyTo", status: "not_declared" },
+      { capability: "thread", status: "not_declared" },
+      { capability: "nativeQuote", status: "not_declared" },
+      { capability: "messageSendingHooks", status: "not_declared" },
+      { capability: "batch", status: "not_declared" },
+      { capability: "reconcileUnknownSend", status: "not_declared" },
+      { capability: "afterSendSuccess", status: "not_declared" },
+      { capability: "afterCommit", status: "not_declared" },
+    ]);
+  });
 });
 
 describe("classifySignalCliLogLine", () => {
@@ -225,9 +341,9 @@ describe("classifySignalCliLogLine", () => {
     expect(classifySignalCliLogLine("DEBUG Something")).toBe("log");
   });
 
-  it("treats WARN/ERROR as error", () => {
-    expect(classifySignalCliLogLine("WARN  Something")).toBe("error");
-    expect(classifySignalCliLogLine("WARNING Something")).toBe("error");
+  it("treats routine warnings as logs and errors as error state", () => {
+    expect(classifySignalCliLogLine("WARN  Something")).toBe("log");
+    expect(classifySignalCliLogLine("WARNING Something")).toBe("log");
     expect(classifySignalCliLogLine("ERROR Something")).toBe("error");
   });
 

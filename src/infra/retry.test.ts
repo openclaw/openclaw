@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 import { resolveRetryConfig, retryAsync } from "./retry.js";
 
 const randomMocks = vi.hoisted(() => ({
@@ -8,6 +9,18 @@ const randomMocks = vi.hoisted(() => ({
 vi.mock("./secure-random.js", () => ({
   generateSecureFraction: randomMocks.generateSecureFraction,
 }));
+
+function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected mock call argument to be an object");
+  }
+  return arg as Record<string, unknown>;
+}
 
 type NumberRetryCase = {
   name: string;
@@ -152,14 +165,12 @@ describe("retryAsync", () => {
       vi.useRealTimers();
     }
     expect(res).toBe("ok");
-    expect(onRetry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attempt: 1,
-        maxAttempts: 2,
-        err,
-        label: "telegram",
-      }),
-    );
+    expect(onRetry).toHaveBeenCalledOnce();
+    const retryEvent = firstMockArg(onRetry);
+    expect(retryEvent.attempt).toBe(1);
+    expect(retryEvent.maxAttempts).toBe(2);
+    expect(retryEvent.err).toBe(err);
+    expect(retryEvent.label).toBe("telegram");
   });
 
   it("retries immediately when the resolved delay is zero", async () => {
@@ -181,6 +192,60 @@ describe("retryAsync", () => {
       "boom",
     );
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to the default attempt count for malformed numeric overloads", async () => {
+    const fn = vi.fn().mockRejectedValue(new Error("boom"));
+    await expect(runRetryNumberCase(fn, Number.NaN, 0)).rejects.toThrow("boom");
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("caps numeric overload delays to the safe timer range", async () => {
+    vi.clearAllTimers();
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
+    try {
+      const promise = retryAsync(fn, 2, 3_000_000_000);
+      await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS);
+      await expect(promise).resolves.toBe("ok");
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps overflowed numeric overload backoff delays at the safe timer ceiling", async () => {
+    vi.clearAllTimers();
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("boom-1"))
+      .mockRejectedValueOnce(new Error("boom-2"))
+      .mockResolvedValueOnce("ok");
+    try {
+      const promise = retryAsync(fn, 3, Number.MAX_VALUE);
+      await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS);
+      await expect(promise).resolves.toBe("ok");
+      expect(timeoutSpy).toHaveBeenNthCalledWith(
+        1,
+        expect.any(Function),
+        MAX_SAFE_TIMEOUT_DELAY_MS,
+      );
+      expect(timeoutSpy).toHaveBeenNthCalledWith(
+        2,
+        expect.any(Function),
+        MAX_SAFE_TIMEOUT_DELAY_MS,
+      );
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   it.each([
@@ -250,6 +315,19 @@ describe("resolveRetryConfig", () => {
         jitter: 2,
       },
       expected: { attempts: 3, minDelayMs: 300, maxDelayMs: 30000, jitter: 1 },
+    },
+    {
+      name: "caps huge retry delays to the safe timer range",
+      overrides: {
+        minDelayMs: 3_000_000_000,
+        maxDelayMs: 4_000_000_000,
+      },
+      expected: {
+        attempts: 3,
+        minDelayMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+        maxDelayMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+        jitter: 0,
+      },
     },
   ])("$name", ({ overrides, expected }) => {
     expect(resolveRetryConfig(undefined, overrides)).toEqual(expected);

@@ -1,14 +1,18 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "typebox";
+import type {
+  GatewayClientMode,
+  GatewayClientName,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayClientMode, GatewayClientName } from "../../gateway/protocol/client-info.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
+import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -24,9 +28,7 @@ export type ChannelExposure = {
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
 /** Agent tool registered by a channel plugin. */
-export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
-  ownerOnly?: boolean;
-};
+export type ChannelAgentTool = AgentTool;
 
 /** Lazy agent-tool factory used when tool availability depends on config. */
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
@@ -112,7 +114,7 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   dangerouslyAllowPrivateNetwork?: boolean;
-  /** Compatibility alias for legacy setup callers; prefer dangerouslyAllowPrivateNetwork. */
+  /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
   allowPrivateNetwork?: boolean;
   proxy?: string;
   userId?: string;
@@ -152,12 +154,29 @@ export type ChannelHeartbeatDeps = {
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
-export type ChannelLegacyStateMigrationPlan = {
-  kind: "copy" | "move";
-  label: string;
-  sourcePath: string;
-  targetPath: string;
-};
+export type ChannelLegacyStateMigrationPlan =
+  | {
+      kind: "copy" | "move";
+      label: string;
+      sourcePath: string;
+      targetPath: string;
+    }
+  | {
+      kind: "plugin-state-import";
+      label: string;
+      sourcePath: string;
+      targetPath: string;
+      pluginId: string;
+      namespace: string;
+      maxEntries: number;
+      scopeKey: string;
+      stateDir?: string;
+      cleanupSource?: "rename";
+      preview?: string;
+      readEntries: () =>
+        | Array<{ key: string; value: unknown; ttlMs?: number }>
+        | Promise<Array<{ key: string; value: unknown; ttlMs?: number }>>;
+    };
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */
 export type ChannelMeta = {
@@ -273,10 +292,29 @@ export type ChannelGroupContext = {
 };
 
 /** TTS voice delivery behavior advertised by a channel plugin. */
+/**
+ * Container tokens (file-extension shape, no leading dot) that the host
+ * speech-core pipeline knows how to pre-transcode synthesized audio into.
+ * Channels that benefit from a specific container — currently only
+ * iMessage, which needs Apple's native voice-memo CAF descriptor — name
+ * one here. Adding a new entry requires extending the host transcoder
+ * recipe table in lockstep so a typed declaration cannot silently no-op.
+ */
+export type PreferredAudioFileFormat = "caf";
+
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
   audioFileFormats?: readonly string[];
+  /**
+   * Optional preferred audio container the channel wants for voice-memo
+   * delivery. When set and the host can transcode (e.g. `afconvert` on
+   * macOS), the TTS pipeline pre-encodes synthesized audio to this format
+   * before handing it to the channel. Useful for channels (such as
+   * iMessage) whose downstream attempts its own container conversion
+   * that races against the upload write and fails.
+   */
+  preferAudioFileFormat?: PreferredAudioFileFormat;
 };
 
 /** Static capability flags advertised by a channel plugin. */
@@ -388,6 +426,8 @@ export type ChannelThreadingAdapter = {
    */
   allowExplicitReplyTagsWhenOff?: boolean;
   /**
+   * @deprecated Use allowExplicitReplyTagsWhenOff.
+   *
    * Deprecated alias for allowExplicitReplyTagsWhenOff.
    * Kept for compatibility with older plugin surfaces.
    */
@@ -432,6 +472,7 @@ export type ChannelThreadingContext = {
   ReplyToIdFull?: string;
   ThreadLabel?: string;
   MessageThreadId?: string | number;
+  TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
 };
@@ -444,6 +485,8 @@ export type ChannelThreadingToolContext = {
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  /** True when posting at the parent conversation root would leak a thread-originated reply. */
+  sameChannelThreadRequired?: boolean;
   /**
    * When true, skip cross-context decoration (e.g., "[from X]" prefix).
    * Use this for direct tool invocations where the agent is composing a new message,
@@ -454,6 +497,12 @@ export type ChannelThreadingToolContext = {
 
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
+  /**
+   * Provider prefixes accepted in explicit targets, including aliases not used
+   * as channel-selection aliases. Core uses these to reject cross-channel
+   * targets before plugin-specific normalization.
+   */
+  targetPrefixes?: readonly string[];
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
@@ -516,6 +565,8 @@ export type ChannelMessagingAdapter = {
     parentConversationCandidates?: string[];
   } | null;
   /**
+   * @deprecated Return parentConversationCandidates from resolveSessionConversation.
+   *
    * Legacy compatibility hook for parent fallbacks when a plugin does not need
    * to customize `id` or `threadId`. Core only uses this when
    * `resolveSessionConversation(...)` does not return
@@ -530,6 +581,11 @@ export type ChannelMessagingAdapter = {
     id: string;
     threadId?: string | null;
   }) => string | undefined;
+  /**
+   * @deprecated Use `targetResolver` for target id normalization and
+   * `resolveOutboundSessionRoute` for session/thread identity. This remains for
+   * compatibility with older route parsing helpers.
+   */
   parseExplicitTarget?: (params: { raw: string }) => {
     to: string;
     threadId?: string | number;
@@ -649,9 +705,11 @@ export type ChannelMessageActionContext = {
    * never be sourced from tool/model-controlled params.
    */
   requesterSenderId?: string | null;
+  /** Trusted owner identity bit from command/channel-action auth. */
   senderIsOwner?: boolean;
   sessionKey?: string | null;
   sessionId?: string | null;
+  inboundEventKind?: InboundEventKind;
   agentId?: string | null;
   gateway?: {
     url?: string;
@@ -663,12 +721,21 @@ export type ChannelMessageActionContext = {
   };
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
 
 export type ChannelToolSend = {
   to: string;
   accountId?: string | null;
   threadId?: string | null;
+};
+
+export type ChannelMessagePreparedSendPayloadContext = {
+  ctx: ChannelMessageActionContext;
+  to: string;
+  payload: ReplyPayload;
+  replyToId?: string | null;
+  threadId?: string | number | null;
 };
 
 /** Channel-owned action surface for the shared `message` tool. */
@@ -704,6 +771,14 @@ export type ChannelMessageActionAdapter = {
     toolContext?: ChannelThreadingToolContext;
   }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
+  /**
+   * Translate generic `message(action=send)` arguments into the payload core
+   * should persist, retry, recover, and ack. Return null to keep the legacy
+   * plugin-owned action path for sends that cannot be represented durably.
+   */
+  prepareSendPayload?: (
+    params: ChannelMessagePreparedSendPayloadContext,
+  ) => ReplyPayload | null | undefined | Promise<ReplyPayload | null | undefined>;
   /**
    * Prefer this for channel-specific poll semantics or extra poll parameters.
    * Core only parses the shared poll model when falling back to `outbound.sendPoll`.

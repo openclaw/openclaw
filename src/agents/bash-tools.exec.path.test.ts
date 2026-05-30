@@ -118,11 +118,16 @@ const normalizeText = (value?: string) =>
     .replace(/\r/g, "\n")
     .trim();
 
-const normalizePathEntries = (value?: string) =>
-  normalizeText(value)
-    .split(/[:\s]+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+function normalizePathEntries(value?: string): string[] {
+  const entries: string[] = [];
+  for (const entry of normalizeText(value).split(/[:\s]+/)) {
+    const normalized = entry.trim();
+    if (normalized.length > 0) {
+      entries.push(normalized);
+    }
+  }
+  return entries;
+}
 
 describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
@@ -245,12 +250,9 @@ describe("exec PATH login shell merge", () => {
 
       expect(entries).toEqual(["/usr/bin"]);
       expect(shellPathMock).toHaveBeenCalledTimes(1);
-      expect(shellPathMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-          timeoutMs: 1234,
-        }),
-      );
+      const shellPathCall = shellPathMock.mock.calls.at(0)?.[0];
+      expect(shellPathCall?.env).toBe(process.env);
+      expect(shellPathCall?.timeoutMs).toBe(1234);
     } finally {
       fs.rmSync(shellDir, { recursive: true, force: true });
     }
@@ -337,11 +339,25 @@ describe("exec host env validation", () => {
     "env --ignore-environment /approve abc123 allow-once",
     "env -i FOO=1 /approve abc123 allow-once",
     "env -S '/approve abc123 deny'",
+    "env -P /usr/bin /approve abc123 deny",
+    "env -iS'/approve abc123 deny'",
+    "env -S '/approve abc123' deny",
+    "env -iS'/approve abc123' deny",
     "command /approve abc123 deny",
     "command -p /approve abc123 deny",
     "exec -a openclaw /approve abc123 deny",
     "sudo /approve abc123 allow-once",
     "sudo -E /approve abc123 allow-once",
+    "sudo -EH /approve abc123 allow-once",
+    "sudo -k /approve abc123 allow-once",
+    "sudo --reset-timestamp /approve abc123 allow-once",
+    "sudo --command-timeout=1 /approve abc123 allow-once",
+    "sudo OPENCLAW_APPROVE=1 /approve abc123 allow-once",
+    "sudo -uroot bash -lc '/approve abc123 allow-once'",
+    "sudo -u root OPENCLAW_APPROVE=1 bash -lc '/approve abc123 allow-once'",
+    "sudo -EH bash -lc '/approve abc123 allow-once'",
+    "doas -uroot bash -lc '/approve abc123 deny'",
+    "env env env env env env /approve abc123 allow-once",
     "bash -lc '/approve abc123 deny'",
     "bash -c 'sudo /approve abc123 allow-once'",
     "sh -c '/approve abc123 allow-once'",

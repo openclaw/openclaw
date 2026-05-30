@@ -1,20 +1,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
 } from "./auth-profiles/store.js";
+import type { OAuthCredential } from "./auth-profiles/types.js";
+import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
   getApiKeyForModel,
   hasAvailableAuthForProvider,
   resolveApiKeyForProvider,
   resolveEnvApiKey,
+  resolveModelAuthMode,
 } from "./model-auth.js";
+import { hasAuthForModelProvider } from "./model-provider-auth.js";
 
 async function expectVertexAdcEnvApiKey(params: {
   provider: string;
@@ -37,6 +42,21 @@ async function expectVertexAdcEnvApiKey(params: {
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+function testModelDefinition(id: string): Model {
+  return {
+    id,
+    name: id,
+    provider: "test",
+    api: "responses",
+    baseUrl: "https://example.test/v1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
 }
 
 vi.mock("../plugins/setup-registry.js", async () => {
@@ -89,9 +109,21 @@ vi.mock("./provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("./model-auth-env-vars.js", () => {
+  const hasAllowedPlugin = (config: unknown, pluginId: string): boolean => {
+    if (!config || typeof config !== "object") {
+      return false;
+    }
+    const plugins = (config as { plugins?: unknown }).plugins;
+    if (!plugins || typeof plugins !== "object") {
+      return false;
+    }
+    const allow = (plugins as { allow?: unknown }).allow;
+    return Array.isArray(allow) && allow.includes(pluginId);
+  };
   const candidates = {
     anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    "google-vertex": ["GOOGLE_CLOUD_API_KEY"],
     "demo-local": ["DEMO_LOCAL_API_KEY"],
     huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
@@ -104,10 +136,56 @@ vi.mock("./model-auth-env-vars.js", () => {
     voyage: ["VOYAGE_API_KEY"],
     zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
   } as const;
+  const aliasMap = {
+    modelstudio: "qwen",
+    qwencloud: "qwen",
+    "z.ai": "zai",
+    "z-ai": "zai",
+    "opencode-go-auth": "opencode-go",
+    bedrock: "amazon-bedrock",
+    "aws-bedrock": "amazon-bedrock",
+  };
+  const resolveProviderEnvAuthEvidence = (params?: { config?: OpenClawConfig }) => {
+    const evidence = {
+      "google-vertex": [
+        {
+          type: "local-file-with-env",
+          fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
+          fallbackPaths: [
+            "${HOME}/.config/gcloud/application_default_credentials.json",
+            "${APPDATA}/gcloud/application_default_credentials.json",
+          ],
+          requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+          requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
+          credentialMarker: "gcp-vertex-credentials",
+          source: "gcloud adc",
+        },
+      ],
+    } satisfies Record<string, readonly unknown[]>;
+    if (!hasAllowedPlugin(params?.config, "workspace-cloud")) {
+      return evidence;
+    }
+    return {
+      ...evidence,
+      "workspace-cloud": [
+        {
+          type: "local-file-with-env",
+          fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+          credentialMarker: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+        },
+      ],
+    };
+  };
   return {
-    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
     resolveProviderEnvApiKeyCandidates: () => candidates,
+    resolveProviderEnvAuthEvidence,
+    resolveProviderEnvAuthLookupMaps: (params?: { config?: OpenClawConfig }) => ({
+      aliasMap,
+      envCandidateMap: candidates,
+      authEvidenceMap: resolveProviderEnvAuthEvidence(params),
+    }),
   };
 });
 
@@ -157,16 +235,25 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProvider: ({ provider }: { provider: string }) =>
     provider === "openai" ? ["openai"] : [],
+  resolveOwningPluginIdsForProviderRef: ({ provider }: { provider: string }) =>
+    provider === "openai" ? ["openai"] : [],
 }));
 
-vi.mock("./cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
-  readCodexCliCredentialsCached: () => null,
-  readMiniMaxCliCredentialsCached: () => null,
+const cliCredentialMocks = vi.hoisted(() => ({
+  readClaudeCliCredentialsCached: vi.fn<(options?: unknown) => ClaudeCliCredential | null>(
+    () => null,
+  ),
+  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
+  readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
+
+vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  cliCredentialMocks.readClaudeCliCredentialsCached.mockReset().mockReturnValue(null);
+  cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
+  cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -199,6 +286,21 @@ const BEDROCK_PROVIDER_CFG = {
   },
 } as const;
 
+const BEDROCK_PROVIDER_CFG_WITH_PROFILE = {
+  ...BEDROCK_PROVIDER_CFG,
+  auth: {
+    order: {
+      "amazon-bedrock": ["amazon-bedrock:default"],
+    },
+    profiles: {
+      "amazon-bedrock:default": {
+        provider: "amazon-bedrock",
+        mode: "aws-sdk",
+      },
+    },
+  },
+} as const;
+
 async function resolveBedrockProvider() {
   return resolveApiKeyForProvider({
     provider: "amazon-bedrock",
@@ -218,6 +320,33 @@ async function expectBedrockAuthSource(params: {
     expect(resolved.source).toContain(params.expectedSource);
   });
 }
+
+it("resolves config-only aws-sdk profiles without stored credentials", async () => {
+  const resolved = await resolveApiKeyForProvider({
+    provider: "amazon-bedrock",
+    profileId: "amazon-bedrock:default",
+    store: { version: 1, profiles: {} },
+    cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
+  });
+
+  expect(resolved.mode).toBe("aws-sdk");
+  expect(resolved.profileId).toBe("amazon-bedrock:default");
+  expect(resolved.source).toBe("profile:amazon-bedrock:default");
+  expect(resolved.apiKey).toBeUndefined();
+});
+
+it("uses configured aws-sdk profile order without stored credentials", async () => {
+  const resolved = await resolveApiKeyForProvider({
+    provider: "amazon-bedrock",
+    store: { version: 1, profiles: {} },
+    cfg: BEDROCK_PROVIDER_CFG_WITH_PROFILE as never,
+  });
+
+  expect(resolved.mode).toBe("aws-sdk");
+  expect(resolved.profileId).toBe("amazon-bedrock:default");
+  expect(resolved.source).toBe("profile:amazon-bedrock:default");
+  expect(resolved.apiKey).toBeUndefined();
+});
 
 function buildDemoLocalStore(keys: string[]) {
   return {
@@ -255,123 +384,306 @@ async function resolveDemoLocalApiKey(params: {
   storedKeys: string[];
   configuredApiKey: string;
 }) {
-  let resolved!: Awaited<ReturnType<typeof resolveApiKeyForProvider>>;
-  await withEnvAsync({ DEMO_LOCAL_API_KEY: params.envApiKey }, async () => {
-    resolved = await resolveApiKeyForProvider({
+  return await withEnvAsync({ DEMO_LOCAL_API_KEY: params.envApiKey }, async () => {
+    return await resolveApiKeyForProvider({
       provider: "demo-local",
       store: buildDemoLocalStore(params.storedKeys),
       cfg: buildDemoLocalProviderCfg(params.configuredApiKey),
     });
   });
-  return resolved;
 }
 
 describe("getApiKeyForModel", () => {
   it("reads oauth auth-profiles entries from auth-profiles.json via explicit profile", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-"));
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-oauth-",
+        agentEnv: "main",
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              ...oauthFixture,
+            },
+          },
+        });
 
-    try {
-      const agentDir = path.join(tempDir, "agent");
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: tempDir,
-          OPENCLAW_AGENT_DIR: agentDir,
-          PI_CODING_AGENT_DIR: agentDir,
+        const model = {
+          id: "codex-mini-latest",
+          provider: "openai-codex",
+          api: "openai-codex-responses",
+        } as Model;
+
+        const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
+          allowKeychainPrompt: false,
+        });
+        const apiKey = await getApiKeyForModel({
+          model,
+          profileId: "openai-codex:default",
+          store,
+          agentDir: process.env.OPENCLAW_AGENT_DIR,
+        });
+        expect(apiKey.apiKey).toBe(oauthFixture.access);
+      },
+    );
+  });
+
+  it("keeps OpenAI OAuth profiles on the Codex transport and API keys on direct OpenAI", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
         },
-        async () => {
-          const authProfilesPath = path.join(agentDir, "auth-profiles.json");
-          await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-          await fs.writeFile(
-            authProfilesPath,
-            `${JSON.stringify(
-              {
-                version: 1,
-                profiles: {
-                  "openai-codex:default": {
-                    type: "oauth",
-                    provider: "openai-codex",
-                    ...oauthFixture,
-                  },
-                },
+        "openai:api-key": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "direct-openai-key",
+        },
+      },
+    };
+
+    const directAuth = await getApiKeyForModel({
+      model: {
+        id: "chat-latest",
+        provider: "openai",
+        api: "openai-responses",
+      } as Model,
+      store,
+    });
+    const codexAuth = await getApiKeyForModel({
+      model: {
+        id: "gpt-5.5",
+        provider: "openai",
+        api: "openai-codex-responses",
+      } as Model,
+      store,
+    });
+
+    expect(directAuth).toMatchObject({
+      apiKey: "direct-openai-key",
+      mode: "api-key",
+      profileId: "openai:api-key",
+    });
+    expect(codexAuth).toMatchObject({
+      apiKey: oauthFixture.access,
+      mode: "oauth",
+      profileId: "openai:chatgpt",
+    });
+  });
+
+  it("rejects an explicit OpenAI OAuth profile for direct OpenAI Platform models", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+      },
+    };
+
+    await expect(
+      getApiKeyForModel({
+        model: {
+          id: "chat-latest",
+          provider: "openai",
+          api: "openai-responses",
+        } as Model,
+        profileId: "openai:chatgpt",
+        lockedProfile: true,
+        store,
+      }),
+    ).rejects.toThrow(/requires an OpenAI API key profile/);
+  });
+
+  it("uses the config default agent dir when resolving provider profiles", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-agent-dir-",
+        agentEnv: "clear",
+        env: {
+          XAI_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              "xai:default": {
+                type: "api_key",
+                provider: "xai",
+                key: "process-default-key",
               },
-              null,
-              2,
-            )}\n`,
-            "utf8",
-          );
+            },
+          },
+          "main",
+        );
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              "xai:default": {
+                type: "api_key",
+                provider: "xai",
+                key: "configured-agent-key",
+              },
+            },
+          },
+          "configured",
+        );
 
-          const model = {
-            id: "codex-mini-latest",
-            provider: "openai-codex",
-            api: "openai-codex-responses",
-          } as Model<Api>;
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "configured",
+                default: true,
+                agentDir: state.agentDir("configured"),
+              },
+            ],
+          },
+        };
 
-          const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
-            allowKeychainPrompt: false,
-          });
-          const apiKey = await getApiKeyForModel({
-            model,
-            profileId: "openai-codex:default",
-            store,
-            agentDir: process.env.OPENCLAW_AGENT_DIR,
-          });
-          expect(apiKey.apiKey).toBe(oauthFixture.access);
+        const resolved = await resolveApiKeyForProvider({ provider: "xai", cfg });
+        expect(resolved.apiKey).toBe("configured-agent-key");
+        expect(resolved.source).toBe("profile:xai:default");
+      },
+    );
+  });
+
+  it("reports the config default agent dir when provider auth is missing", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-missing-agent-dir-",
+        agentEnv: "clear",
+        env: {
+          XAI_API_KEY: undefined,
         },
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+      },
+      async (state) => {
+        const configuredAgentDir = state.agentDir("configured");
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "configured",
+                default: true,
+                agentDir: configuredAgentDir,
+              },
+            ],
+          },
+        };
+
+        await expect(resolveApiKeyForProvider({ provider: "xai", cfg })).rejects.toThrow(
+          `agentDir: ${configuredAgentDir}`,
+        );
+      },
+    );
   });
 
   it("suggests openai-codex when only Codex OAuth is configured", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
-
-    try {
-      const agentDir = path.join(tempDir, "agent");
-      await withEnvAsync(
-        {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-",
+        agentEnv: "main",
+        env: {
           OPENAI_API_KEY: undefined,
-          OPENCLAW_STATE_DIR: tempDir,
-          OPENCLAW_AGENT_DIR: agentDir,
-          PI_CODING_AGENT_DIR: agentDir,
         },
-        async () => {
-          const authProfilesPath = path.join(tempDir, "agent", "auth-profiles.json");
-          await fs.mkdir(path.dirname(authProfilesPath), {
-            recursive: true,
-            mode: 0o700,
-          });
-          await fs.writeFile(
-            authProfilesPath,
-            `${JSON.stringify(
-              {
-                version: 1,
-                profiles: {
-                  "openai-codex:default": {
-                    type: "oauth",
-                    provider: "openai-codex",
-                    ...oauthFixture,
-                  },
-                },
-              },
-              null,
-              2,
-            )}\n`,
-            "utf8",
-          );
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              ...oauthFixture,
+            },
+          },
+        });
 
-          let error: unknown = null;
-          try {
-            await resolveApiKeyForProvider({ provider: "openai" });
-          } catch (err) {
-            error = err;
-          }
-          expect(String(error)).toContain("openai/gpt-5.5");
+        let error: unknown = null;
+        try {
+          await resolveApiKeyForProvider({ provider: "openai" });
+        } catch (err) {
+          error = err;
+        }
+        expect(String(error)).toContain("openai/gpt-5.5");
+      },
+    );
+  });
+
+  it("does not read unrelated external CLI credentials when resolving provider auth", async () => {
+    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires: createUsableOAuthExpiry(),
+    });
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-scope-",
+        agentEnv: "main",
+        env: {
+          OPENAI_API_KEY: undefined,
         },
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+      },
+      async () => {
+        await expect(resolveApiKeyForProvider({ provider: "openai" })).rejects.toThrow(
+          'No API key found for provider "openai".',
+        );
+      },
+    );
+
+    expect(cliCredentialMocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
+    expect(cliCredentialMocks.readCodexCliCredentialsCached).toHaveBeenCalled();
+    expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
+  it("reads Claude CLI credentials when the Claude CLI provider is resolved", async () => {
+    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-cli-access",
+      refresh: "claude-cli-refresh",
+      expires: createUsableOAuthExpiry(),
+    });
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-claude-cli-",
+        agentEnv: "main",
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({ provider: "claude-cli" });
+        expect(resolved.apiKey).toBe("claude-cli-access");
+        expect(resolved.profileId).toBe("anthropic:claude-cli");
+        expect(resolved.source).toBe("profile:anthropic:claude-cli");
+        expect(resolved.mode).toBe("oauth");
+      },
+    );
+
+    const options = cliCredentialMocks.readClaudeCliCredentialsCached.mock.calls.at(0)?.[0] as
+      | { allowKeychainPrompt?: boolean }
+      | undefined;
+    expect(options?.allowKeychainPrompt).toBe(false);
   });
 
   it("throws when ZAI API key is missing", async () => {
@@ -454,6 +766,140 @@ describe("getApiKeyForModel", () => {
       expect(resolved.source).toContain("OPENAI_API_KEY");
       expect(resolved.profileId).toBeUndefined();
     });
+  });
+
+  it("uses trusted workspace manifest auth evidence in runtime auth checks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const credentialsPath = path.join(tempDir, "credentials.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    const cfg: OpenClawConfig = {
+      plugins: {
+        allow: ["workspace-cloud"],
+      },
+    };
+
+    try {
+      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+        const store = { version: 1 as const, profiles: {} };
+        const resolved = await resolveApiKeyForProvider({
+          provider: "workspace-cloud",
+          cfg,
+          store,
+        });
+
+        expect(resolved).toEqual({
+          apiKey: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+          mode: "api-key",
+        });
+        expect(resolveModelAuthMode("workspace-cloud", cfg, store)).toBe("api-key");
+        await expect(
+          hasAvailableAuthForProvider({
+            provider: "workspace-cloud",
+            cfg,
+            store,
+          }),
+        ).resolves.toBe(true);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores untrusted workspace manifest auth evidence in runtime auth checks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const credentialsPath = path.join(tempDir, "credentials.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+        const store = { version: 1 as const, profiles: {} };
+        expect(resolveModelAuthMode("workspace-cloud", { plugins: {} }, store)).toBe("unknown");
+        await expect(
+          hasAvailableAuthForProvider({
+            provider: "workspace-cloud",
+            cfg: { plugins: {} },
+            store,
+          }),
+        ).resolves.toBe(false);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the same trusted workspace manifest auth evidence in provider auth checks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const credentialsPath = path.join(tempDir, "credentials.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+    const store = { version: 1 as const, profiles: {} };
+
+    try {
+      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+        await expect(
+          hasAuthForModelProvider({
+            provider: "workspace-cloud",
+            cfg: { plugins: { allow: ["workspace-cloud"] } },
+            store,
+          }),
+        ).resolves.toBe(true);
+        await expect(
+          hasAuthForModelProvider({
+            provider: "workspace-cloud",
+            cfg: { plugins: {} },
+            store,
+          }),
+        ).resolves.toBe(false);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses runtime auth availability for provider auth checks", async () => {
+    const store = { version: 1 as const, profiles: {} };
+    const localNoKeyConfig = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [testModelDefinition("meta-llama/Meta-Llama-3-8B-Instruct")],
+          },
+          remote: {
+            api: "openai-completions",
+            baseUrl: "https://remote.example.com/v1",
+            models: [testModelDefinition("remote-model")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      hasAuthForModelProvider({
+        provider: "amazon-bedrock",
+        cfg: {} as OpenClawConfig,
+        env: {},
+        store,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      hasAuthForModelProvider({
+        provider: "vllm",
+        cfg: localNoKeyConfig,
+        env: {},
+        store,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      hasAuthForModelProvider({
+        provider: "remote",
+        cfg: localNoKeyConfig,
+        env: {},
+        store,
+      }),
+    ).resolves.toBe(false);
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {
@@ -832,7 +1278,7 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("resolveEnvApiKey('anthropic-vertex') uses the provided env snapshot", async () => {
+  it("resolveEnvApiKey('anthropic-vertex') uses the provided env snapshot", () => {
     const resolved = resolveEnvApiKey("anthropic-vertex", {
       GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
     } as NodeJS.ProcessEnv);
@@ -840,13 +1286,13 @@ describe("getApiKeyForModel", () => {
     expect(resolved).toBeNull();
   });
 
-  it("resolveEnvApiKey('google-vertex') uses the provided env snapshot", async () => {
+  it("resolveEnvApiKey('google-vertex') uses the provided env snapshot", () => {
     const resolved = resolveEnvApiKey("google-vertex", {
       GOOGLE_CLOUD_API_KEY: "google-cloud-api-key",
     } as NodeJS.ProcessEnv);
 
     expect(resolved?.apiKey).toBe("google-cloud-api-key");
-    expect(resolved?.source).toBe("gcloud adc");
+    expect(resolved?.source).toBe("env: GOOGLE_CLOUD_API_KEY");
   });
 
   it("resolveEnvApiKey('google-vertex') accepts ADC credentials from the provided env snapshot", async () => {
@@ -859,6 +1305,178 @@ describe("getApiKeyForModel", () => {
         GOOGLE_CLOUD_PROJECT: "vertex-project",
       },
     });
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts Unicode explicit ADC credential paths", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-unicode-"));
+    const explicitDir = path.join(homeDir, "認証情報");
+    const fallbackDir = path.join(homeDir, ".config", "gcloud");
+    const explicitCredentialsPath = path.join(explicitDir, "adc.json");
+    await fs.mkdir(explicitDir, { recursive: true });
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(explicitCredentialsPath, "{}", "utf8");
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: explicitCredentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+        HOME: homeDir,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts Unicode ADC fallback home paths", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const homeDir = path.join(tempDir, "認証情報-home");
+    const fallbackDir = path.join(homeDir, ".config", "gcloud");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+        HOME: homeDir,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') rejects GOOGLE_CLOUD_PROJECT_ID-only ADC auth evidence", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-project-id-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT_ID: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved).toBeNull();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') accepts Windows APPDATA ADC fallback evidence", async () => {
+    const appDataDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-appdata-"));
+    const fallbackDir = path.join(appDataDir, "gcloud");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        APPDATA: appDataDir,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(appDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') does not synthesize APPDATA from USERPROFILE", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const userProfileDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-google-adc-userprofile-"),
+    );
+    const fallbackDir = path.join(userProfileDir, "AppData", "Roaming", "gcloud");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        HOME: homeDir,
+        USERPROFILE: userProfileDir,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved).toBeNull();
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+      await fs.rm(userProfileDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') keeps ADC fallback when manifest env candidates are empty", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-candidates-"));
+    const credentialsPath = path.join(tempDir, "adc.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+
+    try {
+      const resolved = resolveEnvApiKey(
+        "google-vertex",
+        {
+          GOOGLE_APPLICATION_CREDENTIALS: credentialsPath,
+          GOOGLE_CLOUD_LOCATION: "us-central1",
+          GOOGLE_CLOUD_PROJECT: "vertex-project",
+        } as NodeJS.ProcessEnv,
+        { candidateMap: { "google-vertex": ["GOOGLE_CLOUD_API_KEY"] } },
+      );
+
+      expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
+      expect(resolved?.source).toBe("gcloud adc");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolveEnvApiKey('google-vertex') rejects missing explicit ADC path before fallback paths", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-adc-home-"));
+    const fallbackDir = path.join(homeDir, ".config", "gcloud");
+    const missingCredentialsPath = path.join(homeDir, "missing-adc.json");
+    await fs.mkdir(fallbackDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fallbackDir, "application_default_credentials.json"),
+      "{}",
+      "utf8",
+    );
+
+    try {
+      const resolved = resolveEnvApiKey("google-vertex", {
+        GOOGLE_APPLICATION_CREDENTIALS: missingCredentialsPath,
+        GOOGLE_CLOUD_LOCATION: "us-central1",
+        GOOGLE_CLOUD_PROJECT: "vertex-project",
+        HOME: homeDir,
+      } as NodeJS.ProcessEnv);
+
+      expect(resolved).toBeNull();
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+    }
   });
 
   it("resolveEnvApiKey('anthropic-vertex') accepts GOOGLE_APPLICATION_CREDENTIALS with project_id", async () => {
@@ -875,12 +1493,28 @@ describe("getApiKeyForModel", () => {
     });
   });
 
-  it("resolveEnvApiKey('anthropic-vertex') accepts explicit metadata auth opt-in", async () => {
+  it("resolveEnvApiKey('anthropic-vertex') accepts explicit metadata auth opt-in", () => {
     const resolved = resolveEnvApiKey("anthropic-vertex", {
       ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
     } as NodeJS.ProcessEnv);
 
     expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
     expect(resolved?.source).toBe("gcloud adc");
+  });
+
+  it("resolveEnvApiKey skips plugin setup fallback when precomputed maps are authoritative", () => {
+    const resolved = resolveEnvApiKey(
+      "anthropic-vertex",
+      {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      } as NodeJS.ProcessEnv,
+      {
+        candidateMap: {},
+        authEvidenceMap: {},
+        skipSetupProviderFallback: true,
+      },
+    );
+
+    expect(resolved).toBeNull();
   });
 });

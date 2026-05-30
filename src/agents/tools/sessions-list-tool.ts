@@ -6,21 +6,35 @@ import {
   resolveSessionFilePathOptions,
   resolveStorePath,
 } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-utils.fs.js";
-import { deriveSessionTitle } from "../../gateway/session-utils.js";
+import {
+  deriveSessionTitle,
+  readSessionTitleFieldsFromTranscriptAsync,
+} from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import {
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+} from "../schema/typebox.js";
 import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
 import {
-  createSessionVisibilityGuard,
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+} from "./common.js";
+import {
   createAgentToAgentPolicy,
+  createSessionVisibilityRowChecker,
   classifySessionKind,
   deriveChannel,
   resolveDisplaySessionKey,
@@ -34,9 +48,9 @@ import {
 
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
-  limit: Type.Optional(Type.Number({ minimum: 1 })),
-  activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
-  messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
+  limit: optionalPositiveIntegerSchema(),
+  activeMinutes: optionalPositiveIntegerSchema(),
+  messageLimit: optionalNonNegativeIntegerSchema(),
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
@@ -45,6 +59,8 @@ const SessionsListToolSchema = Type.Object({
 });
 
 type GatewayCaller = typeof callGateway;
+
+const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
 function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
   return value === "running" ||
@@ -91,18 +107,9 @@ export function createSessionsListTool(opts?: {
       );
       const allowedKinds = allowedKindsList.length ? new Set(allowedKindsList) : undefined;
 
-      const limit =
-        typeof params.limit === "number" && Number.isFinite(params.limit)
-          ? Math.max(1, Math.floor(params.limit))
-          : undefined;
-      const activeMinutes =
-        typeof params.activeMinutes === "number" && Number.isFinite(params.activeMinutes)
-          ? Math.max(1, Math.floor(params.activeMinutes))
-          : undefined;
-      const messageLimitRaw =
-        typeof params.messageLimit === "number" && Number.isFinite(params.messageLimit)
-          ? Math.max(0, Math.floor(params.messageLimit))
-          : 0;
+      const limit = readPositiveIntegerParam(params, "limit");
+      const activeMinutes = readPositiveIntegerParam(params, "activeMinutes");
+      const messageLimitRaw = readNonNegativeIntegerParam(params, "messageLimit") ?? 0;
       const messageLimit = Math.min(messageLimitRaw, 20);
       const label = readStringParam(params, "label");
       const agentId = readStringParam(params, "agentId");
@@ -110,6 +117,8 @@ export function createSessionsListTool(opts?: {
       const includeDerivedTitles = params.includeDerivedTitles === true;
       const includeLastMessage = params.includeLastMessage === true;
       const gatewayCall = opts?.callGateway ?? callGateway;
+      const a2aPolicy = createAgentToAgentPolicy(cfg);
+      const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
 
       const list = await gatewayCall<{ sessions: Array<SessionListRow>; path: string }>({
         method: "sessions.list",
@@ -119,6 +128,8 @@ export function createSessionsListTool(opts?: {
           label,
           agentId,
           search,
+          includeDerivedTitles: false,
+          includeLastMessage: false,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
           spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
@@ -127,8 +138,7 @@ export function createSessionsListTool(opts?: {
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
-      const a2aPolicy = createAgentToAgentPolicy(cfg);
-      const visibilityGuard = await createSessionVisibilityGuard({
+      const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
         requesterSessionKey: effectiveRequesterKey,
         visibility,
@@ -136,6 +146,13 @@ export function createSessionsListTool(opts?: {
       });
       const rows: SessionListRow[] = [];
       const historyTargets: Array<{ row: SessionListRow; resolvedKey: string }> = [];
+      const titleTargets: Array<{
+        row: SessionListRow;
+        titleEntry: SessionEntry;
+        sessionId: string;
+        sessionFile?: string;
+        agentId: string;
+      }> = [];
 
       for (const entry of sessions) {
         if (!entry || typeof entry !== "object") {
@@ -145,7 +162,17 @@ export function createSessionsListTool(opts?: {
         if (!key) {
           continue;
         }
-        const access = visibilityGuard.check(key);
+        const access = visibilityGuard.check({
+          key,
+          agentId: typeof entry.agentId === "string" ? entry.agentId : undefined,
+          ownerSessionKey:
+            typeof (entry as { ownerSessionKey?: unknown }).ownerSessionKey === "string"
+              ? (entry as { ownerSessionKey?: string }).ownerSessionKey
+              : undefined,
+          spawnedBy: typeof entry.spawnedBy === "string" ? entry.spawnedBy : undefined,
+          parentSessionKey:
+            typeof entry.parentSessionKey === "string" ? entry.parentSessionKey : undefined,
+        });
         if (!access.allowed) {
           continue;
         }
@@ -176,10 +203,7 @@ export function createSessionsListTool(opts?: {
             : undefined;
         const originChannel =
           typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
-        const deliveryContext =
-          entry.deliveryContext && typeof entry.deliveryContext === "object"
-            ? (entry.deliveryContext as Record<string, unknown>)
-            : undefined;
+        const deliveryContext = deliveryContextFromSession(entry);
         const deliveryChannel = readStringValue(deliveryContext?.channel);
         const deliveryTo = readStringValue(deliveryContext?.to);
         const deliveryAccountId = readStringValue(deliveryContext?.accountId);
@@ -309,31 +333,24 @@ export function createSessionsListTool(opts?: {
           lastAccountId,
           transcriptPath,
         };
-        if (sessionId && (includeDerivedTitles || includeLastMessage)) {
-          const fields = readSessionTitleFieldsFromTranscript(
+        if (
+          sessionId &&
+          hydrateTranscriptFieldsAfterFiltering &&
+          titleTargets.length < SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS
+        ) {
+          titleTargets.push({
+            row,
+            titleEntry: {
+              sessionId,
+              displayName: row.displayName,
+              label: row.label,
+              subject: readStringValue((entry as { subject?: unknown }).subject),
+              updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
+            },
             sessionId,
-            storePath,
-            sessionFile,
-            resolvedAgentId,
-          );
-          if (includeDerivedTitles && !row.derivedTitle) {
-            const derivedTitle = deriveSessionTitle(
-              {
-                sessionId,
-                displayName: row.displayName,
-                label: row.label,
-                subject: readStringValue((entry as { subject?: unknown }).subject),
-                updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
-              },
-              fields.firstUserMessage,
-            );
-            if (derivedTitle) {
-              row.derivedTitle = derivedTitle;
-            }
-          }
-          if (includeLastMessage && !row.lastMessagePreview && fields.lastMessagePreview) {
-            row.lastMessagePreview = fields.lastMessagePreview;
-          }
+            ...(sessionFile ? { sessionFile } : {}),
+            agentId: resolvedAgentId,
+          });
         }
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({
@@ -344,6 +361,37 @@ export function createSessionsListTool(opts?: {
           historyTargets.push({ row, resolvedKey });
         }
         rows.push(row);
+      }
+
+      if (titleTargets.length > 0) {
+        const maxConcurrent = Math.min(4, titleTargets.length);
+        let index = 0;
+        const worker = async () => {
+          while (true) {
+            const next = index;
+            index += 1;
+            if (next >= titleTargets.length) {
+              return;
+            }
+            const target = titleTargets[next];
+            const fields = await readSessionTitleFieldsFromTranscriptAsync(
+              target.sessionId,
+              storePath,
+              target.sessionFile,
+              target.agentId,
+            );
+            if (includeDerivedTitles && !target.row.derivedTitle) {
+              target.row.derivedTitle = deriveSessionTitle(
+                target.titleEntry,
+                fields.firstUserMessage,
+              );
+            }
+            if (includeLastMessage && fields.lastMessagePreview) {
+              target.row.lastMessagePreview = fields.lastMessagePreview;
+            }
+          }
+        };
+        await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
       }
 
       if (messageLimit > 0 && historyTargets.length > 0) {
@@ -370,9 +418,19 @@ export function createSessionsListTool(opts?: {
         await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
       }
 
+      const visibilityMetadata =
+        visibility === "all"
+          ? undefined
+          : {
+              mode: visibility,
+              restricted: true,
+              warning: `Session visibility is restricted (effective tools.sessions.visibility=${visibility}). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.`,
+            };
+
       return jsonResult({
         count: rows.length,
         sessions: rows,
+        ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
       });
     },
   };

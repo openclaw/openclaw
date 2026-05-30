@@ -1,13 +1,17 @@
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
   ImageGenerationResult,
-  ImageGenerationSourceImage,
+} from "openclaw/plugin-sdk/image-generation";
+import {
+  parseOpenAiCompatibleImageResponse,
+  toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   ensureAuthProfileStore,
   isProviderApiKeyConfigured,
@@ -179,20 +183,33 @@ function resolveOutputMime(outputFormat?: ImageGenerationOutputFormat): {
   return { mimeType: DEFAULT_OUTPUT_MIME, extension: DEFAULT_OUTPUT_EXTENSION };
 }
 
+type OpenAIImageRequest = Parameters<ImageGenerationProvider["generateImage"]>[0];
+type OpenAIImageOptions = NonNullable<OpenAIImageRequest["providerOptions"]>["openai"];
+
+function resolveOpenAIImageOutputCompression(
+  req: OpenAIImageRequest,
+  openai: OpenAIImageOptions,
+): number | undefined {
+  if (openai?.outputCompression === undefined) {
+    return undefined;
+  }
+  const outputFormat = req.outputFormat ?? "png";
+  return outputFormat === "jpeg" || outputFormat === "webp" ? openai.outputCompression : undefined;
+}
+
 function appendOpenAIImageOptions(
   target: Record<string, unknown> | FormData,
   req: Parameters<ImageGenerationProvider["generateImage"]>[0],
 ): void {
   const openai = req.providerOptions?.openai;
   const background = openai?.background ?? req.background;
+  const outputCompression = resolveOpenAIImageOutputCompression(req, openai);
   const entries: Record<string, unknown> = {
     ...(req.quality !== undefined ? { quality: req.quality } : {}),
     ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
     ...(background !== undefined ? { background } : {}),
     ...(openai?.moderation !== undefined ? { moderation: openai.moderation } : {}),
-    ...(openai?.outputCompression !== undefined
-      ? { output_compression: openai.outputCompression }
-      : {}),
+    ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
     ...(openai?.user !== undefined ? { user: openai.user } : {}),
   };
   for (const [key, value] of Object.entries(entries)) {
@@ -280,46 +297,6 @@ function normalizeProviderId(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? "";
 }
 
-function hasExplicitOpenAIDirectAuthConfig(cfg: OpenClawConfig | undefined): boolean {
-  const profiles = cfg?.auth?.profiles;
-  if (!profiles) {
-    return false;
-  }
-  return Object.values(profiles).some(
-    (profile) => normalizeProviderId(profile.provider) === "openai",
-  );
-}
-
-function hasExplicitOpenAIDirectProviderConfig(cfg: OpenClawConfig | undefined): boolean {
-  if (hasExplicitOpenAIDirectAuthConfig(cfg)) {
-    return true;
-  }
-  const providerConfig = cfg?.models?.providers?.openai;
-  if (!providerConfig) {
-    return false;
-  }
-  if (providerConfig.apiKey !== undefined) {
-    return true;
-  }
-  const configuredBaseUrl = resolveConfiguredOpenAIBaseUrl(cfg);
-  if (
-    configuredBaseUrl.trim() &&
-    configuredBaseUrl.replace(/\/+$/, "") !== DEFAULT_OPENAI_IMAGE_BASE_URL
-  ) {
-    return true;
-  }
-  if (providerConfig.api !== undefined) {
-    return true;
-  }
-  if (providerConfig.headers && Object.keys(providerConfig.headers).length > 0) {
-    return true;
-  }
-  if (providerConfig.authHeader === false || providerConfig.request !== undefined) {
-    return true;
-  }
-  return false;
-}
-
 function resolveRequestAuthStore(req: {
   authStore?: AuthProfileStore;
   agentDir?: string;
@@ -336,20 +313,155 @@ function resolveRequestAuthStore(req: {
   });
 }
 
-function hasCodexOAuthProfileConfigured(req: {
+function hasDirectOpenAIImageApiKeyAuth(params: {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): boolean {
+  if (hasExplicitOpenAIImageApiKeyConfig(params.cfg)) {
+    return true;
+  }
+  if (process.env.OPENAI_API_KEY?.trim()) {
+    return true;
+  }
+  const store = params.agentDir
+    ? ensureAuthProfileStore(params.agentDir, {
+        allowKeychainPrompt: false,
+      })
+    : undefined;
+  if (!store) {
+    return false;
+  }
+  const profileIds = listProfilesForProvider(store, "openai");
+  if (profileIds.length === 0) {
+    return true;
+  }
+  return profileIds.some((profileId) => store.profiles[profileId]?.type === "api_key");
+}
+
+function hasCodexResponseTransportProfileConfigured(req: {
   authStore?: AuthProfileStore;
   agentDir?: string;
 }): boolean {
   const store = resolveRequestAuthStore(req);
-  return Boolean(store && listProfilesForProvider(store, "openai-codex").length > 0);
+  if (!store) {
+    return false;
+  }
+  return ["openai", "openai-codex"].some((provider) =>
+    listProfilesForProvider(store, provider).some(
+      (profileId) =>
+        store.profiles[profileId]?.type === "oauth" || store.profiles[profileId]?.type === "token",
+    ),
+  );
 }
 
-type OpenAIImageApiResponse = {
-  data?: Array<{
-    b64_json?: string;
-    revised_prompt?: string;
-  }>;
-};
+function resolveOpenAIImageAuthProvider(req: {
+  cfg?: OpenClawConfig;
+  authStore?: AuthProfileStore;
+  agentDir?: string;
+}): string {
+  const providerConfig = req.cfg?.models?.providers?.openai;
+  if (providerConfig?.apiKey !== undefined || providerConfig?.auth === "api-key") {
+    return "openai";
+  }
+  const store = resolveRequestAuthStore(req);
+  if (!store) {
+    return "openai";
+  }
+  const profiles = Object.values(store.profiles);
+  const hasCanonicalProfiles = profiles.some(
+    (profile) => normalizeProviderId(profile.provider) === "openai",
+  );
+  const hasLegacySubscriptionProfile = profiles.some(
+    (profile) =>
+      normalizeProviderId(profile.provider) === "openai-codex" &&
+      (profile.type === "oauth" || profile.type === "token"),
+  );
+  return !hasCanonicalProfiles && hasLegacySubscriptionProfile ? "openai-codex" : "openai";
+}
+
+function hasExplicitOpenAIImageApiKeyConfig(cfg: OpenClawConfig | undefined): boolean {
+  const providerConfig = cfg?.models?.providers?.openai;
+  return providerConfig?.apiKey !== undefined || providerConfig?.auth === "api-key";
+}
+
+function hasExplicitDirectOpenAIImageConfig(cfg: OpenClawConfig | undefined): boolean {
+  const providerConfig = cfg?.models?.providers?.openai;
+  if (!providerConfig) {
+    return false;
+  }
+  return (
+    hasExplicitOpenAIImageApiKeyConfig(cfg) ||
+    providerConfig.headers !== undefined ||
+    providerConfig.authHeader !== undefined ||
+    providerConfig.request !== undefined ||
+    (providerConfig.api !== undefined && providerConfig.api !== "openai-codex-responses")
+  );
+}
+
+function resolveConfiguredOpenAIImageHeaders(
+  cfg: OpenClawConfig | undefined,
+): Record<string, string> | undefined {
+  const headers = cfg?.models?.providers?.openai?.headers;
+  if (!headers) {
+    return undefined;
+  }
+  const stringHeaders = Object.fromEntries(
+    Object.entries(headers).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+  return Object.keys(stringHeaders).length > 0 ? stringHeaders : undefined;
+}
+
+function forceOpenAIImageApiKeyAuth(cfg: OpenClawConfig | undefined): OpenClawConfig | undefined {
+  if (!hasExplicitOpenAIImageApiKeyConfig(cfg)) {
+    return cfg;
+  }
+  const providerConfig = cfg?.models?.providers?.openai;
+  if (!providerConfig) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    models: {
+      ...cfg?.models,
+      providers: {
+        ...cfg?.models?.providers,
+        openai: {
+          ...providerConfig,
+          auth: "api-key",
+        },
+      },
+    },
+  };
+}
+
+async function resolveOpenAIImageAuth(req: {
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+}) {
+  const provider = resolveOpenAIImageAuthProvider(req);
+  const primary = await resolveOptionalApiKeyForProvider({
+    provider,
+    cfg: req.cfg,
+    agentDir: req.agentDir,
+    store: req.authStore,
+  });
+  if (primary?.apiKey || provider === "openai-codex") {
+    return primary;
+  }
+  return await resolveOptionalApiKeyForProvider({
+    provider: "openai-codex",
+    cfg: req.cfg,
+    agentDir: req.agentDir,
+    store: req.authStore,
+  });
+}
+
+function isCodexSubscriptionAuthMode(mode: unknown): boolean {
+  return mode === "oauth" || mode === "token";
+}
 
 type OpenAICodexImageGenerationEvent = {
   type?: string;
@@ -384,13 +496,8 @@ function inferImageUploadFileName(params: {
     return path.basename(fileName);
   }
   const mimeType = params.mimeType?.trim().toLowerCase() || DEFAULT_OUTPUT_MIME;
-  const ext = mimeType === "image/jpeg" ? "jpg" : mimeType.replace(/^image\//, "") || "png";
+  const ext = extensionForMime(mimeType)?.slice(1) ?? "png";
   return `image-${params.index + 1}.${ext}`;
-}
-
-function toOpenAIDataUrl(image: ImageGenerationSourceImage): string {
-  const mimeType = image.mimeType?.trim() || DEFAULT_OUTPUT_MIME;
-  return `data:${mimeType};base64,${Buffer.from(image.buffer).toString("base64")}`;
 }
 
 async function readResponseBodyText(response: Response): Promise<string> {
@@ -595,7 +702,7 @@ function logCodexImageAuthSelected(params: {
     allowTransparentDefaultReroute: true,
   });
   log.info(
-    `image auth selected: provider=openai-codex mode=${sanitizeLogValue(
+    `image auth selected: provider=openai mode=${sanitizeLogValue(
       params.authMode,
     )} transport=codex-responses requestedModel=${sanitizeLogValue(
       model,
@@ -609,7 +716,12 @@ async function generateOpenAICodexImage(params: {
 }): Promise<ImageGenerationResult> {
   const { req, apiKey } = params;
   const inputImages = req.inputImages ?? [];
-  const codexProviderConfig = req.cfg?.models?.providers?.["openai-codex"];
+  const openAIProviderConfig = req.cfg?.models?.providers?.openai;
+  const legacyCodexProviderConfig = req.cfg?.models?.providers?.["openai-codex"];
+  const codexProviderConfig =
+    openAIProviderConfig?.api === "openai-codex-responses"
+      ? openAIProviderConfig
+      : legacyCodexProviderConfig;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: canonicalizeCodexResponsesBaseUrl(codexProviderConfig?.baseUrl),
@@ -619,7 +731,7 @@ async function generateOpenAICodexImage(params: {
         Accept: "text/event-stream",
       },
       request: sanitizeConfiguredModelProviderRequest(codexProviderConfig?.request),
-      provider: "openai-codex",
+      provider: "openai",
       api: "openai-codex-responses",
       capability: "image",
       transport: "http",
@@ -638,12 +750,13 @@ async function generateOpenAICodexImage(params: {
   const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
   const openai = req.providerOptions?.openai;
   const background = openai?.background ?? req.background;
+  const outputCompression = resolveOpenAIImageOutputCompression(req, openai);
   headers.set("Content-Type", "application/json");
   const content: Array<Record<string, unknown>> = [
     { type: "input_text", text: req.prompt },
     ...inputImages.map((image) => ({
       type: "input_image",
-      image_url: toOpenAIDataUrl(image),
+      image_url: toImageDataUrl({ buffer: image.buffer, mimeType: image.mimeType }),
       detail: "auto",
     })),
   ];
@@ -669,9 +782,7 @@ async function generateOpenAICodexImage(params: {
             ...(req.quality !== undefined ? { quality: req.quality } : {}),
             ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
             ...(background !== undefined ? { background } : {}),
-            ...(openai?.outputCompression !== undefined
-              ? { output_compression: openai.outputCompression }
-              : {}),
+            ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
           },
         ],
         tool_choice: { type: "image_generation" },
@@ -681,6 +792,7 @@ async function generateOpenAICodexImage(params: {
       timeoutMs,
       fetchFn: fetch,
       allowPrivateNetwork,
+      ssrfPolicy: req.ssrfPolicy,
       dispatcherPolicy,
     });
     const { response, release } = requestResult;
@@ -724,73 +836,124 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           agentDir,
         })
       ) {
-        return true;
+        return (
+          isPublicOpenAIImageBaseUrl(resolveConfiguredOpenAIBaseUrl(cfg)) ||
+          hasDirectOpenAIImageApiKeyAuth({ cfg, agentDir })
+        );
+      }
+      if (
+        isProviderApiKeyConfigured({
+          provider: "openai-codex",
+          agentDir,
+        })
+      ) {
+        return isPublicOpenAIImageBaseUrl(resolveConfiguredOpenAIBaseUrl(cfg));
       }
       if (!isPublicOpenAIImageBaseUrl(resolveConfiguredOpenAIBaseUrl(cfg))) {
         return false;
       }
-      return isProviderApiKeyConfigured({
-        provider: "openai-codex",
-        agentDir,
-      });
+      return false;
     },
     async generateImage(req) {
       const inputImages = req.inputImages ?? [];
       const isEdit = inputImages.length > 0;
       const rawBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
       const publicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(rawBaseUrl);
-      const useCodexOAuthRoute =
+      const explicitOpenAIApiKeyConfig = hasExplicitOpenAIImageApiKeyConfig(req.cfg);
+      const explicitDirectOpenAIConfig = hasExplicitDirectOpenAIImageConfig(req.cfg);
+      const useCodexResponseTransportRoute =
         publicOpenAIBaseUrl &&
-        !hasExplicitOpenAIDirectProviderConfig(req.cfg) &&
-        hasCodexOAuthProfileConfigured(req);
-      if (useCodexOAuthRoute) {
-        const codexAuth = await resolveApiKeyForProvider({
-          provider: "openai-codex",
-          cfg: req.cfg,
+        !explicitDirectOpenAIConfig &&
+        hasCodexResponseTransportProfileConfigured(req);
+      let preResolvedImageAuth:
+        | NonNullable<Awaited<ReturnType<typeof resolveApiKeyForProvider>>>
+        | null
+        | undefined;
+      if (explicitOpenAIApiKeyConfig) {
+        const directAuth = await resolveOptionalApiKeyForProvider({
+          provider: "openai",
+          cfg: forceOpenAIImageApiKeyAuth(req.cfg),
           agentDir: req.agentDir,
           store: req.authStore,
+          credentialPrecedence: "env-first",
         });
-        if (!codexAuth.apiKey) {
+        preResolvedImageAuth =
+          directAuth?.apiKey && (directAuth.mode === undefined || directAuth.mode === "api-key")
+            ? directAuth
+            : null;
+      }
+      if (useCodexResponseTransportRoute) {
+        const codexAuth = await resolveOpenAIImageAuth(req);
+        if (!codexAuth?.apiKey) {
           throw new Error("OpenAI Codex OAuth missing");
         }
-        const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
-        logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
-        return generateOpenAICodexImage({ req, apiKey: codexAuth.apiKey });
-      }
-
-      const auth = await resolveOptionalApiKeyForProvider({
-        provider: "openai",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth?.apiKey) {
-        if (!publicOpenAIBaseUrl) {
-          throw new Error("OpenAI API key missing");
-        }
-        const codexAuth = await resolveOptionalApiKeyForProvider({
-          provider: "openai-codex",
-          cfg: req.cfg,
-          agentDir: req.agentDir,
-          store: req.authStore,
-        });
-        if (codexAuth?.apiKey) {
+        if (codexAuth.mode === "api-key") {
+          preResolvedImageAuth = codexAuth;
+        } else {
           const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
           logCodexImageAuthSelected({ req, authMode: codexAuth.mode, timeoutMs });
           return generateOpenAICodexImage({ req, apiKey: codexAuth.apiKey });
         }
+      }
+
+      let imageAuth:
+        | NonNullable<Awaited<ReturnType<typeof resolveApiKeyForProvider>>>
+        | null
+        | undefined =
+        preResolvedImageAuth !== undefined
+          ? preResolvedImageAuth
+          : await resolveOptionalApiKeyForProvider({
+              provider: "openai",
+              cfg: req.cfg,
+              agentDir: req.agentDir,
+              store: req.authStore,
+            });
+      if (
+        !explicitDirectOpenAIConfig &&
+        imageAuth?.apiKey &&
+        isCodexSubscriptionAuthMode(imageAuth.mode)
+      ) {
+        if (publicOpenAIBaseUrl) {
+          const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
+          logCodexImageAuthSelected({ req, authMode: imageAuth.mode, timeoutMs });
+          return generateOpenAICodexImage({ req, apiKey: imageAuth.apiKey });
+        }
+        imageAuth = undefined;
+      }
+      if (!imageAuth?.apiKey && publicOpenAIBaseUrl && !explicitDirectOpenAIConfig) {
+        const legacyCodexAuth = await resolveOptionalApiKeyForProvider({
+          provider: "openai-codex",
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          store: req.authStore,
+        });
+        if (legacyCodexAuth?.apiKey && isCodexSubscriptionAuthMode(legacyCodexAuth.mode)) {
+          const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
+          logCodexImageAuthSelected({ req, authMode: legacyCodexAuth.mode, timeoutMs });
+          return generateOpenAICodexImage({ req, apiKey: legacyCodexAuth.apiKey });
+        }
+        imageAuth = legacyCodexAuth;
+      }
+      if (!imageAuth?.apiKey) {
+        if (!publicOpenAIBaseUrl) {
+          throw new Error("OpenAI API key missing");
+        }
         throw new Error("OpenAI API key or Codex OAuth missing");
       }
       const isAzure = isAzureOpenAIBaseUrl(rawBaseUrl);
+      const openAIProviderConfig = req.cfg?.models?.providers?.openai;
 
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl: rawBaseUrl,
           defaultBaseUrl: DEFAULT_OPENAI_IMAGE_BASE_URL,
           allowPrivateNetwork: shouldAllowPrivateImageEndpoint(req),
+          headers: resolveConfiguredOpenAIImageHeaders(req.cfg),
+          request: sanitizeConfiguredModelProviderRequest(openAIProviderConfig?.request),
+          api: openAIProviderConfig?.api,
           defaultHeaders: isAzure
-            ? { "api-key": auth.apiKey }
-            : { Authorization: `Bearer ${auth.apiKey}` },
+            ? { "api-key": imageAuth.apiKey }
+            : { Authorization: `Bearer ${imageAuth.apiKey}` },
           provider: "openai",
           capability: "image",
           transport: "http",
@@ -842,6 +1005,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork,
+              ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });
           })()
@@ -864,6 +1028,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork,
+              ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });
           })();
@@ -874,23 +1039,25 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           isEdit ? "OpenAI image edit failed" : "OpenAI image generation failed",
         );
 
-        const data = (await response.json()) as OpenAIImageApiResponse;
+        const data = await response.json();
         const output = resolveOutputMime(req.outputFormat);
-        const images = (data.data ?? [])
-          .map((entry, index) => {
-            if (!entry.b64_json) {
-              return null;
-            }
-            return Object.assign(
-              {
-                buffer: Buffer.from(entry.b64_json, `base64`),
-                mimeType: output.mimeType,
-                fileName: `image-${index + 1}.${output.extension}`,
-              },
-              entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {},
-            );
-          })
-          .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+        const images = parseOpenAiCompatibleImageResponse(data, {
+          defaultMimeType: output.mimeType,
+          malformedResponseError: isEdit
+            ? "OpenAI image edit response malformed"
+            : "OpenAI image generation response malformed",
+        }).map((image, index) =>
+          Object.assign(image, {
+            fileName: `image-${index + 1}.${output.extension}`,
+          }),
+        );
+        if (images.length === 0) {
+          throw new Error(
+            isEdit
+              ? "OpenAI image edit response missing image data"
+              : "OpenAI image generation response missing image data",
+          );
+        }
 
         return {
           images,

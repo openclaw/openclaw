@@ -13,7 +13,7 @@ type OpenAIStrictToolModel = {
 
 const optionalString = readStringValue;
 
-export function resolvesToNativeOpenAIStrictTools(
+function resolvesToNativeOpenAIStrictTools(
   model: OpenAIStrictToolModel,
   transport: OpenAITransportKind,
 ): boolean {
@@ -31,7 +31,6 @@ export function resolvesToNativeOpenAIStrictTools(
   }
   return (
     capabilities.provider === "openai" ||
-    capabilities.provider === "openai-codex" ||
     capabilities.provider === "azure-openai" ||
     capabilities.provider === "azure-openai-responses"
   );

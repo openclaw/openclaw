@@ -1,13 +1,22 @@
-import type { CronJob } from "./types.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { normalizeCronStaggerMs } from "./stagger.js";
+
+type CronScheduleIdentityInput = { schedule?: unknown; enabled?: unknown } & Record<
+  string,
+  unknown
+>;
 
 function readString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return normalizeOptionalString(record[key]);
 }
 
 function readNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return coerceFiniteScheduleNumber(record[key]);
+}
+
+function readStaggerMs(record: Record<string, unknown>): number | undefined {
+  return normalizeCronStaggerMs(record.staggerMs);
 }
 
 function schedulePayloadFromRecord(
@@ -24,7 +33,7 @@ function schedulePayloadFromRecord(
   const everyMs = readNumber(schedule, "everyMs");
   const anchorMs = readNumber(schedule, "anchorMs");
   const tz = readString(schedule, "tz");
-  const staggerMs = readNumber(schedule, "staggerMs");
+  const staggerMs = readStaggerMs(schedule);
   const kind =
     rawKind === "at" || rawKind === "every" || rawKind === "cron"
       ? rawKind
@@ -53,7 +62,7 @@ function schedulePayloadFromRecord(
 }
 
 function resolveSchedulePayload(
-  job: { schedule?: unknown } & Record<string, unknown>,
+  job: CronScheduleIdentityInput,
 ): ReturnType<typeof schedulePayloadFromRecord> {
   if (job.schedule && typeof job.schedule === "object" && !Array.isArray(job.schedule)) {
     return schedulePayloadFromRecord(job.schedule as Record<string, unknown>);
@@ -61,23 +70,7 @@ function resolveSchedulePayload(
   return schedulePayloadFromRecord(job);
 }
 
-export function cronScheduleIdentity(
-  job: Pick<CronJob, "schedule"> & { enabled?: boolean },
-): string {
-  const schedule = resolveSchedulePayload(job as unknown as Record<string, unknown>);
-  if (!schedule) {
-    throw new Error("Unsupported cron schedule kind");
-  }
-  return JSON.stringify({
-    version: 1,
-    enabled: job.enabled ?? true,
-    schedule,
-  });
-}
-
-export function tryCronScheduleIdentity(
-  job: { schedule?: unknown; enabled?: unknown } & Record<string, unknown>,
-): string | undefined {
+export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string | undefined {
   const schedule = resolveSchedulePayload(job);
   if (!schedule) {
     return undefined;
@@ -90,8 +83,14 @@ export function tryCronScheduleIdentity(
 }
 
 export function cronSchedulingInputsEqual(
-  previous: Pick<CronJob, "schedule"> & { enabled?: boolean },
-  next: Pick<CronJob, "schedule"> & { enabled?: boolean },
+  previous: CronScheduleIdentityInput,
+  next: CronScheduleIdentityInput,
 ): boolean {
-  return cronScheduleIdentity(previous) === cronScheduleIdentity(next);
+  const previousIdentity = tryCronScheduleIdentity(previous);
+  const nextIdentity = tryCronScheduleIdentity(next);
+  return (
+    previousIdentity !== undefined &&
+    nextIdentity !== undefined &&
+    previousIdentity === nextIdentity
+  );
 }

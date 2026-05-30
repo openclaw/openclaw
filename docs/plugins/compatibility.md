@@ -67,6 +67,24 @@ Use `--json` for stable machine-readable output in CI annotations. OpenClaw
 core should expose contracts and fixtures the inspector can consume, but should
 not publish the inspector binary from the main `openclaw` package.
 
+### Maintainer acceptance lane
+
+Use Crabbox-backed Blacksmith Testbox for the installable-package acceptance
+lane when validating the external inspector against OpenClaw plugin packages.
+Run it from a clean OpenClaw checkout after the package is built:
+
+```sh
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "pnpm install && pnpm build && npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/telegram --json"
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/discord --json"
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json --shell -- "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- <clawhub-plugin-dir> --json"
+```
+
+Keep this lane opt-in for maintainers because it installs an external npm
+package and may inspect plugin packages cloned outside the repo. The local repo
+guards cover the SDK export map, compatibility registry metadata, deprecated
+SDK-import burn-down, and bundled extension import boundaries; Testbox inspector
+proof covers the package as external plugin authors consume it.
+
 ## Deprecation policy
 
 OpenClaw should not remove a documented plugin contract in the same release
@@ -94,11 +112,14 @@ Current compatibility records include:
 
 - legacy broad SDK imports such as `openclaw/plugin-sdk/compat`
 - legacy hook-only plugin shapes and `before_agent_start`
+- legacy `api.on("deactivate", ...)` cleanup hook names while plugins migrate to
+  `gateway_stop`
 - legacy `activate(api)` plugin entrypoints while plugins migrate to
   `register(api)`
 - legacy SDK aliases such as `openclaw/extension-api`,
   `openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/command-auth`
-  status builders, `openclaw/plugin-sdk/test-utils`, and the `ClawdbotConfig` /
+  status builders, `openclaw/plugin-sdk/test-utils` (replaced by focused
+  `openclaw/plugin-sdk/*` test subpaths), and the `ClawdbotConfig` /
   `OpenClawSchemaType` type aliases
 - bundled plugin allowlist and enablement behavior
 - legacy provider/channel env-var manifest metadata
@@ -109,8 +130,13 @@ Current compatibility records include:
   `api.runtime.config.loadConfig()` / `api.runtime.config.writeConfigFile(...)`
 - legacy memory-plugin split registration while memory plugins move to
   `registerMemoryCapability`
+- legacy memory-specific embedding provider registration while embedding
+  providers move to `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`
 - legacy channel SDK helpers for native message schemas, mention gating,
   inbound envelope formatting, and approval capability nesting
+- legacy channel route key and comparable-target helper aliases while plugins
+  move to `openclaw/plugin-sdk/channel-route`
 - activation hints that are being replaced by manifest contribution ownership
 - `setup-api` runtime fallback while setup descriptors move to cold
   `setup.requiresRuntime: false` metadata

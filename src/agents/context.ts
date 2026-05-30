@@ -1,21 +1,28 @@
-// Lazy-load pi-coding-agent model metadata so we can infer context windows when
-// the agent reports a model id. This includes custom models.json entries.
+// Load session runtime model metadata so we can infer context windows when the
+// agent reports a model id. This includes custom models.json entries.
 
-import path from "node:path";
-import { isHelpOrVersionInvocation } from "../cli/argv.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "./agent-scope.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
 
-type ModelEntry = { id: string; contextWindow?: number; contextTokens?: number };
+type ModelEntry = {
+  id: string;
+  provider?: string;
+  contextWindow?: number;
+  contextTokens?: number;
+};
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -27,10 +34,17 @@ type ProviderConfigEntry = {
   models?: ConfigModelEntry[];
 };
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
-type AgentModelEntry = { params?: Record<string, unknown> };
 
-const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
-const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
+const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
+  "claude-opus-4-8",
+  "claude-opus-4.8",
+  "claude-opus-4-6",
+  "claude-opus-4.6",
+  "claude-opus-4-7",
+  "claude-opus-4.7",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -53,7 +67,7 @@ export function applyDiscoveredContextWindows(params: {
         : typeof model.contextWindow === "number"
           ? Math.trunc(model.contextWindow)
           : undefined;
-    const contextTokens = shouldUseDiscoveredAnthropicOpus47ContextWindow(model.id)
+    const contextTokens = shouldUseDiscoveredAnthropicGa1MContextWindow(model)
       ? ANTHROPIC_CONTEXT_1M_TOKENS
       : discoveredContextTokens;
     if (!contextTokens || contextTokens <= 0) {
@@ -101,82 +115,7 @@ export function applyConfiguredContextWindows(params: {
 }
 
 function loadModelsConfigRuntime() {
-  CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimePromise ??= import("./models-config.runtime.js");
-  return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimePromise;
-}
-
-function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
-  const entryBasename = normalizeLowercaseStringOrEmpty(path.basename(argv[1] ?? ""));
-  return (
-    entryBasename === "openclaw" ||
-    entryBasename === "openclaw.mjs" ||
-    entryBasename === "entry.js" ||
-    entryBasename === "entry.mjs"
-  );
-}
-
-function getCommandPathFromArgv(argv: string[]): string[] {
-  const args = argv.slice(2);
-  const tokens: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      break;
-    }
-    const consumed = consumeRootOptionToken(args, i);
-    if (consumed > 0) {
-      i += consumed - 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    tokens.push(arg);
-    if (tokens.length >= 2) {
-      break;
-    }
-  }
-  return tokens;
-}
-
-const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
-  "agent",
-  "backup",
-  "browser",
-  "completion",
-  "config",
-  "directory",
-  "doctor",
-  "gateway",
-  "health",
-  "hooks",
-  "logs",
-  "models",
-  "pairing",
-  "plugins",
-  "secrets",
-  "sessions",
-  "status",
-  "update",
-  "webhooks",
-]);
-
-export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
-  // Keep this gate tied to the real OpenClaw CLI entrypoints.
-  //
-  // This module can also land inside shared dist chunks that are imported from
-  // plugin-sdk/library surfaces during smoke tests and plugin loading. If we do
-  // eager warmup for those generic Node script imports, merely importing the
-  // built plugin-sdk can call ensureOpenClawModelsJson(), which cascades into
-  // plugin discovery and breaks dist/source singleton assumptions.
-  if (!isLikelyOpenClawCliProcess(argv)) {
-    return false;
-  }
-  if (isHelpOrVersionInvocation(argv)) {
-    return false;
-  }
-  const [primary] = getCommandPathFromArgv(argv);
-  return Boolean(primary) && !SKIP_EAGER_WARMUP_PRIMARY_COMMANDS.has(primary);
+  return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.load();
 }
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
@@ -214,7 +153,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   }
 }
 
-function ensureContextWindowCacheLoaded(): Promise<void> {
+export function ensureContextWindowCacheLoaded(): Promise<void> {
   if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise) {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
@@ -225,18 +164,24 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   }
 
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = (async () => {
+    const agentDir = resolveDefaultAgentDir(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
     try {
-      await (await loadModelsConfigRuntime()).ensureOpenClawModelsJson(cfg);
+      await (
+        await loadModelsConfigRuntime()
+      ).ensureOpenClawModelsJson(cfg, agentDir, {
+        workspaceDir,
+      });
     } catch {
       // Continue with best-effort discovery/overrides.
     }
 
     try {
-      const { discoverAuthStorage, discoverModels } =
-        await import("./pi-model-discovery-runtime.js");
-      const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
+      const modelRegistry = discoverModels(authStorage, agentDir, {
+        normalizeModels: false,
+        workspaceDir,
+      }) as unknown as ModelRegistryLike;
       const models =
         typeof modelRegistry.getAvailable === "function"
           ? modelRegistry.getAvailable()
@@ -261,10 +206,13 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
 export function lookupContextTokens(
   modelId?: string,
-  options?: { allowAsyncLoad?: boolean },
+  options?: { allowAsyncLoad?: boolean; skipRuntimeConfigLoad?: boolean },
 ): number | undefined {
   if (!modelId) {
     return undefined;
+  }
+  if (options?.skipRuntimeConfigLoad) {
+    return lookupCachedContextTokens(modelId);
   }
   if (options?.allowAsyncLoad === false) {
     // Read-only callers still need synchronous config-backed overrides, but they
@@ -275,31 +223,6 @@ export function lookupContextTokens(
     void ensureContextWindowCacheLoaded();
   }
   return lookupCachedContextTokens(modelId);
-}
-
-if (shouldEagerWarmContextWindowCache()) {
-  // Keep startup warmth for the real CLI, but avoid import-time side effects
-  // when this module is pulled in through library/plugin-sdk surfaces.
-  void ensureContextWindowCacheLoaded();
-}
-
-function resolveConfiguredModelParams(
-  cfg: OpenClawConfig | undefined,
-  provider: string,
-  model: string,
-): Record<string, unknown> | undefined {
-  const models = cfg?.agents?.defaults?.models;
-  if (!models) {
-    return undefined;
-  }
-  const key = normalizeLowercaseStringOrEmpty(`${provider}/${model}`);
-  for (const [rawKey, entry] of Object.entries(models)) {
-    if (normalizeLowercaseStringOrEmpty(rawKey) === key) {
-      const params = (entry as AgentModelEntry | undefined)?.params;
-      return params && typeof params === "object" ? params : undefined;
-    }
-  }
-  return undefined;
 }
 
 function resolveProviderModelRef(params: {
@@ -345,7 +268,7 @@ function resolveConfiguredProviderContextTokens(
     return undefined;
   }
 
-  // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
+  // Mirror the lookup order in embedded-agent-runner/model.ts: exact key first,
   // then normalized fallback. This prevents alias collisions from picking the
   // wrong configured cap based on Object.entries iteration order.
   function readProviderContextTokens(providerConfig: ProviderConfigEntry | undefined) {
@@ -395,7 +318,7 @@ function resolveConfiguredProviderContextTokens(
     return exactResult;
   }
 
-  // 2. Normalized fallback: covers alias keys such as "z.ai" → "zai".
+  // 2. Normalized fallback: covers case-only provider key differences.
   const normalizedProvider = normalizeProviderId(provider);
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }
@@ -405,40 +328,37 @@ function isAnthropic1MModel(provider: string, model: string): boolean {
     return false;
   }
   const modelId = resolveModelFamilyId(model);
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
-function shouldUseAnthropicOpus47ContextWindow(params: {
+function shouldUseAnthropicGa1MContextWindow(params: {
   provider?: string;
   model: string;
 }): boolean {
   const provider = params.provider ? normalizeProviderId(params.provider) : "";
-  return (
-    (provider === "anthropic" || provider === "claude-cli") && isClaudeOpus47Model(params.model)
-  );
+  return isAnthropic1MModel(provider, params.model);
 }
 
-function shouldUseDiscoveredAnthropicOpus47ContextWindow(modelId: string): boolean {
-  if (!isClaudeOpus47Model(modelId)) {
-    return false;
+function shouldUseDiscoveredAnthropicGa1MContextWindow(model: ModelEntry): boolean {
+  const provider =
+    typeof model.provider === "string" ? normalizeProviderId(model.provider) : undefined;
+  const modelId = model.id;
+  if (provider) {
+    return isAnthropic1MModel(provider, modelId);
   }
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   const slash = normalized.indexOf("/");
   if (slash < 0) {
     return false;
   }
-  const provider = normalizeProviderId(normalized.slice(0, slash));
-  return provider === "claude-cli";
+  const inferredProvider = normalizeProviderId(normalized.slice(0, slash));
+  const inferredModel = normalized.slice(slash + 1);
+  return inferredProvider === "claude-cli" && isAnthropic1MModel(inferredProvider, inferredModel);
 }
 
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
-}
-
-function isClaudeOpus47Model(model: string): boolean {
-  const modelId = resolveModelFamilyId(model);
-  return CLAUDE_OPUS_47_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
 export function resolveContextTokensForModel(params: {
@@ -459,8 +379,7 @@ export function resolveContextTokensForModel(params: {
   });
   const explicitProvider = params.provider?.trim();
   if (ref) {
-    const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
-    if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
+    if (explicitProvider && isAnthropic1MModel(ref.provider, ref.model)) {
       return ANTHROPIC_CONTEXT_1M_TOKENS;
     }
     // Only do the config direct scan when the caller explicitly passed a
@@ -482,7 +401,7 @@ export function resolveContextTokensForModel(params: {
     }
   }
 
-  if (explicitProvider && ref && shouldUseAnthropicOpus47ContextWindow(ref)) {
+  if (explicitProvider && ref && shouldUseAnthropicGa1MContextWindow(ref)) {
     return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
 
@@ -501,7 +420,10 @@ export function resolveContextTokensForModel(params: {
   if (params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      { allowAsyncLoad: params.allowAsyncLoad },
+      {
+        allowAsyncLoad: params.allowAsyncLoad,
+        skipRuntimeConfigLoad: Boolean(params.cfg),
+      },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;
@@ -512,6 +434,7 @@ export function resolveContextTokensForModel(params: {
   // (e.g. "google/gemini-2.5-pro") this IS the raw discovery cache key.
   const bareResult = lookupContextTokens(params.model, {
     allowAsyncLoad: params.allowAsyncLoad,
+    skipRuntimeConfigLoad: Boolean(params.cfg),
   });
   if (bareResult !== undefined) {
     return bareResult;
@@ -523,7 +446,10 @@ export function resolveContextTokensForModel(params: {
   if (!params.provider && ref && !ref.model.includes("/")) {
     const qualifiedResult = lookupContextTokens(
       `${normalizeProviderId(ref.provider)}/${ref.model}`,
-      { allowAsyncLoad: params.allowAsyncLoad },
+      {
+        allowAsyncLoad: params.allowAsyncLoad,
+        skipRuntimeConfigLoad: Boolean(params.cfg),
+      },
     );
     if (qualifiedResult !== undefined) {
       return qualifiedResult;

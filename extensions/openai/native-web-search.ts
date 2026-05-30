@@ -1,20 +1,17 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenAIApiBaseUrl } from "./base-url.js";
 
 const OPENAI_WEB_SEARCH_TOOL = { type: "web_search" } as const;
 
-export type OpenAINativeWebSearchPatchResult =
+type OpenAINativeWebSearchPatchResult =
   | "payload_not_object"
   | "native_tool_already_present"
   | "injected";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function isOpenAINativeWebSearchEligibleModel(model: {
   api?: unknown;
@@ -38,7 +35,7 @@ function shouldUseOpenAINativeWebSearchProvider(config: OpenClawConfig | undefin
   return normalized === "" || normalized === "auto" || normalized === "openai";
 }
 
-export function shouldEnableOpenAINativeWebSearch(params: {
+function shouldEnableOpenAINativeWebSearch(params: {
   config?: OpenClawConfig;
   model: { api?: unknown; provider?: unknown; baseUrl?: unknown };
 }): boolean {

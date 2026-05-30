@@ -31,6 +31,8 @@ export interface VoiceCallProvider {
   /** Provider identifier */
   readonly name: ProviderName;
 
+  setPublicUrl?(url: string): void;
+
   /**
    * Verify webhook signature/HMAC before processing.
    * Must be called before parseWebhookEvent.
@@ -42,6 +44,12 @@ export interface VoiceCallProvider {
    * Returns events and optional response to send back to provider.
    */
   parseWebhookEvent(ctx: WebhookContext, options?: WebhookParseOptions): ProviderWebhookParseResult;
+
+  /**
+   * Consume one-time TwiML that must be served before shortcut handlers such as
+   * realtime media streams take over the webhook response.
+   */
+  consumeInitialTwiML?: (ctx: WebhookContext) => string | null;
 
   /**
    * Initiate an outbound call.

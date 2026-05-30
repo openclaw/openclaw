@@ -1,3 +1,7 @@
+import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
+import { note } from "../../packages/terminal-core/src/note.js";
+import { formatPortRangeHint } from "../cli/error-format.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
@@ -10,10 +14,8 @@ import {
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
 import {
@@ -25,6 +27,13 @@ import {
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type GatewayTokenInputMode = "plaintext" | "ref";
+
+function validateGatewayPortInput(value: unknown): string | undefined {
+  if (parsePort(value) === null) {
+    return formatPortRangeHint();
+  }
+  return undefined;
+}
 
 export async function promptGatewayConfig(
   cfg: OpenClawConfig,
@@ -38,11 +47,11 @@ export async function promptGatewayConfig(
     await text({
       message: "Gateway port",
       initialValue: String(resolveGatewayPort(cfg)),
-      validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
+      validate: validateGatewayPortInput,
     }),
     runtime,
   );
-  const port = Number.parseInt(portRaw, 10);
+  const port = parsePort(portRaw) ?? resolveGatewayPort(cfg);
 
   let bind = guardCancel(
     await select({
@@ -93,9 +102,9 @@ export async function promptGatewayConfig(
 
   let authMode = guardCancel(
     await select({
-      message: "Gateway auth",
+      message: "Gateway access protection",
       options: [
-        { value: "token", label: "Token", hint: "Recommended default" },
+        { value: "token", label: "Token (recommended)", hint: "Recommended default" },
         { value: "password", label: "Password" },
         {
           value: "trusted-proxy",

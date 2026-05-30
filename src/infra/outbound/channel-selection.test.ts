@@ -3,9 +3,18 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   listChannelPlugins: vi.fn(),
   resolveOutboundChannelPlugin: vi.fn(),
+  missingOfficialExternalChannels: new Set<string>(),
 }));
 
-const deliverableChannelIds = vi.hoisted(() => ["alpha", "beta", "gamma", "delta", "muted"]);
+const deliverableChannelIds = vi.hoisted(() => [
+  "alpha",
+  "beta",
+  "gamma",
+  "delta",
+  "feishu",
+  "muted",
+  "whatsapp",
+]);
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: vi.fn(),
@@ -23,17 +32,32 @@ vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
 }));
 
+vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
+  resolveMissingOfficialExternalChannelPluginRepairHint: ({ channelId }: { channelId: string }) =>
+    mocks.missingOfficialExternalChannels.has(channelId)
+      ? {
+          pluginId: channelId,
+          channelId,
+          label: channelId === "whatsapp" ? "WhatsApp" : "Feishu",
+          installSpec: `@openclaw/${channelId}`,
+          installCommand: `openclaw plugins install @openclaw/${channelId}`,
+          doctorFixCommand: "openclaw doctor --fix",
+          repairHint: `Install the official external plugin with: openclaw plugins install @openclaw/${channelId}, or run: openclaw doctor --fix.`,
+        }
+      : null,
+}));
+
 type ChannelSelectionModule = typeof import("./channel-selection.js");
 type RuntimeModule = typeof import("../../runtime.js");
 
-let __testing: ChannelSelectionModule["__testing"];
+let testing: ChannelSelectionModule["testing"];
 let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessageChannels"];
 let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
 let runtimeModule: RuntimeModule;
 
 beforeAll(async () => {
   runtimeModule = await import("../../runtime.js");
-  ({ __testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
+  ({ testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
     await import("./channel-selection.js"));
 });
 
@@ -73,7 +97,7 @@ describe("listConfiguredMessageChannels", () => {
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
       id: channel,
     }));
-    __testing.resetLoggedChannelSelectionErrors();
+    testing.resetLoggedChannelSelectionErrors();
     errorSpy.mockClear();
   });
 
@@ -141,6 +165,11 @@ describe("resolveMessageChannelSelection", () => {
   beforeEach(() => {
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
+      id: channel,
+    }));
+    mocks.missingOfficialExternalChannels.clear();
   });
 
   it.each([
@@ -216,6 +245,36 @@ describe("resolveMessageChannelSelection", () => {
     verify?.(setupResult as never);
   });
 
+  it("allows bootstrap while checking explicit and fallback channels", async () => {
+    const cfg = {} as never;
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
+      channel === "beta" ? { id: "beta" } : undefined,
+    );
+
+    await expect(
+      expectResolvedSelection({
+        cfg,
+        channel: "alpha",
+        fallbackChannel: "beta",
+      }),
+    ).resolves.toEqual({
+      channel: "beta",
+      configured: [],
+      source: "tool-context-fallback",
+    });
+
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(1, {
+      channel: "alpha",
+      cfg,
+      allowBootstrap: true,
+    });
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(2, {
+      channel: "beta",
+      cfg,
+      allowBootstrap: true,
+    });
+  });
+
   it.each([
     {
       params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "not-a-channel" },
@@ -229,8 +288,43 @@ describe("resolveMessageChannelSelection", () => {
       expectedMessage: "Channel is unavailable: alpha",
     },
     {
+      setup: () => {
+        mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
+        mocks.missingOfficialExternalChannels.add("feishu");
+      },
+      params: {
+        cfg: { channels: { feishu: { appId: "cli_xxx" } } } as never,
+        channel: "feishu",
+      },
+      expectedMessage:
+        "Channel is unavailable: feishu. Install the official external plugin with: openclaw plugins install @openclaw/feishu, or run: openclaw doctor --fix.",
+    },
+    {
       params: { cfg: {} as never },
-      expectedMessage: "Channel is required (no configured channels detected).",
+      expectedMessage:
+        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
+    },
+    {
+      setup: () => {
+        mocks.resolveOutboundChannelPlugin.mockReturnValue(undefined);
+        mocks.missingOfficialExternalChannels.add("whatsapp");
+      },
+      params: { cfg: { channels: { whatsapp: { enabled: true } } } as never },
+      expectedMessage:
+        "Channel is required (no available channels detected). Configured official external channel WhatsApp is missing its plugin. Install the official external plugin with: openclaw plugins install @openclaw/whatsapp, or run: openclaw doctor --fix.",
+    },
+    {
+      setup: () => {
+        mocks.listChannelPlugins.mockReturnValue([
+          makePlugin({
+            id: "whatsapp",
+            isConfigured: async () => false,
+          }),
+        ]);
+      },
+      params: { cfg: { channels: { whatsapp: { enabled: true } } } as never },
+      expectedMessage:
+        "Channel is required (no configured channels detected). Run openclaw channels add to configure one",
     },
     {
       setup: () => {
@@ -240,7 +334,8 @@ describe("resolveMessageChannelSelection", () => {
         ]);
       },
       params: { cfg: {} as never },
-      expectedMessage: "Channel is required when multiple channels are configured: beta, gamma",
+      expectedMessage:
+        "Channel is required when multiple channels are configured: beta, gamma. Pass --channel <channel> to choose one.",
     },
   ])("rejects invalid channel selection for %j", async ({ setup, params, expectedMessage }) => {
     setup?.();

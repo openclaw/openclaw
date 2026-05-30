@@ -14,6 +14,7 @@ import type {
 } from "../../config/types.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -25,11 +26,20 @@ import {
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
   formatPortDiagnostics,
+  inspectPortConnections,
   inspectPortUsage,
+  type PortConnection,
   type PortListener,
   type PortUsageStatus,
 } from "../../infra/ports.js";
+import {
+  readGatewayRestartHandoffSync,
+  type GatewayRestartHandoff,
+} from "../../infra/restart-handoff.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
+import { VERSION } from "../../version.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -38,6 +48,7 @@ type ConfigSummary = {
   exists: boolean;
   valid: boolean;
   issues?: Array<{ path: string; message: string }>;
+  warnings?: ConfigFileSnapshot["warnings"];
   controlUi?: GatewayControlUiConfig;
 };
 
@@ -50,6 +61,7 @@ type GatewayStatusSummary = {
   portSource: "service args" | "env/config";
   probeUrl: string;
   probeNote?: string;
+  version?: string | null;
 };
 
 type PortStatusSummary = {
@@ -81,43 +93,49 @@ type ResolvedGatewayStatus = {
   probeUrlOverride: string | null;
 };
 
-let gatewayProbeAuthModulePromise:
-  | Promise<typeof import("../../gateway/probe-auth.js")>
-  | undefined;
-let daemonInspectModulePromise: Promise<typeof import("../../daemon/inspect.js")> | undefined;
-let serviceAuditModulePromise: Promise<typeof import("../../daemon/service-audit.js")> | undefined;
-let gatewayTlsModulePromise: Promise<typeof import("../../infra/tls/gateway.js")> | undefined;
-let daemonProbeModulePromise: Promise<typeof import("./probe.js")> | undefined;
-let restartHealthModulePromise: Promise<typeof import("./restart-health.js")> | undefined;
+type CliStatusSummary = {
+  version: string;
+  entrypoint?: string;
+};
+
+const gatewayProbeAuthModuleLoader = createLazyImportLoader(
+  () => import("../../gateway/probe-auth.js"),
+);
+const daemonInspectModuleLoader = createLazyImportLoader(() => import("../../daemon/inspect.js"));
+const launchdModuleLoader = createLazyImportLoader(() => import("../../daemon/launchd.js"));
+const serviceAuditModuleLoader = createLazyImportLoader(
+  () => import("../../daemon/service-audit.js"),
+);
+const gatewayTlsModuleLoader = createLazyImportLoader(() => import("../../infra/tls/gateway.js"));
+const daemonProbeModuleLoader = createLazyImportLoader(() => import("./probe.js"));
+const restartHealthModuleLoader = createLazyImportLoader(() => import("./restart-health.js"));
 
 function loadGatewayProbeAuthModule() {
-  gatewayProbeAuthModulePromise ??= import("../../gateway/probe-auth.js");
-  return gatewayProbeAuthModulePromise;
+  return gatewayProbeAuthModuleLoader.load();
 }
 
 function loadDaemonInspectModule() {
-  daemonInspectModulePromise ??= import("../../daemon/inspect.js");
-  return daemonInspectModulePromise;
+  return daemonInspectModuleLoader.load();
+}
+
+function loadLaunchdModule() {
+  return launchdModuleLoader.load();
 }
 
 function loadServiceAuditModule() {
-  serviceAuditModulePromise ??= import("../../daemon/service-audit.js");
-  return serviceAuditModulePromise;
+  return serviceAuditModuleLoader.load();
 }
 
 function loadGatewayTlsModule() {
-  gatewayTlsModulePromise ??= import("../../infra/tls/gateway.js");
-  return gatewayTlsModulePromise;
+  return gatewayTlsModuleLoader.load();
 }
 
 function loadDaemonProbeModule() {
-  daemonProbeModulePromise ??= import("./probe.js");
-  return daemonProbeModulePromise;
+  return daemonProbeModuleLoader.load();
 }
 
 function loadRestartHealthModule() {
-  restartHealthModulePromise ??= import("./restart-health.js");
-  return restartHealthModulePromise;
+  return restartHealthModuleLoader.load();
 }
 
 function resolveSnapshotRuntimeConfig(snapshot: ConfigFileSnapshot | null): OpenClawConfig | null {
@@ -191,11 +209,16 @@ async function readFastStatusConfig(configPath: string): Promise<StatusConfigRea
 async function readFullStatusConfig(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
+  pluginValidation?: "full" | "skip";
 }): Promise<StatusConfigRead> {
   const io = createConfigIO({
     env: params.env,
     configPath: params.configPath,
-    pluginValidation: "skip",
+    pluginValidation: params.pluginValidation ?? "skip",
+    logger: {
+      error: () => {},
+      warn: () => {},
+    },
   });
   const snapshot = await io.readConfigFileSnapshot().catch(() => null);
   const cfg = resolveSnapshotRuntimeConfig(snapshot) ?? io.loadConfig();
@@ -205,6 +228,7 @@ async function readFullStatusConfig(params: {
       exists: snapshot?.exists ?? false,
       valid: snapshot?.valid ?? true,
       ...(snapshot?.issues?.length ? { issues: snapshot.issues } : {}),
+      ...(snapshot?.warnings?.length ? { warnings: snapshot.warnings } : {}),
       controlUi: cfg.gateway?.controlUi,
     },
     cfg,
@@ -215,12 +239,14 @@ async function readFullStatusConfig(params: {
 async function readStatusConfig(params: {
   env: NodeJS.ProcessEnv;
   configPath: string;
+  deep?: boolean;
 }): Promise<StatusConfigRead> {
   return (
-    (await readFastStatusConfig(params.configPath)) ??
+    (params.deep ? null : await readFastStatusConfig(params.configPath)) ??
     (await readFullStatusConfig({
       env: params.env,
       configPath: params.configPath,
+      pluginValidation: params.deep ? "full" : "skip",
     }))
   );
 }
@@ -233,9 +259,10 @@ function appendProbeNote(
   if (values.length === 0) {
     return undefined;
   }
-  return [...new Set(values)].join(" ");
+  return uniqueStrings(values).join(" ");
 }
 export type DaemonStatus = {
+  cli?: CliStatusSummary;
   logFile?: string;
   service: {
     label: string;
@@ -250,6 +277,8 @@ export type DaemonStatus = {
     } | null;
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
+    restartHandoff?: GatewayRestartHandoff;
+    staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   };
   config?: {
     cli: ConfigSummary;
@@ -269,6 +298,10 @@ export type DaemonStatus = {
     listeners: PortListener[];
     hints: string[];
   };
+  connections?: {
+    port: number;
+    established: PortConnection[];
+  };
   lastError?: string;
   rpc?: {
     ok: boolean;
@@ -279,6 +312,11 @@ export type DaemonStatus = {
       scopes?: string[];
       capability?: string;
     };
+    server?: {
+      version?: string | null;
+      connId?: string | null;
+    };
+    version?: string | null;
     error?: string;
     url?: string;
     authWarning?: string;
@@ -300,8 +338,17 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
   return true;
 }
 
+function resolveCliStatusSummary(argv: string[] = process.argv): CliStatusSummary {
+  const entrypoint = argv[1]?.trim();
+  return {
+    version: VERSION,
+    ...(entrypoint ? { entrypoint } : {}),
+  };
+}
+
 async function loadDaemonConfigContext(
   serviceEnv?: Record<string, string>,
+  opts: { deep?: boolean } = {},
 ): Promise<DaemonConfigContext> {
   const mergedDaemonEnv = {
     ...(process.env as Record<string, string | undefined>),
@@ -317,6 +364,7 @@ async function loadDaemonConfigContext(
   const cliConfigRead = await readStatusConfig({
     env: process.env,
     configPath: cliConfigPath,
+    deep: opts.deep,
   });
   const sharesDaemonConfigContext =
     sameConfigPath && (cliConfigRead.mode === "fast" || !serviceEnv);
@@ -325,6 +373,7 @@ async function loadDaemonConfigContext(
     : await readStatusConfig({
         env: mergedDaemonEnv as NodeJS.ProcessEnv,
         configPath: daemonConfigPath,
+        deep: opts.deep,
       });
 
   return {
@@ -420,6 +469,27 @@ async function inspectDaemonPortStatuses(params: {
   };
 }
 
+async function inspectEstablishedGatewayClients(params: {
+  daemonPort: number;
+  deep?: boolean;
+  gatewayMode?: string;
+}): Promise<DaemonStatus["connections"] | undefined> {
+  if (params.deep !== true || params.gatewayMode === "remote") {
+    return undefined;
+  }
+  const result = await inspectPortConnections(params.daemonPort).catch(() => null);
+  const establishedClients = result?.connections.filter(
+    (connection) => connection.direction !== "server",
+  );
+  if (!result || !establishedClients || establishedClients.length === 0) {
+    return undefined;
+  }
+  return {
+    port: result.port,
+    established: establishedClients,
+  };
+}
+
 export async function gatherDaemonStatus(
   opts: {
     rpc: GatewayRpcOpts;
@@ -440,6 +510,7 @@ export async function gatherDaemonStatus(
     service.isLoaded({ env: serviceEnv }).catch(() => false),
     service.readRuntime(serviceEnv).catch((err) => ({ status: "unknown", detail: String(err) })),
   ]);
+  const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit = command
     ? await loadServiceAuditModule().then(({ auditGatewayServiceConfig }) =>
         auditGatewayServiceConfig({
@@ -455,7 +526,7 @@ export async function gatherDaemonStatus(
     cliConfigSummary,
     daemonConfigSummary,
     configMismatch,
-  } = await loadDaemonConfigContext(command?.environment);
+  } = await loadDaemonConfigContext(command?.environment, { deep: opts.deep });
   const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
     cliCfg,
     daemonCfg,
@@ -467,6 +538,11 @@ export async function gatherDaemonStatus(
     daemonPort,
     cliPort,
   });
+  const establishedClients = await inspectEstablishedGatewayClients({
+    daemonPort,
+    deep: opts.deep,
+    gatewayMode: daemonCfg.gateway?.mode,
+  });
 
   const extraServices = opts.deep
     ? await loadDaemonInspectModule()
@@ -477,8 +553,16 @@ export async function gatherDaemonStatus(
         )
         .catch(() => [])
     : [];
+  const staleUpdateLaunchdJobs =
+    opts.deep && process.platform === "darwin"
+      ? await loadLaunchdModule()
+          .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs())
+          .catch(() => [])
+      : [];
 
-  const timeoutMs = parseStrictPositiveInteger(opts.rpc.timeout ?? "10000") ?? 10_000;
+  const timeoutMs =
+    parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
+    Math.max(10_000, daemonCfg.gateway?.handshakeTimeoutMs ?? 0);
 
   const tlsEnabled = daemonCfg.gateway?.tls?.enabled === true;
   const shouldUseLocalTlsRuntime = opts.probe && !probeUrlOverride && tlsEnabled;
@@ -513,10 +597,12 @@ export async function gatherDaemonStatus(
           url: gateway.probeUrl,
           token: daemonProbeAuth?.token,
           password: daemonProbeAuth?.password,
+          config: daemonCfg,
           tlsFingerprint:
             shouldUseLocalTlsRuntime && tlsRuntime?.enabled
               ? tlsRuntime.fingerprintSha256
               : undefined,
+          preauthHandshakeTimeoutMs: daemonCfg.gateway?.handshakeTimeoutMs,
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
@@ -539,6 +625,11 @@ export async function gatherDaemonStatus(
           )
           .catch(() => undefined)
       : undefined;
+  const gatewayVersion = opts.probe
+    ? ((rpc && "server" in rpc ? rpc.server?.version : undefined) ??
+      (rpc && "version" in rpc ? rpc.version : undefined) ??
+      null)
+    : undefined;
 
   let lastError: string | undefined;
   if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
@@ -546,6 +637,7 @@ export async function gatherDaemonStatus(
   }
 
   return {
+    cli: resolveCliStatusSummary(),
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       label: service.label,
@@ -555,15 +647,25 @@ export async function gatherDaemonStatus(
       command,
       runtime,
       configAudit,
+      ...(restartHandoff ? { restartHandoff } : {}),
+      ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
     },
     config: {
       cli: cliConfigSummary,
       daemon: daemonConfigSummary,
       ...(configMismatch ? { mismatch: true } : {}),
     },
-    gateway,
+    gateway: {
+      ...gateway,
+      ...(opts.probe
+        ? {
+            version: gatewayVersion,
+          }
+        : {}),
+    },
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
+    ...(establishedClients ? { connections: establishedClients } : {}),
     lastError,
     ...(rpc
       ? {

@@ -1,10 +1,10 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../daemon/systemd.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 import { confirm, select } from "./configure.shared.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import {
@@ -116,13 +116,14 @@ export async function maybeInstallDaemon(params: {
           progress.setLabel("Gateway service install blocked.");
           return;
         }
-        const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-          env: process.env,
-          port: params.port,
-          runtime: daemonRuntime,
-          warn: (message, title) => note(message, title),
-          config: cfg,
-        });
+        const { programArguments, workingDirectory, environment, environmentValueSources } =
+          await buildGatewayInstallPlan({
+            env: process.env,
+            port: params.port,
+            runtime: daemonRuntime,
+            warn: (message, title) => note(message, title),
+            config: cfg,
+          });
 
         progress.setLabel("Installing Gateway service…");
         try {
@@ -132,6 +133,7 @@ export async function maybeInstallDaemon(params: {
             programArguments,
             workingDirectory,
             environment,
+            environmentValueSources,
           });
           progress.setLabel("Gateway service installed.");
         } catch (err) {

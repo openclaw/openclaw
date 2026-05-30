@@ -176,10 +176,11 @@ describe("processEvent (functional)", () => {
 
     expect(ctx.activeCalls.size).toBe(0);
     expect(hangupCalls).toEqual([
-      expect.objectContaining({
+      {
+        callId: "prov-dup",
         providerCallId: "prov-dup",
         reason: "hangup-bot",
-      }),
+      },
     ]);
   });
 
@@ -332,7 +333,7 @@ describe("processEvent (functional)", () => {
     expect(answeredCallId).toBe("call-2");
   });
 
-  it("when hangup throws, logs and does not throw", () => {
+  it("removes active call even when hangup rejects", () => {
     const provider = createProvider({
       hangupCall: async (): Promise<void> => {
         throw new Error("provider down");
@@ -348,7 +349,7 @@ describe("processEvent (functional)", () => {
       from: "+15553333333",
     });
 
-    expect(() => processEvent(ctx, event)).not.toThrow();
+    processEvent(ctx, event);
     expect(ctx.activeCalls.size).toBe(0);
   });
 
@@ -424,6 +425,66 @@ describe("processEvent (functional)", () => {
     expect(ctx.activeCalls.size).toBe(1);
     const call = requireFirstActiveCall(ctx);
     expect(call.direction).toBe("inbound");
+  });
+
+  it("assigns per-call session keys to inbound calls when configured", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        sessionScope: "per-call",
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-inbound-session-scope",
+      type: "call.initiated",
+      callId: "CA-inbound-session-scope",
+      providerCallId: "CA-inbound-session-scope",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+15550000000",
+    };
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(call.sessionKey).toBe(`voice:call:${call.callId}`);
+  });
+
+  it("applies per-number inbound greeting and stores the matched route key", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        inboundGreeting: "Hello from global.",
+        numbers: {
+          "+15550002222": {
+            inboundGreeting: "Silver Fox Cards, how can I help?",
+          },
+        },
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-inbound-number-route",
+      type: "call.initiated",
+      callId: "CA-inbound-number-route",
+      providerCallId: "CA-inbound-number-route",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+1 (555) 000-2222",
+    };
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(call.metadata?.initialMessage).toBe("Silver Fox Cards, how can I help?");
+    expect(call.metadata?.numberRouteKey).toBe("+15550002222");
   });
 
   it("deduplicates by dedupeKey even when event IDs differ", () => {
@@ -511,7 +572,7 @@ describe("processEvent (functional)", () => {
       throw new Error("expected retryable error call to remain active");
     }
     expect(call.state).toBe("active");
-    expect(Array.from(ctx.processedEventIds)).toEqual([]);
-    expect(call.processedEventIds).toEqual([]);
+    expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
+    expect(call.processedEventIds).toStrictEqual([]);
   });
 });

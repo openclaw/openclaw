@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -16,13 +20,10 @@ import {
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type ExecApprovalsSnapshot = {
   path: string;
@@ -616,4 +617,6 @@ export function registerExecApprovalsCli(program: Command) {
       return true;
     },
   });
+
+  applyParentDefaultHelpAction(approvals);
 }

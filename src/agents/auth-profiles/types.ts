@@ -12,6 +12,7 @@ export type OAuthCredentials = {
   enterpriseUrl?: string;
   projectId?: string;
   accountId?: string;
+  chatgptPlanType?: string;
   idToken?: string;
 };
 
@@ -20,6 +21,8 @@ export type ApiKeyCredential = {
   provider: string;
   key?: string;
   keyRef?: SecretRef;
+  /** Explicit opt-out for copying this profile when creating another agent. */
+  copyToAgents?: boolean;
   email?: string;
   displayName?: string;
   /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
@@ -35,6 +38,8 @@ export type TokenCredential = {
   provider: string;
   token?: string;
   tokenRef?: SecretRef;
+  /** Explicit opt-out for copying this profile when creating another agent. */
+  copyToAgents?: boolean;
   /** Optional expiry timestamp (ms since epoch). */
   expires?: number;
   email?: string;
@@ -45,6 +50,11 @@ export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: string;
   clientId?: string;
+  /**
+   * OAuth refresh tokens are not portable by default. Provider-owned flows may
+   * set this only when copying refresh material across agents is known safe.
+   */
+  copyToAgents?: boolean;
   email?: string;
   displayName?: string;
 };
@@ -66,9 +76,16 @@ export type AuthProfileFailureReason =
   | "unclassified"
   | "unknown";
 
+export type AuthProfileBlockedReason = "subscription_limit";
+export type AuthProfileBlockedSource = "codex_rate_limits" | "wham";
+
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
+  blockedUntil?: number;
+  blockedReason?: AuthProfileBlockedReason;
+  blockedSource?: AuthProfileBlockedSource;
+  blockedModel?: string;
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;
@@ -100,7 +117,13 @@ export type AuthProfileStateStore = {
   version: number;
 } & AuthProfileState;
 
-export type AuthProfileStore = AuthProfileSecretsStore & AuthProfileState;
+export type AuthProfileStore = AuthProfileSecretsStore &
+  AuthProfileState & {
+    /** Runtime-only provenance for external OAuth profiles overlaid onto this store. */
+    runtimeExternalProfileIds?: string[];
+    /** True when the runtime external profile set was freshly resolved, even if empty. */
+    runtimeExternalProfileIdsAuthoritative?: boolean;
+  };
 
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;

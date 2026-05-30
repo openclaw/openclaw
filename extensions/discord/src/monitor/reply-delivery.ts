@@ -1,23 +1,24 @@
-import type { RequestClient } from "@buape/carbon";
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  buildOutboundSessionContext,
+  sendDurableMessageBatch,
+  type OutboundDeliveryFormattingOptions,
+  type OutboundIdentity,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
   ReplyToMode,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
-import {
-  buildOutboundSessionContext,
-  deliverOutboundPayloads,
-  type OutboundDeliveryFormattingOptions,
-  type OutboundIdentity,
-  type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { RequestClient } from "../internal/discord.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
+import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 
 export type DiscordThreadBindingLookupRecord = {
   accountId: string;
@@ -171,17 +172,22 @@ export async function deliverDiscordReply(params: {
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
   mediaLocalRoots?: readonly string[];
+  kind: "tool" | "block" | "final";
 }) {
   void params.runtime;
 
   const delivery = resolveDiscordDeliveryOptions(params);
+  const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, { kind: params.kind });
+  if (payloads.length === 0) {
+    return;
+  }
 
-  await deliverOutboundPayloads({
+  const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: "discord",
     to: delivery.to,
     accountId: params.accountId,
-    payloads: params.replies,
+    payloads,
     replyToId: normalizeOptionalString(params.replyToId),
     replyToMode: delivery.replyToMode,
     formatting: delivery.formatting,
@@ -200,4 +206,11 @@ export async function deliverDiscordReply(params: {
       requesterAccountId: params.accountId,
     }),
   });
+  if (send.status === "failed" || send.status === "partial_failed") {
+    throw send.error;
+  }
+  const results = send.status === "sent" ? send.results : [];
+  if (results.length === 0) {
+    throw new Error(`discord final reply produced no delivered message for ${delivery.to}`);
+  }
 }

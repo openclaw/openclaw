@@ -12,7 +12,7 @@ import type {
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
 } from "../channels/plugins/types.adapters.js";
-import type { ChannelConfigSchema, ChannelConfigUiHint } from "../channels/plugins/types.config.js";
+import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
@@ -27,17 +27,19 @@ import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
-import { parseThreadSessionSuffix } from "../sessions/session-key-utils.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+  normalizeSessionKeyPreservingOpaquePeerIds,
+  parseThreadSessionSuffix,
+} from "../sessions/session-key-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export type {
+  AgentPromptGuidance,
+  AgentPromptGuidanceEntry,
+  AgentPromptSurfaceKind,
   AgentHarness,
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,
@@ -48,6 +50,36 @@ export type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginCommandContext,
+  PluginCommandResult,
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
+  PluginAgentEventSubscriptionRegistration,
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginControlUiDescriptor,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+  PluginJsonValue,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionActionContext,
+  PluginSessionActionRegistration,
+  PluginSessionActionResult,
+  PluginSessionAttachmentParams,
+  PluginSessionAttachmentResult,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionTurnScheduleParams,
+  PluginSessionTurnUnscheduleByTagParams,
+  PluginSessionTurnUnscheduleByTagResult,
+  PluginSessionExtensionRegistration,
+  PluginSessionExtensionProjection,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,
@@ -92,23 +124,38 @@ export type {
   ProviderValidateReplayTurnsContext,
   ProviderWebSocketSessionPolicy,
   ProviderWrapStreamFnContext,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
   SpeechProviderPlugin,
 } from "./plugin-entry.js";
+export type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+  UnifiedModelCatalogSource,
+} from "../model-catalog/types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
+export type {
+  OpenClawPluginActiveModelContext,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
+} from "../plugins/types.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
 } from "../plugins/memory-state.js";
 export type {
+  PluginHookReplyPayloadSendingContext,
+  PluginHookReplyPayloadSendingEvent,
+  PluginHookReplyPayloadSendingResult,
+  PluginHookReplyPayload,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
-export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.types.js";
 export type { ReplyPayload } from "./reply-payload.js";
 export type { AllowlistMatch } from "../channels/allowlist-match.js";
 export type {
@@ -161,7 +208,11 @@ export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 
 export { definePluginEntry } from "./plugin-entry.js";
-export { buildPluginConfigSchema, emptyPluginConfigSchema } from "../plugins/config-schema.js";
+export {
+  buildJsonPluginConfigSchema,
+  buildPluginConfigSchema,
+  emptyPluginConfigSchema,
+} from "../plugins/config-schema.js";
 export { KeyedAsyncQueue, enqueueKeyedTask } from "./keyed-async-queue.js";
 export { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js";
 export { generateSecureToken, generateSecureUuid } from "../infra/secure-random.js";
@@ -172,6 +223,7 @@ export {
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export {
   buildChannelConfigSchema,
+  buildJsonChannelConfigSchema,
   emptyChannelConfigSchema,
 } from "../channels/plugins/config-schema.js";
 export {
@@ -336,8 +388,8 @@ export function recoverCurrentThreadSessionId(params: {
     return undefined;
   }
   if (
-    normalizeOptionalLowercaseString(current.baseSessionKey) !==
-    normalizeOptionalLowercaseString(params.route.baseSessionKey)
+    normalizeSessionKeyPreservingOpaquePeerIds(current.baseSessionKey) !==
+    normalizeSessionKeyPreservingOpaquePeerIds(params.route.baseSessionKey)
   ) {
     return undefined;
   }
@@ -443,6 +495,7 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   streaming?: ChannelPlugin<TResolvedAccount>["streaming"];
   reload?: ChannelPlugin<TResolvedAccount>["reload"];
   gatewayMethods?: ChannelPlugin<TResolvedAccount>["gatewayMethods"];
+  gatewayMethodDescriptors?: ChannelPlugin<TResolvedAccount>["gatewayMethodDescriptors"];
   configSchema?: ChannelPlugin<TResolvedAccount>["configSchema"];
   config?: ChannelPlugin<TResolvedAccount>["config"];
   security?: ChannelPlugin<TResolvedAccount>["security"];
@@ -465,6 +518,7 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
       | "streaming"
       | "reload"
       | "gatewayMethods"
+      | "gatewayMethodDescriptors"
       | "configSchema"
       | "config"
       | "security"
@@ -501,6 +555,10 @@ export function defineChannelPluginEntry<TPlugin>({
     register(api: OpenClawPluginApi) {
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
+        return;
+      }
+      if (api.registrationMode === "tool-discovery") {
+        registerFull?.(api);
         return;
       }
       api.registerChannel({ plugin: plugin as ChannelPlugin });
@@ -773,6 +831,9 @@ export function createChannelPluginBase<TResolvedAccount>(
     ...(params.streaming ? { streaming: params.streaming } : {}),
     ...(params.reload ? { reload: params.reload } : {}),
     ...(params.gatewayMethods ? { gatewayMethods: params.gatewayMethods } : {}),
+    ...(params.gatewayMethodDescriptors
+      ? { gatewayMethodDescriptors: params.gatewayMethodDescriptors }
+      : {}),
     ...(params.configSchema ? { configSchema: params.configSchema } : {}),
     ...(params.config ? { config: params.config } : {}),
     ...(params.security ? { security: params.security } : {}),

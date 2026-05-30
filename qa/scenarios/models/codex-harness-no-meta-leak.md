@@ -11,7 +11,7 @@ coverage:
     - runtime.no-meta-leak
 objective: Verify the Codex app-server harness keeps coordination/meta chatter out of the visible reply.
 successCriteria:
-  - The scenario forces the Codex embedded harness and disables PI fallback.
+  - The scenario forces the Codex embedded harness.
   - The final visible reply includes the requested confirmation token.
   - The visible reply does not include internal coordination or progress chatter.
 docsRefs:
@@ -29,7 +29,6 @@ execution:
     requiredProvider: codex
     requiredModel: gpt-5.5
     harnessRuntime: codex
-    harnessFallback: none
     expectedReply: QA_LEAK_OK
     prompt: |-
       Think through your answer privately, but do not expose any internal planning, thread-context checks, or progress narration.
@@ -73,11 +72,8 @@ steps:
                   patch:
                     agents:
                       defaults:
-                        agentRuntime:
-                          id:
-                            expr: config.harnessRuntime
-                          fallback:
-                            expr: config.harnessFallback
+                        models:
+                          expr: "({ [env.primaryModel]: { agentRuntime: { id: config.harnessRuntime } } })"
             - call: waitForGatewayHealthy
               args:
                 - ref: env
@@ -91,14 +87,10 @@ steps:
               args:
                 - ref: env
             - assert:
-                expr: "snapshot.config.agents?.defaults?.agentRuntime?.id === config.harnessRuntime"
+                expr: "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id === config.harnessRuntime"
                 message:
-                  expr: "`expected agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.agentRuntime)}`"
-            - assert:
-                expr: "snapshot.config.agents?.defaults?.agentRuntime?.fallback === config.harnessFallback"
-                message:
-                  expr: "`expected agentRuntime.fallback=${config.harnessFallback}, got ${JSON.stringify(snapshot.config.agents?.defaults?.agentRuntime)}`"
-    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.agentRuntime?.id} fallback=${snapshot.config.agents?.defaults?.agentRuntime?.fallback}` : `mock mode: parsed ${scenario.id}`"
+                  expr: "`expected ${env.primaryModel} agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime)}`"
+    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id}` : `mock mode: parsed ${scenario.id}`"
   - name: keeps codex coordination chatter out of the visible reply
     actions:
       - if:

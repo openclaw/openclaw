@@ -1,3 +1,7 @@
+import {
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexAccessTokenExpiry } from "./openai-codex-auth-identity.js";
 import { trimNonEmptyString } from "./openai-codex-shared.js";
 
@@ -7,6 +11,16 @@ const OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS = 15 * 60_000;
 const OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS = 5_000;
 const OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS = 1_000;
 const OPENAI_CODEX_DEVICE_CALLBACK_URL = `${OPENAI_AUTH_BASE_URL}/deviceauth/callback`;
+
+function resolveOpenAICodexDeviceCodeHeaders(contentType: string): Record<string, string> {
+  const version = process.env.OPENCLAW_VERSION?.trim();
+  return {
+    "Content-Type": contentType,
+    originator: "openclaw",
+    ...(version ? { version } : {}),
+    "User-Agent": version ? `openclaw/${version}` : "openclaw",
+  };
+}
 
 type OpenAICodexDeviceCodePrompt = {
   verificationUrl: string;
@@ -50,27 +64,6 @@ type DeviceCodeAuthorizationCode = {
   authorizationCode: string;
   codeVerifier: string;
 };
-
-function normalizePositiveMilliseconds(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.trunc(value * 1000);
-  }
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    const seconds = Number.parseInt(value.trim(), 10);
-    return seconds > 0 ? seconds * 1000 : undefined;
-  }
-  return undefined;
-}
-
-function normalizeTokenLifetimeMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.trunc(value * 1000);
-  }
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    return Number.parseInt(value.trim(), 10) * 1000;
-  }
-  return undefined;
-}
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
   try {
@@ -129,9 +122,7 @@ function formatDeviceCodeError(params: {
 async function requestOpenAICodexDeviceCode(fetchFn: typeof fetch): Promise<RequestedDeviceCode> {
   const response = await fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/usercode`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers: resolveOpenAICodexDeviceCodeHeaders("application/json"),
     body: JSON.stringify({
       client_id: OPENAI_CODEX_CLIENT_ID,
     }),
@@ -165,7 +156,8 @@ async function requestOpenAICodexDeviceCode(fetchFn: typeof fetch): Promise<Requ
     userCode,
     verificationUrl: `${OPENAI_AUTH_BASE_URL}/codex/device`,
     intervalMs:
-      normalizePositiveMilliseconds(body?.interval) ?? OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS,
+      positiveSecondsToSafeMilliseconds(body?.interval) ??
+      OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS,
   };
 }
 
@@ -180,9 +172,7 @@ async function pollOpenAICodexDeviceCode(params: {
   while (Date.now() < deadline) {
     const response = await params.fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/token`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: resolveOpenAICodexDeviceCodeHeaders("application/json"),
       body: JSON.stringify({
         device_auth_id: params.deviceAuthId,
         user_code: params.userCode,
@@ -229,9 +219,7 @@ async function exchangeOpenAICodexDeviceCode(params: {
 }): Promise<OpenAICodexDeviceCodeCredentials> {
   const response = await params.fetchFn(`${OPENAI_AUTH_BASE_URL}/oauth/token`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers: resolveOpenAICodexDeviceCodeHeaders("application/x-www-form-urlencoded"),
     body: new URLSearchParams({
       grant_type: "authorization_code",
       code: params.authorizationCode,
@@ -259,11 +247,10 @@ async function exchangeOpenAICodexDeviceCode(params: {
     throw new Error("OpenAI token exchange succeeded but did not return OAuth tokens.");
   }
 
-  const expiresInMs = normalizeTokenLifetimeMs(body?.expires_in);
   const expires =
-    expiresInMs !== undefined
-      ? Date.now() + expiresInMs
-      : (resolveCodexAccessTokenExpiry(access) ?? Date.now());
+    resolveExpiresAtMsFromDurationSeconds(body?.expires_in) ??
+    resolveCodexAccessTokenExpiry(access) ??
+    Date.now();
 
   return {
     access,

@@ -1,8 +1,15 @@
 import crypto from "node:crypto";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMSTeamsStorePath } from "./storage.js";
 import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
-export type MSTeamsPollVote = {
+type MSTeamsPollVote = {
   pollId: string;
   selections: string[];
 };
@@ -29,7 +36,7 @@ export type MSTeamsPollStore = {
   }) => Promise<MSTeamsPoll | null>;
 };
 
-export type MSTeamsPollCard = {
+type MSTeamsPollCard = {
   pollId: string;
   question: string;
   options: string[];
@@ -46,18 +53,6 @@ type PollStoreData = {
 const STORE_FILENAME = "msteams-polls.json";
 const MAX_POLLS = 1000;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function normalizeChoiceValue(value: unknown): string | null {
   if (typeof value === "string") {
@@ -79,10 +74,7 @@ function extractSelections(value: unknown): string[] {
     return [];
   }
   if (normalized.includes(",")) {
-    return normalized
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(normalized.split(","));
   }
   return [normalized];
 }
@@ -116,7 +108,10 @@ export function extractMSTeamsPollVote(
     readNestedString(value, ["openclaw", "poll", "id"]) ??
     readNestedString(value, ["data", "openclawPollId"]) ??
     readNestedString(value, ["data", "pollId"]) ??
-    readNestedString(value, ["data", "openclaw", "pollId"]);
+    readNestedString(value, ["data", "openclaw", "pollId"]) ??
+    // Action.Execute (Universal Action Model) payload shape: value.action.data
+    readNestedString(value, ["action", "data", "openclawPollId"]) ??
+    readNestedString(value, ["action", "data", "pollId"]);
   if (!pollId) {
     return null;
   }
@@ -124,12 +119,17 @@ export function extractMSTeamsPollVote(
   const directSelections = extractSelections(value.choices);
   const nestedSelections = extractSelections(readNestedValue(value, ["choices"]));
   const dataSelections = extractSelections(readNestedValue(value, ["data", "choices"]));
+  const actionDataSelections = extractSelections(
+    readNestedValue(value, ["action", "data", "choices"]),
+  );
   const selections =
     directSelections.length > 0
       ? directSelections
       : nestedSelections.length > 0
         ? nestedSelections
-        : dataSelections;
+        : dataSelections.length > 0
+          ? dataSelections
+          : actionDataSelections;
 
   if (selections.length === 0) {
     return null;
@@ -190,17 +190,12 @@ export function buildMSTeamsPollCard(params: {
     ],
     actions: [
       {
-        type: "Action.Submit",
+        type: "Action.Execute",
         title: "Vote",
+        verb: "openclaw.poll.vote",
         data: {
           openclawPollId: pollId,
           pollId,
-        },
-        msteams: {
-          type: "messageBack",
-          text: "openclaw poll vote",
-          displayText: "Vote recorded",
-          value: { openclawPollId: pollId, pollId },
         },
       },
     ],
@@ -221,7 +216,7 @@ export function buildMSTeamsPollCard(params: {
   };
 }
 
-export type MSTeamsPollStoreFsOptions = {
+type MSTeamsPollStoreFsOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;
@@ -262,12 +257,12 @@ function pruneToLimit(polls: Record<string, MSTeamsPoll>) {
 export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
-    .map((entry) => Number.parseInt(entry, 10))
-    .filter((value) => Number.isFinite(value))
+    .map((entry) => parseStrictNonNegativeInteger(entry))
+    .filter((value): value is number => value !== undefined)
     .filter((value) => value >= 0 && value < poll.options.length)
     .map((value) => String(value));
   const limited = maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);
-  return Array.from(new Set(limited));
+  return uniqueStrings(limited);
 }
 
 export function createMSTeamsPollStoreFs(params?: MSTeamsPollStoreFsOptions): MSTeamsPollStore {

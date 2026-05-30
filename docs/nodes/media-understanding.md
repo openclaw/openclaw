@@ -61,6 +61,7 @@ If understanding fails or is disabled, **the reply flow continues** with the ori
       - `attachments` policy (`mode`, `maxAttachments`, `prefer`)
       - `scope` (optional gating by channel/chatType/session key)
     - `tools.media.concurrency`: max concurrent capability runs (default **2**).
+
   </Accordion>
 </AccordionGroup>
 
@@ -136,6 +137,32 @@ Each `models[]` entry can be **provider** or **CLI**:
   </Tab>
 </Tabs>
 
+### Provider credentials (`apiKey`)
+
+Provider media understanding uses the same provider auth resolution as normal
+model calls: auth profiles, environment variables, then
+`models.providers.<providerId>.apiKey`.
+
+`tools.media.*.models[]` entries do not accept an inline `apiKey` field. The
+`provider` value in a media model entry, such as `openai` or `moonshot`, must
+have credentials available through one of the standard provider auth sources.
+
+Minimal example:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: { apiKey: "<OPENAI_API_KEY>" },
+      moonshot: { apiKey: "<MOONSHOT_API_KEY>" },
+    },
+  },
+}
+```
+
+For the full provider auth reference, including profiles, environment
+variables, and custom base URLs, see [Tools and custom providers](/gateway/config-tools).
+
 ## Defaults and limits
 
 Recommended defaults:
@@ -157,6 +184,7 @@ Recommended defaults:
     - If a Gateway/WebChat primary model is text-only, image attachments are preserved as offloaded `media://inbound/*` refs so the image/PDF tools or configured image model can still inspect them instead of losing the attachment.
     - Explicit `openclaw infer image describe --model <provider/model>` requests are different: they run that image-capable provider/model directly, including Ollama refs such as `ollama/qwen2.5vl:7b`.
     - If `<capability>.enabled: true` but no models are configured, OpenClaw tries the **active reply model** when its provider supports the capability.
+
   </Accordion>
 </AccordionGroup>
 
@@ -170,6 +198,7 @@ If `tools.media.<capability>.enabled` is **not** set to `false` and you haven't 
   </Step>
   <Step title="agents.defaults.imageModel">
     `agents.defaults.imageModel` primary/fallback refs (image only).
+    Prefer `provider/model` refs. Bare refs are qualified from configured image-capable provider model entries only when the match is unique.
   </Step>
   <Step title="Local CLIs (audio only)">
     Local CLIs (if installed):
@@ -189,7 +218,7 @@ If `tools.media.<capability>.enabled` is **not** set to `false` and you haven't 
 
     Bundled fallback order:
 
-    - Audio: OpenAI → Groq → xAI → Deepgram → Google → SenseAudio → ElevenLabs → Mistral
+    - Audio: OpenAI → Groq → xAI → Deepgram → OpenRouter → Google → SenseAudio → ElevenLabs → Mistral
     - Image: OpenAI → Anthropic → Google → MiniMax → MiniMax Portal → Z.AI
     - Video: Google → Qwen → Moonshot
 
@@ -234,7 +263,7 @@ If you set `capabilities`, the entry only runs for those media types. For shared
 - `openai`, `anthropic`, `minimax`: **image**
 - `minimax-portal`: **image**
 - `moonshot`: **image + video**
-- `openrouter`: **image**
+- `openrouter`: **image + audio**
 - `google` (Gemini API): **image + audio + video**
 - `qwen`: **image + video**
 - `mistral`: **audio**
@@ -248,18 +277,19 @@ For CLI entries, **set `capabilities` explicitly** to avoid surprising matches. 
 
 ## Provider support matrix (OpenClaw integrations)
 
-| Capability | Provider integration                                                                                                         | Notes                                                                                                                                                                                                                                   |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Image      | OpenAI, OpenAI Codex OAuth, Codex app-server, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai-codex/*` uses OAuth provider plumbing; `codex/*` uses a bounded Codex app-server turn; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
-| Audio      | OpenAI, Groq, xAI, Deepgram, Google, SenseAudio, ElevenLabs, Mistral                                                         | Provider transcription (Whisper/Groq/xAI/Deepgram/Gemini/SenseAudio/Scribe/Voxtral).                                                                                                                                                    |
-| Video      | Google, Qwen, Moonshot                                                                                                       | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                                                                                                                        |
+| Capability | Provider integration                                                                                                         | Notes                                                                                                                                                                                                                                       |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image      | OpenAI, OpenAI Codex OAuth, Codex app-server, OpenRouter, Anthropic, Google, MiniMax, Moonshot, Qwen, Z.AI, config providers | Vendor plugins register image support; `openai/*` can use API-key or Codex OAuth routing; `codex/*` uses a bounded Codex app-server turn; MiniMax and MiniMax OAuth both use `MiniMax-VL-01`; image-capable config providers auto-register. |
+| Audio      | OpenAI, Groq, xAI, Deepgram, OpenRouter, Google, SenseAudio, ElevenLabs, Mistral                                             | Provider transcription (Whisper/Groq/xAI/Deepgram/OpenRouter STT/Gemini/SenseAudio/Scribe/Voxtral).                                                                                                                                         |
+| Video      | Google, Qwen, Moonshot                                                                                                       | Provider video understanding via vendor plugins; Qwen video understanding uses the Standard DashScope endpoints.                                                                                                                            |
 
 <Note>
 **MiniMax note**
 
-- `minimax` and `minimax-portal` image understanding comes from the plugin-owned `MiniMax-VL-01` media provider.
-- The bundled MiniMax text catalog still starts text-only; explicit `models.providers.minimax` entries materialize image-capable M2.7 chat refs.
-  </Note>
+- `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` image understanding comes from the plugin-owned `MiniMax-VL-01` media provider.
+- Automatic image routing keeps using `MiniMax-VL-01` even if legacy MiniMax M2.x chat metadata claims image input.
+
+</Note>
 
 ## Model selection guidance
 
@@ -292,6 +322,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
     - This attachment-extraction path intentionally omits the long `SECURITY NOTICE:` banner to avoid bloating the media prompt; the boundary markers and metadata still remain.
     - If a file has no extractable text, OpenClaw injects `[No extractable text]`.
     - If a PDF falls back to rendered page images in this path, the media prompt keeps the placeholder `[PDF content rendered to images; images not forwarded to model]` because this attachment-extraction step forwards text blocks, not the rendered PDF images.
+
   </Accordion>
 </AccordionGroup>
 

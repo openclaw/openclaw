@@ -8,14 +8,35 @@ const EMPTY_STORE: AuthProfileStore = {
 };
 
 describe("formatAuthDoctorHint", () => {
-  it("guides removed qwen portal users to model studio onboarding", async () => {
+  it("does not report restored qwen portal auth as removed", async () => {
     const hint = await formatAuthDoctorHint({
       store: EMPTY_STORE,
       provider: "qwen-portal",
     });
 
-    expect(hint).toContain("openclaw onboard --auth-choice qwen-api-key");
-    expect(hint).toContain("qwen-api-key-cn");
-    expect(hint).not.toContain("--provider qwen");
+    expect(hint).toBe("");
+  });
+
+  it("guides legacy qwen portal oauth profiles to re-authenticate", async () => {
+    const hint = await formatAuthDoctorHint({
+      store: {
+        version: 1,
+        profiles: {
+          "qwen-portal-auth": {
+            type: "oauth",
+            provider: "qwen-portal",
+            access: "old-access",
+            refresh: "old-refresh",
+            expires: 0,
+          },
+        },
+      },
+      provider: "qwen-portal",
+      profileId: "qwen-portal-auth",
+    });
+
+    expect(hint).toBe(
+      "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.",
+    );
   });
 });

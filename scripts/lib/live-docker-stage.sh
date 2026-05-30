@@ -13,6 +13,7 @@ openclaw_live_stage_source_tree() {
     --warning=no-file-changed \
     --ignore-failed-read \
     --exclude=.git \
+    --exclude=.artifacts \
     --exclude=node_modules \
     --exclude=dist \
     --exclude=ui/dist \
@@ -103,8 +104,9 @@ openclaw_live_prepare_staged_config() {
     return 0
   fi
 
+  local scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
   (
     cd /app
-    node --import tsx /src/scripts/live-docker-normalize-config.ts
+    node --import tsx "$scripts_dir/live-docker-normalize-config.ts"
   )
 }

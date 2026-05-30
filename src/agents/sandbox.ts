@@ -18,7 +18,7 @@ export {
   requireSandboxBackendFactory,
 } from "./sandbox/backend.js";
 
-export { buildSandboxCreateArgs } from "./sandbox/docker.js";
+export { buildSandboxCreateArgs, isDockerDaemonUnavailable } from "./sandbox/docker.js";
 export {
   listSandboxBrowsers,
   listSandboxContainers,
@@ -32,12 +32,13 @@ export {
   resolveSandboxRuntimeStatus,
 } from "./sandbox/runtime-status.js";
 
-export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+export { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
 export {
   buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,

@@ -1,29 +1,35 @@
+import path from "node:path";
 import {
+  canonicalizeAbsoluteSessionFilePath,
   mergeSessionEntry,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   setSessionRuntimeModel,
   type SessionEntry,
   updateSessionStore,
+  rewriteSessionFileForNewSessionId,
 } from "../../config/sessions.js";
+import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
-type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 
-let usageFormatModulePromise: Promise<typeof import("../../utils/usage-format.js")> | undefined;
-let contextModulePromise: Promise<typeof import("../context.js")> | undefined;
+const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
+const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
 
 async function getUsageFormatModule() {
-  usageFormatModulePromise ??= import("../../utils/usage-format.js");
-  return await usageFormatModulePromise;
+  return await usageFormatModuleLoader.load();
 }
 
 async function getContextModule() {
-  contextModulePromise ??= import("../context.js");
-  return await contextModulePromise;
+  return await contextModuleLoader.load();
 }
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
@@ -35,6 +41,15 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
     return undefined;
   }
   return Math.floor(value);
+}
+
+function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntry {
+  const next = { ...entry };
+  delete next.status;
+  delete next.startedAt;
+  delete next.endedAt;
+  delete next.runtimeMs;
+  return next;
 }
 
 export async function updateSessionStoreAfterAgentRun(params: {
@@ -50,6 +65,14 @@ export async function updateSessionStoreAfterAgentRun(params: {
   fallbackModel?: string;
   result: RunResult;
   touchInteraction?: boolean;
+  /**
+   * When true, preserve the pre-existing runtime model fields (model,
+   * modelProvider, contextTokens) on the session entry instead of overwriting
+   * them with the model used by this run. Used for heartbeat turns so the
+   * heartbeat model does not "bleed" into the main session's perceived state.
+   */
+  preserveRuntimeModel?: boolean;
+  preserveUserFacingSessionModelState?: boolean;
 }) {
   const {
     cfg,
@@ -68,17 +91,20 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
+  const lastCallUsage = result.meta.agentMeta?.lastCallUsage;
   const compactionTokensAfter =
     typeof result.meta.agentMeta?.compactionTokensAfter === "number" &&
     Number.isFinite(result.meta.agentMeta.compactionTokensAfter) &&
-    result.meta.agentMeta.compactionTokensAfter > 0
+    result.meta.agentMeta.compactionTokensAfter >= 0
       ? Math.floor(result.meta.agentMeta.compactionTokensAfter)
       : undefined;
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
+  const activeSessionFile = normalizeOptionalString(result.meta.agentMeta?.sessionFile);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
+  const contextBudgetStatus = result.meta.agentMeta?.contextBudgetStatus;
   const contextTokens =
     runtimeContextTokens !== undefined
       ? runtimeContextTokens
@@ -92,6 +118,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
             allowAsyncLoad: false,
           }) ?? DEFAULT_CONTEXT_TOKENS);
 
+  const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+  const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
     updatedAt: now,
@@ -103,38 +131,94 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
-    contextTokens,
+    ...(preserveRuntimeModel
+      ? {}
+      : {
+          contextTokens,
+        }),
   };
-  setSessionRuntimeModel(next, {
-    provider: providerUsed,
-    model: modelUsed,
-  });
-  if (agentHarnessId) {
-    next.agentHarnessId = agentHarnessId;
-  } else if (result.meta.executionTrace?.runner === "cli") {
-    next.agentHarnessId = undefined;
+  if (entry.sessionId !== sessionId) {
+    next.sessionFile =
+      activeSessionFile ??
+      resolveCompactionSessionFile({
+        entry,
+        sessionKey,
+        storePath,
+        newSessionId: sessionId,
+      });
+    next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
+    next.usageFamilySessionIds = Array.from(
+      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, sessionId]),
+    );
+  } else if (activeSessionFile) {
+    next.sessionFile = activeSessionFile;
   }
-  if (isCliProvider(providerUsed, cfg)) {
-    const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
-    if (cliSessionBinding?.sessionId?.trim()) {
-      setCliSessionBinding(next, providerUsed, cliSessionBinding);
-    } else {
-      const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-      if (cliSessionId) {
-        setCliSessionId(next, providerUsed, cliSessionId);
+  if (preserveRuntimeModel) {
+    // Keep the pre-existing runtime model and context window so a background
+    // heartbeat turn using a different model does not bleed into the main
+    // session's perceived state.
+    if (entry.model) {
+      // Prior runtime model exists: preserve its contextTokens. When missing,
+      // leave contextTokens unset rather than falling back to the heartbeat
+      // run's context window; status derives it from the preserved model.
+      next.contextTokens = entry.contextTokens;
+      if (entry.modelProvider) {
+        setSessionRuntimeModel(next, {
+          provider: entry.modelProvider,
+          model: entry.model,
+        });
+      } else {
+        // Retain the model-only entry without borrowing the heartbeat provider
+        // to avoid invalid cross-provider pairs (e.g. ollama/claude-opus-4-6).
+        next.model = entry.model;
       }
     }
+    // When there is no prior runtime model, do nothing: a heartbeat turn
+    // should not establish initial model state on an empty session.
+  } else {
+    setSessionRuntimeModel(next, {
+      provider: providerUsed,
+      model: modelUsed,
+    });
   }
-  next.abortedLastRun = result.meta.aborted ?? false;
-  if (result.meta.systemPromptReport) {
-    next.systemPromptReport = result.meta.systemPromptReport;
+  if (!preserveUserFacingRunState) {
+    if (agentHarnessId) {
+      next.agentHarnessId = agentHarnessId;
+    } else if (result.meta.executionTrace?.runner === "cli") {
+      next.agentHarnessId = undefined;
+    }
+    if (isCliProvider(providerUsed, cfg)) {
+      const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
+      if (result.meta.agentMeta?.clearCliSessionBinding === true) {
+        clearCliSession(next, providerUsed);
+      } else if (cliSessionBinding?.sessionId?.trim()) {
+        setCliSessionBinding(next, providerUsed, cliSessionBinding);
+      } else {
+        const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
+        if (cliSessionId) {
+          setCliSessionId(next, providerUsed, cliSessionId);
+        }
+      }
+    }
+    next.abortedLastRun = result.meta.aborted ?? false;
+    if (result.meta.systemPromptReport) {
+      next.systemPromptReport = result.meta.systemPromptReport;
+    }
+    if (!preserveRuntimeModel) {
+      next.contextBudgetStatus = contextBudgetStatus;
+    }
   }
-  if (hasNonzeroUsage(usage)) {
+  if (hasNonzeroUsage(usage) && !preserveUserFacingRunState) {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();
     const input = usage.input ?? 0;
     const output = usage.output ?? 0;
+    const usageForContext = isCliProvider(providerUsed, cfg)
+      ? promptTokens
+        ? undefined
+        : lastCallUsage
+      : usage;
     const totalTokens = deriveSessionTotalTokens({
-      usage: promptTokens ? undefined : usage,
+      usage: promptTokens ? undefined : usageForContext,
       contextTokens,
       promptTokens,
     });
@@ -150,28 +234,44 @@ export async function updateSessionStoreAfterAgentRun(params: {
     );
     next.inputTokens = input;
     next.outputTokens = output;
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
-      next.totalTokens = totalTokens;
-      next.totalTokensFresh = true;
-    } else if (compactionTokensAfter !== undefined) {
+    const hasUsageTotalTokens =
+      typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0;
+    const useCompactionSnapshot = compactionTokensAfter !== undefined && !hasUsageTotalTokens;
+    if (useCompactionSnapshot) {
       next.totalTokens = compactionTokensAfter;
+      next.totalTokensFresh = true;
+      next.inputTokens = undefined;
+      next.outputTokens = undefined;
+      next.cacheRead = undefined;
+      next.cacheWrite = undefined;
+      next.contextBudgetStatus = undefined;
+    } else if (hasUsageTotalTokens) {
+      next.totalTokens = totalTokens;
       next.totalTokensFresh = true;
     } else {
       next.totalTokens = undefined;
       next.totalTokensFresh = false;
     }
-    next.cacheRead = usage.cacheRead ?? 0;
-    next.cacheWrite = usage.cacheWrite ?? 0;
+    if (!useCompactionSnapshot) {
+      next.cacheRead = usage.cacheRead ?? 0;
+      next.cacheWrite = usage.cacheWrite ?? 0;
+    }
     // Snapshot cost like tokens (runEstimatedCostUsd is already computed from
     // cumulative run usage, so assign directly instead of accumulating).
     // Fixes #69347: cost was inflated 1x-72x by accumulating on every persist.
     if (runEstimatedCostUsd !== undefined) {
       next.estimatedCostUsd = runEstimatedCostUsd;
     }
-  } else if (compactionTokensAfter !== undefined) {
+  } else if (compactionTokensAfter !== undefined && !preserveUserFacingRunState) {
     next.totalTokens = compactionTokensAfter;
     next.totalTokensFresh = true;
+    next.inputTokens = undefined;
+    next.outputTokens = undefined;
+    next.cacheRead = undefined;
+    next.cacheWrite = undefined;
+    next.contextBudgetStatus = undefined;
   } else if (
+    !preserveUserFacingRunState &&
     typeof entry.totalTokens === "number" &&
     Number.isFinite(entry.totalTokens) &&
     entry.totalTokens > 0
@@ -179,15 +279,35 @@ export async function updateSessionStoreAfterAgentRun(params: {
     next.totalTokens = entry.totalTokens;
     next.totalTokensFresh = false;
   }
-  if (compactionsThisRun > 0) {
+  if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
-  const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], next);
-    store[sessionKey] = merged;
-    return merged;
-  });
-  sessionStore[sessionKey] = persisted;
+  const metadataPatch = preserveUserFacingRunState
+    ? {
+        updatedAt: next.updatedAt,
+        ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
+      }
+    : removeLifecycleStateFromMetadataPatch(next);
+  const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
+  const persisted = await updateSessionStore(
+    storePath,
+    (store) => {
+      if (preserveUserFacingRunState && !store[sessionKey]) {
+        return undefined;
+      }
+      const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
+      store[sessionKey] = merged;
+      return merged;
+    },
+    {
+      takeCacheOwnership: true,
+      maintenanceConfig,
+      resolveSingleEntryPersistence: (entry) => (entry ? { sessionKey, entry } : undefined),
+    },
+  );
+  if (persisted) {
+    sessionStore[sessionKey] = persisted;
+  }
 }
 
 export async function clearCliSessionInStore(params: {
@@ -220,6 +340,9 @@ export async function recordCliCompactionInStore(params: {
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
+  tokensAfter?: number;
+  newSessionId?: string;
+  newSessionFile?: string;
 }): Promise<SessionEntry | undefined> {
   const { provider, sessionKey, sessionStore, storePath } = params;
   const entry = sessionStore[sessionKey];
@@ -231,6 +354,45 @@ export async function recordCliCompactionInStore(params: {
   clearCliSession(next, provider);
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
+  const newSessionId = normalizeOptionalString(params.newSessionId);
+  const explicitNewSessionFile = normalizeOptionalString(params.newSessionFile);
+  const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
+  const sessionFileChanged = Boolean(
+    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
+  );
+  if (sessionIdChanged && newSessionId) {
+    next.sessionId = newSessionId;
+    next.sessionFile =
+      explicitNewSessionFile ??
+      resolveCompactionSessionFile({
+        entry,
+        sessionKey,
+        storePath,
+        newSessionId,
+      });
+    next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
+    next.usageFamilySessionIds = Array.from(
+      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
+    );
+  } else if (sessionFileChanged && explicitNewSessionFile) {
+    next.sessionFile = explicitNewSessionFile;
+  }
+  const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
+  next.contextBudgetStatus = undefined;
+  if (tokensAfterCompaction !== undefined) {
+    next.totalTokens = Math.floor(tokensAfterCompaction);
+    next.totalTokensFresh = true;
+    next.inputTokens = undefined;
+    next.outputTokens = undefined;
+    next.cacheRead = undefined;
+    next.cacheWrite = undefined;
+  } else {
+    next.totalTokensFresh = false;
+    next.inputTokens = undefined;
+    next.outputTokens = undefined;
+    next.cacheRead = undefined;
+    next.cacheWrite = undefined;
+  }
 
   const persisted = await updateSessionStore(storePath, (store) => {
     const merged = mergeSessionEntry(store[sessionKey], next);
@@ -239,4 +401,31 @@ export async function recordCliCompactionInStore(params: {
   });
   sessionStore[sessionKey] = persisted;
   return persisted;
+}
+
+function resolveCompactionSessionFile(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath?: string;
+  newSessionId: string;
+}): string {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const pathOpts = resolveSessionFilePathOptions({
+    agentId,
+    storePath: params.storePath,
+  });
+  const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
+    sessionFile: params.entry.sessionFile,
+    previousSessionId: params.entry.sessionId,
+    nextSessionId: params.newSessionId,
+  });
+  const normalizedRewrittenSessionFile =
+    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
+      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
+      : rewrittenSessionFile;
+  return resolveSessionFilePath(
+    params.newSessionId,
+    normalizedRewrittenSessionFile ? { sessionFile: normalizedRewrittenSessionFile } : undefined,
+    pathOpts,
+  );
 }

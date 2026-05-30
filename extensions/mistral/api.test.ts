@@ -1,11 +1,13 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import {
   applyMistralModelCompat,
+  MISTRAL_MEDIUM_3_5_ID,
   MISTRAL_MODEL_TRANSPORT_PATCH,
   MISTRAL_SMALL_LATEST_ID,
   resolveMistralCompatPatch,
 } from "./api.js";
-import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
+import mistralPlugin from "./index.js";
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe provider compat shape.
 function readCompat<T>(model: unknown): T | undefined {
@@ -29,13 +31,33 @@ function reasoningEffortMap(model: unknown): Record<string, string> | undefined 
   return readCompat<{ reasoningEffortMap?: Record<string, string> }>(model)?.reasoningEffortMap;
 }
 
+const MISTRAL_REASONING_EFFORT_MAP = {
+  off: "none",
+  minimal: "none",
+  low: "high",
+  medium: "high",
+  high: "high",
+  xhigh: "high",
+  adaptive: "high",
+  max: "high",
+};
+
 describe("resolveMistralCompatPatch", () => {
   it("enables reasoning_effort mapping for mistral-small-latest", () => {
-    expect(resolveMistralCompatPatch({ id: MISTRAL_SMALL_LATEST_ID })).toMatchObject({
+    expect(resolveMistralCompatPatch({ id: MISTRAL_SMALL_LATEST_ID })).toEqual({
       supportsStore: false,
       supportsReasoningEffort: true,
       maxTokensField: "max_tokens",
-      reasoningEffortMap: expect.objectContaining({ high: "high", off: "none" }),
+      reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
+    });
+  });
+
+  it("enables reasoning_effort mapping for mistral-medium-3-5", () => {
+    expect(resolveMistralCompatPatch({ id: MISTRAL_MEDIUM_3_5_ID })).toEqual({
+      supportsStore: false,
+      supportsReasoningEffort: true,
+      maxTokensField: "max_tokens",
+      reasoningEffortMap: MISTRAL_REASONING_EFFORT_MAP,
     });
   });
 
@@ -58,6 +80,13 @@ describe("applyMistralModelCompat", () => {
 
   it("applies reasoning compat for mistral-small-latest", () => {
     const normalized = applyMistralModelCompat({ id: MISTRAL_SMALL_LATEST_ID });
+    expect(supportsReasoningEffort(normalized)).toBe(true);
+    expect(reasoningEffortMap(normalized)?.high).toBe("high");
+    expect(reasoningEffortMap(normalized)?.off).toBe("none");
+  });
+
+  it("applies reasoning compat for mistral-medium-3-5", () => {
+    const normalized = applyMistralModelCompat({ id: MISTRAL_MEDIUM_3_5_ID });
     expect(supportsReasoningEffort(normalized)).toBe(true);
     expect(reasoningEffortMap(normalized)?.high).toBe("high");
     expect(reasoningEffortMap(normalized)?.off).toBe("none");
@@ -109,38 +138,22 @@ describe("applyMistralModelCompat", () => {
     expect(applyMistralModelCompat(model)).toBe(model);
   });
 
-  it("contributes Mistral transport compat for native, provider-family, and hinted custom routes", () => {
-    expect(
-      contributeMistralResolvedModelCompat({
-        modelId: "mistral-large-latest",
-        model: {
-          provider: "mistral",
-          api: "openai-completions",
-          baseUrl: "https://proxy.example/v1",
-        },
-      }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
+  it("returns the same object when mistral-medium-3-5 compat is fully normalized", () => {
+    const model = {
+      id: MISTRAL_MEDIUM_3_5_ID,
+      compat: resolveMistralCompatPatch({ id: MISTRAL_MEDIUM_3_5_ID }),
+    };
+    expect(applyMistralModelCompat(model)).toBe(model);
+  });
+
+  it("exposes thinking profile levels for mistral-medium-3-5", async () => {
+    const provider = await registerSingleProviderPlugin(mistralPlugin);
 
     expect(
-      contributeMistralResolvedModelCompat({
-        modelId: "custom-model",
-        model: {
-          provider: "custom-mistral-host",
-          api: "openai-completions",
-          baseUrl: "https://api.mistral.ai/v1",
-        },
+      provider.resolveThinkingProfile?.({
+        provider: "mistral",
+        modelId: MISTRAL_MEDIUM_3_5_ID,
       }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
-
-    expect(
-      contributeMistralResolvedModelCompat({
-        modelId: "mistralai/mistral-small-3.2",
-        model: {
-          provider: "openrouter",
-          api: "openai-completions",
-          baseUrl: "https://openrouter.ai/api/v1",
-        },
-      }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
+    ).toEqual({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" });
   });
 });

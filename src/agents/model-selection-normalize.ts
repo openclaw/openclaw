@@ -1,3 +1,4 @@
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { modelKey as sharedModelKey, normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import {
@@ -11,6 +12,10 @@ import { normalizeProviderModelIdWithRuntime } from "./provider-model-normalizat
 export type ModelRef = {
   provider: string;
   model: string;
+};
+
+export type ModelManifestNormalizationContext = {
+  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
 };
 
 export function modelKey(provider: string, model: string) {
@@ -38,9 +43,15 @@ export {
 function normalizeProviderModelId(
   provider: string,
   model: string,
-  options?: { allowPluginNormalization?: boolean },
+  options?: ModelManifestNormalizationContext & {
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  },
 ): string {
-  const staticModelId = normalizeStaticProviderModelId(provider, model);
+  const staticModelId = normalizeStaticProviderModelId(provider, model, {
+    allowManifestNormalization: options?.allowManifestNormalization,
+    manifestPlugins: options?.manifestPlugins,
+  });
   if (options?.allowPluginNormalization === false) {
     return staticModelId;
   }
@@ -55,7 +66,8 @@ function normalizeProviderModelId(
   );
 }
 
-type ModelRefNormalizeOptions = {
+type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 };
 

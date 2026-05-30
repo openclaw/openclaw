@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -29,7 +29,8 @@ function queueGuardedResponse(response: Response): { release: ReturnType<typeof 
 }
 
 function lastGuardRequest(): GuardRequest {
-  const call = fetchWithSsrFGuardMock.mock.calls.at(-1);
+  const calls = fetchWithSsrFGuardMock.mock.calls;
+  const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("fetchWithSsrFGuard was not called");
   }
@@ -44,9 +45,56 @@ function readRequestBody(request: GuardRequest): string {
   return body;
 }
 
+const guardedSuccessReleaseCases = [
+  {
+    name: "listInworldVoices",
+    run: async () => {
+      const { release } = queueGuardedResponse(
+        new Response(JSON.stringify({ voices: [] }), { status: 200 }),
+      );
+
+      await listInworldVoices({ apiKey: "test-key" });
+      return release;
+    },
+  },
+  {
+    name: "inworldTTS",
+    run: async () => {
+      const chunk = Buffer.from("audio").toString("base64");
+      const { release } = queueGuardedResponse(
+        new Response(JSON.stringify({ result: { audioContent: chunk } }), { status: 200 }),
+      );
+
+      await inworldTTS({ text: "test", apiKey: "test-key" });
+      return release;
+    },
+  },
+];
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
+
+describe("Inworld guarded dispatcher lifecycle", () => {
+  afterEach(() => {
+    fetchWithSsrFGuardMock.mockReset();
+    vi.restoreAllMocks();
+  });
+
+  it.each(guardedSuccessReleaseCases)(
+    "$name releases the guarded dispatcher after success",
+    async ({ run }) => {
+      const release = await run();
+
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
 describe("listInworldVoices", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockClear();
+    fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -133,7 +181,7 @@ describe("listInworldVoices", () => {
     queueGuardedResponse(new Response(JSON.stringify({}), { status: 200 }));
 
     const voices = await listInworldVoices({ apiKey: "test-key" });
-    expect(voices).toEqual([]);
+    expect(voices).toStrictEqual([]);
   });
 
   it("passes language filter as query parameter", async () => {
@@ -143,21 +191,11 @@ describe("listInworldVoices", () => {
 
     expect(lastGuardRequest().url).toBe("https://api.inworld.ai/voices/v1/voices?languages=EN_US");
   });
-
-  it("releases the guarded dispatcher after success", async () => {
-    const { release } = queueGuardedResponse(
-      new Response(JSON.stringify({ voices: [] }), { status: 200 }),
-    );
-
-    await listInworldVoices({ apiKey: "test-key" });
-
-    expect(release).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("inworldTTS", () => {
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockClear();
+    fetchWithSsrFGuardMock.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -229,8 +267,11 @@ describe("inworldTTS", () => {
     expect(request.url).toBe("https://api.inworld.ai/tts/v1/voice:stream");
     expect(request.auditContext).toBe("inworld-tts");
     expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
-    expect(request.init?.method).toBe("POST");
-    const headers = new Headers(request.init?.headers);
+    if (!request.init) {
+      throw new Error("expected Inworld TTS request init");
+    }
+    expect(request.init.method).toBe("POST");
+    const headers = new Headers(request.init.headers);
     expect(headers.get("authorization")).toBe("Basic test-key");
     expect(headers.get("content-type")).toBe("application/json");
     expect(JSON.parse(readRequestBody(request))).toEqual({
@@ -292,21 +333,12 @@ describe("inworldTTS", () => {
     expect(buffer).toEqual(Buffer.from("audio"));
   });
 
-  it("releases the guarded dispatcher after success", async () => {
-    const chunk = Buffer.from("audio").toString("base64");
-    const { release } = queueGuardedResponse(
-      new Response(JSON.stringify({ result: { audioContent: chunk } }), { status: 200 }),
-    );
-
-    await inworldTTS({ text: "test", apiKey: "test-key" });
-
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
   it("releases the guarded dispatcher after failure", async () => {
     const { release } = queueGuardedResponse(new Response("fail", { status: 500 }));
 
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow();
+    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
+      "Inworld TTS API error (500): fail",
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

@@ -68,7 +68,6 @@ export async function prepareRestartScript(
   env: NodeJS.ProcessEnv = process.env,
   gatewayPort: number = DEFAULT_GATEWAY_PORT,
 ): Promise<string | null> {
-  const tmpDir = os.tmpdir();
   const timestamp = Date.now();
   const platform = process.platform;
 
@@ -85,17 +84,35 @@ export async function prepareRestartScript(
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
+exec 3>&2
 ${logSetup}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
-if systemctl --user restart '${escaped}'; then
-  status=0
-  printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
+if systemctl --user is-active --quiet '${escaped}' || systemctl --user is-enabled --quiet '${escaped}'; then
+  if systemctl --user restart '${escaped}'; then
+    status=0
+    printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
+  else
+    status=$?
+    printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  fi
+elif systemctl is-active --quiet '${escaped}' || systemctl is-enabled --quiet '${escaped}'; then
+  status=78
+  printf '[%s] system-scoped openclaw gateway unit detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&2
+  printf '[%s] system-scoped openclaw gateway unit detected; update cannot restart it without sudo. Run: sudo systemctl restart %s\\n' "$(date -u +%FT%TZ)" '${escaped}' >&3 2>/dev/null || true
 else
-  status=$?
-  printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  if systemctl --user restart '${escaped}'; then
+    status=0
+    printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
+  else
+    status=$?
+    printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+  fi
 fi
 # Self-cleanup
+script_dir=$(dirname "$0")
+exec 3>&-
 rm -f "$0"
+rmdir "$script_dir" 2>/dev/null || true
 exit "$status"
 `;
     } else if (platform === "darwin") {
@@ -121,14 +138,19 @@ ${logSetup}
 printf '[%s] openclaw restart attempt source=update target=%s\\n' "$(date -u +%FT%TZ)" '${shellEscapeRestartLogValue(label)}' >&2
 # Try kickstart first (works when the service is still registered).
 # If it fails (e.g. after bootout), clear any persisted disabled state,
-# then re-register via bootstrap and kickstart. The final status is captured
+# then re-register via bootstrap. Bootstrap loads RunAtLoad agents, so the
+# fallback must not immediately kickstart -k the freshly spawned gateway.
+# The final status is captured
 # before self-cleanup so a genuine failure remains observable.
 status=0
 if ! launchctl kickstart -k 'gui/${uid}/${escaped}'; then
   launchctl enable 'gui/${uid}/${escaped}'
-  launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'
-  launchctl kickstart -k 'gui/${uid}/${escaped}'
-  status=$?
+  if launchctl bootstrap 'gui/${uid}' '${escapedPlistPath}'; then
+    status=0
+  else
+    launchctl kickstart -k 'gui/${uid}/${escaped}'
+    status=$?
+  fi
 fi
 if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=update\\n' "$(date -u +%FT%TZ)" >&2
@@ -136,7 +158,9 @@ else
   printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
 fi
 # Self-cleanup (log is retained under the OpenClaw state logs directory).
+script_dir=$(dirname "$0")
 rm -f "$0"
+rmdir "$script_dir" 2>/dev/null || true
 exit "$status"
 `;
     } else if (platform === "win32") {
@@ -156,9 +180,11 @@ REM Keep this as a cmd wrapper so Group Policy script execution policies
 REM cannot block the update restart handoff before schtasks.exe runs.
 setlocal
 set "OPENCLAW_RESTART_SCRIPT=%~f0"
+set "OPENCLAW_RESTART_SCRIPT_DIR=%~dp0."
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:OPENCLAW_RESTART_SCRIPT; $s=Get-Content -Raw -LiteralPath $p; $m='# POWERSHELL'; $i=$s.IndexOf($m); if ($i -lt 0) { exit 1 }; Invoke-Expression $s.Substring($i)"
 set "status=%ERRORLEVEL%"
 del "%~f0" >nul 2>&1
+rmdir "%OPENCLAW_RESTART_SCRIPT_DIR%" >nul 2>&1
 exit /b %status%
 # POWERSHELL
 # Wait briefly to ensure file locks are released after update.
@@ -281,6 +307,23 @@ function Get-OpenClawListenerPids {
   $listenerPids | Sort-Object -Unique
 }
 
+function Invoke-OpenClawStartupLauncher {
+  $launcherPath = Join-Path $env:USERPROFILE ".openclaw\\gateway.cmd"
+  if (-not (Test-Path -LiteralPath $launcherPath)) {
+    Write-RestartLog "openclaw restart startup launcher missing source=update path=$launcherPath"
+    return 1
+  }
+
+  try {
+    Start-Process -FilePath $launcherPath -WindowStyle Hidden | Out-Null
+    Write-RestartLog "openclaw restart launched startup fallback source=update path=$launcherPath"
+    return 0
+  } catch {
+    Write-RestartLog "openclaw restart startup fallback failed source=update error=$($_.Exception.Message)"
+    return 1
+  }
+}
+
 $taskName = ${quotedTaskName}
 $port = ${port}
 Write-RestartLog "openclaw restart attempt source=update target=$taskName"
@@ -317,6 +360,9 @@ for ($attempt = 1; $attempt -le 10; $attempt++) {
 }
 
 $status = Invoke-OpenClawSchtasksWithTimeout -Arguments @("/Run", "/TN", $taskName) -TimeoutSeconds 30
+if ($status -ne 0) {
+  $status = Invoke-OpenClawStartupLauncher
+}
 if ($status -eq 0) {
   Write-RestartLog "openclaw restart done source=update"
 } else {
@@ -329,8 +375,14 @@ exit $status
       return null;
     }
 
-    const scriptPath = path.join(tmpDir, filename);
-    await fs.writeFile(scriptPath, scriptContent, { mode: 0o755 });
+    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-"));
+    const scriptPath = path.join(scriptDir, filename);
+    try {
+      await fs.writeFile(scriptPath, scriptContent, { mode: 0o755, flag: "wx" });
+    } catch (error) {
+      await fs.rm(scriptDir, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
     return scriptPath;
   } catch {
     // If we can't write the script, we'll fall back to the standard restart method
@@ -354,10 +406,15 @@ export async function runRestartScript(scriptPath: string): Promise<void> {
   const file = isWindows ? "cmd.exe" : "/bin/sh";
   const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
 
-  const child = spawn(file, args, {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  child.unref();
+  try {
+    const child = spawn(file, args, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    // Restart handoff is best-effort; update completion must not crash here.
+  }
 }

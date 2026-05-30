@@ -127,11 +127,15 @@ describe("memory search config", () => {
   function expectMergedRemoteConfig(
     resolved: ReturnType<typeof resolveMemorySearchConfig>,
     apiKey: unknown,
+    extras?: { nonBatchConcurrency?: number },
   ) {
     expect(resolved?.remote).toEqual({
       baseUrl: "https://agent.example/v1",
       apiKey,
       headers: { "X-Default": "on" },
+      ...(typeof extras?.nonBatchConcurrency === "number"
+        ? { nonBatchConcurrency: extras.nonBatchConcurrency }
+        : {}),
       batch: {
         enabled: false,
         wait: true,
@@ -180,7 +184,7 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
-  it("defaults provider to auto when unspecified", () => {
+  it("defaults provider to openai when unspecified", () => {
     const cfg = asConfig({
       agents: {
         defaults: {
@@ -191,8 +195,43 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.provider).toBe("auto");
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.fallback).toBe("none");
+  });
+
+  it("normalizes legacy auto provider config to openai", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("auto"), "main");
+
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.model).toBe("text-embedding-3-small");
+  });
+
+  it("resolves custom provider ids through their configured api owner", () => {
+    const cfg = asConfig({
+      models: {
+        providers: {
+          "ollama-5080": {
+            api: "ollama",
+            baseUrl: "http://10.0.0.8:11435",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama-5080",
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.provider).toBe("ollama-5080");
+    expect(resolved?.model).toBe("nomic-embed-text");
+    expectDefaultRemoteBatch(resolved);
   });
 
   it("resolves sync config without consulting embedding providers", () => {
@@ -400,6 +439,49 @@ describe("memory search config", () => {
     );
   });
 
+  it("rejects multimodal memory on generic OpenAI-compatible providers", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai-compatible",
+            model: "text-embedding-bge-m3",
+            remote: { baseUrl: "http://127.0.0.1:1234/v1" },
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
+      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
+    );
+  });
+
+  it("rejects multimodal memory on baseUrl-only OpenAI-compatible custom providers", () => {
+    const cfg = asConfig({
+      models: {
+        providers: {
+          localEmbeddings: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "localEmbeddings",
+            model: "text-embedding-bge-m3",
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
+      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
+    );
+  });
+
   it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {
     clearMemoryEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders({ includeGemini: false });
@@ -533,6 +615,18 @@ describe("memory search config", () => {
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expectMergedRemoteConfig(resolved, "default-key"); // pragma: allowlist secret
+  });
+
+  it("merges remote non-batch concurrency from defaults with agent overrides", () => {
+    const cfg = configWithRemoteDefaults({
+      apiKey: "default-key", // pragma: allowlist secret
+      headers: { "X-Default": "on" },
+      nonBatchConcurrency: 1,
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expectMergedRemoteConfig(resolved, "default-key", { nonBatchConcurrency: 1 }); // pragma: allowlist secret
   });
 
   it("preserves SecretRef remote apiKey when merging defaults with agent overrides", () => {

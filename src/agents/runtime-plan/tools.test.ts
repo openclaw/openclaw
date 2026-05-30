@@ -1,10 +1,10 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
   createParameterFreeTool,
   normalizedParameterFreeSchema,
-} from "../../../test/helpers/agents/schema-normalization-runtime-contract.js";
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logAgentRuntimeToolDiagnostics, normalizeAgentRuntimeTools } from "./tools.js";
 import type { AgentRuntimePlan } from "./types.js";
 
@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   normalizeProviderToolSchemas: vi.fn(),
 }));
 
-vi.mock("../pi-embedded-runner/tool-schema-runtime.js", () => ({
+vi.mock("../embedded-agent-runner/tool-schema-runtime.js", () => ({
   logProviderToolSchemaDiagnostics: mocks.logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas: mocks.normalizeProviderToolSchemas,
 }));
@@ -97,12 +97,34 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(normalized[0]?.parameters).toEqual(normalizedParameterFreeSchema());
+    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledTimes(1);
+    expect(mocks.normalizeProviderToolSchemas.mock.calls.at(0)?.[0]).toEqual({
+      tools: [createParameterFreeTool()],
+      provider: "openai",
+      config: undefined,
+      workspaceDir: "/tmp/openclaw-runtime-plan-tools",
+      env: process.env,
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      model: createNativeOpenAIResponsesModel(),
+      allowRuntimePluginLoad: undefined,
+    });
+  });
+
+  it("can normalize without cold-loading provider runtime plugins", () => {
+    const tools = [createParameterFreeTool()] as AgentTool[];
+
+    normalizeAgentRuntimeTools({
+      tools,
+      provider: "openai",
+      allowProviderRuntimePluginLoad: false,
+    });
+
     expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
       expect.objectContaining({
+        tools,
         provider: "openai",
-        modelId: "gpt-5.4",
-        modelApi: "openai-responses",
-        workspaceDir: "/tmp/openclaw-runtime-plan-tools",
+        allowRuntimePluginLoad: false,
       }),
     );
   });

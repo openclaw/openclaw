@@ -71,18 +71,21 @@ describe("matrix sync helpers", () => {
       matched: false,
       since: "next-batch-2",
     });
-    expect(observedEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "message",
-          body: "hello",
-          eventId: "$driver",
-          roomId: "!room:matrix-qa.test",
-          sender: "@driver:matrix-qa.test",
-          type: "m.room.message",
-        }),
-      ]),
-    );
+    expect(observedEvents).toEqual([
+      {
+        kind: "message",
+        roomId: "!room:matrix-qa.test",
+        eventId: "$driver",
+        sender: "@driver:matrix-qa.test",
+        stateKey: undefined,
+        type: "m.room.message",
+        originServerTs: undefined,
+        body: "hello",
+        formattedBody: undefined,
+        msgtype: "m.text",
+        membership: undefined,
+      },
+    ]);
   });
 
   it("keeps recording later same-batch events after the first match", async () => {
@@ -130,26 +133,50 @@ describe("matrix sync helpers", () => {
     });
 
     expect(result).toEqual({
-      event: expect.objectContaining({
+      event: {
+        kind: "message",
+        roomId: "!room:matrix-qa.test",
         eventId: "$sut",
-      }),
+        sender: "@sut:matrix-qa.test",
+        stateKey: undefined,
+        type: "m.room.message",
+        originServerTs: undefined,
+        body: "target",
+        formattedBody: undefined,
+        msgtype: "m.text",
+        membership: undefined,
+      },
       matched: true,
       since: "next-batch-2",
     });
-    expect(observedEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "message",
-          body: "target",
-          eventId: "$sut",
-        }),
-        expect.objectContaining({
-          kind: "message",
-          body: "trailing event",
-          eventId: "$driver",
-        }),
-      ]),
-    );
+    expect(observedEvents).toEqual([
+      {
+        kind: "message",
+        roomId: "!room:matrix-qa.test",
+        eventId: "$sut",
+        sender: "@sut:matrix-qa.test",
+        stateKey: undefined,
+        type: "m.room.message",
+        originServerTs: undefined,
+        body: "target",
+        formattedBody: undefined,
+        msgtype: "m.text",
+        membership: undefined,
+      },
+      {
+        kind: "message",
+        roomId: "!room:matrix-qa.test",
+        eventId: "$driver",
+        sender: "@driver:matrix-qa.test",
+        stateKey: undefined,
+        type: "m.room.message",
+        originServerTs: undefined,
+        body: "trailing event",
+        formattedBody: undefined,
+        msgtype: "m.text",
+        membership: undefined,
+      },
+    ]);
   });
 
   it("lets a second wait reuse later same-batch events without another /sync", async () => {
@@ -220,9 +247,18 @@ describe("matrix sync helpers", () => {
 
   it("shares one in-flight /sync poll across concurrent waits", async () => {
     let calls = 0;
+    let markFetchStarted: () => void = () => {};
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+    let releaseFetch: () => void = () => {};
+    const fetchCanComplete = new Promise<void>((resolve) => {
+      releaseFetch = resolve;
+    });
     const fetchImpl: typeof fetch = async () => {
       calls += 1;
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      markFetchStarted();
+      await fetchCanComplete;
       return new Response(
         JSON.stringify({
           next_batch: "next-batch-2",
@@ -260,7 +296,7 @@ describe("matrix sync helpers", () => {
       since: "start-batch",
     });
 
-    const [reply, notice] = await Promise.all([
+    const waits = Promise.all([
       observer.waitForRoomEvent({
         predicate: (event) => event.eventId === "$reply",
         roomId: "!room:matrix-qa.test",
@@ -273,12 +309,28 @@ describe("matrix sync helpers", () => {
       }),
     ]);
 
+    await fetchStarted;
+    await Promise.resolve();
+    releaseFetch();
+    const [reply, notice] = await waits;
+
     expect(reply.event.eventId).toBe("$reply");
-    expect(notice).toMatchObject({
-      event: expect.objectContaining({
+    expect(notice).toEqual({
+      event: {
+        kind: "notice",
+        roomId: "!room:matrix-qa.test",
         eventId: "$notice",
-      }),
+        sender: "@sut:matrix-qa.test",
+        stateKey: undefined,
+        type: "m.room.message",
+        originServerTs: undefined,
+        body: "notice",
+        formattedBody: undefined,
+        msgtype: "m.notice",
+        membership: undefined,
+      },
       matched: true,
+      since: "next-batch-2",
     });
     expect(calls).toBe(1);
   });

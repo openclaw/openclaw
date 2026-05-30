@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -5,28 +6,88 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
+  parseTsdownBuildArgs,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
+  pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   runTsdownBuildInvocation,
 } from "../../scripts/tsdown-build.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const NO_MEMORY_LIMIT = {
+  cgroupMemoryLimitPaths: [],
+  procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+};
+
+async function expectPathMissing(targetPath: string) {
+  let statError: unknown;
+  try {
+    await fsPromises.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect(statError).toBeInstanceOf(Error);
+  if (!(statError instanceof Error)) {
+    throw new Error("expected missing path error");
+  }
+  expect(Reflect.get(statError, "code")).toBe("ENOENT");
+}
 
 describe("resolveTsdownBuildInvocation", () => {
+  it("parses wrapper help before any tsdown work", () => {
+    expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
+    expect(parseTsdownBuildArgs(["--format", "esm"])).toEqual({
+      forwardedArgs: ["--format", "esm"],
+      help: false,
+    });
+  });
+
+  it("prints wrapper help without invoking pnpm or tsdown", () => {
+    const result = spawnSync(process.execPath, ["scripts/tsdown-build.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/tsdown-build.mjs");
+    expect(result.stdout).not.toContain("Scope:");
+    expect(result.stdout).not.toContain("pnpm");
+  });
+
+  it("forwards explicit tsdown args after wrapper args are parsed", () => {
+    const result = resolveTsdownBuildInvocation({
+      args: ["--format", "esm"],
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.args).toContain("tsdown");
+    expect(result.args).toEqual(expect.arrayContaining(["--config-loader", "unrun", "--no-clean"]));
+    expect(result.args.slice(-2)).toEqual(["--format", "esm"]);
+  });
+
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
+    const rootDir = createTempDir("openclaw-pnpm-runner-");
+    const npmExecPath = path.join(rootDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
     const result = resolveTsdownBuildInvocation({
       platform: "win32",
       nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
+      npmExecPath,
       env: {},
+      ...NO_MEMORY_LIMIT,
     });
 
     expect(result).toEqual({
       command: "C:\\Program Files\\nodejs\\node.exe",
       args: [
-        "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
+        npmExecPath,
         "exec",
         "tsdown",
         "--config-loader",
@@ -39,7 +100,115 @@ describe("resolveTsdownBuildInvocation", () => {
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         windowsVerbatimArguments: undefined,
-        env: {},
+        env: { NODE_OPTIONS: "--max-old-space-size=8192" },
+      },
+    });
+  });
+
+  it("preserves explicit tsdown heap settings", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+  });
+
+  it("raises inherited lower tsdown heap settings to the build default", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+  });
+
+  it("raises split inherited lower tsdown heap settings to the build default", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+  });
+
+  it("keeps default tsdown heap below the container memory limit", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+  });
+
+  it("clamps explicit tsdown heap settings to the container memory limit", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6400");
+  });
+
+  it("falls back to proc meminfo when the cgroup memory limit is unbounded", () => {
+    const fsMock = {
+      readFileSync: vi.fn((filePath: string) => {
+        if (filePath === "/test/memory.max") {
+          return "max\n";
+        }
+        if (filePath === "/test/meminfo") {
+          return "MemTotal: 7340032 kB\n";
+        }
+        throw new Error(`unexpected path ${filePath}`);
+      }),
+    };
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: fsMock,
+      cgroupMemoryLimitPaths: ["/test/memory.max"],
+      procMeminfoPath: "/test/meminfo",
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+  });
+
+  it("can run tsdown without invoking pnpm", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result).toEqual({
+      command: "/usr/bin/node",
+      args: [
+        "node_modules/tsdown/dist/run.mjs",
+        "--config-loader",
+        "unrun",
+        "--logLevel",
+        "warn",
+        "--no-clean",
+      ],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+        env: {
+          NODE_OPTIONS: "--max-old-space-size=8192",
+          OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+        },
       },
     });
   });
@@ -52,11 +221,11 @@ describe("resolveTsdownBuildInvocation", () => {
       throw new Error("locked");
     });
 
-    expect(() =>
+    expect(
       pruneSourceCheckoutBundledPluginNodeModules({
         cwd: process.cwd(),
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(warn).toHaveBeenCalledWith(
       "tsdown: could not prune bundled plugin source node_modules: Error: locked",
@@ -97,32 +266,63 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(
       fsPromises.readFile(path.join(distRuntimeDir, "heartbeat-runner.runtime.js"), "utf8"),
     ).resolves.toBe("alias\n");
-    await expect(fsPromises.stat(path.join(distDir, "delegate-BPjCe4gC.js"))).rejects.toThrow();
-    await expect(
-      fsPromises.stat(path.join(distDir, "compact.runtime-2DiEmVcA.js")),
-    ).rejects.toThrow();
-    await expect(
-      fsPromises.stat(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js")),
-    ).rejects.toThrow();
+    await expectPathMissing(path.join(distDir, "delegate-BPjCe4gC.js"));
+    await expectPathMissing(path.join(distDir, "compact.runtime-2DiEmVcA.js"));
+    await expectPathMissing(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js"));
   });
 
   it("cleans tsdown output roots before using tsdown --no-clean", async () => {
     const rootDir = createTempDir("openclaw-tsdown-clean-");
     const distFile = path.join(rootDir, "dist", "stale.js");
+    const pluginGeneratedFile = path.join(rootDir, "dist", "extensions", "telegram", "index.js");
     const distRuntimeFile = path.join(rootDir, "dist-runtime", "stale.js");
     const unrelatedFile = path.join(rootDir, "tmp", "keep.js");
     await fsPromises.mkdir(path.dirname(distFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(pluginGeneratedFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(distRuntimeFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(unrelatedFile), { recursive: true });
     await fsPromises.writeFile(distFile, "stale\n");
+    await fsPromises.writeFile(pluginGeneratedFile, "generated\n");
     await fsPromises.writeFile(distRuntimeFile, "stale\n");
     await fsPromises.writeFile(unrelatedFile, "keep\n");
 
     cleanTsdownOutputRoots({ cwd: rootDir });
 
-    await expect(fsPromises.stat(path.join(rootDir, "dist"))).rejects.toThrow();
-    await expect(fsPromises.stat(path.join(rootDir, "dist-runtime"))).rejects.toThrow();
+    await expectPathMissing(distFile);
+    await expectPathMissing(pluginGeneratedFile);
+    await expectPathMissing(path.join(rootDir, "dist-runtime"));
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("prunes untracked generated declaration files that shadow source entries", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-source-dts-");
+    const signalDir = path.join(rootDir, "extensions", "signal");
+    const signalSrcDir = path.join(signalDir, "src");
+    await fsPromises.mkdir(signalSrcDir, { recursive: true });
+    await fsPromises.writeFile(path.join(signalDir, "api.ts"), "export {};\n");
+    await fsPromises.writeFile(path.join(signalDir, "api.d.ts"), "export {};\n");
+    await fsPromises.writeFile(path.join(signalSrcDir, "probe.ts"), "export {};\n");
+    await fsPromises.writeFile(path.join(signalSrcDir, "probe.d.ts"), "export {};\n");
+    await fsPromises.writeFile(
+      path.join(signalSrcDir, "ambient.d.ts"),
+      "declare const x: string;\n",
+    );
+
+    const removed = pruneUntrackedGeneratedSourceDeclarations({
+      cwd: rootDir,
+      spawnSync: () => ({
+        status: 0,
+        stdout:
+          "extensions/signal/api.d.ts\nextensions/signal/src/probe.d.ts\nextensions/signal/src/ambient.d.ts\n",
+      }),
+    });
+
+    expect(removed).toBe(2);
+    await expectPathMissing(path.join(signalDir, "api.d.ts"));
+    await expectPathMissing(path.join(signalSrcDir, "probe.d.ts"));
+    await expect(
+      fsPromises.readFile(path.join(signalSrcDir, "ambient.d.ts"), "utf8"),
+    ).resolves.toBe("declare const x: string;\n");
   });
 });
 
@@ -146,6 +346,9 @@ describe("createTsdownOutputScanner", () => {
 
     scanner.append("[UNRESOLVED_IMPORT] extensions/telegram/src/index.ts\n");
     scanner.append("[UNRESOLVED_IMPORT] node_modules/example/index.js\n");
+    scanner.append(
+      "[UNRESOLVED_IMPORT] ../../../../tmp/openclaw-pnpm-node-modules/baileys/lib/Utils/messages-media.js\n",
+    );
 
     expect(scanner.finish().fatalUnresolvedImport).toBeNull();
   });

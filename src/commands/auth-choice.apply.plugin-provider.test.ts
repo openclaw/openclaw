@@ -16,6 +16,8 @@ type ResolveManifestProviderAuthChoice =
   typeof import("../plugins/provider-auth-choices.js").resolveManifestProviderAuthChoice;
 type ResolvePluginSetupProvider =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginSetupProvider;
+type RunProviderModelSelectedHook =
+  typeof import("../plugins/provider-auth-choice.runtime.js").runProviderModelSelectedHook;
 
 const resolvePluginProviders = vi.hoisted(() => vi.fn<() => ProviderPlugin[]>(() => []));
 const resolvePluginSetupProvider = vi.hoisted(() =>
@@ -39,9 +41,10 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoice,
 }));
 
-const upsertAuthProfile = vi.hoisted(() => vi.fn());
+const upsertAuthProfile = vi.hoisted(() => vi.fn(() => ({ version: 1, profiles: {} })));
 vi.mock("../agents/auth-profiles.js", () => ({
   upsertAuthProfile,
+  upsertAuthProfileWithLock: upsertAuthProfile,
 }));
 
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "default"));
@@ -56,11 +59,6 @@ vi.mock("../agents/agent-scope.js", () => ({
 const resolveDefaultAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 vi.mock("../agents/workspace.js", () => ({
   resolveDefaultAgentWorkspaceDir,
-}));
-
-const resolveOpenClawAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir,
 }));
 
 const applyAuthProfileConfig = vi.hoisted(() => vi.fn((config) => config));
@@ -99,17 +97,13 @@ vi.mock("../commands/onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled,
 }));
 
-const clearPluginDiscoveryCache = vi.hoisted(() => vi.fn());
-vi.mock("../plugins/discovery.js", () => ({
-  clearPluginDiscoveryCache,
-}));
-
 const LOCAL_PROVIDER_ID = "local-provider";
 const LOCAL_PROVIDER_LABEL = "Local Provider";
 const LOCAL_AUTH_METHOD_ID = "local";
 const LOCAL_PROFILE_ID = `${LOCAL_PROVIDER_ID}:default`;
 const LOCAL_API_KEY = "local-provider-key";
 const LOCAL_DEFAULT_MODEL = `${LOCAL_PROVIDER_ID}/demo-model`;
+const EXISTING_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0";
 
 function buildProvider(): ProviderPlugin {
   return {
@@ -131,6 +125,43 @@ function buildProvider(): ProviderPlugin {
               },
             },
           ],
+          defaultModel: LOCAL_DEFAULT_MODEL,
+        }),
+      },
+    ],
+  };
+}
+
+function buildProviderWithDefaultModelPatch(): ProviderPlugin {
+  return {
+    id: LOCAL_PROVIDER_ID,
+    label: LOCAL_PROVIDER_LABEL,
+    auth: [
+      {
+        id: LOCAL_AUTH_METHOD_ID,
+        label: LOCAL_PROVIDER_LABEL,
+        kind: "custom",
+        run: async () => ({
+          profiles: [
+            {
+              profileId: LOCAL_PROFILE_ID,
+              credential: {
+                type: "api_key",
+                provider: LOCAL_PROVIDER_ID,
+                key: LOCAL_API_KEY,
+              },
+            },
+          ],
+          configPatch: {
+            agents: {
+              defaults: {
+                model: { primary: LOCAL_DEFAULT_MODEL },
+                models: {
+                  [LOCAL_DEFAULT_MODEL]: { alias: "Local default" },
+                },
+              },
+            },
+          },
           defaultModel: LOCAL_DEFAULT_MODEL,
         }),
       },
@@ -328,13 +359,56 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
       agentDir: "/tmp/agent",
     });
-    expect(runProviderModelSelectedHook).toHaveBeenCalledWith({
-      config: result?.config,
-      model: LOCAL_DEFAULT_MODEL,
-      prompter: expect.objectContaining({ note: expect.any(Function) }),
-      agentDir: undefined,
-      workspaceDir: "/tmp/workspace",
+    expect(runProviderModelSelectedHook).toHaveBeenCalledOnce();
+    const [hookParams] = runProviderModelSelectedHook.mock
+      .calls[0] as unknown as Parameters<RunProviderModelSelectedHook>;
+    expect(hookParams.config).toBe(result?.config);
+    expect(hookParams.model).toBe(LOCAL_DEFAULT_MODEL);
+    expect(typeof hookParams.prompter.note).toBe("function");
+    expect(hookParams.agentDir).toBeUndefined();
+    expect(hookParams.workspaceDir).toBe("/tmp/workspace");
+  });
+
+  it("keeps an existing default when provider auth patches its own primary model", async () => {
+    const provider = buildProviderWithDefaultModelPatch();
+    resolvePluginProviders.mockReturnValue([provider]);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider,
+      method: provider.auth[0],
     });
+    const note = vi.fn(async () => {});
+
+    const result = await applyAuthChoiceLoadedPluginProvider(
+      buildParams({
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: EXISTING_DEFAULT_MODEL },
+              models: {
+                [EXISTING_DEFAULT_MODEL]: { alias: "Bedrock" },
+              },
+            },
+          },
+        },
+        prompter: {
+          note,
+        } as unknown as ApplyAuthChoiceParams["prompter"],
+        preserveExistingDefaultModel: true,
+      }),
+    );
+
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: EXISTING_DEFAULT_MODEL,
+    });
+    expect(result?.config.agents?.defaults?.models).toEqual({
+      [EXISTING_DEFAULT_MODEL]: { alias: "Bedrock" },
+      [LOCAL_DEFAULT_MODEL]: { alias: "Local default" },
+    });
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      `Kept existing default model ${EXISTING_DEFAULT_MODEL}; ${LOCAL_DEFAULT_MODEL} is available.`,
+      "Model configured",
+    );
   });
 
   it("uses manifest-owned setup providers without loading the broad provider runtime", async () => {
@@ -359,7 +433,15 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     });
     expect(resolvePluginSetupProvider).toHaveBeenCalledWith({
       provider: LOCAL_PROVIDER_ID,
-      config: {},
+      config: {
+        plugins: {
+          entries: {
+            "local-provider-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
       workspaceDir: "/tmp/workspace",
       env: undefined,
       pluginIds: ["local-provider-plugin"],
@@ -379,16 +461,14 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
 
-    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          pluginId: "local-provider-plugin",
-          label: LOCAL_PROVIDER_LABEL,
-        }),
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
-    expect(clearPluginDiscoveryCache).toHaveBeenCalledOnce();
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledOnce();
+    const [installParams] = ensureOnboardingPluginInstalled.mock.calls[0] ?? [];
+    if (installParams === undefined) {
+      throw new Error("expected plugin install params");
+    }
+    expect(installParams.entry?.pluginId).toBe("local-provider-plugin");
+    expect(installParams.entry?.label).toBe(LOCAL_PROVIDER_LABEL);
+    expect(installParams.workspaceDir).toBe("/tmp/workspace");
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
     expect(result?.config.agents?.defaults?.model).toEqual({
       primary: LOCAL_DEFAULT_MODEL,
@@ -412,7 +492,6 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
 
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
 
-    expect(clearPluginDiscoveryCache).toHaveBeenCalledOnce();
     expect(result).toEqual({
       config: {
         plugins: {
@@ -511,6 +590,29 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     );
   });
 
+  it("normalizes retired Google Gemini default models returned by auth methods", async () => {
+    const method: ProviderAuthMethod = {
+      id: "google",
+      label: "Google",
+      kind: "custom",
+      run: async () => ({
+        profiles: [],
+        defaultModel: "google/gemini-3-pro-preview",
+      }),
+    };
+
+    const result = await runProviderPluginAuthMethod({
+      config: {},
+      runtime: {} as ApplyAuthChoiceParams["runtime"],
+      prompter: {
+        note: vi.fn(async () => {}),
+      } as unknown as ApplyAuthChoiceParams["prompter"],
+      method,
+    });
+
+    expect(result.defaultModel).toBe("google/gemini-3.1-pro-preview");
+  });
+
   it("replaces provider-owned default model maps during auth migrations", async () => {
     const method: ProviderAuthMethod = {
       id: "local",
@@ -606,6 +708,59 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
       `Default model set to ${LOCAL_DEFAULT_MODEL} for agent "worker".`,
+      "Model configured",
+    );
+  });
+
+  it("preserves the existing primary model for plugin auth choices that patch defaults", async () => {
+    const provider = buildProviderWithDefaultModelPatch();
+    resolvePluginProviders.mockReturnValue([provider]);
+    const note = vi.fn(async () => {});
+
+    const result = await applyAuthChoicePluginProvider(
+      buildParams({
+        authChoice: `provider-plugin:${LOCAL_PROVIDER_ID}:${LOCAL_AUTH_METHOD_ID}`,
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: EXISTING_DEFAULT_MODEL },
+              models: {
+                [EXISTING_DEFAULT_MODEL]: { alias: "Bedrock" },
+              },
+            },
+          },
+        },
+        prompter: {
+          note,
+        } as unknown as ApplyAuthChoiceParams["prompter"],
+        preserveExistingDefaultModel: true,
+      }),
+      {
+        authChoice: `provider-plugin:${LOCAL_PROVIDER_ID}:${LOCAL_AUTH_METHOD_ID}`,
+        pluginId: LOCAL_PROVIDER_ID,
+        providerId: LOCAL_PROVIDER_ID,
+        methodId: LOCAL_AUTH_METHOD_ID,
+        label: LOCAL_PROVIDER_LABEL,
+      },
+    );
+
+    expect(result?.config.agents?.defaults?.model).toEqual({
+      primary: EXISTING_DEFAULT_MODEL,
+    });
+    expect(result?.config.agents?.defaults?.models).toEqual({
+      [EXISTING_DEFAULT_MODEL]: { alias: "Bedrock" },
+      [LOCAL_DEFAULT_MODEL]: { alias: "Local default" },
+    });
+    expect(result?.config.plugins).toEqual({
+      entries: {
+        [LOCAL_PROVIDER_ID]: {
+          enabled: true,
+        },
+      },
+    });
+    expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      `Kept existing default model ${EXISTING_DEFAULT_MODEL}; ${LOCAL_DEFAULT_MODEL} is available.`,
       "Model configured",
     );
   });

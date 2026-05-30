@@ -1,11 +1,8 @@
-import type { proto } from "@whiskeysockets/baileys";
-import {
-  extractMessageContent,
-  getContentType,
-  normalizeMessageContent,
-} from "@whiskeysockets/baileys";
+import type { proto } from "baileys";
+import { extractMessageContent, getContentType, normalizeMessageContent } from "baileys";
 import { formatLocationText, type NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
 import { jidToE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
@@ -197,7 +194,9 @@ function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextI
   return undefined;
 }
 
-function extractContextInfo(message: proto.IMessage | undefined): proto.IContextInfo | undefined {
+export function extractContextInfo(
+  message: proto.IMessage | undefined,
+): proto.IContextInfo | undefined {
   for (const candidate of buildMessageChain(message)) {
     const contextInfo = extractContextInfoFromMessage(candidate);
     if (contextInfo) {
@@ -228,7 +227,7 @@ export function extractMentionedJids(rawMessage: proto.IMessage | undefined): st
   if (flattened.length === 0) {
     return undefined;
   }
-  return Array.from(new Set(flattened));
+  return uniqueStrings(flattened);
 }
 
 export function extractText(rawMessage: proto.IMessage | undefined): string | undefined {
@@ -437,4 +436,50 @@ export function describeReplyContext(
     body,
     sender,
   };
+}
+
+function hasInteractiveResponseContent(message: proto.IMessage | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  // Button/list/template/interactive selections that the existing four
+  // extractors do not cover. Treat any presence of these keys as user
+  // content — Baileys never delivers these as receipts or protocol
+  // envelopes, only as explicit user choices.
+  return Boolean(
+    message.buttonsResponseMessage ||
+    message.listResponseMessage ||
+    message.templateButtonReplyMessage ||
+    message.interactiveResponseMessage,
+  );
+}
+
+/**
+ * Fast check that a Baileys message carries user-visible inbound content
+ * (text, media, contact, location, button/list selection). Returns false for
+ * protocol/receipt/typing notifications that arrive on the same
+ * `messages.upsert` stream as real messages but should not trigger pairing
+ * access-control side effects.
+ */
+export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): boolean {
+  if (!rawMessage) {
+    return false;
+  }
+  if (extractText(rawMessage)) {
+    return true;
+  }
+  if (extractMediaPlaceholder(rawMessage)) {
+    return true;
+  }
+  if (extractLocationData(rawMessage)) {
+    return true;
+  }
+  // Walk wrappers (ephemeral, viewOnce, etc.) — interactive responses
+  // can arrive nested.
+  for (const candidate of buildMessageChain(rawMessage)) {
+    if (hasInteractiveResponseContent(candidate)) {
+      return true;
+    }
+  }
+  return false;
 }

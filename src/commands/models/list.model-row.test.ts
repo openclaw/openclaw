@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { toModelRow } from "./list.model-row.js";
 
 const OPENROUTER_MODEL = {
@@ -26,32 +25,34 @@ describe("toModelRow", () => {
       tags: [],
     });
 
-    expect(row).toMatchObject({
-      contextWindow: 400_000,
-      contextTokens: 272_000,
-    });
+    expect(row.contextWindow).toBe(400_000);
+    expect(row.contextTokens).toBe(272_000);
   });
 
   it("marks models available from auth profiles without loading model discovery", () => {
-    const authStore: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          key: "sk-or-v1-regression-test",
-        },
-      },
-    };
-
     const row = toModelRow({
       model: OPENROUTER_MODEL as never,
       key: "openrouter/openai/gpt-5.4",
       tags: [],
-      cfg: {},
-      authStore,
+      hasAuthForProvider: (provider) => provider === "openrouter",
     });
 
     expect(row.available).toBe(true);
+  });
+
+  it("marks bracketed IPv6 loopback base URLs as local", () => {
+    for (const baseUrl of ["http://[::1]:11434/v1", "http://[::]:11434/v1"]) {
+      const row = toModelRow({
+        model: {
+          ...OPENROUTER_MODEL,
+          provider: "ollama",
+          baseUrl,
+        } as never,
+        key: "ollama/llama3.2",
+        tags: [],
+      });
+
+      expect(row.local).toBe(true);
+    }
   });
 });

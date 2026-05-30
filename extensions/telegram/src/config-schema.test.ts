@@ -66,6 +66,64 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("accepts mediaGroupFlushMs overrides per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      mediaGroupFlushMs: 750,
+      accounts: { ops: { mediaGroupFlushMs: 1500 } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.mediaGroupFlushMs).toBe(750);
+      expect(res.data.accounts?.ops?.mediaGroupFlushMs).toBe(1500);
+    }
+  });
+
+  it("rejects mediaGroupFlushMs outside the supported flush bounds", () => {
+    expectTelegramConfigIssue({ mediaGroupFlushMs: 9 }, "mediaGroupFlushMs");
+    expectTelegramConfigIssue({ mediaGroupFlushMs: 60_001 }, "mediaGroupFlushMs");
+  });
+
+  it("accepts Telegram native tool-progress draft config only on Telegram", () => {
+    expectTelegramConfigValid({
+      streaming: {
+        preview: {
+          toolProgress: true,
+          nativeToolProgress: true,
+          nativeToolProgressAllowFrom: ["123456789"],
+        },
+      },
+      accounts: {
+        ops: {
+          streaming: {
+            preview: {
+              nativeToolProgress: true,
+              nativeToolProgressAllowFrom: [123456789],
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects removed DM thread reply policy keys", () => {
+    expectTelegramConfigIssue({ dm: { threadReplies: "off" } }, "");
+    expectTelegramConfigIssue(
+      { accounts: { ops: { dm: { threadReplies: "always" } } } },
+      ["accounts", "ops"].join("."),
+    );
+    expectTelegramConfigIssue(
+      {
+        direct: {
+          "123456789": {
+            threadReplies: "inbound",
+          },
+        },
+      },
+      "direct.123456789",
+    );
+  });
+
   it("rejects pollingStallThresholdMs outside the watchdog bounds", () => {
     expectTelegramConfigIssue({ pollingStallThresholdMs: 29_999 }, "pollingStallThresholdMs");
     expectTelegramConfigIssue({ pollingStallThresholdMs: 600_001 }, "pollingStallThresholdMs");
@@ -195,6 +253,38 @@ describe("telegram topic agentId schema", () => {
               agentId: "support",
               systemPrompt: "You are support",
             },
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      console.error(res.error.format());
+      return;
+    }
+    expect(res.data.direct?.["123456789"]?.topics?.["99"]?.agentId).toBe("support");
+  });
+
+  it("rejects removed per-DM threadReplies overrides", () => {
+    expectTelegramConfigIssue(
+      {
+        direct: {
+          "123456789": {
+            threadReplies: "inbound",
+          },
+        },
+      },
+      "direct.123456789",
+    );
+  });
+
+  it("accepts DM topic config without threadReplies overrides", () => {
+    const res = TelegramConfigSchema.safeParse({
+      direct: {
+        "123456789": {
+          topics: {
+            "99": { agentId: "support" },
           },
         },
       },

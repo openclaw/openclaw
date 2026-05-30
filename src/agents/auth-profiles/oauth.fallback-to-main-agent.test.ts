@@ -13,7 +13,7 @@ const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai-codex" }],
 }));
@@ -37,7 +37,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 afterAll(() => {
-  vi.doUnmock("@mariozechner/pi-ai/oauth");
+  vi.doUnmock("../../llm/oauth.js");
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
@@ -48,11 +48,7 @@ function createUsableOAuthExpiry(): number {
 }
 
 describe("resolveApiKeyForProfile fallback to main agent", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR"]);
   let tmpDir: string;
   let mainAgentDir: string;
   let secondaryAgentDir: string;
@@ -69,10 +65,9 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     await fs.mkdir(mainAgentDir, { recursive: true });
     await fs.mkdir(secondaryAgentDir, { recursive: true });
 
-    // Set environment variables so resolveOpenClawAgentDir() returns mainAgentDir
+    // Set environment variables so the default agent dir resolves under tmpDir.
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
     clearRuntimeAuthProfileStoreSnapshots();
   });
 
@@ -95,6 +90,20 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
         },
       },
     };
+  }
+
+  function expectOauthCredentialFields(
+    store: AuthProfileStore,
+    profileId: string,
+    params: { access: string; expires: number },
+  ) {
+    const credential = store.profiles[profileId];
+    expect(credential?.type).toBe("oauth");
+    if (credential?.type !== "oauth") {
+      throw new Error(`Expected OAuth credential for ${profileId}`);
+    }
+    expect(credential.access).toBe(params.access);
+    expect(credential.expires).toBe(params.expires);
   }
 
   async function writeAuthProfilesStore(agentDir: string, store: AuthProfileStore) {
@@ -183,20 +192,22 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
     // Load the secondary agent's store (will merge with main agent's store)
     // Call resolveApiKeyForProfile with the secondary agent's expired credentials:
-    // refresh fails, then fallback copies main credentials to secondary.
+    // fresh main credentials are used read-through without copying the refresh token.
     const result = await resolveFromSecondaryAgent(profileId);
 
-    expect(result).not.toBeNull();
-    expect(result?.apiKey).toBe("fresh-access-token");
-    expect(result?.provider).toBe("anthropic");
+    if (!result) {
+      throw new Error("Expected fallback OAuth result from main agent");
+    }
+    expect(result.apiKey).toBe("fresh-access-token");
+    expect(result.provider).toBe("anthropic");
 
-    // Verify the credentials were copied to the secondary agent
-    const updatedSecondaryStore = JSON.parse(
+    // The secondary store keeps its local credential; inherited OAuth is read-through.
+    const secondaryStore = JSON.parse(
       await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
-      access: "fresh-access-token",
-      expires: freshTime,
+    expectOauthCredentialFields(secondaryStore, profileId, {
+      access: "expired-access-token",
+      expires: expiredTime,
     });
   });
 
@@ -230,12 +241,12 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
     expect(result?.apiKey).toBe("main-newer-access-token");
 
-    const updatedSecondaryStore = JSON.parse(
+    const secondaryStore = JSON.parse(
       await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
     ) as AuthProfileStore;
-    expect(updatedSecondaryStore.profiles[profileId]).toMatchObject({
-      access: "main-newer-access-token",
-      expires: mainExpiry,
+    expectOauthCredentialFields(secondaryStore, profileId, {
+      access: "secondary-access-token",
+      expires: secondaryExpiry,
     });
   });
 

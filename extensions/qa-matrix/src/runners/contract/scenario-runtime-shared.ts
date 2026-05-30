@@ -29,6 +29,12 @@ export type MatrixQaScenarioContext = {
   observerUserId: string;
   gatewayRuntimeEnv?: NodeJS.ProcessEnv;
   gatewayStateDir?: string;
+  gatewayWorkspaceDir?: string;
+  gatewayCall?: (
+    method: string,
+    params?: Record<string, unknown>,
+    opts?: { expectFinal?: boolean; timeoutMs?: number },
+  ) => Promise<unknown>;
   outputDir?: string;
   registrationToken?: string;
   restartGateway?: () => Promise<void>;
@@ -55,13 +61,14 @@ export type MatrixQaScenarioContext = {
   waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
 };
 
-export const NO_REPLY_WINDOW_MS = 8_000;
+const NO_REPLY_WINDOW_MS = 8_000;
 const NO_REPLY_WINDOW_ENV = "OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS";
 
 export function resolveMatrixQaNoReplyWindowMs(timeoutMs: number) {
-  const raw = process.env[NO_REPLY_WINDOW_ENV];
-  const parsed = raw === undefined ? NO_REPLY_WINDOW_MS : Number(raw);
-  const windowMs = Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : NO_REPLY_WINDOW_MS;
+  const raw = process.env[NO_REPLY_WINDOW_ENV]?.trim();
+  const parsed =
+    raw === undefined ? NO_REPLY_WINDOW_MS : /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  const windowMs = Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : NO_REPLY_WINDOW_MS;
   return Math.min(windowMs, timeoutMs);
 }
 
@@ -81,15 +88,60 @@ export function buildMatrixQuietStreamingPrompt(sutUserId: string, text: string)
   return `${sutUserId} Quiet streaming QA check: reply exactly \`${text}\`.`;
 }
 
+export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: string) {
+  return `${sutUserId} Partial streaming QA check: reply exactly \`${text}\`.`;
+}
+
+export const MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME = "QA_KICKOFF_TASK.md";
+export const MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME =
+  "matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt";
+
+export function buildMatrixToolProgressTaskContent(text: string) {
+  return [
+    "Matrix tool progress QA task.",
+    "Reply with only this exact marker and no other text:",
+    text,
+  ].join("\n");
+}
+
+export function buildMatrixToolProgressPrompt(sutUserId: string) {
+  return [
+    `${sutUserId} Tool progress QA check: call the read tool exactly once on \`${MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME}\` before answering.`,
+    `The QA harness must observe that read tool call; the only valid final marker is inside that file.`,
+    `Do not guess or send any marker before the tool result returns.`,
+    `Do not read \`HEARTBEAT.md\` for this check.`,
+    `After that read completes, reply with only the exact marker from the file and no other text.`,
+  ].join(" ");
+}
+
+export function buildMatrixToolProgressErrorPrompt(sutUserId: string, text: string) {
+  return [
+    `${sutUserId} Tool progress error QA check: read \`missing-matrix-tool-progress-target.txt\` before answering.`,
+    `After the read fails, reply exactly \`${text}\`.`,
+  ].join(" ");
+}
+
+export function buildMatrixToolProgressMentionSafetyPrompt(sutUserId: string, text: string) {
+  return [
+    `${sutUserId} Tool progress QA check: read the missing workspace file \`${MATRIX_QA_TOOL_PROGRESS_MENTION_FILENAME}\` before answering.`,
+    `The QA harness must observe that failed read in a Matrix tool-progress preview.`,
+    `Do not guess or send any marker before the tool result returns.`,
+    `After that read fails, reply exactly \`${text}\`.`,
+  ].join(" ");
+}
+
 export function buildMatrixBlockStreamingPrompt(
   sutUserId: string,
   firstText: string,
   secondText: string,
 ) {
   return [
-    `${sutUserId} Block streaming QA check: reply with exactly this two-line body and no extra text:`,
-    firstText,
-    secondText,
+    `${sutUserId} Block streaming QA check: complete this whole sequence in one turn.`,
+    `Step 1: send an assistant text block containing only this exact marker: \`${firstText}\`.`,
+    "That first marker block must be emitted before any tool call.",
+    "Step 2: after the first marker block, use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
+    `Step 3: after that read completes, send a final assistant text block containing only this exact marker: \`${secondText}\`.`,
+    "Never put both markers in the same assistant text block.",
   ].join("\n");
 }
 
@@ -416,7 +468,7 @@ export async function runConfigurableTopLevelScenario(params: {
   };
 }
 
-export async function runTopLevelMentionScenario(params: {
+async function runTopLevelMentionScenario(params: {
   accessToken: string;
   actorId: MatrixQaActorId;
   baseUrl: string;
@@ -570,6 +622,7 @@ export async function runNoReplyExpectedScenario(params: {
   mentionUserIds?: string[];
   observedEvents: MatrixQaObservedEvent[];
   roomId: string;
+  sendClient?: MatrixQaScenarioClient;
   syncState: MatrixQaSyncState;
   syncStreams?: MatrixQaSyncStreams;
   sutUserId: string;
@@ -588,7 +641,8 @@ export async function runNoReplyExpectedScenario(params: {
     syncState: params.syncState,
     syncStreams: params.syncStreams,
   });
-  const driverEventId = await client.sendTextMessage({
+  const sendClient = params.sendClient ?? client;
+  const triggerEventId = await sendClient.sendTextMessage({
     body: params.body,
     ...(params.mentionUserIds ? { mentionUserIds: params.mentionUserIds } : {}),
     roomId: params.roomId,
@@ -600,7 +654,7 @@ export async function runNoReplyExpectedScenario(params: {
       if (event.roomId !== params.roomId) {
         return false;
       }
-      if (event.eventId === driverEventId) {
+      if (event.eventId === triggerEventId) {
         observedTriggerEvent = true;
         return false;
       }
@@ -608,7 +662,8 @@ export async function runNoReplyExpectedScenario(params: {
         observedTriggerEvent &&
         event.sender === params.sutUserId &&
         event.type === "m.room.message" &&
-        (params.replyPredicate?.(event, { driverEventId, token: params.token }) ?? true)
+        (params.replyPredicate?.(event, { driverEventId: triggerEventId, token: params.token }) ??
+          true)
       );
     },
     roomId: params.roomId,
@@ -634,13 +689,13 @@ export async function runNoReplyExpectedScenario(params: {
   return {
     artifacts: {
       actorUserId: params.actorUserId,
-      driverEventId,
+      driverEventId: triggerEventId,
       expectedNoReplyWindowMs: params.timeoutMs,
       token: params.token,
       triggerBody: params.body,
     },
     details: [
-      `trigger event: ${driverEventId}`,
+      `trigger event: ${triggerEventId}`,
       `trigger sender: ${params.actorUserId}`,
       `waited ${params.timeoutMs}ms with no SUT reply`,
     ].join("\n"),

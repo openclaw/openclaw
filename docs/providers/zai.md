@@ -6,19 +6,26 @@ read_when:
 title: "Z.AI"
 ---
 
-Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and uses API keys
-for authentication. Create your API key in the Z.AI console. OpenClaw uses the `zai` provider
-with a Z.AI API key.
+Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and
+uses API keys for authentication. Create your API key in the Z.AI console.
+OpenClaw uses the `zai` provider with a Z.AI API key.
 
-- Provider: `zai`
-- Auth: `ZAI_API_KEY`
-- API: Z.AI Chat Completions (Bearer auth)
+| Property | Value                                        |
+| -------- | -------------------------------------------- |
+| Provider | `zai`                                        |
+| Auth     | `ZAI_API_KEY` (legacy alias: `Z_AI_API_KEY`) |
+| API      | Z.AI Chat Completions (Bearer auth)          |
+
+## GLM models
+
+GLM is a model family, not a separate provider. In OpenClaw, GLM models use
+refs such as `zai/glm-5.1`: provider `zai`, model id `glm-5.1`.
 
 ## Getting started
 
 <Tabs>
   <Tab title="Auto-detect endpoint">
-    **Best for:** most users. OpenClaw detects the matching Z.AI endpoint from the key and applies the correct base URL automatically.
+    **Best for:** most users. OpenClaw probes supported Z.AI endpoints with your API key and applies the correct base URL automatically.
 
     <Steps>
       <Step title="Run onboarding">
@@ -26,17 +33,9 @@ with a Z.AI API key.
         openclaw onboard --auth-choice zai-api-key
         ```
       </Step>
-      <Step title="Set a default model">
-        ```json5
-        {
-          env: { ZAI_API_KEY: "sk-..." },
-          agents: { defaults: { model: { primary: "zai/glm-5.1" } } },
-        }
-        ```
-      </Step>
-      <Step title="Verify the model is available">
+      <Step title="Verify the model is listed">
         ```bash
-        openclaw models list --provider zai
+        openclaw models list --all --provider zai
         ```
       </Step>
     </Steps>
@@ -62,17 +61,9 @@ with a Z.AI API key.
         openclaw onboard --auth-choice zai-cn
         ```
       </Step>
-      <Step title="Set a default model">
-        ```json5
-        {
-          env: { ZAI_API_KEY: "sk-..." },
-          agents: { defaults: { model: { primary: "zai/glm-5.1" } } },
-        }
-        ```
-      </Step>
-      <Step title="Verify the model is available">
+      <Step title="Verify the model is listed">
         ```bash
-        openclaw models list --provider zai
+        openclaw models list --all --provider zai
         ```
       </Step>
     </Steps>
@@ -80,9 +71,39 @@ with a Z.AI API key.
   </Tab>
 </Tabs>
 
+## Config example
+
+<Tip>
+`zai-api-key` lets OpenClaw detect the matching Z.AI endpoint from the key and
+apply the correct base URL automatically. Use the explicit regional choices when
+you want to force a specific Coding Plan or general API surface.
+</Tip>
+
+```json5
+{
+  env: { ZAI_API_KEY: "sk-..." },
+  models: {
+    providers: {
+      zai: {
+        // Example value. Onboarding writes the matching baseUrl for your endpoint.
+        baseUrl: "https://api.z.ai/api/paas/v4",
+      },
+    },
+  },
+  agents: { defaults: { model: { primary: "zai/glm-5.1" } } },
+}
+```
+
 ## Built-in catalog
 
-OpenClaw currently seeds the bundled `zai` provider with:
+OpenClaw ships the bundled `zai` provider catalog in the plugin manifest, so read-only
+listing can show known GLM rows without loading provider runtime:
+
+```bash
+openclaw models list --all --provider zai
+```
+
+The manifest-backed catalog currently includes:
 
 | Model ref            | Notes         |
 | -------------------- | ------------- |
@@ -101,8 +122,14 @@ OpenClaw currently seeds the bundled `zai` provider with:
 | `zai/glm-4.5v`       |               |
 
 <Tip>
-GLM models are available as `zai/<model>` (example: `zai/glm-5`). The default bundled model ref is `zai/glm-5.1`.
+GLM models are available as `zai/<model>` (example: `zai/glm-5`).
 </Tip>
+
+<Note>
+The default bundled model ref is `zai/glm-5.1`. GLM versions and availability
+can change; run `openclaw models list --all --provider zai` to see the catalog
+known to your installed version.
+</Note>
 
 ## Advanced configuration
 
@@ -178,18 +205,20 @@ GLM models are available as `zai/<model>` (example: `zai/glm-5`). The default bu
 
   <Accordion title="Auth details">
     - Z.AI uses Bearer auth with your API key.
-    - The `zai-api-key` onboarding choice auto-detects the matching Z.AI endpoint from the key prefix.
+    - The `zai-api-key` onboarding choice auto-detects the matching Z.AI endpoint by probing supported endpoints with your key.
     - Use the explicit regional choices (`zai-coding-global`, `zai-coding-cn`, `zai-global`, `zai-cn`) when you want to force a specific API surface.
+    - The legacy env var `Z_AI_API_KEY` is still accepted; OpenClaw copies it to `ZAI_API_KEY` at startup if `ZAI_API_KEY` is unset.
+
   </Accordion>
 </AccordionGroup>
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="GLM model family" href="/providers/glm" icon="microchip">
-    Model family overview for GLM.
-  </Card>
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
+  </Card>
+  <Card title="Configuration reference" href="/gateway/configuration-reference" icon="gear">
+    Full OpenClaw config schema, including provider and model settings.
   </Card>
 </CardGroup>

@@ -23,6 +23,9 @@ export type WizardTextParams = {
   initialValue?: string;
   placeholder?: string;
   validate?: (value: string) => string | undefined;
+  // Render as a masked input. The entered value is never echoed to the
+  // terminal — keeps secrets out of scrollback, transcripts, and screenshots.
+  sensitive?: boolean;
 };
 
 export type WizardConfirmParams = {
@@ -39,6 +42,7 @@ export type WizardPrompter = {
   intro: (title: string) => Promise<void>;
   outro: (message: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;
+  plain?: (message: string) => Promise<void>;
   select: <T>(params: WizardSelectParams<T>) => Promise<T>;
   multiselect: <T>(params: WizardMultiSelectParams<T>) => Promise<T[]>;
   text: (params: WizardTextParams) => Promise<string>;

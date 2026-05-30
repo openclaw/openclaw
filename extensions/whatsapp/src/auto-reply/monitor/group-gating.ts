@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
   getPrimaryIdentityId,
   getReplyContext,
@@ -17,7 +18,7 @@ import {
   implicitMentionKindWhen,
   normalizeE164,
   parseActivationCommand,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
   resolveInboundMentionDecision,
 } from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
@@ -46,8 +47,33 @@ type ApplyGroupGatingParams = {
   groupMemberNames: Map<string, Map<string, string>>;
   selfChatMode?: boolean;
   logVerbose: (msg: string) => void;
-  replyLogger: { debug: (obj: unknown, msg: string) => void };
+  replyLogger: {
+    debug: (obj: unknown, msg: string) => void;
+    warn: (obj: unknown, msg: string) => void;
+  };
 };
+
+const MAX_GROUP_DROP_WARNINGS = 100;
+const groupDropWarned = new Set<string>();
+
+export function resetGroupDropWarningsForTests() {
+  groupDropWarned.clear();
+}
+
+function shouldWarnForGroupDrop(warnKey: string): boolean {
+  if (groupDropWarned.has(warnKey)) {
+    return false;
+  }
+  groupDropWarned.add(warnKey);
+  while (groupDropWarned.size > MAX_GROUP_DROP_WARNINGS) {
+    const oldest = groupDropWarned.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    groupDropWarned.delete(oldest);
+  }
+  return true;
+}
 
 function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
   const sender = normalizeE164(getSenderIdentity(msg).e164 ?? "");
@@ -73,8 +99,7 @@ function recordPendingGroupHistoryEntry(params: {
         senderIdentity.e164 ??
         getPrimaryIdentityId(senderIdentity) ??
         "Unknown");
-  recordPendingHistoryEntryIfEnabled({
-    historyMap: params.groupHistories,
+  createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
     historyKey: params.groupHistoryKey,
     limit: params.groupHistoryLimit,
     entry: {
@@ -115,7 +140,18 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     params.conversationId,
   );
   if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
-    params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
+    const accountId = inboundPolicy.account.accountId;
+    const warnKey = `${accountId}:${params.conversationId}`;
+    if (shouldWarnForGroupDrop(warnKey)) {
+      const groupsPath = resolveWhatsAppGroupsConfigPath({ cfg: params.cfg, accountId });
+      params.replyLogger.warn(
+        { conversationId: params.conversationId, accountId, groupsPath },
+        `WhatsApp group ${params.conversationId} not in ${groupsPath} — inbound dropped. Add the group JID to ${groupsPath} (or add "*" there to admit all groups). Sender authorization still applies.`,
+      );
+    }
+    params.logVerbose(
+      `Dropping message from unregistered WhatsApp group ${params.conversationId}. Add the group JID to channels.whatsapp.groups, or add "*" there to admit all groups. Sender authorization still applies.`,
+    );
     return { shouldProcess: false };
   }
 

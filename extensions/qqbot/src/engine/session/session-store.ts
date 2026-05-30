@@ -7,6 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
@@ -62,32 +63,24 @@ function getCandidateSessionPaths(accountId: string): string[] {
   return primaryPath === legacyPath ? [primaryPath] : [primaryPath, legacyPath];
 }
 
-function isSessionFileName(file: string): boolean {
-  return file.startsWith("session-") && file.endsWith(".json");
-}
-
-function readSessionStateFile(file: string): { filePath: string; state: SessionState } {
-  const filePath = path.join(getSessionDir(), file);
-  const data = fs.readFileSync(filePath, "utf-8");
-  return { filePath, state: JSON.parse(data) as SessionState };
-}
-
 /** Load a saved session, rejecting expired or mismatched appId entries. */
 export function loadSession(accountId: string, expectedAppId?: string): SessionState | null {
   try {
     let filePath: string | null = null;
+    let state: SessionState | null = null;
     for (const candidatePath of getCandidateSessionPaths(accountId)) {
-      if (fs.existsSync(candidatePath)) {
+      state = privateFileStoreSync(path.dirname(candidatePath)).readJsonIfExists<SessionState>(
+        path.basename(candidatePath),
+      );
+      if (state) {
         filePath = candidatePath;
         break;
       }
     }
-    if (!filePath) {
+    if (!filePath || !state) {
       return null;
     }
 
-    const data = fs.readFileSync(filePath, "utf-8");
-    const state = JSON.parse(data) as SessionState;
     const now = Date.now();
 
     if (now - state.savedAt > SESSION_EXPIRE_TIME) {
@@ -172,7 +165,7 @@ function doSaveSession(state: SessionState): void {
   try {
     ensureDir();
     const stateToSave: SessionState = { ...state, savedAt: Date.now() };
-    fs.writeFileSync(filePath, JSON.stringify(stateToSave, null, 2), "utf-8");
+    privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), stateToSave);
     if (legacyPath !== filePath && fs.existsSync(legacyPath)) {
       fs.unlinkSync(legacyPath);
     }
@@ -211,74 +204,4 @@ export function clearSession(accountId: string): void {
       `[session-store] Failed to clear session for ${accountId}: ${formatErrorMessage(err)}`,
     );
   }
-}
-
-/** Update only lastSeq on the persisted session. */
-export function updateLastSeq(accountId: string, lastSeq: number): void {
-  const existing = loadSession(accountId);
-  if (existing?.sessionId) {
-    saveSession({ ...existing, lastSeq });
-  }
-}
-
-/** Load all saved sessions from disk. */
-export function getAllSessions(): SessionState[] {
-  const sessions = new Map<string, SessionState>();
-  try {
-    const sessionDir = getSessionDir();
-    if (!fs.existsSync(sessionDir)) {
-      return [];
-    }
-    const files = fs.readdirSync(sessionDir);
-
-    for (const file of files) {
-      if (isSessionFileName(file)) {
-        try {
-          const { state } = readSessionStateFile(file);
-          if (typeof state.accountId !== "string" || !state.accountId) {
-            continue;
-          }
-          const existing = sessions.get(state.accountId);
-          if (!existing || (state.savedAt ?? 0) >= (existing.savedAt ?? 0)) {
-            sessions.set(state.accountId, state);
-          }
-        } catch {}
-      }
-    }
-  } catch {}
-  return [...sessions.values()];
-}
-
-/** Remove expired session files from disk. */
-export function cleanupExpiredSessions(): number {
-  let cleaned = 0;
-  try {
-    const sessionDir = getSessionDir();
-    if (!fs.existsSync(sessionDir)) {
-      return 0;
-    }
-    const now = Date.now();
-    const files = fs.readdirSync(sessionDir);
-
-    for (const file of files) {
-      if (isSessionFileName(file)) {
-        const filePath = path.join(sessionDir, file);
-        try {
-          const { state } = readSessionStateFile(file);
-
-          if (now - state.savedAt > SESSION_EXPIRE_TIME) {
-            fs.unlinkSync(filePath);
-            cleaned++;
-            debugLog(`[session-store] Cleaned expired session: ${file}`);
-          }
-        } catch {
-          try {
-            fs.unlinkSync(filePath);
-            cleaned++;
-          } catch {}
-        }
-      }
-    }
-  } catch {}
-  return cleaned;
 }

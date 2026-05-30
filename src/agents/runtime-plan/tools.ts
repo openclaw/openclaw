@@ -1,11 +1,12 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
-} from "../pi-embedded-runner/tool-schema-runtime.js";
+} from "../embedded-agent-runner/tool-schema-runtime.js";
+import type { AgentTool } from "../runtime/index.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
@@ -18,6 +19,8 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  runtimeHandle?: ProviderRuntimePluginHandle;
+  allowProviderRuntimePluginLoad?: boolean;
 };
 
 function runtimePlanToolContext(params: {
@@ -48,6 +51,8 @@ export function normalizeAgentRuntimeTools<
       modelId: params.modelId,
       modelApi: params.modelApi,
       model: params.model,
+      runtimeHandle: params.runtimeHandle,
+      allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
     })
   );
 }
@@ -67,5 +72,6 @@ export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyPar
     modelId: params.modelId,
     modelApi: params.modelApi,
     model: params.model,
+    runtimeHandle: params.runtimeHandle,
   });
 }

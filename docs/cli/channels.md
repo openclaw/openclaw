@@ -19,16 +19,20 @@ Related docs:
 
 ```bash
 openclaw channels list
+openclaw channels list --all
 openclaw channels status
 openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
+openclaw channels capabilities --channel discord --target channel:<voice-channel-id>
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
 ```
 
+`channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account. Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Auth providers (OAuth + API keys) and model-provider usage/quota snapshots are no longer printed here; use `openclaw models auth list` for provider auth profiles and `openclaw status` or `openclaw models list` for usage.
+
 ## Status / capabilities / resolve / logs
 
-- `channels status`: `--probe`, `--timeout <ms>`, `--json`
+- `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>`, `--json`
 - `channels capabilities`: `--channel <name>`, `--account <id>` (only with `--channel`), `--target <dest>`, `--timeout <ms>`, `--json`
 - `channels resolve`: `<entries...>`, `--channel <name>`, `--account <id>`, `--kind <auto|user|group>`, `--json`
 - `channels logs`: `--channel <name|all>`, `--lines <n>`, `--json`
@@ -38,6 +42,12 @@ openclaw channels logs --channel all
 state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
+
+Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
+`sessions_list` tool as a channel socket-health signal. Those surfaces report
+stored conversation rows, not provider runtime state. After a Discord provider
+restart, a connected but quiet account may be healthy while no Discord session
+row appears until the next inbound or outbound conversation event.
 
 ## Add / remove accounts
 
@@ -50,6 +60,9 @@ openclaw channels remove --channel telegram --delete
 <Tip>
 `openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
 </Tip>
+
+`channels remove` only operates on installed/configured channel plugins. Use `channels add` first for installable catalog channels.
+For runtime-backed channel plugins, `channels remove` also asks the running Gateway to stop the selected account before it updates config, so disabling or deleting an account does not leave the old listener active until restart.
 
 Common non-interactive add surfaces include:
 
@@ -67,7 +80,7 @@ When you run `openclaw channels add` without flags, the interactive wizard can p
 
 - account ids per selected channel
 - optional display names for those accounts
-- `Bind configured channel accounts to agents now?`
+- `Route these channel accounts to agents now?`
 
 If you confirm bind now, the wizard asks which agent should own each configured channel account and writes account-scoped routing bindings.
 
@@ -92,12 +105,14 @@ openclaw channels logout --channel whatsapp
 
 - `channels login` supports `--verbose`.
 - `channels login` and `logout` can infer the channel when only one supported login target is configured.
+- `channels logout` prefers the live Gateway path when reachable, so logout stops any active listener before clearing channel auth state. If a local Gateway is not reachable, it falls back to local auth cleanup.
+- Run `channels login` from a terminal on the gateway host. Agent `exec` blocks this interactive login flow; channel-native agent login tools, such as `whatsapp_login`, should be used from chat when available.
 
 ## Troubleshooting
 
 - Run `openclaw status --deep` for a broad probe.
 - Use `openclaw doctor` for guided fixes.
-- `openclaw channels list` prints `Claude: HTTP 403 ... user:profile` → usage snapshot needs the `user:profile` scope. Use `--no-usage`, or provide a claude.ai session key (`CLAUDE_WEB_SESSION_KEY` / `CLAUDE_WEB_COOKIE`), or re-auth via Claude CLI.
+- `openclaw channels list` no longer prints model provider usage/quota snapshots. For those, use `openclaw status` (overview) or `openclaw models list` (per-provider).
 - `openclaw channels status` falls back to config-only summaries when the gateway is unreachable. If a supported channel credential is configured via SecretRef but unavailable in the current command path, it reports that account as configured with degraded notes instead of showing it as not configured.
 
 ## Capabilities probe
@@ -113,7 +128,7 @@ Notes:
 
 - `--channel` is optional; omit it to list every channel (including extensions).
 - `--account` is only valid with `--channel`.
-- `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord.
+- `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord. For Discord voice channels, the permission check flags missing `ViewChannel`, `Connect`, `Speak`, `SendMessages`, and `ReadMessageHistory`.
 - Probes are provider-specific: Discord intents + optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
 
 ## Resolve names to IDs
@@ -131,6 +146,7 @@ Notes:
 - Use `--kind user|group|auto` to force the target type.
 - Resolution prefers active matches when multiple entries share the same name.
 - `channels resolve` is read-only. If a selected account is configured via SecretRef but that credential is unavailable in the current command path, the command returns degraded unresolved results with notes instead of aborting the entire run.
+- `channels resolve` does not install channel plugins. Use `channels add --channel <name>` before resolving names for an installable catalog channel.
 
 ## Related
 

@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { sanitizeForLog } from "../../terminal/ansi.js";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 export type CommandDescriptorLike = Pick<NamedCommandDescriptor, "name" | "description">;
@@ -11,6 +11,7 @@ export type CommandDescriptorCatalog<TDescriptor extends NamedCommandDescriptor>
   getDescriptors: () => readonly TDescriptor[];
   getNames: () => string[];
   getCommandsWithSubcommands: () => string[];
+  getParentDefaultHelpCommands: () => string[];
 };
 
 export function normalizeCommandDescriptorName(name: string): string | null {
@@ -18,7 +19,7 @@ export function normalizeCommandDescriptorName(name: string): string | null {
   return SAFE_COMMAND_NAME_PATTERN.test(normalized) ? normalized : null;
 }
 
-export function assertSafeCommandDescriptorName(name: string): string {
+function assertSafeCommandDescriptorName(name: string): string {
   const normalized = normalizeCommandDescriptorName(name);
   if (!normalized) {
     throw new Error(`Invalid CLI command name: ${JSON.stringify(name.trim())}`);
@@ -39,6 +40,14 @@ export function getCommandsWithSubcommands(
 ): string[] {
   return descriptors
     .filter((descriptor) => descriptor.hasSubcommands)
+    .map((descriptor) => descriptor.name);
+}
+
+export function getParentDefaultHelpCommands(
+  descriptors: readonly NamedCommandDescriptor[],
+): string[] {
+  return descriptors
+    .filter((descriptor) => descriptor.parentDefaultHelp)
     .map((descriptor) => descriptor.name);
 }
 
@@ -67,6 +76,7 @@ export function defineCommandDescriptorCatalog<TDescriptor extends NamedCommandD
     getDescriptors: () => descriptors,
     getNames: () => getCommandDescriptorNames(descriptors),
     getCommandsWithSubcommands: () => getCommandsWithSubcommands(descriptors),
+    getParentDefaultHelpCommands: () => getParentDefaultHelpCommands(descriptors),
   };
 }
 

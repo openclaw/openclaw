@@ -58,7 +58,7 @@ async function writeLiveGatewayConfig(params: {
       list: [{ id: "dev", default: true }],
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex", fallback: "none" },
+        agentRuntime: { id: "codex" },
         skipBootstrap: true,
         model: { primary: params.modelKey },
         models: { [params.modelKey]: {} },
@@ -82,10 +82,9 @@ async function connectGatewayClient(params: {
     deviceIdentity,
     timeoutMs: GATEWAY_CONNECT_TIMEOUT_MS,
     requestTimeoutMs: 60_000,
+    tickWatchTimeoutMs: AGENT_REQUEST_TIMEOUT_MS + 120_000,
     clientDisplayName: "trajectory-live",
   });
-  (client as unknown as { tickIntervalMs?: number }).tickIntervalMs =
-    AGENT_REQUEST_TIMEOUT_MS + 120_000;
   return client;
 }
 
@@ -138,6 +137,33 @@ async function waitForPath(filePath: string, timeoutMs = 60_000): Promise<void> 
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
+async function approveTrajectoryExport(client: GatewayClient): Promise<string> {
+  const approvals = (await client.request(
+    "exec.approval.list",
+    {},
+    { timeoutMs: 10_000 },
+  )) as Array<{
+    id?: string;
+    request?: {
+      command?: string;
+    };
+  }>;
+  const approval = approvals.find((entry) =>
+    entry.request?.command?.includes("sessions export-trajectory"),
+  );
+  expect(typeof approval?.id).toBe("string");
+  expect(approval?.request?.command).toContain("sessions export-trajectory");
+  if (!approval?.id) {
+    throw new Error("expected trajectory export approval id");
+  }
+  await client.request(
+    "exec.approval.resolve",
+    { id: approval.id, decision: "allow-once" },
+    { timeoutMs: 10_000 },
+  );
+  return approval.id;
+}
+
 describeLive("gateway live trajectory export", () => {
   let cleanup: Array<() => Promise<void>> = [];
 
@@ -171,7 +197,6 @@ describeLive("gateway live trajectory export", () => {
 
       clearRuntimeConfigSnapshot();
       process.env.OPENCLAW_AGENT_RUNTIME = "codex";
-      process.env.OPENCLAW_AGENT_HARNESS_FALLBACK = "none";
       delete process.env.OPENAI_BASE_URL;
       delete process.env.OPENAI_API_KEY;
       process.env.OPENCLAW_CONFIG_PATH = configPath;
@@ -244,26 +269,31 @@ describeLive("gateway live trajectory export", () => {
           exportResponse?.status === "ok" ||
           exportResponse?.status === "started",
       ).toBe(true);
-      await waitForPath(path.join(bundleDir, "events.jsonl"), 60_000);
       const finalText =
         typeof exportResponse?.message === "object"
           ? extractFirstTextBlock(exportResponse.message)
           : undefined;
+      expect(finalText).toContain("Trajectory exports can include");
+      expect(finalText).toContain("through exec approval");
+      const approvalId = await approveTrajectoryExport(client);
+      logLiveStep("export:approved", { approvalId });
+      await waitForPath(path.join(bundleDir, "events.jsonl"), 60_000);
       logLiveStep("export:done", { finalText });
       if (finalText) {
-        expect(finalText).toContain("Trajectory exported!");
+        expect(finalText).toContain("Approve once");
       }
-      expect(await listDirectoryNames(bundleDir)).toEqual(
-        expect.arrayContaining([
-          "artifacts.json",
-          "events.jsonl",
-          "manifest.json",
-          "metadata.json",
-          "prompts.json",
-          "session.jsonl",
-          "tools.json",
-        ]),
-      );
+      const bundleNames = await listDirectoryNames(bundleDir);
+      for (const expectedName of [
+        "artifacts.json",
+        "events.jsonl",
+        "manifest.json",
+        "metadata.json",
+        "prompts.json",
+        "session.jsonl",
+        "tools.json",
+      ]) {
+        expect(bundleNames).toContain(expectedName);
+      }
       expect(beforeExport.has("bundle")).toBe(false);
 
       const manifest = JSON.parse(

@@ -1,4 +1,7 @@
-import { Mock, vi } from "vitest";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
+import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
@@ -7,6 +10,7 @@ type SlackProviderMonitor = (params: {
   appToken: string;
   abortSignal: AbortSignal;
   config?: Record<string, unknown>;
+  channelRuntime?: ChannelRuntimeSurface;
 }) => Promise<unknown>;
 
 type SlackTestState = {
@@ -15,8 +19,13 @@ type SlackTestState = {
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
   reactMock: Mock<(...args: unknown[]) => unknown>;
+  reactionAddMock: Mock<(...args: unknown[]) => unknown>;
+  reactionRemoveMock: Mock<(...args: unknown[]) => unknown>;
   readAllowFromStoreMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   upsertPairingRequestMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  resolveSlackUserAllowlistMock: Mock<
+    (params: { entries: string[] }) => Promise<Array<{ input: string; resolved: boolean }>>
+  >;
 };
 
 const slackTestState: SlackTestState = vi.hoisted(() => ({
@@ -25,8 +34,11 @@ const slackTestState: SlackTestState = vi.hoisted(() => ({
   replyMock: vi.fn(),
   updateLastRouteMock: vi.fn(),
   reactMock: vi.fn(),
+  reactionAddMock: vi.fn(),
+  reactionRemoveMock: vi.fn(),
   readAllowFromStoreMock: vi.fn(),
   upsertPairingRequestMock: vi.fn(),
+  resolveSlackUserAllowlistMock: vi.fn(),
 }));
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
@@ -64,11 +76,11 @@ function ensureSlackTestRuntime(): {
     __slackHandlers?: Map<string, SlackHandler>;
     __slackClient?: SlackClient;
   };
-  if (!globalState.__slackHandlers) {
-    globalState.__slackHandlers = new Map<string, SlackHandler>();
+  if (!globalState["__slackHandlers"]) {
+    globalState["__slackHandlers"] = new Map<string, SlackHandler>();
   }
-  if (!globalState.__slackClient) {
-    globalState.__slackClient = {
+  if (!globalState["__slackClient"]) {
+    globalState["__slackClient"] = {
       auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
       conversations: {
         info: vi.fn().mockResolvedValue({
@@ -88,20 +100,26 @@ function ensureSlackTestRuntime(): {
         },
       },
       reactions: {
-        add: (...args: unknown[]) => slackTestState.reactMock(...args),
-        remove: (...args: unknown[]) => slackTestState.reactMock(...args),
+        add: (...args: unknown[]) => {
+          slackTestState.reactionAddMock(...args);
+          return slackTestState.reactMock(...args);
+        },
+        remove: (...args: unknown[]) => {
+          slackTestState.reactionRemoveMock(...args);
+          return slackTestState.reactMock(...args);
+        },
       },
     };
   }
   return {
-    handlers: globalState.__slackHandlers,
-    client: globalState.__slackClient,
+    handlers: globalState["__slackHandlers"],
+    client: globalState["__slackClient"],
   };
 }
 
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-export async function waitForSlackEvent(name: string) {
+async function waitForSlackEvent(name: string) {
   for (let i = 0; i < 10; i += 1) {
     if (getSlackHandlers()?.has(name)) {
       return;
@@ -112,7 +130,7 @@ export async function waitForSlackEvent(name: string) {
 
 export function startSlackMonitor(
   monitorSlackProvider: SlackProviderMonitor,
-  opts?: { botToken?: string; appToken?: string },
+  opts?: { botToken?: string; appToken?: string; channelRuntime?: ChannelRuntimeSurface },
 ) {
   const controller = new AbortController();
   const run = monitorSlackProvider({
@@ -120,6 +138,7 @@ export function startSlackMonitor(
     appToken: opts?.appToken ?? "app-token",
     abortSignal: controller.signal,
     config: slackTestState.config,
+    channelRuntime: opts?.channelRuntime,
   });
   return { controller, run };
 }
@@ -142,7 +161,7 @@ export async function stopSlackMonitor(params: {
   await params.run;
 }
 
-export async function runSlackEventOnce(
+async function runSlackEventOnce(
   monitorSlackProvider: SlackProviderMonitor,
   name: string,
   args: unknown,
@@ -177,16 +196,35 @@ export const defaultSlackTestConfig = () => ({
 });
 
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
+  clearSlackInboundDeliveryStateForTest();
   slackTestState.config = config;
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
   slackTestState.reactMock.mockReset();
+  slackTestState.reactionAddMock.mockReset();
+  slackTestState.reactionRemoveMock.mockReset();
   slackTestState.readAllowFromStoreMock.mockReset().mockResolvedValue([]);
   slackTestState.upsertPairingRequestMock.mockReset().mockResolvedValue({
     code: "PAIRCODE",
     created: true,
   });
+  slackTestState.resolveSlackUserAllowlistMock
+    .mockReset()
+    .mockImplementation(async ({ entries }) =>
+      entries.map((input) => ({ input, resolved: false })),
+    );
+  const client = getSlackClient();
+  client.auth.test.mockReset().mockResolvedValue({ user_id: "bot-user" });
+  client.conversations.info.mockReset().mockResolvedValue({
+    channel: { name: "dm", is_im: true },
+  });
+  client.conversations.replies.mockReset().mockResolvedValue({ messages: [] });
+  client.conversations.history.mockReset().mockResolvedValue({ messages: [] });
+  client.users.info.mockReset().mockResolvedValue({
+    user: { profile: { display_name: "Ada" } },
+  });
+  client.assistant.threads.setStatus.mockReset().mockResolvedValue({ ok: true });
   getSlackHandlers()?.clear();
 }
 
@@ -208,8 +246,13 @@ vi.mock("./monitor/reply.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./monitor/reply.runtime.js")>(
     "./monitor/reply.runtime.js",
   );
-  const replyResolver: typeof actual.getReplyFromConfig = (...args) =>
-    slackTestState.replyMock(...args) as ReturnType<typeof actual.getReplyFromConfig>;
+  type DispatchParams = Parameters<typeof actual.dispatchInboundMessage>[0];
+  type BufferedDispatchParams = Parameters<
+    typeof actual.dispatchReplyWithBufferedBlockDispatcher
+  >[0];
+  type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
+  const replyResolver: ReplyResolver = (...args) =>
+    slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
   return {
     ...actual,
     dispatchInboundMessage: (params: Parameters<typeof actual.dispatchInboundMessage>[0]) =>
@@ -217,7 +260,11 @@ vi.mock("./monitor/reply.runtime.js", async () => {
         ...params,
         replyResolver,
       }),
-    getReplyFromConfig: replyResolver,
+    dispatchReplyWithBufferedBlockDispatcher: (params: BufferedDispatchParams) =>
+      actual.dispatchReplyWithBufferedBlockDispatcher({
+        ...params,
+        replyResolver,
+      }),
   };
 });
 
@@ -227,8 +274,8 @@ vi.mock("./resolve-channels.js", () => ({
 }));
 
 vi.mock("./resolve-users.js", () => ({
-  resolveSlackUserAllowlist: async ({ entries }: { entries: string[] }) =>
-    entries.map((input) => ({ input, resolved: false })),
+  resolveSlackUserAllowlist: (params: { entries: string[] }) =>
+    slackTestState.resolveSlackUserAllowlistMock(params),
 }));
 
 vi.mock("./monitor/send.runtime.js", () => {

@@ -2,9 +2,11 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
+import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
@@ -13,7 +15,10 @@ let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 let cachedEtcShells: Set<string> | null | undefined;
 let nextExecCacheId = 1;
-const loginShellEnvProbeCache = new Map<string, Array<[string, string]>>();
+const loginShellEnvProbeCache = new Map<
+  string,
+  { ok: true; entries: Array<[string, string]> } | { ok: false; error: string }
+>();
 const execCacheIds = new WeakMap<object, number>();
 
 function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -33,10 +38,7 @@ function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function resolveTimeoutMs(timeoutMs: number | undefined): number {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
-    return DEFAULT_TIMEOUT_MS;
-  }
-  return Math.max(0, timeoutMs);
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 0);
 }
 
 function readEtcShells(): Set<string> | null {
@@ -89,6 +91,7 @@ function execLoginShellEnvZero(params: {
     timeout: params.timeoutMs,
     maxBuffer: DEFAULT_MAX_BUFFER_BYTES,
     env: params.env,
+    windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
@@ -168,7 +171,13 @@ function probeLoginShellEnv(params: {
   env: NodeJS.ProcessEnv;
   timeoutMs?: number;
   exec?: typeof execFileSync;
+  platform?: NodeJS.Platform;
 }): LoginShellEnvProbeResult {
+  const platform = params.platform ?? process.platform;
+  if (platform === "win32") {
+    return { ok: true, shellEnv: new Map() };
+  }
+
   const exec = params.exec ?? execFileSync;
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   const shell = resolveShell(params.env);
@@ -181,31 +190,34 @@ function probeLoginShellEnv(params: {
   });
   const cached = loginShellEnvProbeCache.get(cacheKey);
   if (cached) {
-    return { ok: true, shellEnv: new Map(cached) };
+    return cached.ok ? { ok: true, shellEnv: new Map(cached.entries) } : cached;
   }
 
   try {
     const stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
     const shellEnv = parseShellEnv(stdout);
-    loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
+    loginShellEnvProbeCache.set(cacheKey, { ok: true, entries: [...shellEnv.entries()] });
     return { ok: true, shellEnv };
   } catch (err) {
-    return { ok: false, error: formatErrorMessage(err) };
+    const result = { ok: false as const, error: formatErrorMessage(err) };
+    loginShellEnvProbeCache.set(cacheKey, result);
+    return result;
   }
 }
 
-export type ShellEnvFallbackResult =
+type ShellEnvFallbackResult =
   | { ok: true; applied: string[]; skippedReason?: never }
   | { ok: true; applied: []; skippedReason: "already-has-keys" | "disabled" }
   | { ok: false; error: string; applied: [] };
 
-export type ShellEnvFallbackOptions = {
+type ShellEnvFallbackOptions = {
   enabled: boolean;
   env: NodeJS.ProcessEnv;
   expectedKeys: string[];
   logger?: Pick<typeof console, "warn">;
   timeoutMs?: number;
   exec?: typeof execFileSync;
+  platform?: NodeJS.Platform;
 };
 
 function hasExplicitEnvBinding(env: NodeJS.ProcessEnv, key: string): boolean {
@@ -232,6 +244,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     env: opts.env,
     timeoutMs: opts.timeoutMs,
     exec: opts.exec,
+    platform: opts.platform,
   });
   if (!probe.ok) {
     logger.warn(`[openclaw] shell env fallback failed: ${probe.error}`);
@@ -266,11 +279,11 @@ export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number
   if (!raw) {
     return DEFAULT_TIMEOUT_MS;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_TIMEOUT_MS;
   }
-  return Math.max(0, parsed);
+  return resolveTimeoutMs(parsed);
 }
 
 export function getShellPathFromLoginShell(opts: {
@@ -292,6 +305,7 @@ export function getShellPathFromLoginShell(opts: {
     env: opts.env,
     timeoutMs: opts.timeoutMs,
     exec: opts.exec,
+    platform,
   });
   if (!probe.ok) {
     cachedShellPath = null;

@@ -1,5 +1,5 @@
-import type { PluginChannelRegistration, PluginRegistry } from "../../plugins/registry-types.js";
-import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
+import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
+import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../../plugins/runtime.js";
 import type { ChannelId } from "./channel-id.types.js";
 
 type ChannelRegistryValueResolver<TValue> = (
@@ -9,27 +9,25 @@ type ChannelRegistryValueResolver<TValue> = (
 export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
 ): (id: ChannelId) => Promise<TValue | undefined> {
-  const cache = new Map<ChannelId, TValue>();
-  let lastRegistry: PluginRegistry | null = null;
-
   return async (id: ChannelId): Promise<TValue | undefined> => {
-    const registry = getActivePluginChannelRegistry();
-    if (registry !== lastRegistry) {
-      cache.clear();
-      lastRegistry = registry;
+    const resolveFromRegistry = (
+      registry: ReturnType<typeof getActivePluginRegistry>,
+    ): TValue | undefined => {
+      const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
+      return pluginEntry ? resolveValue(pluginEntry) : undefined;
+    };
+
+    const channelRegistry = getActivePluginChannelRegistry();
+    const channelValue = resolveFromRegistry(channelRegistry);
+    if (channelValue !== undefined) {
+      return channelValue;
     }
-    const cached = cache.get(id);
-    if (cached) {
-      return cached;
+
+    const activeRegistry = getActivePluginRegistry();
+    if (activeRegistry && activeRegistry !== channelRegistry) {
+      return resolveFromRegistry(activeRegistry);
     }
-    const pluginEntry = registry?.channels.find((entry) => entry.plugin.id === id);
-    if (!pluginEntry) {
-      return undefined;
-    }
-    const resolved = resolveValue(pluginEntry);
-    if (resolved) {
-      cache.set(id, resolved);
-    }
-    return resolved;
+
+    return undefined;
   };
 }

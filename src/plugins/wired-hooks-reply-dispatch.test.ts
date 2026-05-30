@@ -26,6 +26,10 @@ const replyDispatchCtx = {
   markIdle: () => {},
 };
 
+function firstErrorLog(logger: { error: ReturnType<typeof vi.fn> }) {
+  return logger.error.mock.calls[0];
+}
+
 describe("reply_dispatch hook runner", () => {
   it("stops at the first handler that claims reply dispatch", async () => {
     const first = vi.fn().mockResolvedValue({
@@ -80,9 +84,50 @@ describe("reply_dispatch hook runner", () => {
       queuedFinal: false,
       counts: { tool: 1, block: 0, final: 0 },
     });
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("reply_dispatch handler from test-plugin failed: boom"),
-    );
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(firstErrorLog(logger)).toEqual([
+      "[hooks] reply_dispatch handler from test-plugin failed: boom",
+    ]);
     expect(succeeding).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors per-hook registration timeouts and continues to the next handler", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = {
+        warn: vi.fn(),
+        error: vi.fn(),
+      };
+      const slow = vi.fn(() => new Promise(() => {}));
+      const succeeding = vi.fn().mockResolvedValue({
+        handled: true,
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      });
+      const { registry, runner } = createHookRunnerWithRegistry(
+        [
+          { hookName: "reply_dispatch", handler: slow },
+          { hookName: "reply_dispatch", handler: succeeding },
+        ],
+        { logger },
+      );
+      registry.typedHooks[0].timeoutMs = 5;
+
+      const run = runner.runReplyDispatch(replyDispatchEvent, replyDispatchCtx);
+      await vi.advanceTimersByTimeAsync(5);
+
+      await expect(run).resolves.toEqual({
+        handled: true,
+        queuedFinal: false,
+        counts: { tool: 1, block: 0, final: 0 },
+      });
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(firstErrorLog(logger)).toEqual([
+        "[hooks] reply_dispatch handler from test-plugin failed: timed out after 5ms",
+      ]);
+      expect(succeeding).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -1,18 +1,25 @@
 import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
-import type { WebSocket, WebSocketServer } from "ws";
-import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
-import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
+import type { RawData, WebSocket, WebSocketServer } from "ws";
+import {
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+} from "../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import { upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
-import { getPreauthHandshakeTimeoutMsFromEnv } from "../handshake-timeouts.js";
+import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
+import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
+import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
+import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
@@ -22,8 +29,13 @@ import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
 import {
-  attachGatewayWsMessageHandler,
-  type WsOriginCheckMetrics,
+  buildHandshakeAuthLogKey,
+  HandshakeAuthLogLimiter,
+  shouldLimitMissingCredentialAuthLog,
+} from "./ws-connection/handshake-auth-log-limiter.js";
+import type {
+  GatewayWsMessageHandlerParams,
+  WsOriginCheckMetrics,
 } from "./ws-connection/message-handler.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import type { GatewayWsClient } from "./ws-types.js";
@@ -32,6 +44,8 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const LOG_HEADER_MAX_LEN = 300;
 const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
+const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
+const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
 
 function replaceControlChars(value: string): string {
   let cleaned = "";
@@ -47,6 +61,11 @@ function replaceControlChars(value: string): string {
     cleaned += char;
   }
   return cleaned;
+}
+
+function stringMetaValue(meta: Record<string, unknown>, key: string): string | undefined {
+  const value = meta[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 const sanitizeLogValue = (value: string | undefined): string | undefined => {
   if (!value) {
@@ -85,7 +104,7 @@ function resolveSocketAddress(socket: WebSocket): {
   localPort?: number;
   endpoint?: string;
 } {
-  const rawSocket = (socket as WebSocket & { _socket?: Socket })._socket;
+  const rawSocket = (socket as WebSocket & { _socket?: Socket })["_socket"];
   const remoteAddr = rawSocket?.remoteAddress;
   const remotePort = rawSocket?.remotePort;
   const localAddr = rawSocket?.localAddress;
@@ -122,8 +141,8 @@ export type GatewayWsSharedHandlerParams = {
   preauthConnectionBudget: PreauthConnectionBudget;
   port: number;
   gatewayHost?: string;
-  canvasHostEnabled: boolean;
-  canvasHostServerPort?: number;
+  pluginSurfaceScheme?: "http" | "https";
+  getPluginNodeCapabilities?: () => PluginNodeCapabilitySurface[];
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
@@ -131,6 +150,8 @@ export type GatewayWsSharedHandlerParams = {
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
+  preauthHandshakeTimeoutMs?: number;
+  isStartupPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -141,6 +162,7 @@ export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParam
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
   extraHandlers: GatewayRequestHandlers;
+  getMethodRegistry?: () => GatewayMethodRegistry;
   broadcast: (
     event: string,
     payload: unknown,
@@ -152,21 +174,60 @@ export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParam
   buildRequestContext: () => GatewayRequestContext;
 };
 
+function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHandlerParams): void {
+  const queued: RawData[] = [];
+  const queueMessage = (data: RawData) => {
+    if (queued.length >= MAX_QUEUED_MESSAGE_HANDLER_FRAMES) {
+      params.setCloseCause("message-handler-loading-overflow", {
+        queuedFrames: queued.length,
+      });
+      params.close(1008, "gateway message handler loading");
+      return;
+    }
+    queued.push(data);
+  };
+  params.socket.on("message", queueMessage);
+  void import("./ws-connection/message-handler.js")
+    .then(({ attachGatewayWsMessageHandler }) => {
+      params.socket.off("message", queueMessage);
+      if (params.isClosed()) {
+        return;
+      }
+      attachGatewayWsMessageHandler(params);
+      for (const data of queued) {
+        params.socket.emit("message", data);
+      }
+    })
+    .catch((error: unknown) => {
+      params.socket.off("message", queueMessage);
+      params.setCloseCause("message-handler-load-failed", {
+        error: formatError(error),
+      });
+      params.logWsControl.warn(
+        `failed to load ws message handler conn=${params.connId}: ${formatError(error)}`,
+      );
+      params.close(1011, "gateway message handler unavailable");
+    });
+}
+
 export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnectionHandlerParams) {
   const {
     wss,
     clients,
     preauthConnectionBudget,
     port,
-    gatewayHost,
-    canvasHostEnabled,
-    canvasHostServerPort,
+    pluginSurfaceScheme,
+    getPluginNodeCapabilities,
     resolvedAuth,
     getResolvedAuth = () => resolvedAuth,
     getRequiredSharedGatewaySessionGeneration = () =>
-      resolveSharedGatewaySessionGeneration(getResolvedAuth()),
+      resolveSharedGatewaySessionGeneration(
+        getResolvedAuth(),
+        getRuntimeConfig().gateway?.trustedProxies,
+      ),
     rateLimiter,
     browserRateLimiter,
+    isStartupPending,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -174,6 +235,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     logHealth,
     logWsControl,
     extraHandlers,
+    getMethodRegistry,
     broadcast,
     buildRequestContext,
   } = params;
@@ -190,12 +252,12 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         __openclawPreauthBudgetClaimed?: boolean;
         __openclawPreauthBudgetKey?: string;
       }
-    ).__openclawPreauthBudgetKey;
+    )["__openclawPreauthBudgetKey"];
     (
       socket as WebSocket & {
         __openclawPreauthBudgetClaimed?: boolean;
       }
-    ).__openclawPreauthBudgetClaimed = true;
+    )["__openclawPreauthBudgetClaimed"] = true;
     const headerValue = (value: string | string[] | undefined) =>
       Array.isArray(value) ? value[0] : value;
     const requestHost = headerValue(upgradeReq.headers.host);
@@ -204,16 +266,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
     const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
 
-    const canvasHostPortForWs = canvasHostServerPort ?? (canvasHostEnabled ? port : undefined);
-    const canvasHostOverride =
-      gatewayHost && gatewayHost !== "0.0.0.0" && gatewayHost !== "::" ? gatewayHost : undefined;
-    const canvasHostUrl = resolveCanvasHostUrl({
-      canvasPort: canvasHostPortForWs,
-      hostOverride: canvasHostServerPort ? canvasHostOverride : undefined,
-      requestHost: upgradeReq.headers.host,
-      forwardedProto: upgradeReq.headers["x-forwarded-proto"],
-      localAddress: upgradeReq.socket?.localAddress,
-    });
+    const pluginNodeCapabilities = getPluginNodeCapabilities?.() ?? [];
+    const pluginSurfaceBaseUrl =
+      pluginNodeCapabilities.length > 0
+        ? resolveHostedPluginSurfaceUrl({
+            port,
+            forwardedHost: upgradeReq.headers["x-forwarded-host"],
+            requestHost: upgradeReq.headers.host,
+            forwardedProto: upgradeReq.headers["x-forwarded-proto"],
+            localAddress: upgradeReq.socket?.localAddress,
+            scheme: pluginSurfaceScheme,
+          })
+        : undefined;
 
     logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
     let handshakeState: "pending" | "connected" | "failed" = "pending";
@@ -264,12 +328,17 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       payload: { nonce: connectNonce, ts: Date.now() },
     });
 
+    let pingTimer: ReturnType<typeof setInterval> | undefined;
+
     const close = (code = 1000, reason?: string) => {
       if (closed) {
         return;
       }
       closed = true;
       clearTimeout(handshakeTimer);
+      if (pingTimer !== undefined) {
+        clearInterval(pingTimer);
+      }
       releasePreauthBudget();
       if (client) {
         clients.delete(client);
@@ -323,32 +392,67 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const logFn = isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr)
-          ? logWsControl.debug
-          : logWsControl.warn;
-        logFn(
-          `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
-          closeContext,
-        );
+        const isExpectedStartupRetryClose =
+          closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE && code === GATEWAY_STARTUP_CLOSE_CODE;
+        const logFn =
+          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) || isExpectedStartupRetryClose
+            ? logWsControl.debug
+            : logWsControl.warn;
+        const authReason = stringMetaValue(closeMeta, "authReason");
+        // This pre-connect close path has no client object yet; treat only
+        // missing shared credentials as suppressible startup retry noise.
+        const shouldLimitMissingAuthClose =
+          closeCause === "unauthorized" &&
+          shouldLimitMissingCredentialAuthLog({
+            reason: authReason,
+            authProvided: "none",
+          });
+        const closeLogDecision = shouldLimitMissingAuthClose
+          ? unauthorizedCloseBeforeConnectLogLimiter.register(
+              buildHandshakeAuthLogKey({
+                reason: authReason,
+                remoteAddr,
+                client:
+                  stringMetaValue(closeMeta, "clientDisplayName") ??
+                  stringMetaValue(closeMeta, "client"),
+                mode: stringMetaValue(closeMeta, "mode"),
+                authProvided: "none",
+              }),
+            )
+          : { shouldLog: true, suppressedSinceLastLog: 0 };
+        if (closeLogDecision.shouldLog) {
+          const suppressedText =
+            closeLogDecision.suppressedSinceLastLog > 0
+              ? ` suppressed=${closeLogDecision.suppressedSinceLastLog}`
+              : "";
+          logFn(
+            `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}${suppressedText}`,
+            closeContext,
+          );
+        }
       }
       if (client && isWebchatClient(client.connect.client)) {
         logWsControl.info(
           `webchat disconnected code=${code} reason=${logReason || "n/a"} conn=${connId}`,
         );
       }
-      if (client?.presenceKey) {
+      const context = buildRequestContext();
+      context.unsubscribeAllSessionEvents(connId);
+      let currentDisconnectedNodeId: string | null = null;
+      if (client?.connect?.role === "node") {
+        currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+      }
+      if (
+        client?.presenceKey &&
+        (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
+      ) {
         upsertPresence(client.presenceKey, { reason: "disconnect" });
         broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       }
-      const context = buildRequestContext();
-      context.unsubscribeAllSessionEvents(connId);
-      if (client?.connect?.role === "node") {
-        const nodeId = context.nodeRegistry.unregister(connId);
-        if (nodeId) {
-          removeRemoteNodeInfo(nodeId);
-          context.nodeUnsubscribeAll(nodeId);
-          clearNodeWakeState(nodeId);
-        }
+      if (currentDisconnectedNodeId) {
+        removeRemoteNodeInfo(currentDisconnectedNodeId);
+        context.nodeUnsubscribeAll(currentDisconnectedNodeId);
+        clearNodeWakeState(currentDisconnectedNodeId);
       }
       logWs("out", "close", {
         connId,
@@ -365,7 +469,9 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       close();
     });
 
-    const handshakeTimeoutMs = getPreauthHandshakeTimeoutMsFromEnv();
+    const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
+      configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
+    });
     const handshakeTimer = setTimeout(() => {
       if (!client) {
         handshakeState = "failed";
@@ -380,7 +486,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       }
     }, handshakeTimeoutMs);
 
-    attachGatewayWsMessageHandler({
+    attachGatewayWsMessageHandlerOnDemand({
       socket,
       upgradeReq,
       connId,
@@ -394,15 +500,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       requestHost,
       requestOrigin,
       requestUserAgent,
-      canvasHostUrl,
+      pluginSurfaceBaseUrl,
+      pluginNodeCapabilities,
       connectNonce,
       getResolvedAuth,
       getRequiredSharedGatewaySessionGeneration,
       rateLimiter,
       browserRateLimiter,
+      isStartupPending,
       gatewayMethods,
       events,
       extraHandlers,
+      getMethodRegistry,
       buildRequestContext,
       refreshHealthSnapshot,
       send,
@@ -417,6 +526,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         releasePreauthBudget();
         client = next;
         clients.add(next);
+        pingTimer = setInterval(() => {
+          try {
+            socket.ping();
+          } catch {
+            // close() clears the timer; ping can race with a socket already entering CLOSING.
+          }
+        }, 25_000);
         return true;
       },
       setHandshakeState: (next) => {

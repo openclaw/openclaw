@@ -20,9 +20,28 @@ export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
 const BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET = new Set<string>(BOOTSTRAP_HANDOFF_OPERATOR_SCOPES);
 
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+  // QR/setup-code bootstrap must hand off both tokens for native onboarding:
+  // iOS/Android suppress the operator loop while bootstrap auth is active and
+  // only start it after persisting this bounded operator token.
   roles: ["node", "operator"],
   scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
+
+export function isPairingSetupBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): boolean {
+  const profile = normalizeDeviceBootstrapProfile(input);
+  if (profile.roles.length !== PAIRING_SETUP_BOOTSTRAP_PROFILE.roles.length) {
+    return false;
+  }
+  if (profile.scopes.length !== PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes.length) {
+    return false;
+  }
+  return (
+    profile.roles.every((role, index) => role === PAIRING_SETUP_BOOTSTRAP_PROFILE.roles[index]) &&
+    profile.scopes.every((scope, index) => scope === PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes[index])
+  );
+}
 
 export function resolveBootstrapProfileScopesForRole(
   role: string,
@@ -34,6 +53,26 @@ export function resolveBootstrapProfileScopesForRole(
     return normalizedScopes.filter((scope) => BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET.has(scope));
   }
   return [];
+}
+
+export function resolveBootstrapProfileScopesForRoles(
+  roles: readonly string[],
+  scopes: readonly string[],
+): string[] {
+  return normalizeDeviceAuthScopes(
+    roles.flatMap((role) => resolveBootstrapProfileScopesForRole(role, scopes)),
+  );
+}
+
+export function normalizeDeviceBootstrapHandoffProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): DeviceBootstrapProfile {
+  const profile = normalizeDeviceBootstrapProfile(input);
+  // Bootstrap handoff profiles can only carry the documented handoff allowlist.
+  return {
+    roles: profile.roles,
+    scopes: resolveBootstrapProfileScopesForRoles(profile.roles, profile.scopes),
+  };
 }
 
 function normalizeBootstrapRoles(roles: readonly string[] | undefined): string[] {

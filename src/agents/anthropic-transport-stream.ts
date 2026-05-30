@@ -1,21 +1,19 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import {
-  calculateCost,
-  getEnvApiKey,
-  parseStreamingJson,
-  type AnthropicOptions,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-  type ThinkingLevel,
-} from "@mariozechner/pi-ai";
+import { getEnvApiKey } from "../llm/env-api-keys.js";
+import { calculateCost } from "../llm/model-utils.js";
+import type { AnthropicOptions } from "../llm/providers/anthropic.js";
+import type { Context, Model, SimpleStreamOptions, ThinkingLevel } from "../llm/types.js";
+import { parseStreamingJson } from "../llm/utils/json-parse.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   coerceTransportToolCallArguments,
@@ -24,6 +22,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -50,7 +49,6 @@ const CLAUDE_CODE_TOOLS = [
 const CLAUDE_CODE_TOOL_LOOKUP = new Map(
   CLAUDE_CODE_TOOLS.map((tool) => [normalizeLowercaseStringOrEmpty(tool), tool]),
 );
-
 type AnthropicTransportModel = Model<"anthropic-messages"> & {
   headers?: Record<string, string>;
   provider: string;
@@ -67,6 +65,13 @@ type AnthropicMessagesClient = {
     ): AsyncIterable<Record<string, unknown>>;
   };
 };
+
+function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string {
+  if (isDirectAnthropicModel(model) && /^anthropic\//i.test(model.id)) {
+    return model.id.replace(/^anthropic\//i, "");
+  }
+  return model.id;
+}
 
 type TransportContentBlock =
   | { type: "text"; text: string; index?: number }
@@ -106,8 +111,15 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
-function isClaudeOpus47Model(modelId: string): boolean {
-  return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
+const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
+
+function isClaudeOpus47OrNewerModel(modelId: string): boolean {
+  return (
+    modelId.includes("opus-4-8") ||
+    modelId.includes("opus-4.8") ||
+    modelId.includes("opus-4-7") ||
+    modelId.includes("opus-4.7")
+  );
 }
 
 function isClaudeOpus46Model(modelId: string): boolean {
@@ -116,7 +128,7 @@ function isClaudeOpus46Model(modelId: string): boolean {
 
 function supportsAdaptiveThinking(modelId: string): boolean {
   return (
-    isClaudeOpus47Model(modelId) ||
+    isClaudeOpus47OrNewerModel(modelId) ||
     isClaudeOpus46Model(modelId) ||
     modelId.includes("sonnet-4-6") ||
     modelId.includes("sonnet-4.6")
@@ -131,17 +143,19 @@ function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): Anthro
     case "medium":
       return "medium";
     case "xhigh":
-      if (isClaudeOpus47Model(modelId)) {
+      if (isClaudeOpus47OrNewerModel(modelId)) {
         return "xhigh";
       }
       return isClaudeOpus46Model(modelId) ? "max" : "high";
+    case "max":
+      return isClaudeOpus47OrNewerModel(modelId) ? "max" : "high";
     default:
       return "high";
   }
 }
 
 function clampReasoningLevel(level: ThinkingLevel): "minimal" | "low" | "medium" | "high" {
-  return level === "xhigh" ? "high" : level;
+  return level === "xhigh" || level === "max" ? "high" : level;
 }
 
 function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {
@@ -191,6 +205,37 @@ function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
 }
 
+function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
+  if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") {
+    return false;
+  }
+  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  return endpointClass === "default" || endpointClass === "anthropic-public";
+}
+
+function isKimiAnthropicProvider(provider: string | undefined): boolean {
+  return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
+}
+
+function supportsReasoningContentReplay(
+  model: Pick<AnthropicTransportModel, "provider" | "baseUrl">,
+): boolean {
+  return resolveProviderEndpoint(model.baseUrl).endpointClass === "xiaomi-native";
+}
+
+function buildAnthropicBetaHeader(
+  model: AnthropicTransportModel,
+  betaFeatures: readonly string[],
+  params: { oauth: boolean },
+): string | undefined {
+  if (!isDirectAnthropicModel(model)) {
+    return undefined;
+  }
+  return params.oauth
+    ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
+    : betaFeatures.join(",");
+}
+
 function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
@@ -215,31 +260,38 @@ function convertContentBlocks(
 ) {
   const hasImages = content.some((item) => item.type === "image");
   if (!hasImages) {
-    return sanitizeTransportPayloadText(
+    return sanitizeNonEmptyTransportPayloadText(
       content.map((item) => ("text" in item ? item.text : "")).join("\n"),
     );
   }
-  const blocks = content.map((block) => {
+  const blocks: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "image";
+        source: { type: "base64"; media_type: string; data: string };
+      }
+  > = [];
+  let hasTextBlock = false;
+  for (const block of content) {
     if (block.type === "text") {
-      return {
-        type: "text",
-        text: sanitizeTransportPayloadText(block.text),
-      };
+      const text = sanitizeTransportPayloadText(block.text);
+      if (text.trim().length > 0) {
+        blocks.push({ type: "text", text });
+        hasTextBlock = true;
+      }
+    } else {
+      blocks.push({
+        type: "image" as const,
+        source: {
+          type: "base64",
+          media_type: block.mimeType,
+          data: block.data,
+        },
+      });
     }
-    return {
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: block.mimeType,
-        data: block.data,
-      },
-    };
-  });
-  if (!blocks.some((block) => block.type === "text")) {
-    blocks.unshift({
-      type: "text",
-      text: "(see attached image)",
-    });
+  }
+  if (!hasTextBlock) {
+    return [{ type: "text", text: "(see attached image)" }, ...blocks];
   }
   return blocks;
 }
@@ -252,8 +304,10 @@ function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
+  options?: { allowReasoningContentReplay?: boolean },
 ) {
   const params: Array<Record<string, unknown>> = [];
+  const allowReasoningContentReplay = options?.allowReasoningContentReplay === true;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
@@ -305,6 +359,7 @@ function convertAnthropicMessages(
     }
     if (msg.role === "assistant") {
       const blocks: Array<Record<string, unknown>> = [];
+      const reasoningContent: string[] = [];
       for (const block of msg.content) {
         if (block.type === "text") {
           if (block.text.trim().length > 0) {
@@ -332,9 +387,24 @@ function convertAnthropicMessages(
               text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
+            const thinking =
+              block.thinkingSignature === "reasoning_content"
+                ? sanitizeTransportPayloadText(block.thinking)
+                : block.thinking;
+            if (block.thinkingSignature === "reasoning_content") {
+              if (allowReasoningContentReplay) {
+                blocks.push({
+                  type: "thinking",
+                  thinking,
+                  signature: block.thinkingSignature,
+                });
+                reasoningContent.push(thinking);
+              }
+              continue;
+            }
             blocks.push({
               type: "thinking",
-              thinking: sanitizeTransportPayloadText(block.thinking),
+              thinking,
               signature: block.thinkingSignature,
             });
           }
@@ -350,10 +420,17 @@ function convertAnthropicMessages(
         }
       }
       if (blocks.length > 0) {
-        params.push({
-          role: "assistant",
-          content: blocks,
-        });
+        const assistantMsg: Record<string, unknown> = { role: "assistant", content: blocks };
+        if (reasoningContent.length > 0) {
+          assistantMsg.reasoning_content = reasoningContent.join("\n");
+        } else if (allowReasoningContentReplay) {
+          blocks.unshift({
+            type: "thinking",
+            thinking: "",
+            signature: "reasoning_content",
+          });
+        }
+        params.push(assistantMsg);
       }
       continue;
     }
@@ -391,11 +468,26 @@ function convertAnthropicMessages(
   return params;
 }
 
+function ensureNonEmptyAnthropicMessages(messages: Array<Record<string, unknown>>) {
+  return messages.length > 0
+    ? messages
+    : [{ role: "user", content: EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT }];
+}
+
 function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   if (!tools) {
     return [];
   }
-  return tools.flatMap((tool) => {
+  const converted: Array<{
+    name: string;
+    description?: string;
+    input_schema: {
+      type: "object";
+      properties: unknown;
+      required: unknown;
+    };
+  }> = [];
+  for (const tool of tools) {
     // Main quarantine happens when plugin tools materialize; this keeps Anthropic
     // safe for direct/custom tool arrays that bypass the plugin registry.
     const parameters =
@@ -403,20 +495,23 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
         ? (tool.parameters as Record<string, unknown>)
         : undefined;
     if (!parameters) {
-      return [];
+      continue;
     }
-    return [
-      {
-        name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
-        description: tool.description,
-        input_schema: {
-          type: "object",
-          properties: parameters.properties || {},
-          required: parameters.required || [],
-        },
+    converted.push({
+      name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+      description: tool.description,
+      input_schema: {
+        type: "object",
+        properties: parameters.properties || {},
+        required: parameters.required || [],
       },
-    ];
-  });
+    });
+  }
+  return converted;
+}
+
+function parseAnthropicToolCallArguments(inputJson: string): unknown {
+  return parseJsonObjectPreservingUnsafeIntegers(inputJson) ?? parseStreamingJson(inputJson);
 }
 
 function mapStopReason(reason: string | undefined): string {
@@ -444,15 +539,87 @@ function resolveAnthropicMessagesUrl(baseUrl?: string): string {
   return normalized.endsWith("/v1") ? `${normalized}/messages` : `${normalized}/v1/messages`;
 }
 
+function createAbortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  const error =
+    reason === undefined
+      ? new Error("Request was aborted")
+      : new Error("Request was aborted", { cause: reason });
+  error.name = "AbortError";
+  return error;
+}
+
+function readAnthropicSseChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (!signal) {
+    return reader.read();
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      reader.cancel(signal.reason).catch(() => undefined);
+      reject(createAbortError(signal));
+    };
+
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then(
+      (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      },
+      (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function parseAnthropicSseEventData(data: string): Record<string, unknown> {
+  try {
+    return JSON.parse(data) as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause: error });
+    }
+    throw error;
+  }
+}
+
 async function* parseAnthropicSseBody(
   body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
 ): AsyncIterable<Record<string, unknown>> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readAnthropicSseChunk(reader, signal);
       if (done) {
         break;
       }
@@ -467,7 +634,7 @@ async function* parseAnthropicSseBody(
           .map((line) => line.slice(5).trimStart())
           .join("\n");
         if (data && data !== "[DONE]") {
-          yield JSON.parse(data) as Record<string, unknown>;
+          yield parseAnthropicSseEventData(data);
         }
         frameEnd = buffer.indexOf("\n\n");
       }
@@ -480,7 +647,7 @@ async function* parseAnthropicSseBody(
         .map((line) => line.slice(5).trimStart())
         .join("\n");
       if (data && data !== "[DONE]") {
-        yield JSON.parse(data) as Record<string, unknown>;
+        yield parseAnthropicSseEventData(data);
       }
     }
   } finally {
@@ -523,7 +690,7 @@ function createAnthropicMessagesClient(params: {
         if (!response.body) {
           return;
         }
-        yield* parseAnthropicSseBody(response.body);
+        yield* parseAnthropicSseBody(response.body, options?.signal);
       },
     },
   };
@@ -538,7 +705,12 @@ function createAnthropicTransportClient(params: {
   const { model, context, apiKey, options } = params;
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
-  const fetch = buildGuardedModelFetch(model);
+  // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
+  // the OpenAI SDK compatibility sanitizer can stall before the text block.
+  const fetch =
+    isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
+      ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
+      : buildGuardedModelFetch(model);
   if (model.provider === "github-copilot") {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
@@ -569,6 +741,7 @@ function createAnthropicTransportClient(params: {
     betaFeatures.push("interleaved-thinking-2025-05-14");
   }
   if (isAnthropicOAuthToken(apiKey)) {
+    const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: true });
     return {
       client: createAnthropicMessagesClient({
         apiKey: null,
@@ -578,7 +751,7 @@ function createAnthropicTransportClient(params: {
           {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
-            "anthropic-beta": `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`,
+            ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
             "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
             "x-app": "cli",
           },
@@ -590,6 +763,7 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: true,
     };
   }
+  const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
   return {
     client: createAnthropicMessagesClient({
       apiKey,
@@ -598,7 +772,7 @@ function createAnthropicTransportClient(params: {
         {
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": betaFeatures.join(","),
+          ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
         },
         model.headers,
         options?.headers,
@@ -632,8 +806,12 @@ function buildAnthropicParams(
     enableCacheControl: true,
   });
   const params: Record<string, unknown> = {
-    model: model.id,
-    messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
+    model: resolveAnthropicRequestModelId(model),
+    messages: ensureNonEmptyAnthropicMessages(
+      convertAnthropicMessages(context.messages, model, isOAuthToken, {
+        allowReasoningContentReplay: supportsReasoningContentReplay(model),
+      }),
+    ),
     max_tokens: maxTokens,
     stream: true,
   };
@@ -788,6 +966,117 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
+        const signatureDeltaIndexes = new Set<number>();
+        const allowReasoningContentReplay = supportsReasoningContentReplay(model);
+        const reasoningContentThinkingBlocks = new Map<number, number>();
+        const reasoningContentTextBlocks = new Map<number, number>();
+        const eventIndexKey = (eventIndex: unknown) =>
+          typeof eventIndex === "number" ? eventIndex : -1;
+        const appendReasoningContentThinkingDelta = (
+          eventIndex: unknown,
+          rawText: unknown,
+        ): boolean => {
+          if (typeof rawText !== "string") {
+            return false;
+          }
+          const text = sanitizeTransportPayloadText(rawText);
+          if (text.length === 0) {
+            return false;
+          }
+          const key = eventIndexKey(eventIndex);
+          let contentIndex = reasoningContentThinkingBlocks.get(key);
+          let block =
+            contentIndex === undefined
+              ? undefined
+              : (output.content[contentIndex] as TransportContentBlock | undefined);
+          if (!block || block.type !== "thinking") {
+            block = { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" };
+            output.content.push(block);
+            contentIndex = output.content.length - 1;
+            reasoningContentThinkingBlocks.set(key, contentIndex);
+            stream.push({
+              type: "thinking_start",
+              contentIndex,
+              partial: output as never,
+            });
+          }
+          block.thinking += text;
+          block.thinkingSignature = "reasoning_content";
+          stream.push({
+            type: "thinking_delta",
+            contentIndex,
+            delta: text,
+            partial: output as never,
+          });
+          return true;
+        };
+        const appendReasoningContentTextDelta = (
+          eventIndex: unknown,
+          rawText: unknown,
+        ): boolean => {
+          if (typeof rawText !== "string") {
+            return false;
+          }
+          const text = sanitizeTransportPayloadText(rawText);
+          if (text.length === 0) {
+            return false;
+          }
+          const key = eventIndexKey(eventIndex);
+          let contentIndex = reasoningContentTextBlocks.get(key);
+          let block =
+            contentIndex === undefined
+              ? undefined
+              : (output.content[contentIndex] as TransportContentBlock | undefined);
+          if (!block || block.type !== "text") {
+            block = { type: "text", text: "" };
+            output.content.push(block);
+            contentIndex = output.content.length - 1;
+            reasoningContentTextBlocks.set(key, contentIndex);
+            stream.push({
+              type: "text_start",
+              contentIndex,
+              partial: output as never,
+            });
+          }
+          block.text += text;
+          stream.push({
+            type: "text_delta",
+            contentIndex,
+            delta: text,
+            partial: output as never,
+          });
+          return true;
+        };
+        const finishReasoningContentSidecars = (eventIndex: unknown) => {
+          const key = eventIndexKey(eventIndex);
+          const thinkingContentIndex = reasoningContentThinkingBlocks.get(key);
+          if (thinkingContentIndex !== undefined) {
+            reasoningContentThinkingBlocks.delete(key);
+            const block = output.content[thinkingContentIndex];
+            if (block?.type === "thinking") {
+              stream.push({
+                type: "thinking_end",
+                contentIndex: thinkingContentIndex,
+                content: block.thinking,
+                partial: output as never,
+              });
+            }
+          }
+          const textContentIndex = reasoningContentTextBlocks.get(key);
+          if (textContentIndex === undefined) {
+            return;
+          }
+          reasoningContentTextBlocks.delete(key);
+          const block = output.content[textContentIndex];
+          if (block?.type === "text") {
+            stream.push({
+              type: "text_end",
+              contentIndex: textContentIndex,
+              content: block.text,
+              partial: output as never,
+            });
+          }
+        };
         for await (const event of anthropicStream) {
           if (event.type === "error") {
             const error = event.error as { message?: string } | undefined;
@@ -819,28 +1108,53 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const contentBlock = event.content_block as Record<string, unknown> | undefined;
             const index = typeof event.index === "number" ? event.index : -1;
             if (contentBlock?.type === "text") {
-              const block: TransportContentBlock = { type: "text", text: "", index };
+              const text =
+                typeof contentBlock.text === "string"
+                  ? sanitizeTransportPayloadText(contentBlock.text)
+                  : "";
+              const block: TransportContentBlock = { type: "text", text, index };
               output.content.push(block);
+              const contentIndex = output.content.length - 1;
               stream.push({
                 type: "text_start",
-                contentIndex: output.content.length - 1,
+                contentIndex,
                 partial: output as never,
               });
+              if (text.length > 0) {
+                stream.push({
+                  type: "text_delta",
+                  contentIndex,
+                  delta: text,
+                  partial: output as never,
+                });
+              }
               continue;
             }
             if (contentBlock?.type === "thinking") {
+              const thinking =
+                typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
               const block: TransportContentBlock = {
                 type: "thinking",
-                thinking: "",
-                thinkingSignature: "",
+                thinking,
+                thinkingSignature:
+                  typeof contentBlock.signature === "string" ? contentBlock.signature : "",
                 index,
               };
               output.content.push(block);
+              const contentIndex = output.content.length - 1;
               stream.push({
                 type: "thinking_start",
-                contentIndex: output.content.length - 1,
+                contentIndex,
                 partial: output as never,
               });
+              if (thinking.length > 0) {
+                stream.push({
+                  type: "thinking_delta",
+                  contentIndex,
+                  delta: thinking,
+                  partial: output as never,
+                });
+              }
               continue;
             }
             if (contentBlock?.type === "redacted_thinking") {
@@ -886,9 +1200,56 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             continue;
           }
           if (event.type === "content_block_delta") {
-            const index = blocks.findIndex((block) => block.index === event.index);
-            const block = blocks[index];
             const delta = event.delta as Record<string, unknown> | undefined;
+            let index = blocks.findIndex((block) => block.index === event.index);
+            let block = blocks[index];
+            if (allowReasoningContentReplay) {
+              const appendedThinking = appendReasoningContentThinkingDelta(
+                event.index,
+                delta?.reasoning_content,
+              );
+              const hasNativeAnthropicDelta =
+                (delta?.type === "text_delta" && typeof delta.text === "string") ||
+                (delta?.type === "thinking_delta" && typeof delta.thinking === "string") ||
+                (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") ||
+                (delta?.type === "signature_delta" && typeof delta.signature === "string");
+              let appendedContent = false;
+              if (
+                !hasNativeAnthropicDelta &&
+                typeof delta?.content === "string" &&
+                delta.content.length > 0
+              ) {
+                const text = sanitizeTransportPayloadText(delta.content);
+                if (text.length > 0) {
+                  if (block?.type === "text") {
+                    block.text += text;
+                    stream.push({
+                      type: "text_delta",
+                      contentIndex: index,
+                      delta: text,
+                      partial: output as never,
+                    });
+                    appendedContent = true;
+                  } else {
+                    appendedContent = appendReasoningContentTextDelta(event.index, text);
+                  }
+                }
+              }
+              if ((appendedThinking || appendedContent) && !hasNativeAnthropicDelta) {
+                continue;
+              }
+            }
+            if (!block && delta?.type === "text_delta" && typeof delta.text === "string") {
+              const recoveredIndex = typeof event.index === "number" ? event.index : blocks.length;
+              block = { type: "text", text: "", index: recoveredIndex };
+              output.content.push(block);
+              index = output.content.length - 1;
+              stream.push({
+                type: "text_start",
+                contentIndex: index,
+                partial: output as never,
+              });
+            }
             if (
               block?.type === "text" &&
               delta?.type === "text_delta" &&
@@ -922,8 +1283,9 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "input_json_delta" &&
               typeof delta.partial_json === "string"
             ) {
-              block.partialJson += delta.partial_json;
-              block.arguments = parseStreamingJson(block.partialJson);
+              const partialJson = `${block.partialJson ?? ""}${delta.partial_json}`;
+              block.partialJson = partialJson;
+              block.arguments = parseAnthropicToolCallArguments(partialJson);
               stream.push({
                 type: "toolcall_delta",
                 contentIndex: index,
@@ -937,7 +1299,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "signature_delta" &&
               typeof delta.signature === "string"
             ) {
-              block.thinkingSignature = `${block.thinkingSignature ?? ""}${delta.signature}`;
+              const signatureIndex = eventIndexKey(event.index);
+              if (!signatureDeltaIndexes.has(signatureIndex)) {
+                signatureDeltaIndexes.add(signatureIndex);
+                block.thinkingSignature = "";
+              }
+              block.thinkingSignature = (block.thinkingSignature || "") + delta.signature;
             }
             continue;
           }
@@ -945,6 +1312,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const index = blocks.findIndex((block) => block.index === event.index);
             const block = blocks[index];
             if (!block) {
+              finishReasoningContentSidecars(event.index);
               continue;
             }
             delete block.index;
@@ -955,6 +1323,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 content: block.text,
                 partial: output as never,
               });
+              finishReasoningContentSidecars(event.index);
               continue;
             }
             if (block.type === "thinking") {
@@ -964,11 +1333,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 content: block.thinking,
                 partial: output as never,
               });
+              finishReasoningContentSidecars(event.index);
               continue;
             }
             if (block.type === "toolCall") {
               if (typeof block.partialJson === "string" && block.partialJson.length > 0) {
-                block.arguments = parseStreamingJson(block.partialJson);
+                block.arguments = parseAnthropicToolCallArguments(block.partialJson);
               }
               delete block.partialJson;
               stream.push({
@@ -977,6 +1347,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 toolCall: block as never,
                 partial: output as never,
               });
+              finishReasoningContentSidecars(event.index);
             }
             continue;
           }

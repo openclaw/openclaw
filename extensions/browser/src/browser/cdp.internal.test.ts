@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
+import "../test-support/browser-security.mock.js";
 import {
   type AriaSnapshotNode,
   captureScreenshot,
@@ -33,6 +34,16 @@ type CdpMockMessage = Parameters<CdpReplyHandler>[0];
 
 function sendCdpResult(socket: WebSocket, id: number | undefined, result: Record<string, unknown>) {
   socket.send(JSON.stringify({ id, result }));
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function replyToPageEnable(msg: CdpMockMessage, socket: WebSocket): boolean {
@@ -133,7 +144,7 @@ describe("cdp internal", () => {
           return;
         }
         if (msg.method === "Page.captureScreenshot") {
-          expect(msg.params).toMatchObject({ format: "png" });
+          expect(msg.params?.format).toBe("png");
           expect(msg.params).not.toHaveProperty("captureBeyondViewport");
           socket.send(
             JSON.stringify({
@@ -197,7 +208,7 @@ describe("cdp internal", () => {
         }
         if (msg.method === "Runtime.evaluate") {
           // Pre-capture viewport probe + post-capture probe.
-          const isPre = events.filter((m) => m === "Runtime.evaluate").length === 1;
+          const isPre = countMatching(events, (m) => m === "Runtime.evaluate") === 1;
           socket.send(
             JSON.stringify({
               id: msg.id,
@@ -385,12 +396,12 @@ describe("cdp internal", () => {
 
   describe("formatAriaSnapshot", () => {
     it("returns an empty array when the AX tree is empty", () => {
-      expect(formatAriaSnapshot([], 100)).toEqual([]);
+      expect(formatAriaSnapshot([], 100)).toStrictEqual([]);
     });
 
     it("returns an empty array when no node has an id", () => {
       const nodes = [{ role: { value: "Role" }, name: { value: "" } }] as unknown as RawAXNode[];
-      expect(formatAriaSnapshot(nodes, 100)).toEqual([]);
+      expect(formatAriaSnapshot(nodes, 100)).toStrictEqual([]);
     });
 
     it("skips child references that are absent from the node map", () => {
@@ -443,6 +454,38 @@ describe("cdp internal", () => {
       const out = formatAriaSnapshot(nodes, 3);
       expect(out).toHaveLength(3);
     });
+
+    it("returns nodes when snapshotAria receives a non-finite limit", async () => {
+      const server = await startMockWsServer((msg, socket) => {
+        if (msg.method === "Accessibility.enable") {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          return;
+        }
+        if (msg.method === "Accessibility.getFullAXTree") {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: {
+                nodes: [
+                  {
+                    nodeId: "1",
+                    role: { value: "RootWebArea" },
+                    name: { value: "Home" },
+                    childIds: [],
+                  },
+                ],
+              },
+            }),
+          );
+        }
+      });
+      wss = server.wss;
+
+      const snap = await snapshotAria({ wsUrl: server.wsUrl, limit: Number.NaN });
+
+      expect(snap.nodes).toHaveLength(1);
+      expect(snap.nodes[0]?.role).toBe("RootWebArea");
+    });
   });
 
   describe("snapshotAria", () => {
@@ -482,7 +525,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
   });
 
@@ -723,7 +766,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
 
     it("returns an empty nodes array when nodes is not an array", async () => {
@@ -743,7 +786,32 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
+    });
+
+    it("uses default DOM snapshot budgets for non-finite options", async () => {
+      const server = await startMockWsServer((msg, socket) => {
+        if (msg.method === "Runtime.enable") {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          return;
+        }
+        if (msg.method === "Runtime.evaluate") {
+          const expression =
+            typeof msg.params?.expression === "string" ? msg.params.expression : "";
+          expect(expression).toContain("const maxNodes = 800;");
+          expect(expression).toContain("const maxText = 220;");
+          socket.send(JSON.stringify({ id: msg.id, result: { result: { value: { nodes: [] } } } }));
+        }
+      });
+      wss = server.wss;
+
+      const snap = await snapshotDom({
+        wsUrl: server.wsUrl,
+        limit: Number.NaN,
+        maxTextChars: Number.NaN,
+      });
+
+      expect(snap.nodes).toStrictEqual([]);
     });
   });
 
@@ -817,6 +885,30 @@ describe("cdp internal", () => {
       const obj = await getDomText({ wsUrl: server.wsUrl, format: "text" });
       expect(obj.text).toBe("");
     });
+
+    it("uses the default text budget for non-finite maxChars", async () => {
+      const server = await startMockWsServer((msg, socket) => {
+        if (msg.method === "Runtime.enable") {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          return;
+        }
+        if (msg.method === "Runtime.evaluate") {
+          const expression =
+            typeof msg.params?.expression === "string" ? msg.params.expression : "";
+          expect(expression).toContain("const max = 200000;");
+          socket.send(JSON.stringify({ id: msg.id, result: { result: { value: "ok" } } }));
+        }
+      });
+      wss = server.wss;
+
+      const res = await getDomText({
+        wsUrl: server.wsUrl,
+        format: "text",
+        maxChars: Number.NaN,
+      });
+
+      expect(res.text).toBe("ok");
+    });
   });
 
   describe("querySelector", () => {
@@ -854,7 +946,35 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const out = await querySelector({ wsUrl: server.wsUrl, selector: "button" });
-      expect(out.matches).toEqual([]);
+      expect(out.matches).toStrictEqual([]);
+    });
+
+    it("uses default query budgets for non-finite options", async () => {
+      const server = await startMockWsServer((msg, socket) => {
+        if (msg.method === "Runtime.enable") {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          return;
+        }
+        if (msg.method === "Runtime.evaluate") {
+          const expression =
+            typeof msg.params?.expression === "string" ? msg.params.expression : "";
+          expect(expression).toContain("const lim = 20;");
+          expect(expression).toContain("const maxText = 500;");
+          expect(expression).toContain("const maxHtml = 1500;");
+          socket.send(JSON.stringify({ id: msg.id, result: { result: { value: [] } } }));
+        }
+      });
+      wss = server.wss;
+
+      const out = await querySelector({
+        wsUrl: server.wsUrl,
+        selector: "button",
+        limit: Number.NaN,
+        maxTextChars: Number.NaN,
+        maxHtmlChars: Number.NaN,
+      });
+
+      expect(out.matches).toStrictEqual([]);
     });
   });
 
@@ -963,6 +1083,22 @@ describe("cdp internal", () => {
           const msg = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
           if (msg.method === "Target.createTarget") {
             socket.send(JSON.stringify({ id: msg.id, result: { targetId: "T_BARE_WS" } }));
+            return;
+          }
+          if (msg.method === "Target.attachToTarget") {
+            socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S_BARE_WS" } }));
+            return;
+          }
+          if (
+            msg.method === "Page.enable" ||
+            msg.method === "Runtime.enable" ||
+            msg.method === "Network.enable" ||
+            msg.method === "DOM.enable" ||
+            msg.method === "Accessibility.enable" ||
+            msg.method === "Runtime.runIfWaitingForDebugger" ||
+            msg.method === "Target.detachFromTarget"
+          ) {
+            socket.send(JSON.stringify({ id: msg.id, result: {} }));
           }
         });
       });
@@ -1069,7 +1205,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
 
     it("swallows a failing Runtime.enable in evaluateJavaScript", async () => {

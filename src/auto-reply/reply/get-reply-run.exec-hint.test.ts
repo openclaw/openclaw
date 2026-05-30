@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { TemplateContext } from "../templating.js";
 import {
   buildExecOverridePromptHint,
+  resolvePromptSessionContextForSystemEvent,
   resolvePromptSilentReplyConversationType,
 } from "./get-reply-run.js";
 import { buildGetReplyCtx, buildGetReplyGroupCtx } from "./get-reply.test-fixtures.js";
@@ -104,5 +107,95 @@ describe("resolvePromptSilentReplyConversationType", () => {
         inboundSessionKey: "agent:main:telegram:group:source",
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("resolvePromptSessionContextForSystemEvent", () => {
+  it("rebuilds missing system-event chat metadata from the persisted session entry", () => {
+    const sessionCtx = {
+      Body: "wake up",
+      Provider: "cron-event",
+      Surface: "cron-event",
+    } as TemplateContext;
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      chatType: "channel",
+      channel: "discord",
+      groupId: "guild-1",
+      groupChannel: "#ops",
+      space: "Ops Guild",
+      origin: {
+        provider: "discord",
+        surface: "discord",
+        chatType: "channel",
+        to: "channel-1",
+        accountId: "acct-1",
+        threadId: "thread-1",
+      },
+      lastChannel: "discord",
+      lastTo: "channel-1",
+      lastAccountId: "acct-1",
+      lastThreadId: "thread-1",
+    } satisfies SessionEntry;
+
+    const result = resolvePromptSessionContextForSystemEvent({
+      sessionCtx,
+      sessionEntry,
+      ctx: { Provider: "cron-event" },
+    });
+
+    expect(result).not.toBe(sessionCtx);
+    expect(result.Provider).toBe("discord");
+    expect(result.Surface).toBe("discord");
+    expect(result.ChatType).toBe("channel");
+    expect(result.GroupChannel).toBe("#ops");
+    expect(result.GroupSpace).toBe("Ops Guild");
+    expect(result.OriginatingChannel).toBe("discord");
+    expect(result.OriginatingTo).toBe("channel-1");
+    expect(result.AccountId).toBe("acct-1");
+    expect(result.MessageThreadId).toBe("thread-1");
+  });
+
+  it("keeps normal user turns on their live chat metadata", () => {
+    const sessionCtx = buildGetReplyGroupCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "group",
+    }) as TemplateContext;
+    const result = resolvePromptSessionContextForSystemEvent({
+      sessionCtx,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        chatType: "direct",
+        channel: "telegram",
+      },
+      ctx: { Provider: "discord" },
+    });
+
+    expect(result).toBe(sessionCtx);
+  });
+
+  it("does not overwrite explicit system-event chat metadata", () => {
+    const sessionCtx = {
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "direct",
+      OriginatingChannel: "discord",
+    } as TemplateContext;
+    const result = resolvePromptSessionContextForSystemEvent({
+      sessionCtx,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        chatType: "channel",
+        channel: "discord",
+        groupChannel: "#ops",
+      },
+      ctx: { Provider: "heartbeat" },
+    });
+
+    expect(result).toBe(sessionCtx);
   });
 });

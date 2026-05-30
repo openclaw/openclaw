@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
@@ -62,7 +63,8 @@ describe("buildXiaomiSpeechProvider", () => {
         cfg: {} as never,
         timeoutMs: 30000,
       });
-      expect(config).toMatchObject({
+      expect(config).toEqual({
+        apiKey: undefined,
         baseUrl: "https://example.com/v1",
         model: "mimo-v2-tts",
         voice: "default_en",
@@ -127,6 +129,7 @@ describe("buildXiaomiSpeechProvider", () => {
     });
 
     afterEach(() => {
+      vi.unstubAllGlobals();
       globalThis.fetch = savedFetch;
       vi.restoreAllMocks();
     });
@@ -160,9 +163,12 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(result.audioBuffer.toString()).toBe("fake-mp3-audio");
 
       expect(mockFetch).toHaveBeenCalledOnce();
-      const [url, init] = mockFetch.mock.calls[0];
+      const [url, init] = mockFetch.mock.calls[0] ?? [];
       expect(url).toBe("https://api.xiaomimimo.com/v1/chat/completions");
-      expect(init?.headers).toMatchObject({ "api-key": "sk-test" });
+      expect(init?.headers).toEqual({
+        "api-key": "sk-test",
+        "Content-Type": "application/json",
+      });
       const body = JSON.parse(init!.body as string);
       expect(body.model).toBe("mimo-v2-tts");
       expect(body.messages).toEqual([
@@ -203,6 +209,37 @@ describe("buildXiaomiSpeechProvider", () => {
       });
     });
 
+    it("caps oversized TTS request timeouts before scheduling or fetching", async () => {
+      const audio = Buffer.from("fake-mp3-audio").toString("base64");
+      const timeoutSpy = vi
+        .spyOn(globalThis, "setTimeout")
+        .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+      const clearTimeoutSpy = vi
+        .spyOn(globalThis, "clearTimeout")
+        .mockImplementation(() => undefined);
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      try {
+        await provider.synthesize({
+          text: "Hello from OpenClaw.",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "audio-file",
+          timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+        });
+
+        expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      } finally {
+        timeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
+      }
+    });
+
     it("throws when API key is missing", async () => {
       const savedKey = process.env.XIAOMI_API_KEY;
       delete process.env.XIAOMI_API_KEY;
@@ -217,7 +254,9 @@ describe("buildXiaomiSpeechProvider", () => {
           }),
         ).rejects.toThrow("Xiaomi API key missing");
       } finally {
-        if (savedKey) {
+        if (savedKey === undefined) {
+          delete process.env.XIAOMI_API_KEY;
+        } else {
           process.env.XIAOMI_API_KEY = savedKey;
         }
       }

@@ -1,16 +1,16 @@
 import path from "node:path";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
-export const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
-export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
-export const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
+const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
+const DEFAULT_BOOTSTRAP_PROMPT_WARNING_MAX_FILES = 3;
+const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
 
-export type BootstrapTruncationCause = "per-file-limit" | "total-limit";
-export type BootstrapPromptWarningMode = "off" | "once" | "always";
+type BootstrapTruncationCause = "per-file-limit" | "total-limit";
+type BootstrapPromptWarningMode = "off" | "once" | "always";
 
-export type BootstrapInjectionStat = {
+type BootstrapInjectionStat = {
   name: string;
   path: string;
   missing: boolean;
@@ -19,12 +19,12 @@ export type BootstrapInjectionStat = {
   truncated: boolean;
 };
 
-export type BootstrapAnalyzedFile = BootstrapInjectionStat & {
+type BootstrapAnalyzedFile = BootstrapInjectionStat & {
   nearLimit: boolean;
   causes: BootstrapTruncationCause[];
 };
 
-export type BootstrapBudgetAnalysis = {
+type BootstrapBudgetAnalysis = {
   files: BootstrapAnalyzedFile[];
   truncatedFiles: BootstrapAnalyzedFile[];
   nearLimitFiles: BootstrapAnalyzedFile[];
@@ -40,14 +40,14 @@ export type BootstrapBudgetAnalysis = {
   };
 };
 
-export type BootstrapPromptWarning = {
+type BootstrapPromptWarning = {
   signature?: string;
   warningShown: boolean;
   lines: string[];
   warningSignaturesSeen: string[];
 };
 
-export type BootstrapTruncationReportMeta = {
+type BootstrapTruncationReportMeta = {
   warningMode: BootstrapPromptWarningMode;
   warningShown: boolean;
   promptWarningSignature?: string;
@@ -66,6 +66,10 @@ function normalizePositiveLimit(value: number): number {
 
 function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
+}
+
+function isAgentsBootstrapName(name: string | undefined): boolean {
+  return name?.toLowerCase() === "agents.md";
 }
 
 function normalizeSeenSignatures(signatures?: string[]): string[] {
@@ -293,6 +297,9 @@ export function formatBootstrapTruncationWarningLines(params: {
       `+${params.analysis.truncatedFiles.length - topFiles.length} more truncated file(s).`,
     );
   }
+  if (params.analysis.truncatedFiles.some((file) => isAgentsBootstrapName(file.name))) {
+    lines.push("AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.");
+  }
   lines.push(
     "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
   );
@@ -354,8 +361,17 @@ export function appendBootstrapPromptWarning(
   return prompt ? `${prompt}\n\n${warningBlock}` : warningBlock;
 }
 
-// Backward-compatible alias while older callers still import the prepend name.
-export const prependBootstrapPromptWarning = appendBootstrapPromptWarning;
+export function buildBootstrapPromptWarningNotice(warningLines?: string[]): string | undefined {
+  const hasWarning = (warningLines ?? []).some((line) => line.trim().length > 0);
+  if (!hasWarning) {
+    return undefined;
+  }
+  return [
+    "[Bootstrap truncation warning]",
+    "Some workspace bootstrap files were truncated before Project Context injection.",
+    "Treat Project Context as partial and read the relevant files directly if details seem missing.",
+  ].join("\n");
+}
 
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;

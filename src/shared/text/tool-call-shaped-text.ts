@@ -1,3 +1,6 @@
+import { asOptionalRecord } from "../record-coerce.js";
+import { normalizeOptionalString as readTrimmedString } from "../string-coerce.js";
+
 export type ToolCallShapedTextDetection = {
   kind: "json_tool_call" | "xml_tool_call" | "bracketed_tool_call" | "react_action";
   toolName?: string;
@@ -8,20 +11,6 @@ const TOOL_TEXT_PREFILTER_RE =
 const MAX_SCAN_CHARS = 20_000;
 const MAX_JSON_CANDIDATES = 20;
 const MAX_JSON_CANDIDATE_CHARS = 8_000;
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function readToolName(record: Record<string, unknown>): string | undefined {
   return (
@@ -47,7 +36,7 @@ function classifyJsonValue(value: unknown): ToolCallShapedTextDetection | null {
     return null;
   }
 
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return null;
   }
@@ -63,7 +52,7 @@ function classifyJsonValue(value: unknown): ToolCallShapedTextDetection | null {
     return { kind: "json_tool_call" };
   }
 
-  const functionRecord = asRecord(record.function);
+  const functionRecord = asOptionalRecord(record.function);
   if (functionRecord) {
     const toolName = readToolName(functionRecord);
     if (toolName && hasToolArgs(functionRecord)) {
@@ -199,6 +188,14 @@ function detectXmlToolCall(text: string): ToolCallShapedTextDetection | null {
 }
 
 function detectBracketedToolCall(text: string): ToolCallShapedTextDetection | null {
+  const legacyMatch =
+    /\[\s*TOOL_CALL\s*\]\s*{[\s\S]{0,8000}?\btool\s*=>\s*["']([A-Za-z_][A-Za-z0-9_.:-]{0,119})["'][\s\S]{0,8000}?\bargs\s*=>[\s\S]*?(?:\[\s*\/\s*TOOL_CALL\s*\]|$)/i.exec(
+      text,
+    );
+  if (legacyMatch?.[1]) {
+    return { kind: "bracketed_tool_call", toolName: legacyMatch[1] };
+  }
+
   const match =
     /^\s*\[([A-Za-z_][A-Za-z0-9_.:-]{0,119})\]\s+[\s\S]*?\[END_TOOL_REQUEST\]\s*$/i.exec(text);
   if (!match?.[1]) {

@@ -1,10 +1,12 @@
 import fs from "node:fs";
+import path from "node:path";
 import { z } from "zod";
+import { note } from "../../packages/terminal-core/src/note.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "../utils/zod-parse.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -13,6 +15,7 @@ const LEGACY_MANIFEST_CONTRACT_KEYS = [
   "speechProviders",
   "mediaUnderstandingProviders",
   "imageGenerationProviders",
+  "tools",
 ] as const;
 
 type LegacyManifestContractMigration = {
@@ -29,6 +32,14 @@ function readManifestJson(manifestPath: string): Record<string, unknown> | null 
     return safeParseJsonWithSchema(JsonRecordSchema, fs.readFileSync(manifestPath, "utf-8"));
   } catch {
     return null;
+  }
+}
+
+function manifestSeenKey(manifestPath: string): string {
+  try {
+    return fs.realpathSync.native(manifestPath);
+  } catch {
+    return path.resolve(manifestPath);
   }
 }
 
@@ -80,19 +91,49 @@ function buildLegacyManifestContractMigration(params: {
 }
 
 export function collectLegacyPluginManifestContractMigrations(params?: {
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  manifestRoots?: string[];
+  workspaceDir?: string;
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
 
-  for (const plugin of loadPluginManifestRegistry({
-    cache: false,
-    ...(params?.env ? { env: params.env } : {}),
-  }).plugins) {
-    if (seen.has(plugin.manifestPath)) {
+  for (const root of params?.manifestRoots ?? []) {
+    if (!fs.existsSync(root)) {
       continue;
     }
-    seen.add(plugin.manifestPath);
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const manifestPath = path.join(root, entry.name, "openclaw.plugin.json");
+      const seenKey = manifestSeenKey(manifestPath);
+      if (seen.has(seenKey)) {
+        continue;
+      }
+      seen.add(seenKey);
+      const raw = readManifestJson(manifestPath);
+      if (!raw) {
+        continue;
+      }
+      const migration = buildLegacyManifestContractMigration({ manifestPath, raw });
+      if (migration) {
+        migrations.push(migration);
+      }
+    }
+  }
+
+  for (const plugin of loadPluginManifestRegistry({
+    ...(params?.config ? { config: params.config } : {}),
+    ...(params?.env ? { env: params.env } : {}),
+    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  }).plugins) {
+    const seenKey = manifestSeenKey(plugin.manifestPath);
+    if (seen.has(seenKey)) {
+      continue;
+    }
+    seen.add(seenKey);
     const raw = readManifestJson(plugin.manifestPath);
     if (!raw) {
       continue;
@@ -110,14 +151,20 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
 }
 
 export async function maybeRepairLegacyPluginManifestContracts(params: {
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  manifestRoots?: string[];
+  workspaceDir?: string;
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
   note?: typeof note;
 }): Promise<void> {
-  const migrations = collectLegacyPluginManifestContractMigrations(
-    params.env ? { env: params.env } : undefined,
-  );
+  const migrations = collectLegacyPluginManifestContractMigrations({
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   if (migrations.length === 0) {
     return;
   }

@@ -2,31 +2,33 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { privateFileStore } from "../../infra/private-file-store.js";
+import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import type { ImageContent } from "../../llm/types.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
-import { buildTtsSystemPromptHint } from "../../tts/tts.js";
-import { buildModelAliasLines } from "../model-alias-lines.js";
+import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
+import { detectImageReferences, loadImageFromRef } from "../embedded-agent-runner/run/images.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveOwnerDisplaySetting } from "../owner-display.js";
-import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
+import type { AgentTool } from "../runtime/index.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
-import { buildAgentSystemPrompt } from "../system-prompt.js";
+import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
@@ -64,11 +66,14 @@ export function resolveCliRunQueueKey(params: {
   return params.backendId;
 }
 
-export function buildSystemPrompt(params: {
+export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
+  cwd?: string;
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  silentReplyPromptMode?: SilentReplyPromptMode;
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -79,6 +84,7 @@ export function buildSystemPrompt(params: {
   modelDisplay: string;
   agentId?: string;
 }) {
+  const runtimeWorkspaceDir = params.cwd?.trim() || params.workspaceDir;
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
@@ -87,8 +93,8 @@ export function buildSystemPrompt(params: {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
-    cwd: process.cwd(),
+    workspaceDir: runtimeWorkspaceDir,
+    cwd: runtimeWorkspaceDir,
     runtime: {
       host: "openclaw",
       os: `${os.type()} ${os.release()}`,
@@ -99,34 +105,35 @@ export function buildSystemPrompt(params: {
       shell: detectRuntimeShell(),
     },
   });
-  const ttsHint = params.config
-    ? buildTtsSystemPromptHint(params.config, params.agentId)
-    : undefined;
-  const ownerDisplay = resolveOwnerDisplaySetting(params.config);
-  return buildAgentSystemPrompt({
-    workspaceDir: params.workspaceDir,
+  return buildConfiguredAgentSystemPrompt({
+    config: params.config,
+    agentId: params.agentId,
+    workspaceDir: runtimeWorkspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
-    ownerDisplay: ownerDisplay.ownerDisplay,
-    ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
     reasoningTagHint: false,
     heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
+    promptSurface: "cli_backend",
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: "cli_backend",
+    }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
-    modelAliasLines: buildModelAliasLines(params.config),
     skillsPrompt: params.skillsPrompt,
     userTimezone,
     userTime,
     userTimeFormat,
     contextFiles: params.contextFiles,
-    ttsHint,
-    memoryCitationsMode: params.config?.memory?.citations,
   });
 }
+
+export const buildSystemPrompt = buildCliAgentSystemPrompt;
 
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
   const trimmed = modelId.trim();
@@ -221,7 +228,7 @@ function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: 
   return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
 }
 
-export function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
+function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
   if (!paths.length) {
     return prompt;
   }
@@ -277,14 +284,14 @@ export async function writeCliImages(params: {
     workspaceDir: params.workspaceDir,
   });
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
+  const store = privateFileStore(imageRoot);
   const paths: string[] = [];
   for (let i = 0; i < params.images.length; i += 1) {
     const image = params.images[i];
     const fileName = path.basename(resolveCliImagePath(image));
-    const filePath = path.join(imageRoot, fileName);
     const buffer = Buffer.from(image.data, "base64");
-    await fs.writeFile(filePath, buffer, { mode: 0o600 });
-    paths.push(filePath);
+    await store.writeText(fileName, buffer);
+    paths.push(store.path(fileName));
   }
   // Keep content-addressed image paths stable across Claude CLI runs so prompt
   // text and argv don't churn on every turn with fresh temp-dir suffixes.
@@ -302,19 +309,17 @@ export async function writeCliSystemPromptFile(params: {
   ) {
     return { cleanup: async () => {} };
   }
-  const tempDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-system-prompt-"),
-  );
-  const filePath = path.join(tempDir, "system-prompt.md");
-  await fs.writeFile(filePath, stripSystemPromptCacheBoundary(params.systemPrompt), {
-    encoding: "utf-8",
-    mode: 0o600,
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-cli-system-prompt-",
   });
+  const filePath = await workspace.write(
+    "system-prompt.md",
+    stripSystemPromptCacheBoundary(params.systemPrompt),
+  );
   return {
     filePath,
-    cleanup: async () => {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    },
+    cleanup: async () => await workspace.cleanup(),
   };
 }
 
@@ -376,14 +381,14 @@ export function buildCliArgs(params: {
     args.push(params.backend.modelArg, params.modelId);
   }
   if (
-    !params.useResume &&
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileArg
   ) {
     args.push(params.backend.systemPromptFileArg, params.systemPromptFilePath);
   } else if (
-    !params.useResume &&
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileConfigKey
@@ -395,7 +400,11 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
+  } else if (
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    params.systemPrompt &&
+    params.backend.systemPromptArg
+  ) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {

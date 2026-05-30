@@ -1,18 +1,39 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildQaAgenticParityComparison,
+  buildQaRuntimeParityReport,
   renderQaAgenticParityMarkdownReport,
+  renderQaRuntimeParityMarkdownReport,
   type QaParitySuiteSummary,
+  type QaRuntimeParitySuiteSummary,
 } from "./agentic-parity-report.js";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
-import { buildQaCoverageInventory, renderQaCoverageMarkdownReport } from "./coverage-report.js";
+import {
+  buildQaConfidenceReport,
+  readQaConfidenceManifestFile,
+  renderQaConfidenceMarkdownReport,
+  writeQaConfidenceSelfTestArtifacts,
+} from "./confidence-report.js";
+import {
+  buildQaCoverageInventory,
+  findQaScenarioMatches,
+  renderQaCoverageMarkdownReport,
+  renderQaScenarioMatchesMarkdownReport,
+} from "./coverage-report.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
+import {
+  createMockJsonlReplayCellRunner,
+  renderJsonlReplayMarkdownReport,
+  runJsonlReplay,
+  type JsonlReplayInput,
+} from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
@@ -38,9 +59,25 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./run-config.js";
-import { readQaScenarioPack } from "./scenario-catalog.js";
+import type { RuntimeId } from "./runtime-parity.js";
+import {
+  QA_RUNTIME_PARITY_TIERS,
+  readQaScenarioPack,
+  type QaRuntimeParityTier,
+} from "./scenario-catalog.js";
+import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
+import {
+  buildTokenEfficiencyReport,
+  renderTokenEfficiencyMarkdownReport,
+  type TokenEfficiencySuiteSummary,
+} from "./token-efficiency-report.js";
+import {
+  buildQaToolCoverageReport,
+  renderQaToolCoverageMarkdownReport,
+  type QaToolCoverageSuiteSummary,
+} from "./tool-coverage-report.js";
 
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 
@@ -121,10 +158,88 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
   if (value === undefined) {
     return undefined;
   }
-  if (!Number.isFinite(value) || value < 1) {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${label} must be a positive integer`);
   }
-  return Math.floor(value);
+  return value;
+}
+
+function normalizeQaOptionalModelRef(input: string | undefined) {
+  const model = input?.trim();
+  return model && model.length > 0 ? model : undefined;
+}
+
+function normalizeQaRuntimeId(value: string): RuntimeId | undefined {
+  if (value === "openclaw" || value === "pi") {
+    return "openclaw";
+  }
+  if (value === "codex") {
+    return "codex";
+  }
+  return undefined;
+}
+
+function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const runtimes = value
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .map(normalizeQaRuntimeId);
+  if (runtimes.length !== 2) {
+    throw new Error('--runtime-pair must use exactly two runtimes, e.g. "openclaw,codex".');
+  }
+  const [left, right] = runtimes;
+  if (!left || !right) {
+    throw new Error('--runtime-pair only supports "openclaw" and "codex".');
+  }
+  if (left === right) {
+    throw new Error("--runtime-pair must compare two different runtimes.");
+  }
+  return ["openclaw", "codex"];
+}
+
+function parseQaRuntimeParityTierFilters(input: string[] | undefined): QaRuntimeParityTier[] {
+  const rawValues = [
+    ...new Set(
+      (input ?? [])
+        .flatMap((value) => value.split(","))
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+  const validTiers = new Set<string>(QA_RUNTIME_PARITY_TIERS);
+  for (const value of rawValues) {
+    if (!validTiers.has(value)) {
+      throw new Error(
+        `--runtime-parity-tier must be one of ${QA_RUNTIME_PARITY_TIERS.join(", ")}, got "${value}".`,
+      );
+    }
+  }
+  return rawValues as QaRuntimeParityTier[];
+}
+
+function resolveQaRuntimeParityTierScenarioIds(params: {
+  scenarioIds: string[];
+  runtimeParityTiers: readonly QaRuntimeParityTier[];
+}): string[] {
+  if (params.runtimeParityTiers.length === 0) {
+    return params.scenarioIds;
+  }
+  const tierSet = new Set(params.runtimeParityTiers);
+  const matchingScenarioIds = readQaScenarioPack()
+    .scenarios.filter(
+      (scenario) => scenario.runtimeParityTier && tierSet.has(scenario.runtimeParityTier),
+    )
+    .map((scenario) => scenario.id);
+  if (matchingScenarioIds.length === 0) {
+    throw new Error(
+      `--runtime-parity-tier matched no scenarios for ${params.runtimeParityTiers.join(", ")}.`,
+    );
+  }
+  return uniqueStrings([...params.scenarioIds, ...matchingScenarioIds]);
 }
 
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
@@ -409,21 +524,26 @@ function printQaCredentialListTable(credentials: QaCredentialRecord[]) {
   }
   const rows = credentials.map((credential) => ({
     credentialId: credential.credentialId,
+    fingerprint: credential.credentialFingerprint ?? "",
     kind: credential.kind,
     status: credential.status,
     leased: formatQaCredentialLeaseState(credential),
     note: credential.note ?? "",
   }));
   const idWidth = Math.max("credentialId".length, ...rows.map((row) => row.credentialId.length));
+  const fingerprintWidth = Math.max(
+    "fingerprint".length,
+    ...rows.map((row) => row.fingerprint.length),
+  );
   const kindWidth = Math.max("kind".length, ...rows.map((row) => row.kind.length));
   const statusWidth = Math.max("status".length, ...rows.map((row) => row.status.length));
   const leaseWidth = Math.max("leased".length, ...rows.map((row) => row.leased.length));
   process.stdout.write(
-    `${"credentialId".padEnd(idWidth)}  ${"kind".padEnd(kindWidth)}  ${"status".padEnd(statusWidth)}  ${"leased".padEnd(leaseWidth)}  note\n`,
+    `${"credentialId".padEnd(idWidth)}  ${"fingerprint".padEnd(fingerprintWidth)}  ${"kind".padEnd(kindWidth)}  ${"status".padEnd(statusWidth)}  ${"leased".padEnd(leaseWidth)}  note\n`,
   );
   for (const row of rows) {
     process.stdout.write(
-      `${row.credentialId.padEnd(idWidth)}  ${row.kind.padEnd(kindWidth)}  ${row.status.padEnd(statusWidth)}  ${row.leased.padEnd(leaseWidth)}  ${row.note}\n`,
+      `${row.credentialId.padEnd(idWidth)}  ${row.fingerprint.padEnd(fingerprintWidth)}  ${row.kind.padEnd(kindWidth)}  ${row.status.padEnd(statusWidth)}  ${row.leased.padEnd(leaseWidth)}  ${row.note}\n`,
     );
   }
 }
@@ -466,28 +586,43 @@ export async function runQaSuiteCommand(opts: {
   thinking?: string;
   cliAuthMode?: string;
   parityPack?: string;
+  pack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   allowFailures?: boolean;
+  enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
   memory?: string;
   disk?: string;
   preflight?: boolean;
+  runtimePair?: string;
+  runtimeParityTier?: string[];
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
-  const scenarioIds = resolveQaParityPackScenarioIds({
-    parityPack: opts.parityPack,
-    scenarioIds: opts.scenarioIds,
+  const explicitScenarioIds = resolveQaScenarioPackScenarioIds({
+    pack: opts.pack,
+    scenarioIds: resolveQaParityPackScenarioIds({
+      parityPack: opts.parityPack,
+      scenarioIds: opts.scenarioIds,
+    }),
+  });
+  const runtimeParityTiers = parseQaRuntimeParityTierFilters(opts.runtimeParityTier);
+  const scenarioIds = resolveQaRuntimeParityTierScenarioIds({
+    scenarioIds: explicitScenarioIds,
+    runtimeParityTiers,
   });
   const allowFailures = opts.allowFailures === true;
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
+  const runtimePair = parseQaRuntimePair(opts.runtimePair);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
+  const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
+  const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
   if (opts.preflight === true && runner !== "host") {
     throw new Error("--preflight requires --runner host.");
   }
@@ -510,8 +645,8 @@ export async function runQaSuiteCommand(opts: {
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       transportId,
       providerMode,
-      primaryModel: opts.primaryModel,
-      alternateModel: opts.alternateModel,
+      primaryModel,
+      alternateModel,
       fastMode: opts.fastMode,
       ...(thinkingDefault ? { thinkingDefault } : {}),
       allowFailures: true,
@@ -519,6 +654,7 @@ export async function runQaSuiteCommand(opts: {
       ...(opts.concurrency !== undefined
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
         : {}),
+      ...(runtimePair ? { runtimePair } : {}),
       image: opts.image,
       cpus: parseQaPositiveIntegerOption("--cpus", opts.cpus),
       memory: opts.memory,
@@ -542,8 +678,8 @@ export async function runQaSuiteCommand(opts: {
       repoRoot,
       transportId,
       providerMode,
-      primaryModel: opts.primaryModel,
-      alternateModel: opts.alternateModel,
+      primaryModel,
+      alternateModel,
       allowFailures,
     });
     return;
@@ -554,15 +690,17 @@ export async function runQaSuiteCommand(opts: {
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     transportId,
     providerMode,
-    primaryModel: opts.primaryModel,
-    alternateModel: opts.alternateModel,
+    primaryModel,
+    alternateModel,
     fastMode: opts.fastMode,
     ...(thinkingDefault ? { thinkingDefault } : {}),
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
     scenarioIds,
+    ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
     ...(opts.concurrency !== undefined
       ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
       : {}),
+    ...(runtimePair ? { runtimePair } : {}),
   });
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
@@ -575,18 +713,72 @@ export async function runQaSuiteCommand(opts: {
 
 export async function runQaParityReportCommand(opts: {
   repoRoot?: string;
-  candidateSummary: string;
-  baselineSummary: string;
+  candidateSummary?: string;
+  baselineSummary?: string;
   candidateLabel?: string;
   baselineLabel?: string;
   outputDir?: string;
+  runtimeAxis?: boolean;
+  summary?: string;
+  tokenEfficiency?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  if (opts.tokenEfficiency === true && opts.runtimeAxis !== true) {
+    throw new Error("--token-efficiency requires --runtime-axis.");
+  }
   const outputDir =
     resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
     path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
 
+  if (opts.runtimeAxis === true) {
+    if (!opts.summary?.trim()) {
+      throw new Error("--runtime-axis requires --summary.");
+    }
+    const summaryPath = path.resolve(repoRoot, opts.summary);
+    const summary = JSON.parse(
+      await fs.readFile(summaryPath, "utf8"),
+    ) as QaRuntimeParitySuiteSummary;
+    const reportPayload = buildQaRuntimeParityReport({ summary });
+    const report = renderQaRuntimeParityMarkdownReport(reportPayload);
+    const reportPath = path.join(outputDir, "qa-runtime-parity-report.md");
+    const runtimeSummaryPath = path.join(outputDir, "qa-runtime-parity-summary.json");
+    await fs.writeFile(reportPath, report, "utf8");
+    await fs.writeFile(runtimeSummaryPath, `${JSON.stringify(reportPayload, null, 2)}\n`, "utf8");
+
+    process.stdout.write(`QA runtime parity report: ${reportPath}\n`);
+    process.stdout.write(`QA runtime parity summary: ${runtimeSummaryPath}\n`);
+    process.stdout.write(`QA runtime parity verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
+
+    let tokenEfficiencyPass = true;
+    if (opts.tokenEfficiency === true) {
+      const tokenPayload = buildTokenEfficiencyReport({
+        summary: summary as TokenEfficiencySuiteSummary,
+      });
+      tokenEfficiencyPass = tokenPayload.pass;
+      const tokenReport = renderTokenEfficiencyMarkdownReport(tokenPayload);
+      const tokenReportPath = path.join(outputDir, "qa-runtime-token-efficiency-report.md");
+      const tokenSummaryPath = path.join(outputDir, "qa-runtime-token-efficiency-summary.json");
+      await fs.writeFile(tokenReportPath, tokenReport, "utf8");
+      await fs.writeFile(tokenSummaryPath, `${JSON.stringify(tokenPayload, null, 2)}\n`, "utf8");
+      process.stdout.write(`QA runtime token efficiency report: ${tokenReportPath}\n`);
+      process.stdout.write(`QA runtime token efficiency summary: ${tokenSummaryPath}\n`);
+      process.stdout.write(
+        `QA runtime token efficiency verdict: ${tokenPayload.status === "skipped" ? "skipped" : tokenPayload.pass ? "pass" : "fail"}\n`,
+      );
+    }
+
+    if (!reportPayload.pass || !tokenEfficiencyPass) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (!opts.candidateSummary?.trim() || !opts.baselineSummary?.trim()) {
+    throw new Error(
+      "--candidate-summary and --baseline-summary are required unless --runtime-axis is set.",
+    );
+  }
   const candidateSummaryPath = path.resolve(repoRoot, opts.candidateSummary);
   const baselineSummaryPath = path.resolve(repoRoot, opts.baselineSummary);
   const candidateSummary = JSON.parse(
@@ -616,26 +808,161 @@ export async function runQaParityReportCommand(opts: {
   }
 }
 
+export async function runQaConfidenceReportCommand(opts: {
+  repoRoot?: string;
+  manifest: string;
+  artifactRoot?: string;
+  outputDir?: string;
+  strictZeroUnknowns?: boolean;
+  strictGlobalPass?: boolean;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const manifestPath = path.resolve(repoRoot, opts.manifest);
+  const artifactRoot = path.resolve(repoRoot, opts.artifactRoot ?? ".");
+  const outputDir =
+    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-${Date.now().toString(36)}`);
+  await fs.mkdir(outputDir, { recursive: true });
+  const manifest = await readQaConfidenceManifestFile(manifestPath);
+  const reportPayload = await buildQaConfidenceReport({
+    manifest,
+    artifactRoot,
+    strictZeroUnknowns: opts.strictZeroUnknowns === true,
+    strictGlobalPass: opts.strictGlobalPass === true,
+  });
+  const report = renderQaConfidenceMarkdownReport(reportPayload);
+  const reportPath = path.join(outputDir, "qa-confidence-report.md");
+  const summaryPath = path.join(outputDir, "qa-confidence-summary.json");
+  await fs.writeFile(reportPath, report, "utf8");
+  await fs.writeFile(summaryPath, `${JSON.stringify(reportPayload, null, 2)}\n`, "utf8");
+  process.stdout.write(`QA confidence report: ${reportPath}\n`);
+  process.stdout.write(`QA confidence summary: ${summaryPath}\n`);
+  process.stdout.write(`QA confidence verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
+  if (!reportPayload.pass) {
+    process.exitCode = 1;
+  }
+}
+
+export async function runQaConfidenceSelfTestCommand(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const outputDir =
+    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `confidence-self-test-${Date.now().toString(36)}`);
+  const result = await writeQaConfidenceSelfTestArtifacts({ outputDir });
+  process.stdout.write(`QA confidence self-test report: ${result.reportPath}\n`);
+  process.stdout.write(`QA confidence self-test summary: ${result.summaryPath}\n`);
+  process.stdout.write(
+    `QA confidence self-test verdict: ${result.summary.pass ? "pass" : "fail"}\n`,
+  );
+  if (!result.summary.pass) {
+    process.exitCode = 1;
+  }
+}
+
 export async function runQaCoverageReportCommand(opts: {
   repoRoot?: string;
   output?: string;
   json?: boolean;
+  tools?: boolean;
+  summary?: string;
+  match?: string[];
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const inventory = buildQaCoverageInventory(readQaScenarioPack().scenarios);
   const outputPath = opts.output ? path.resolve(repoRoot, opts.output) : undefined;
-  const body = opts.json
-    ? `${JSON.stringify(inventory, null, 2)}\n`
-    : renderQaCoverageMarkdownReport(inventory);
+  const scenarios = readQaScenarioPack().scenarios;
+  let body: string;
+  let outputLabel = "QA coverage report";
+  if (opts.tools === true) {
+    if (opts.match && opts.match.length > 0) {
+      throw new Error("--match cannot be combined with --tools.");
+    }
+    const summary = opts.summary?.trim()
+      ? (JSON.parse(
+          await fs.readFile(path.resolve(repoRoot, opts.summary), "utf8"),
+        ) as QaToolCoverageSuiteSummary)
+      : undefined;
+    const report = buildQaToolCoverageReport({ scenarios, summary });
+    body = opts.json
+      ? `${JSON.stringify(report, null, 2)}\n`
+      : renderQaToolCoverageMarkdownReport(report);
+    outputLabel = "QA tool coverage report";
+    if (summary && !report.pass) {
+      process.exitCode = 1;
+    }
+  } else {
+    if (opts.summary?.trim()) {
+      throw new Error("--summary requires --tools.");
+    }
+    const query = opts.match?.join(" ").trim();
+    if (query) {
+      const matches = findQaScenarioMatches(scenarios, query);
+      body = opts.json
+        ? `${JSON.stringify({ query, matches }, null, 2)}\n`
+        : renderQaScenarioMatchesMarkdownReport({ query, matches });
+      outputLabel = "QA scenario match report";
+    } else {
+      const inventory = buildQaCoverageInventory(scenarios);
+      body = opts.json
+        ? `${JSON.stringify(inventory, null, 2)}\n`
+        : renderQaCoverageMarkdownReport(inventory);
+    }
+  }
 
   if (outputPath) {
     await fs.mkdir(path.dirname(outputPath), { recursive: true });
     await fs.writeFile(outputPath, body, "utf8");
-    process.stdout.write(`QA coverage report: ${outputPath}\n`);
+    process.stdout.write(`${outputLabel}: ${outputPath}\n`);
     return;
   }
 
   process.stdout.write(body);
+}
+
+export async function runQaJsonlReplayCommand(opts: {
+  repoRoot?: string;
+  transcripts?: string;
+  outputDir?: string;
+  runtimePair?: string;
+  providerMode?: QaProviderModeInput;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const runtimePair = parseQaRuntimePair(opts.runtimePair) ?? ["openclaw", "codex"];
+  if (runtimePair[0] !== "openclaw" || runtimePair[1] !== "codex") {
+    throw new Error('--runtime-pair for jsonl-replay must be "openclaw,codex".');
+  }
+  const providerMode = normalizeQaProviderMode(opts.providerMode ?? "mock-openai");
+  if (providerMode !== "mock-openai") {
+    throw new Error("qa jsonl-replay currently supports mock-openai curated fixtures only.");
+  }
+  const transcriptDir = path.resolve(repoRoot, opts.transcripts ?? "qa/scenarios/jsonl-replay");
+  const outputDir =
+    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `jsonl-replay-${Date.now().toString(36)}`);
+  await fs.mkdir(outputDir, { recursive: true });
+  const result = await runJsonlReplay(
+    {
+      directory: transcriptDir,
+      runtimePair: runtimePair as JsonlReplayInput["runtimePair"],
+      providerMode,
+    },
+    { runCell: createMockJsonlReplayCellRunner() },
+  );
+  const reportPayload = {
+    generatedAt: new Date().toISOString(),
+    providerMode,
+    runtimePair: runtimePair as JsonlReplayInput["runtimePair"],
+    transcripts: result.transcripts,
+  };
+  const report = renderJsonlReplayMarkdownReport(reportPayload);
+  const reportPath = path.join(outputDir, "qa-jsonl-replay-report.md");
+  const summaryPath = path.join(outputDir, "qa-jsonl-replay-summary.json");
+  await fs.writeFile(reportPath, report, "utf8");
+  await fs.writeFile(summaryPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+  process.stdout.write(`QA JSONL replay report: ${reportPath}\n`);
+  process.stdout.write(`QA JSONL replay summary: ${summaryPath}\n`);
 }
 
 export async function runQaCharacterEvalCommand(opts: {
@@ -881,7 +1208,6 @@ export async function runQaLabUiCommand(opts: {
   advertiseHost?: string;
   advertisePort?: number;
   controlUiUrl?: string;
-  controlUiToken?: string;
   controlUiProxyTarget?: string;
   uiDistDir?: string;
   autoKickoffTarget?: string;
@@ -896,7 +1222,7 @@ export async function runQaLabUiCommand(opts: {
     advertiseHost: opts.advertiseHost,
     advertisePort: Number.isFinite(opts.advertisePort) ? opts.advertisePort : undefined,
     controlUiUrl: opts.controlUiUrl,
-    controlUiToken: opts.controlUiToken,
+    controlUiProxyToken: process.env.OPENCLAW_QA_CONTROL_UI_PROXY_TOKEN,
     controlUiProxyTarget: opts.controlUiProxyTarget,
     uiDistDir: opts.uiDistDir,
     autoKickoffTarget: opts.autoKickoffTarget,
@@ -991,6 +1317,7 @@ export async function runQaProviderServerCommand(
   await runInterruptibleServer(standaloneCommand.serverLabel, server);
 }
 
-export const __testing = {
+export const testing = {
   resolveRepoRelativeOutputDir,
 };
+export { testing as __testing };

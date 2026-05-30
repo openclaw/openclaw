@@ -1,5 +1,8 @@
 {
   "id": "huggingface",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["huggingface"],
   "modelIdNormalization": {
@@ -9,8 +12,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "huggingface": ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"]
+  "setup": {
+    "providers": [
+      {
+        "id": "huggingface",
+        "envVars": ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -24,6 +24,40 @@ describe("resolveCodexAuthIdentity", () => {
     });
   });
 
+  it("extracts account and plan metadata from the JWT auth claim", () => {
+    const identity = resolveCodexAuthIdentity({
+      accessToken: createJwt({
+        "https://api.openai.com/profile": {
+          email: "jwt-user@example.com",
+        },
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-123",
+          chatgpt_plan_type: "prolite",
+        },
+      }),
+    });
+
+    expect(identity).toEqual({
+      accountId: "acct-123",
+      chatgptPlanType: "prolite",
+      email: "jwt-user@example.com",
+      profileName: "jwt-user@example.com",
+    });
+  });
+
+  it("decodes URL-safe base64 JWT payloads", () => {
+    const accessToken = createJwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "w_ébé_1fzcswWN6Pi5zL",
+      },
+    });
+    expect(accessToken.split(".")[1]).toContain("_");
+
+    expect(resolveCodexAuthIdentity({ accessToken })).toEqual({
+      accountId: "w_ébé_1fzcswWN6Pi5zL",
+    });
+  });
+
   it("falls back to credential email before synthetic ids", () => {
     const identity = resolveCodexAuthIdentity({
       accessToken: createJwt({}),
@@ -51,6 +85,6 @@ describe("resolveCodexAuthIdentity", () => {
   });
 
   it("returns no metadata when token parsing yields no identity", () => {
-    expect(resolveCodexAuthIdentity({ accessToken: "not-a-jwt-token" })).toEqual({});
+    expect(resolveCodexAuthIdentity({ accessToken: "not-a-jwt-token" })).toStrictEqual({});
   });
 });

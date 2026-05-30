@@ -6,16 +6,14 @@ import {
   type BundleMcpDiagnostic,
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 
-export type MergedBundleMcpConfig = {
+type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
 };
 
-export type BundleMcpServerMapper = (
-  server: BundleMcpServerConfig,
-  name: string,
-) => BundleMcpServerConfig;
+type BundleMcpServerMapper = (server: BundleMcpServerConfig, name: string) => BundleMcpServerConfig;
 
 const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
   "streamable-http": "http",
@@ -27,7 +25,7 @@ const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
 /**
  * User config stores OpenClaw MCP transport names, while CLI backends such as
  * Claude Code and Gemini expect a downstream `type` field. Keep this adapter
- * out of the generic merge path because embedded Pi still consumes the raw
+ * out of the generic merge path because embedded OpenClaw still consumes the raw
  * OpenClaw `transport` shape directly.
  */
 export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
@@ -49,11 +47,13 @@ export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): Bundl
 export function loadMergedBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   mapConfiguredServer?: BundleMcpServerMapper;
 }): MergedBundleMcpConfig {
   const bundleMcp = loadEnabledBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
   const mapConfiguredServer = params.mapConfiguredServer ?? ((server) => server);

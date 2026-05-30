@@ -1,13 +1,26 @@
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
+import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
 
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) => clackOutro(stylePromptTitle(message) ?? message);
 
+type ConfigModule = typeof import("../config/config.js");
+
+let configModulePromise: Promise<ConfigModule> | undefined;
+
+function loadConfigModule(): Promise<ConfigModule> {
+  return (configModulePromise ??= import("../config/config.js"));
+}
+
 export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
+  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
+    const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
+    assertConfigWriteAllowedInCurrentMode();
+  }
+
   const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");
   const { printWizardHeader } = await import("../commands/onboard-helpers.js");
   const prompter = createDoctorPrompter({ runtime: effectiveRuntime, options });
@@ -35,9 +48,12 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
 
   const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
   const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
+  const { noteStalePluginRuntimeSymlinks } =
+    await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
   const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
   await maybeRepairUiProtocolFreshness(effectiveRuntime, prompter);
   noteSourceInstallIssues(root);
+  await noteStalePluginRuntimeSymlinks(root);
   noteStartupOptimizationHints();
 
   const { loadAndMaybeMigrateDoctorConfig } = await import("../commands/doctor-config-flow.js");
@@ -47,7 +63,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
     runtime: effectiveRuntime,
     prompter,
   });
-  const { CONFIG_PATH } = await import("../config/config.js");
+  const { CONFIG_PATH } = await loadConfigModule();
   const ctx = {
     runtime: effectiveRuntime,
     options,

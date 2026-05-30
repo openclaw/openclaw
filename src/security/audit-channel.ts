@@ -2,6 +2,7 @@ import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../channels/account-snapshot-fields.js";
+import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
@@ -10,8 +11,8 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.types.js";
-import { resolveDmAllowState } from "./dm-policy-shared.js";
 
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
   const s = message.toLowerCase();
@@ -206,10 +207,11 @@ export async function collectChannelSecurityFindings(params: {
     normalizeEntry?: (raw: string) => string;
   }) => {
     const policyPath = input.policyPath ?? `${input.allowFromPath}policy`;
-    const { hasWildcard, isMultiUserDm } = await resolveDmAllowState({
+    const { hasWildcard, isMultiUserDm } = await resolveDmAllowAuditState({
       provider: input.provider,
       accountId: input.accountId,
       allowFrom: input.allowFrom,
+      dmPolicy: input.dmPolicy,
       normalizeEntry: input.normalizeEntry,
     });
     const dmScope = params.cfg.session?.dmScope ?? "main";
@@ -268,7 +270,7 @@ export async function collectChannelSecurityFindings(params: {
       cfg: sourceConfig,
       accountIds,
     });
-    const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+    const orderedAccountIds = uniqueStrings([defaultAccountId, ...accountIds]);
 
     for (const accountId of orderedAccountIds) {
       const hasExplicitAccountPath = hasExplicitProviderAccountConfig(

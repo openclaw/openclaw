@@ -1,7 +1,8 @@
 import path from "node:path";
+import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { isSensitiveUrlQueryParamName } from "../shared/net/redact-sensitive-url.js";
+import { asOptionalRecord } from "../shared/record-coerce.js";
 import { redactSensitiveText } from "./redact.js";
 
 const SECRET_SUPPORT_FIELD_RE =
@@ -59,13 +60,6 @@ type LimitedSupportArray = {
   count: number;
   items: unknown[];
 };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
 
 function isPrivateSupportField(key: string): boolean {
   return (
@@ -235,7 +229,13 @@ function isSupportAbsolutePath(value: string): boolean {
   return path.isAbsolute(value) || isWindowsAbsolutePath(value);
 }
 
-export function redactPathForSupport(file: string, options: SupportRedactionContext): string {
+export function redactPathForSupport(
+  file: string | null | undefined,
+  options: SupportRedactionContext,
+): string {
+  if (file == null || typeof file !== "string") {
+    return "";
+  }
   if (file.startsWith("$")) {
     return file;
   }
@@ -281,8 +281,8 @@ function redactKnownPathPrefixesForSupport(
 }
 
 export function redactTextForSupport(value: string): string {
-  let redacted = redactSensitiveTextForSupport(value);
-  redacted = redactCommonCredentialTextForSupport(redacted);
+  let redacted = redactCommonCredentialTextForSupport(value);
+  redacted = redactSensitiveTextForSupport(redacted);
   redacted = redactUrlSecretsForSupport(redacted);
   redacted = redactServiceIdentifiersForSupport(redacted);
   redacted = redactContactIdentifiersForSupport(redacted);
@@ -392,7 +392,7 @@ export function sanitizeSupportSnapshotValue(
       count,
     );
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "<unsupported>";
   }
@@ -441,7 +441,7 @@ export function sanitizeSupportConfigValue(
       count,
     );
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "<unsupported>";
   }

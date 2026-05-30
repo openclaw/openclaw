@@ -17,7 +17,7 @@ function createMockSpawnChild() {
 }
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   const spawn = vi.fn(() => {
     const { child, stdout } = createMockSpawnChild();
     process.nextTick(() => {
@@ -46,12 +46,22 @@ vi.mock("node:child_process", async () => {
 
 const spawnMock = vi.mocked(spawn);
 
+function requireSpawnArgs(index: number): string[] {
+  const args = spawnMock.mock.calls[index]?.[1] as string[] | undefined;
+  if (!args) {
+    throw new Error("expected ssh spawn args");
+  }
+  return args;
+}
+
 let parseSshConfigOutput: typeof import("./ssh-config.js").parseSshConfigOutput;
 let resolveSshConfig: typeof import("./ssh-config.js").resolveSshConfig;
+let appendSshConfigOutput: typeof import("./ssh-config.js").appendSshConfigOutput;
 
 describe("ssh-config", () => {
   beforeAll(async () => {
-    ({ parseSshConfigOutput, resolveSshConfig } = await import("./ssh-config.js"));
+    ({ appendSshConfigOutput, parseSshConfigOutput, resolveSshConfig } =
+      await import("./ssh-config.js"));
   });
 
   it("parses ssh -G output", () => {
@@ -72,7 +82,12 @@ describe("ssh-config", () => {
     expect(parsed.user).toBe("bob");
     expect(parsed.host).toBe("example.com");
     expect(parsed.port).toBeUndefined();
-    expect(parsed.identityFiles).toEqual([]);
+    expect(parsed.identityFiles).toStrictEqual([]);
+  });
+
+  it("ignores partial and out-of-range ssh -G ports", () => {
+    expect(parseSshConfigOutput("hostname example.com\nport 2222abc\n").port).toBeUndefined();
+    expect(parseSshConfigOutput("hostname example.com\nport 70000\n").port).toBeUndefined();
   });
 
   it("resolves ssh config via ssh -G", async () => {
@@ -81,8 +96,7 @@ describe("ssh-config", () => {
     expect(config?.host).toBe("peters-mac-studio-1.sheep-coho.ts.net");
     expect(config?.port).toBe(2222);
     expect(config?.identityFiles).toEqual(["/tmp/id_ed25519"]);
-    const args = spawnMock.mock.calls[0]?.[1] as string[] | undefined;
-    expect(args?.slice(-2)).toEqual(["--", "me@alias"]);
+    expect(requireSpawnArgs(0).slice(-2)).toEqual(["--", "me@alias"]);
   });
 
   it("adds non-default port and trimmed identity arguments", async () => {
@@ -91,7 +105,7 @@ describe("ssh-config", () => {
       { identity: "  /tmp/custom_id  " },
     );
 
-    const args = spawnMock.mock.calls.at(-1)?.[1] as string[] | undefined;
+    const args = requireSpawnArgs(spawnMock.mock.calls.length - 1);
     expect(args).toEqual(["-G", "-p", "2022", "-i", "/tmp/custom_id", "--", "me@alias"]);
   });
 
@@ -122,5 +136,16 @@ describe("ssh-config", () => {
     );
 
     await expect(resolveSshConfig({ user: "me", host: "bad-host", port: 22 })).resolves.toBeNull();
+  });
+
+  it("rejects oversized ssh -G output while preserving the parser contract", () => {
+    expect(appendSshConfigOutput("user bob", "\nhostname example.com", 128)).toEqual({
+      ok: true,
+      value: "user bob\nhostname example.com",
+    });
+    expect(appendSshConfigOutput("x".repeat(8), "y".repeat(8), 12)).toEqual({
+      ok: false,
+      reason: "too-large",
+    });
   });
 });

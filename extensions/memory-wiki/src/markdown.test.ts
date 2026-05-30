@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createWikiPageFilename, slugifyWikiSegment } from "./markdown.js";
+import {
+  createWikiPageFilename,
+  renderWikiMarkdown,
+  slugifyWikiSegment,
+  toWikiPageSummary,
+} from "./markdown.js";
 
 describe("slugifyWikiSegment", () => {
   it("preserves Unicode letters and numbers in wiki slugs", () => {
@@ -36,7 +41,108 @@ describe("slugifyWikiSegment", () => {
     const fileName = createWikiPageFilename(stem);
 
     expect(fileName.endsWith(".md")).toBe(true);
-    expect(Buffer.byteLength(fileName)).toBeLessThanOrEqual(255);
+    expect(
+      Buffer.byteLength(`.${fileName}.00000000-0000-4000-8000-000000000000.fallback.tmp`),
+    ).toBeLessThanOrEqual(255);
     expect(createWikiPageFilename(stem)).toBe(fileName);
+  });
+});
+
+describe("toWikiPageSummary", () => {
+  it("normalizes agent-facing people wiki metadata", () => {
+    const raw = renderWikiMarkdown({
+      frontmatter: {
+        pageType: "entity",
+        entityType: "person",
+        id: "entity.brad",
+        title: "Brad Groux",
+        canonicalId: "maintainer.brad-groux",
+        aliases: ["brad", "bgroux"],
+        privacyTier: "local-private",
+        bestUsedFor: ["Microsoft ecosystem routing"],
+        notEnoughFor: ["legal approval"],
+        lastRefreshedAt: "2026-04-29T00:00:00.000Z",
+        personCard: {
+          handles: ["@bgroux"],
+          socials: ["https://x.example/bgroux"],
+          email: "brad@example.com",
+          timezone: "America/Chicago",
+          lane: "Microsoft Teams",
+          askFor: ["Teams and Azure questions"],
+          avoidAskingFor: ["unrelated billing"],
+          confidence: 0.8,
+          privacyTier: "confirm-before-use",
+          lastRefreshedAt: "2026-04-28T00:00:00.000Z",
+        },
+        relationships: [
+          {
+            targetId: "entity.alice",
+            targetTitle: "Alice",
+            kind: "collaborates-with",
+            weight: 0.7,
+            confidence: 0.6,
+            evidenceKind: "discrawl-stat",
+            privacyTier: "local-private",
+          },
+        ],
+        claims: [
+          {
+            id: "claim.brad.teams",
+            text: "Brad is useful for Microsoft Teams routing.",
+            confidence: 0.9,
+            evidence: [
+              {
+                kind: "maintainer-whois",
+                sourceId: "source.maintainers",
+                confidence: 0.8,
+                privacyTier: "local-private",
+              },
+            ],
+          },
+        ],
+      },
+      body: "# Brad Groux\n",
+    });
+
+    const summary = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/entities/brad.md",
+      relativePath: "entities/brad.md",
+      raw,
+    });
+    if (!summary) {
+      throw new Error("expected wiki summary");
+    }
+
+    expect(summary.entityType).toBe("person");
+    expect(summary.canonicalId).toBe("maintainer.brad-groux");
+    expect(summary.aliases).toEqual(["brad", "bgroux"]);
+    expect(summary.privacyTier).toBe("local-private");
+    expect(summary.bestUsedFor).toEqual(["Microsoft ecosystem routing"]);
+    expect(summary.notEnoughFor).toEqual(["legal approval"]);
+    expect(summary.lastRefreshedAt).toBe("2026-04-29T00:00:00.000Z");
+    expect(summary.personCard?.handles).toEqual(["@bgroux"]);
+    expect(summary.personCard?.emails).toEqual(["brad@example.com"]);
+    expect(summary.personCard?.lane).toBe("Microsoft Teams");
+    expect(summary.personCard?.privacyTier).toBe("confirm-before-use");
+    expect(summary.relationships).toEqual([
+      {
+        targetId: "entity.alice",
+        targetTitle: "Alice",
+        kind: "collaborates-with",
+        weight: 0.7,
+        confidence: 0.6,
+        evidenceKind: "discrawl-stat",
+        privacyTier: "local-private",
+      },
+    ]);
+    expect(summary.claims[0]?.id).toBe("claim.brad.teams");
+    expect(summary.claims[0]?.evidence).toEqual([
+      {
+        kind: "maintainer-whois",
+        sourceId: "source.maintainers",
+        confidence: 0.8,
+        privacyTier: "local-private",
+      },
+    ]);
   });
 });

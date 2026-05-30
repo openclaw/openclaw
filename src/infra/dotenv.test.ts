@@ -3,7 +3,31 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadCliDotEnv } from "../cli/dotenv.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import { loadDotEnv, loadWorkspaceDotEnvFile } from "./dotenv.js";
+
+const loggerMocks = vi.hoisted(() => ({
+  warn: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => loggerMocks),
+}));
+
+function requireFirstWarnCall(): [unknown, unknown] {
+  const [call] = loggerMocks.warn.mock.calls;
+  if (!call) {
+    throw new Error("expected logger warning");
+  }
+  return call as [unknown, unknown];
+}
 
 const CREDENTIAL_AND_GATEWAY_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
@@ -32,6 +56,21 @@ const BUNDLED_TRUST_ROOT_ENV_LINES = [
 const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
   (line) => line.split("=")[0] ?? "",
 );
+
+const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
+  "ComSpec",
+  "COMSPEC",
+  "LocalAppData",
+  "LOCALAPPDATA",
+  "ProgramFiles",
+  "PROGRAMFILES",
+  "ProgramW6432",
+  "PROGRAMW6432",
+  "SystemRoot",
+  "SYSTEMROOT",
+  "windir",
+  "WINDIR",
+] as const;
 
 async function writeEnvFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -76,6 +115,54 @@ type DotEnvFixture = {
   cwdDir: string;
   stateDir: string;
 };
+
+function emptyOwnerMaps(): PluginMetadataSnapshot["owners"] {
+  return {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  };
+}
+
+function createManifestBackedProviderSnapshot(
+  plugin: PluginManifestRecord,
+): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  return {
+    policyHash,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [plugin], diagnostics: [] },
+    plugins: [plugin],
+    diagnostics: [],
+    byPluginId: new Map([[plugin.id, plugin]]),
+    normalizePluginId: (pluginId: string) => pluginId,
+    owners: emptyOwnerMaps(),
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 1,
+    },
+  };
+}
 
 async function withDotEnvFixture(run: (fixture: DotEnvFixture) => Promise<void>) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
@@ -152,14 +239,18 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.FOO;
         delete process.env.BAR;
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        loggerMocks.warn.mockClear();
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("Conflicting values in"));
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.env"));
+        expect(loggerMocks.warn).toHaveBeenCalledOnce();
+        const [message, metadata] = requireFirstWarnCall();
+        expect(String(message)).toContain("Conflicting values in");
+        expect(String((metadata as { ignoredPath?: unknown } | undefined)?.ignoredPath)).toContain(
+          "gateway.env",
+        );
       });
     });
   });
@@ -176,12 +267,12 @@ describe("loadDotEnv", () => {
         );
 
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        loggerMocks.warn.mockClear();
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-shell");
-        expect(warn).not.toHaveBeenCalled();
+        expect(loggerMocks.warn).not.toHaveBeenCalled();
       });
     });
   });
@@ -194,14 +285,23 @@ describe("loadDotEnv", () => {
           [
             "SAFE_KEY=from-cwd",
             "NODE_OPTIONS=--require ./evil.js",
+            "NODE_REDIRECT_WARNINGS=./warnings.log",
+            "NODE_REPL_EXTERNAL_MODULE=./evil-repl.js",
+            "NODE_REPL_HISTORY=./repl-history",
+            "NODE_V8_COVERAGE=./coverage",
             "OPENCLAW_STATE_DIR=./evil-state",
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
+            "CLOUDSDK_PYTHON=./attacker-python",
             "EXAMPLE_API_HOST=https://evil-api.example.com",
             "MINIMAX_API_HOST=https://evil.example.com",
             "HTTP_PROXY=http://evil-proxy:8080",
+            "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
+            "HOMEBREW_PREFIX=./evil-brew",
+            "SystemRoot=.\\fake-root",
             "UV_PYTHON=./attacker-python",
             "uv_python=./attacker-python-lower",
+            "WINDIR=.\\fake-windir",
           ].join("\n"),
         );
         await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
@@ -209,27 +309,45 @@ describe("loadDotEnv", () => {
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
         delete process.env.SAFE_KEY;
         delete process.env.NODE_OPTIONS;
+        delete process.env.NODE_REDIRECT_WARNINGS;
+        delete process.env.NODE_REPL_EXTERNAL_MODULE;
+        delete process.env.NODE_REPL_HISTORY;
+        delete process.env.NODE_V8_COVERAGE;
         delete process.env.OPENCLAW_CONFIG_PATH;
         delete process.env.ANTHROPIC_BASE_URL;
+        delete process.env.CLOUDSDK_PYTHON;
         delete process.env.EXAMPLE_API_HOST;
         delete process.env.MINIMAX_API_HOST;
         delete process.env.HTTP_PROXY;
+        delete process.env.HOMEBREW_BREW_FILE;
+        delete process.env.HOMEBREW_PREFIX;
+        delete process.env.SystemRoot;
         delete process.env.UV_PYTHON;
         delete process.env.uv_python;
+        delete process.env.WINDIR;
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.SAFE_KEY).toBe("from-cwd");
         expect(process.env.BAR).toBe("from-global");
         expect(process.env.NODE_OPTIONS).toBeUndefined();
+        expect(process.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
+        expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+        expect(process.env.NODE_REPL_HISTORY).toBeUndefined();
+        expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+        expect(process.env.CLOUDSDK_PYTHON).toBeUndefined();
         expect(process.env.EXAMPLE_API_HOST).toBeUndefined();
         expect(process.env.MINIMAX_API_HOST).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
+        expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
+        expect(process.env.HOMEBREW_PREFIX).toBeUndefined();
+        expect(process.env.SystemRoot).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
         expect(process.env.uv_python).toBeUndefined();
+        expect(process.env.WINDIR).toBeUndefined();
       });
     });
   });
@@ -265,26 +383,62 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+  it("blocks state-directory controls from workspace .env even when unset in process env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
-          "OPENCLAW_STATE_DIR=./evil-state\nOPENCLAW_CONFIG_PATH=./evil-config.json\n",
+          [
+            "OPENCLAW_STATE_DIR=./evil-state",
+            "STATE_DIRECTORY=./evil-systemd-state",
+            "OPENCLAW_CONFIG_PATH=./evil-config.json",
+          ].join("\n"),
         );
 
         delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.STATE_DIRECTORY;
         delete process.env.OPENCLAW_CONFIG_PATH;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+        expect(process.env.STATE_DIRECTORY).toBeUndefined();
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
       });
     });
   });
 
-  it("blocks path-override vars (OPENCLAW_AGENT_DIR, OPENCLAW_BUNDLED_PLUGINS_DIR, PI_CODING_AGENT_DIR, OPENCLAW_OAUTH_DIR) from workspace .env", async () => {
+  it("blocks Windows shell trust-root vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "ComSpec=.\\evil-comspec",
+            "COMSPEC=.\\evil-comspec-upper",
+            "LocalAppData=.\\evil-local-app-data",
+            "LOCALAPPDATA=.\\evil-local-app-data-upper",
+            "ProgramFiles=.\\evil-pfiles",
+            "PROGRAMFILES=.\\evil-pfiles-upper",
+            "ProgramW6432=.\\evil-pw6432",
+            "PROGRAMW6432=.\\evil-pw6432-upper",
+            "SystemRoot=.\\fake-root",
+            "SYSTEMROOT=.\\fake-root-upper",
+            "windir=.\\fake-windir",
+            "WINDIR=.\\fake-windir-upper",
+          ].join("\n"),
+        );
+
+        clearEnv(WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS);
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expectEnvUndefined(WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS);
+      });
+    });
+  });
+
+  it("blocks path-override vars from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const bundledPluginsDir = path.join(base, "attacker-bundled");
@@ -293,22 +447,22 @@ describe("loadDotEnv", () => {
           [
             "OPENCLAW_AGENT_DIR=./evil-agent",
             `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
-            "PI_CODING_AGENT_DIR=./evil-coding",
             "OPENCLAW_OAUTH_DIR=./evil-oauth",
+            "PI_CODING_AGENT_DIR=./evil-pi-agent",
           ].join("\n"),
         );
 
         delete process.env.OPENCLAW_AGENT_DIR;
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-        delete process.env.PI_CODING_AGENT_DIR;
         delete process.env.OPENCLAW_OAUTH_DIR;
+        delete process.env.PI_CODING_AGENT_DIR;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
-        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
+        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
       });
     });
   });
@@ -326,6 +480,28 @@ describe("loadDotEnv", () => {
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_TEST_TAILSCALE_BINARY).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks plugin install override vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1",
+            'OPENCLAW_PLUGIN_INSTALL_OVERRIDES={"codex":"npm-pack:/tmp/codex.tgz"}',
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES;
+        delete process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES).toBeUndefined();
+        expect(process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES).toBeUndefined();
       });
     });
   });
@@ -362,6 +538,20 @@ describe("loadDotEnv", () => {
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expectEnvUndefined(BUNDLED_TRUST_ROOT_ENV_KEYS);
+      });
+    });
+  });
+
+  it.each(["npm_execpath", "NPM_EXECPATH"])("blocks %s from workspace .env", async (key) => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(path.join(cwdDir, ".env"), `${key}=./evil/npm-cli.js\n`);
+
+        delete process.env[key];
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env[key]).toBeUndefined();
       });
     });
   });
@@ -569,6 +759,10 @@ describe("loadCliDotEnv", () => {
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "NODE_OPTIONS=--require ./evil.js",
+            "NODE_REDIRECT_WARNINGS=./warnings.log",
+            "NODE_REPL_EXTERNAL_MODULE=./evil-repl.js",
+            "NODE_REPL_HISTORY=./repl-history",
+            "NODE_V8_COVERAGE=./coverage",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
             "UV_PYTHON=./attacker-python",
             "uv_python=./attacker-python-lower",
@@ -581,6 +775,10 @@ describe("loadCliDotEnv", () => {
         delete process.env.OPENCLAW_CONFIG_PATH;
         delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
         delete process.env.NODE_OPTIONS;
+        delete process.env.NODE_REDIRECT_WARNINGS;
+        delete process.env.NODE_REPL_EXTERNAL_MODULE;
+        delete process.env.NODE_REPL_HISTORY;
+        delete process.env.NODE_V8_COVERAGE;
         delete process.env.ANTHROPIC_BASE_URL;
         delete process.env.UV_PYTHON;
         delete process.env.uv_python;
@@ -594,6 +792,10 @@ describe("loadCliDotEnv", () => {
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
         expect(process.env.NODE_OPTIONS).toBeUndefined();
+        expect(process.env.NODE_REDIRECT_WARNINGS).toBeUndefined();
+        expect(process.env.NODE_REPL_EXTERNAL_MODULE).toBeUndefined();
+        expect(process.env.NODE_REPL_HISTORY).toBeUndefined();
+        expect(process.env.NODE_V8_COVERAGE).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
         expect(process.env.uv_python).toBeUndefined();
@@ -603,6 +805,78 @@ describe("loadCliDotEnv", () => {
 });
 
 describe("workspace .env blocklist completeness", () => {
+  it("keeps trusted global dotenv for global plugin provider auth vars", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        const plugin: PluginManifestRecord = {
+          id: "runtime-cloud",
+          channels: [],
+          providers: ["runtime-cloud"],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "global",
+          rootDir: "/plugins/runtime-cloud",
+          source: "/plugins/runtime-cloud/index.js",
+          manifestPath: "/plugins/runtime-cloud/openclaw.plugin.json",
+          providerAuthEnvVars: {
+            "runtime-cloud": ["RUNTIME_CLOUD_API_KEY"],
+          },
+        };
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          "RUNTIME_CLOUD_API_KEY=workspace-plugin-key\n",
+        );
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          "RUNTIME_CLOUD_API_KEY=global-plugin-key\n",
+        );
+
+        delete process.env.RUNTIME_CLOUD_API_KEY;
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+        setCurrentPluginMetadataSnapshot(createManifestBackedProviderSnapshot(plugin), {
+          config: {},
+          env: process.env,
+        });
+
+        try {
+          loadDotEnv({ quiet: true });
+
+          expect(process.env.RUNTIME_CLOUD_API_KEY).toBe("global-plugin-key");
+        } finally {
+          clearCurrentPluginMetadataSnapshot();
+        }
+      });
+    });
+  });
+
+  it("keeps registered provider auth vars from trusted global dotenv", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
+        const providerAuthKeys = listKnownProviderAuthEnvVarNames().toSorted();
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          `${providerAuthKeys.map((key) => `${key}=workspace-${key}`).join("\n")}\n`,
+        );
+        await writeEnvFile(
+          path.join(stateDir, ".env"),
+          `${providerAuthKeys.map((key) => `${key}=global-${key}`).join("\n")}\n`,
+        );
+
+        clearEnv(providerAuthKeys);
+        vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
+
+        loadDotEnv({ quiet: true });
+
+        for (const key of providerAuthKeys) {
+          expect(process.env[key], `${key} should come from trusted global .env`).toBe(
+            `global-${key}`,
+          );
+        }
+      });
+    });
+  });
+
   it("blocks runtime-control variables from workspace .env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
@@ -624,7 +898,10 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
           "OPENCLAW_BROWSER_EXECUTABLE_PATH",
           "EXAMPLE_API_HOST",
+          "HOMEBREW_BREW_FILE",
+          "HOMEBREW_PREFIX",
           "IRC_HOST",
+          "LOCALAPPDATA",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
@@ -646,6 +923,15 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_NODE_EXEC_HOST",
           "OPENCLAW_NODE_EXEC_FALLBACK",
           "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+          "PATH",
+          "HOMEBREW_BREW_FILE",
+          "HOMEBREW_PREFIX",
+          "SystemRoot",
+          "WINDIR",
+          "ProgramFiles",
+          "ProgramFiles(x86)",
+          "ProgramW6432",
+          "STATE_DIRECTORY",
           "SYNOLOGY_CHAT_INCOMING_URL",
           "SYNOLOGY_NAS_HOST",
         ];

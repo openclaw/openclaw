@@ -1,7 +1,15 @@
 {
   "id": "gradium",
-  "providerAuthEnvVars": {
-    "gradium": ["GRADIUM_API_KEY"]
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "gradium",
+        "envVars": ["GRADIUM_API_KEY"]
+      }
+    ]
   },
   "contracts": {
     "speechProviders": ["gradium"]

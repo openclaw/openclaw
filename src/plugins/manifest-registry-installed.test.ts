@@ -7,16 +7,16 @@ import {
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
-  clearInstalledManifestRegistryCache,
   loadPluginManifestRegistryForInstalledIndex,
+  resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
-  clearInstalledManifestRegistryCache();
-  vi.restoreAllMocks();
+  clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -75,34 +75,147 @@ function createIndex(rootDir: string): InstalledPluginIndex {
   };
 }
 
+function fileSignature(filePath: string) {
+  const stat = fs.statSync(filePath);
+  return {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  };
+}
+
+function createIndexWithFileSignatures(rootDir: string): InstalledPluginIndex {
+  const index = createIndex(rootDir);
+  return {
+    ...index,
+    plugins: index.plugins.map((record) => {
+      record.manifestFile = fileSignature(record.manifestPath);
+      return record;
+    }),
+  };
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const object = value as object;
+  if (seen.has(object)) {
+    return value;
+  }
+  seen.add(object);
+  for (const child of Object.values(value)) {
+    deepFreeze(child, seen);
+  }
+  return Object.freeze(value);
+}
+
+function writePackageManifest(rootDir: string, channelLabel: string) {
+  const packageJsonPath = path.join(rootDir, "package.json");
+  fs.writeFileSync(
+    packageJsonPath,
+    JSON.stringify({
+      name: "@openclaw/installed",
+      version: "1.0.0",
+      dependencies: {
+        "runtime-dep": "1.0.0",
+      },
+      openclaw: {
+        channel: {
+          id: "installed",
+          label: channelLabel,
+        },
+      },
+    }),
+    "utf8",
+  );
+  return packageJsonPath;
+}
+
+function createIndexWithPackageJson(rootDir: string): InstalledPluginIndex {
+  const index = createIndexWithFileSignatures(rootDir);
+  const packageJsonPath = writePackageManifest(rootDir, "Installed");
+  const record = index.plugins[0];
+  if (!record) {
+    throw new Error("expected index record");
+  }
+  record.packageJson = {
+    path: "package.json",
+    hash: "package-json-hash",
+    fileSignature: fileSignature(packageJsonPath),
+  };
+  return {
+    ...index,
+    plugins: [record],
+  };
+}
+
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
-  it("reuses installed-index manifest registries for identical runtime lookups", () => {
+  it("reuses frozen installed-index fingerprints when file signatures are persisted", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
-    const index = createIndex(rootDir);
-    const readFileSync = vi.spyOn(fs, "readFileSync");
-    const env = {
-      OPENCLAW_VERSION: "2026.4.25",
-      VITEST: "true",
-    };
-
-    const first = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
-    const readsAfterFirstLoad = readFileSync.mock.calls.length;
-    const second = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
+    const index = deepFreeze(createIndexWithFileSignatures(rootDir));
+    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    const nextMtime = new Date(Date.now() + 5000);
+    fs.utimesSync(manifestPath, nextMtime, nextMtime);
+    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
 
     expect(second).toBe(first);
-    expect(readFileSync.mock.calls.length).toBe(readsAfterFirstLoad);
   });
 
-  it("refreshes the installed-index manifest registry cache when manifest files change", () => {
+  it("recomputes installed-index fingerprints for mutable index objects", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithFileSignatures(rootDir);
+    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
+    const record = index.plugins[0];
+    if (!record) {
+      throw new Error("expected index record");
+    }
+    record.manifestHash = "changed";
+    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    expect(second).not.toBe(first);
+  });
+
+  it("does not cache shallow-frozen installed-index fingerprints with mutable nested records", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithFileSignatures(rootDir);
+    const record = index.plugins[0];
+    if (!record) {
+      throw new Error("expected index record");
+    }
+    Object.freeze(index.installRecords);
+    Object.freeze(index.diagnostics);
+    Object.freeze(record);
+    Object.freeze(index.plugins);
+    Object.freeze(index);
+    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    const agentHarnesses = record.startup.agentHarnesses as string[];
+    agentHarnesses.push("changed");
+    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    expect(second).not.toBe(first);
+  });
+
+  it("does not cache frozen installed-index fingerprints that depend on live file state", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = deepFreeze(createIndex(rootDir));
+    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    const nextMtime = new Date(Date.now() + 5000);
+    fs.utimesSync(manifestPath, nextMtime, nextMtime);
+    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    expect(second).not.toBe(first);
+  });
+
+  it("reconstructs installed-index manifest registries when manifest files change", () => {
     const rootDir = makeTempDir();
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
     writePlugin(rootDir, "installed", "installed-");
@@ -137,13 +250,11 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
-  it("bypasses the installed-index manifest registry cache when disabled", () => {
+  it("reuses installed package metadata until plugin metadata caches are cleared", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
-    const index = createIndex(rootDir);
-    const readFileSync = vi.spyOn(fs, "readFileSync");
+    const index = createIndexWithPackageJson(rootDir);
     const env = {
-      OPENCLAW_DISABLE_INSTALLED_PLUGIN_MANIFEST_REGISTRY_CACHE: "1",
       OPENCLAW_VERSION: "2026.4.25",
       VITEST: "true",
     };
@@ -153,15 +264,58 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       env,
       includeDisabled: true,
     });
-    const readsAfterFirstLoad = readFileSync.mock.calls.length;
+    writePackageManifest(rootDir, "Updated");
     const second = loadPluginManifestRegistryForInstalledIndex({
       index,
       env,
       includeDisabled: true,
     });
+    clearPluginMetadataLifecycleCaches();
+    const third = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
 
-    expect(second).not.toBe(first);
-    expect(readFileSync.mock.calls.length).toBeGreaterThan(readsAfterFirstLoad);
+    expect(first.plugins[0]?.packageChannel?.label).toBe("Installed");
+    expect(second.plugins[0]?.packageChannel?.label).toBe("Installed");
+    expect(third.plugins[0]?.packageChannel?.label).toBe("Updated");
+    expect(third.plugins[0]?.packageDependencies).toEqual({
+      "runtime-dep": "1.0.0",
+    });
+  });
+
+  it("reuses installed package json path validation across registry loads", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithPackageJson(rootDir);
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+    let packagePathCalls: unknown[][] = [];
+    try {
+      loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env,
+        includeDisabled: true,
+      });
+      const packageJsonPath = path.join(rootDir, "package.json");
+      packagePathCalls = realpathSpy.mock.calls.filter(
+        ([filePath]) => filePath === packageJsonPath,
+      );
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(packagePathCalls).toStrictEqual([]);
   });
 
   it("loads manifest metadata only for plugins present in the installed index", () => {
@@ -173,8 +327,6 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     const registry = loadPluginManifestRegistryForInstalledIndex({
       index: createIndex(installedRoot),
       env: {
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },
@@ -216,23 +368,18 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ],
       },
       env: {
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },
       includeDisabled: true,
     });
 
-    expect(registry.diagnostics).toEqual([]);
-    expect(registry.plugins).toEqual([
-      expect.objectContaining({
-        id: "claude-bundle",
-        format: "bundle",
-        bundleFormat: "claude",
-        skills: ["commands"],
-      }),
-    ]);
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.id).toBe("claude-bundle");
+    expect(registry.plugins[0]?.format).toBe("bundle");
+    expect(registry.plugins[0]?.bundleFormat).toBe("claude");
+    expect(registry.plugins[0]?.skills).toEqual(["commands"]);
   });
 
   it("hydrates package channel command metadata while reconstructing from an older index", () => {
@@ -274,8 +421,6 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ],
       },
       env: {
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },
@@ -286,6 +431,139 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: false,
     });
+  });
+
+  it("hydrates package metadata from dot-prefixed package directories", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    fs.mkdirSync(path.join(rootDir, "..meta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, "..meta", "package.json"),
+      JSON.stringify({
+        openclaw: {
+          channel: {
+            id: "installed",
+            label: "Installed",
+            commands: {
+              nativeCommandsAutoEnabled: true,
+              nativeSkillsAutoEnabled: false,
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageJson: {
+              path: "..meta/package.json",
+              hash: "old-index-hash",
+            },
+          },
+        ],
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
+      nativeCommandsAutoEnabled: true,
+      nativeSkillsAutoEnabled: false,
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not hydrate package metadata through a symlink outside the plugin root",
+    () => {
+      const rootDir = makeTempDir();
+      const outsideDir = makeTempDir();
+      const packageJsonPath = path.join(rootDir, "package.json");
+      const outsidePackageJsonPath = path.join(outsideDir, "package.json");
+      writePlugin(rootDir, "installed", "installed-");
+      fs.writeFileSync(
+        outsidePackageJsonPath,
+        JSON.stringify({
+          openclaw: {
+            channel: {
+              id: "installed",
+              label: "Installed",
+              commands: {
+                nativeCommandsAutoEnabled: true,
+                nativeSkillsAutoEnabled: false,
+              },
+            },
+          },
+        }),
+        "utf8",
+      );
+      fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
+
+      const index = createIndex(rootDir);
+      const registry = loadPluginManifestRegistryForInstalledIndex({
+        index: {
+          ...index,
+          plugins: [
+            {
+              ...index.plugins[0],
+              packageJson: {
+                path: "package.json",
+                hash: "old-index-hash",
+              },
+            },
+          ],
+        },
+        env: {
+          OPENCLAW_VERSION: "2026.4.25",
+          VITEST: "true",
+        },
+        includeDisabled: true,
+      });
+
+      expect(registry.plugins[0]?.channelCatalogMeta?.commands).toBeUndefined();
+    },
+  );
+
+  it("ignores malformed persisted package channel metadata", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageChannel: {
+              id: ["installed"],
+              label: 12,
+              blurb: { text: "bad" },
+              preferOver: "legacy",
+              commands: {
+                nativeCommandsAutoEnabled: "yes",
+              },
+            },
+          },
+        ],
+      } as unknown as InstalledPluginIndex,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.packageManifest).toBeUndefined();
+    expect(registry.plugins[0]?.channelCatalogMeta).toBeUndefined();
   });
 
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
@@ -303,20 +581,19 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     );
 
     const index = createIndex(rootDir);
+    const persistedPlugin = {
+      ...index.plugins[0],
+      pluginId: "claude-bundle",
+      manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
+      source: rootDir,
+      format: "bundle" as const,
+      bundleFormat: "claude" as const,
+      setupSource: path.join(rootDir, "setup-api.js"),
+    };
     await writePersistedInstalledPluginIndex(
       {
         ...index,
-        plugins: [
-          {
-            ...index.plugins[0],
-            pluginId: "claude-bundle",
-            manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
-            source: rootDir,
-            format: "bundle",
-            bundleFormat: "claude",
-            setupSource: path.join(rootDir, "setup-api.js"),
-          },
-        ],
+        plugins: [persistedPlugin],
       },
       { stateDir },
     );
@@ -325,35 +602,23 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     if (!persisted) {
       throw new Error("expected persisted installed plugin index");
     }
-    expect(persisted?.plugins[0]).toMatchObject({
-      pluginId: "claude-bundle",
-      source: rootDir,
-      format: "bundle",
-      bundleFormat: "claude",
-      setupSource: path.join(rootDir, "setup-api.js"),
-      rootDir,
-    });
+    expect(persisted.plugins[0]).toEqual(persistedPlugin);
 
     const registry = loadPluginManifestRegistryForInstalledIndex({
       index: persisted,
       env: {
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },
       includeDisabled: true,
     });
 
-    expect(registry.diagnostics).toEqual([]);
-    expect(registry.plugins).toEqual([
-      expect.objectContaining({
-        id: "claude-bundle",
-        format: "bundle",
-        bundleFormat: "claude",
-        rootDir,
-        skills: ["commands"],
-      }),
-    ]);
+    expect(registry.diagnostics).toStrictEqual([]);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.id).toBe("claude-bundle");
+    expect(registry.plugins[0]?.format).toBe("bundle");
+    expect(registry.plugins[0]?.bundleFormat).toBe("claude");
+    expect(registry.plugins[0]?.rootDir).toBe(rootDir);
+    expect(registry.plugins[0]?.skills).toEqual(["commands"]);
   });
 });

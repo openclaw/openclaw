@@ -1,7 +1,13 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  appendQaChildOutputTail,
+  createQaChildOutputTail,
+  formatQaChildOutputTail,
+} from "./child-output.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import type {
@@ -10,6 +16,10 @@ import type {
   QaSuiteRuntimeEnv,
   QaTransportActionName,
 } from "./suite-runtime-types.js";
+
+const requireFromHere = createRequire(import.meta.url);
+const MCP_STDERR_TAIL_LIMIT = 8_192;
+const MCP_REQUEST_TIMEOUT_MS = 180_000;
 
 function findSkill(skills: QaSkillStatusEntry[], name: string) {
   return skills.find((skill) => skill.name === name);
@@ -28,7 +38,7 @@ async function writeWorkspaceSkill(params: {
 }
 
 async function callPluginToolsMcp(params: {
-  env: Pick<QaSuiteRuntimeEnv, "gateway">;
+  env: Pick<QaSuiteRuntimeEnv, "gateway" | "repoRoot">;
   toolName: string;
   args: Record<string, unknown>;
 }) {
@@ -40,22 +50,52 @@ async function callPluginToolsMcp(params: {
   const nodeExecPath = await resolveQaNodeExecPath();
   const transport = new StdioClientTransport({
     command: nodeExecPath,
-    args: ["--import", "tsx", "src/mcp/plugin-tools-serve.ts"],
+    args: [
+      "--import",
+      requireFromHere.resolve("tsx"),
+      path.join(params.env.repoRoot, "src/mcp/plugin-tools-serve.ts"),
+    ],
     stderr: "pipe",
+    cwd: params.env.gateway.tempRoot,
     env: transportEnv,
   });
+  const stderrTail = createQaChildOutputTail(MCP_STDERR_TAIL_LIMIT);
+  const stderr = transport.stderr;
+  if (stderr && typeof stderr.on === "function") {
+    stderr.on("data", (chunk: unknown) => {
+      appendQaChildOutputTail(stderrTail, chunk);
+    });
+  }
   const client = new Client({ name: "openclaw-qa-suite", version: "0.0.0" }, {});
   try {
-    await client.connect(transport);
-    const listed = await client.listTools();
+    await client.connect(transport, { timeout: MCP_REQUEST_TIMEOUT_MS });
+    const listed = await client.listTools({}, { timeout: MCP_REQUEST_TIMEOUT_MS });
     const tool = listed.tools.find((entry) => entry.name === params.toolName);
     if (!tool) {
-      throw new Error(`MCP tool missing: ${params.toolName}`);
+      const availableTools = listed.tools
+        .map((entry) => entry.name)
+        .filter((name): name is string => typeof name === "string" && name.length > 0)
+        .toSorted();
+      throw new Error(
+        `MCP tool missing: ${params.toolName}; available tools: ${availableTools.join(", ") || "<none>"}`,
+      );
     }
-    return await client.callTool({
-      name: params.toolName,
-      arguments: params.args,
-    });
+    try {
+      return await client.callTool(
+        {
+          name: params.toolName,
+          arguments: params.args,
+        },
+        undefined,
+        { timeout: MCP_REQUEST_TIMEOUT_MS },
+      );
+    } catch (error) {
+      const tail = formatQaChildOutputTail(stderrTail, "MCP stderr").trim();
+      if (!tail || !(error instanceof Error)) {
+        throw error;
+      }
+      throw new Error(`${error.message}\nMCP stderr tail:\n${tail}`, { cause: error });
+    }
   } finally {
     await client.close().catch(() => {});
   }

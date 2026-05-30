@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
-import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  ensureDeviceToken,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
@@ -14,6 +18,7 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("handleControlUiHttpRequest", () => {
@@ -31,13 +36,26 @@ describe("handleControlUiHttpRequest", () => {
   }
 
   function parseBootstrapPayload(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
-    return JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+    return JSON.parse(responseBody(end)) as {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
       assistantAgentId: string;
       localMediaPreviewRoots?: string[];
+      chatMessageMaxWidth?: string;
     };
+  }
+
+  function responseBody(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
+    return String(end.mock.calls[0]?.[0] ?? "");
+  }
+
+  function responseJson(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
+    return JSON.parse(responseBody(end)) as unknown;
+  }
+
+  function firstEndCallLength(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
+    return end.mock.calls[0]?.length ?? -1;
   }
 
   function expectNotFoundResponse(params: {
@@ -213,7 +231,7 @@ describe("handleControlUiHttpRequest", () => {
   }) {
     expect(params.handled).toBe(true);
     expect(params.res.statusCode).toBe(403);
-    expect(JSON.parse(String(params.end.mock.calls[0]?.[0] ?? ""))).toMatchObject({
+    expect(responseJson(params.end)).toEqual({
       ok: false,
       error: {
         type: "forbidden",
@@ -266,7 +284,11 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
-  async function withPairedOperatorDeviceToken<T>(params: { fn: (token: string) => Promise<T> }) {
+  async function withPairedOperatorDeviceToken<T>(params: {
+    issuerGeneration?: string;
+    browserMetadata?: boolean;
+    fn: (token: string) => Promise<T>;
+  }) {
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-device-token-"));
     vi.stubEnv("OPENCLAW_HOME", tempHome);
     try {
@@ -276,15 +298,31 @@ describe("handleControlUiHttpRequest", () => {
         publicKey: "test-public-key",
         role: "operator",
         scopes: ["operator.read"],
-        clientId: "openclaw-control-ui",
-        clientMode: "webchat",
+        ...(params.browserMetadata
+          ? {
+              clientId: "openclaw-control-ui",
+              clientMode: "webchat",
+            }
+          : {}),
       });
       const approved = await approveDevicePairing(requested.request.requestId, {
         callerScopes: ["operator.read"],
       });
       expect(approved?.status).toBe("approved");
-      const operatorToken =
+      let operatorToken =
         approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      if (params.issuerGeneration) {
+        const issued = await ensureDeviceToken({
+          deviceId,
+          role: "operator",
+          scopes: ["operator.read"],
+          issuer: {
+            kind: "shared-gateway-auth",
+            generation: params.issuerGeneration,
+          },
+        });
+        operatorToken = issued?.token;
+      }
       expect(typeof operatorToken).toBe("string");
       return await params.fn(operatorToken ?? "");
     } finally {
@@ -310,6 +348,10 @@ describe("handleControlUiHttpRequest", () => {
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
+        expect(String(csp)).toContain(
+          "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
+        );
+        expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
       },
     });
@@ -367,7 +409,14 @@ describe("handleControlUiHttpRequest", () => {
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({ available: true });
+      const payload = responseJson(end) as {
+        available?: boolean;
+        mediaTicket?: string;
+        mediaTicketExpiresAt?: string;
+      };
+      expect(payload.available).toBe(true);
+      expect(payload.mediaTicket).toMatch(/^v1\./);
+      expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -402,7 +451,94 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({ available: true });
+        const payload = responseJson(end) as {
+          available?: boolean;
+          mediaTicket?: string;
+          mediaTicketExpiresAt?: string;
+        };
+        expect(payload.available).toBe(true);
+        expect(payload.mediaTicket).toMatch(/^v1\./);
+        expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
+      },
+    });
+  });
+
+  it("serves assistant local media with a scoped media ticket after metadata auth", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-ticket-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const meta = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            authorization: "Bearer test-token",
+          },
+        });
+        const payload = responseJson(meta.end) as {
+          mediaTicket?: string;
+        };
+        expect(meta.handled).toBe(true);
+        expect(meta.res.statusCode).toBe(200);
+        expect(payload.mediaTicket).toMatch(/^v1\./);
+
+        const media = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(media.handled).toBe(true);
+        expect(media.res.statusCode).toBe(200);
+      },
+    });
+  });
+
+  it("does not refresh assistant media tickets without operator auth", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-ticket-refresh-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const meta = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: {
+            authorization: "Bearer test-token",
+          },
+        });
+        const payload = responseJson(meta.end) as {
+          mediaTicket?: string;
+        };
+
+        const refresh = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&mediaTicket=${encodeURIComponent(payload.mediaTicket ?? "")}`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(refresh.handled).toBe(true);
+        expect(refresh.res.statusCode).toBe(401);
+        expect(responseBody(refresh.end)).toContain("Unauthorized");
+      },
+    });
+  });
+
+  it("rejects assistant local media with an invalid scoped media ticket", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-ticket-invalid-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, "photo.png");
+        await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&mediaTicket=v1.invalid.invalid`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(401);
+        expect(responseBody(end)).toContain("Unauthorized");
       },
     });
   });
@@ -415,7 +551,7 @@ describe("handleControlUiHttpRequest", () => {
     });
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(responseJson(end)).toEqual({
       available: false,
       code: "outside-allowed-folders",
       reason: "Outside allowed folders",
@@ -435,7 +571,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(responseBody(end)).toContain("Unauthorized");
       },
     });
   });
@@ -452,6 +588,39 @@ describe("handleControlUiHttpRequest", () => {
               url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
               method: "GET",
               auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: {
+                authorization: `Bearer ${operatorToken}`,
+              },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+          },
+        });
+      },
+    });
+  });
+
+  it("accepts shared-gateway issuer tagged device tokens on assistant media requests", async () => {
+    const auth = {
+      mode: "token",
+      token: "shared-token",
+      allowTailscale: false,
+    } satisfies ResolvedGatewayAuth;
+    const issuerGeneration = resolveSharedGatewaySessionGeneration(auth);
+    expect(typeof issuerGeneration).toBe("string");
+    await withPairedOperatorDeviceToken({
+      issuerGeneration,
+      browserMetadata: true,
+      fn: async (operatorToken) => {
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-issued-device-token-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "photo.png");
+            await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+            const { res, handled } = await runAssistantMediaRequest({
+              url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+              method: "GET",
+              auth,
               headers: {
                 authorization: `Bearer ${operatorToken}`,
               },
@@ -499,7 +668,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(responseBody(end)).toContain("Unauthorized");
       },
     });
   });
@@ -594,6 +763,7 @@ describe("handleControlUiHttpRequest", () => {
             root: { kind: "resolved", path: tmp },
             config: {
               agents: { defaults: { workspace: tmp } },
+              gateway: { controlUi: { chatMessageMaxWidth: "min(1280px, 82%)" } },
               ui: { assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" } },
             },
           },
@@ -604,6 +774,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantName).toBe("</script><script>alert(1)//");
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
+        expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
@@ -618,7 +789,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(responseBody(end)).toContain("Unauthorized");
       },
     });
   });
@@ -704,7 +875,7 @@ describe("handleControlUiHttpRequest", () => {
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+      expect(responseBody(end)).toBe("avatar-bytes\n");
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
@@ -775,7 +946,7 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled).toBe(true);
           expect(res.statusCode).toBe(200);
-          expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+          expect(responseBody(end)).toBe("avatar-bytes\n");
         } finally {
           await fs.rm(tmp, { recursive: true, force: true });
         }
@@ -800,7 +971,7 @@ describe("handleControlUiHttpRequest", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(responseJson(end)).toEqual({
       avatarUrl: "https://example.com/avatar.png",
       avatarSource: "remote URL",
       avatarStatus: "remote",
@@ -821,7 +992,7 @@ describe("handleControlUiHttpRequest", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(responseJson(end)).toEqual({
       avatarUrl: null,
       avatarSource: null,
       avatarStatus: "none",
@@ -839,7 +1010,7 @@ describe("handleControlUiHttpRequest", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(401);
-    expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+    expect(responseBody(end)).toContain("Unauthorized");
   });
 
   it("rejects trusted-proxy avatar metadata requests without operator.read scope", async () => {
@@ -894,7 +1065,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("inside-ok\n");
+        expect(responseBody(end)).toBe("inside-ok\n");
       },
     });
   });
@@ -912,7 +1083,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(end.mock.calls[0]?.length ?? -1).toBe(0);
+        expect(firstEndCallLength(end)).toBe(0);
       },
     });
   });
@@ -995,7 +1166,36 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
+        expect(responseBody(end)).toBe("console.log('hi');");
+      },
+    });
+  });
+
+  it("serves public root assets under the internal namespace when the SPA is routed there", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await fs.writeFile(path.join(tmp, "favicon.svg"), "<svg/>");
+        await fs.writeFile(path.join(tmp, "manifest.webmanifest"), "{}");
+        await fs.writeFile(path.join(tmp, "apple-touch-icon.png"), "png-bytes");
+        await fs.writeFile(path.join(tmp, "sw.js"), "self.addEventListener('push', () => {});");
+
+        for (const [url, expectedType] of [
+          ["/__openclaw__/favicon.svg", "image/svg+xml"],
+          ["/__openclaw__/manifest.webmanifest", "application/manifest+json; charset=utf-8"],
+          ["/__openclaw__/apple-touch-icon.png", "image/png"],
+          ["/__openclaw__/sw.js", "application/javascript; charset=utf-8"],
+        ] as const) {
+          const { res, end, handled } = await runControlUiRequest({
+            url,
+            method: "GET",
+            rootPath: tmp,
+          });
+
+          expect(handled, `expected ${url} to be handled`).toBe(true);
+          expect(res.statusCode, `expected ${url} to be served`).toBe(200);
+          expect(res.setHeader).toHaveBeenCalledWith("Content-Type", expectedType);
+          expect(end, `expected ${url} to write a body`).toHaveBeenCalled();
+        }
       },
     });
   });
@@ -1003,7 +1203,7 @@ describe("handleControlUiHttpRequest", () => {
   it("does not handle POST to root-mounted paths (plugin webhook passthrough)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        for (const webhookPath of ["/bluebubbles-webhook", "/custom-webhook", "/callback"]) {
+        for (const webhookPath of ["/imessage-webhook", "/custom-webhook", "/callback"]) {
           const { res } = makeMockHttpResponse();
           const handled = await handleControlUiHttpRequest(
             { url: webhookPath, method: "POST" } as IncomingMessage,
@@ -1023,7 +1223,7 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
-          { url: "/bluebubbles-webhook", method: "POST" } as IncomingMessage,
+          { url: "/imessage-webhook", method: "POST" } as IncomingMessage,
           res,
           { basePath: "/openclaw", root: { kind: "resolved", path: tmp } },
         );
@@ -1066,7 +1266,7 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { handled, end } = await runControlUiRequest({
-          url: "/webhook/bluebubbles",
+          url: "/webhook/imessage",
           method: "POST",
           rootPath: tmp,
         });

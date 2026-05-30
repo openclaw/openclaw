@@ -107,6 +107,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("../mcp-cli.js"),
         exportName: "registerMcpCli",
       },
+      {
+        commandNames: ["transcripts"],
+        loadModule: () => import("./register.transcripts.js"),
+        exportName: "registerTranscriptsCli",
+      },
     ]),
   ),
   defineImportedCommandGroupSpec(
@@ -121,7 +126,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
   ...withProgramOnlySpecs(
     defineImportedProgramCommandGroupSpecs([
       {
-        commandNames: ["status", "health", "sessions", "tasks"],
+        commandNames: ["status", "health", "sessions", "commitments", "tasks"],
         loadModule: () => import("./register.status-health-sessions.js"),
         exportName: "registerStatusHealthSessionsCommands",
       },

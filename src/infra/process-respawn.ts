@@ -1,19 +1,23 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectRespawnSupervisor } from "./supervisor-markers.js";
 
 type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
 
-export type GatewayRespawnResult = {
+type GatewayRespawnResult = {
   mode: RespawnMode;
   pid?: number;
   detail?: string;
 };
 
-export type GatewayUpdateRespawnResult = GatewayRespawnResult & {
+type GatewayUpdateRespawnResult = GatewayRespawnResult & {
   child?: ChildProcess;
+};
+type GatewayRespawnOptions = {
+  env?: NodeJS.ProcessEnv;
 };
 
 function isTruthy(value: string | undefined): boolean {
@@ -21,10 +25,13 @@ function isTruthy(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-function spawnDetachedGatewayProcess(): { child: ChildProcess; pid?: number } {
+function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
+  child: ChildProcess;
+  pid?: number;
+} {
   const args = [...process.execArgv, ...process.argv.slice(1)];
   const child = spawn(process.execPath, args, {
-    env: process.env,
+    env: opts.env ? { ...process.env, ...opts.env } : process.env,
     detached: true,
     stdio: "inherit",
   });
@@ -36,9 +43,12 @@ function spawnDetachedGatewayProcess(): { child: ChildProcess; pid?: number } {
  * Attempt to restart this process with a fresh PID.
  * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
  * - OPENCLAW_NO_RESPAWN=1: caller should keep in-process restart behavior (tests/dev)
- * - otherwise: spawn detached child with current argv/execArgv, then caller exits
+ * - unmanaged environments: caller should keep in-process restart behavior so
+ *   custom supervisors keep tracking the same gateway PID
  */
-export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
+export function restartGatewayProcessWithFreshPid(
+  _opts: GatewayRespawnOptions = {},
+): GatewayRespawnResult {
   if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled" };
   }
@@ -66,14 +76,17 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
       detail: "win32: detached respawn unsupported without Scheduled Task markers",
     };
   }
-
-  try {
-    const { pid } = spawnDetachedGatewayProcess();
-    return { mode: "spawned", pid };
-  } catch (err) {
-    const detail = formatErrorMessage(err);
-    return { mode: "failed", detail };
+  if (isContainerEnvironment()) {
+    return {
+      mode: "disabled",
+      detail: "container: use in-process restart to keep PID 1 alive",
+    };
   }
+
+  return {
+    mode: "disabled",
+    detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
+  };
 }
 
 /**
@@ -84,7 +97,9 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
  * unmanaged Windows installs because there is no safe in-process fallback once
  * the installed package contents have been replaced.
  */
-export function respawnGatewayProcessForUpdate(): GatewayUpdateRespawnResult {
+export function respawnGatewayProcessForUpdate(
+  opts: GatewayRespawnOptions = {},
+): GatewayUpdateRespawnResult {
   if (isTruthy(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
@@ -102,7 +117,7 @@ export function respawnGatewayProcessForUpdate(): GatewayUpdateRespawnResult {
     return { mode: "supervised" };
   }
   try {
-    const { child, pid } = spawnDetachedGatewayProcess();
+    const { child, pid } = spawnDetachedGatewayProcess(opts);
     return { mode: "spawned", pid, child };
   } catch (err) {
     return {

@@ -4,6 +4,11 @@ const getProviderEnvVars = vi.hoisted(() => vi.fn(() => ["WHISPERX_API_KEY"]));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   getProviderEnvVars,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
 }));
 
 describe("provider auth env trust", () => {
@@ -20,7 +25,9 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(credential).toMatchObject({
+    expect(credential).toEqual({
+      type: "api_key",
+      provider: "whisperx",
       keyRef: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
     });
   });
@@ -53,7 +60,7 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
       resolvedValue: "test-secret",
     });
@@ -79,7 +86,7 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
       resolvedValue: "test-secret",
     });

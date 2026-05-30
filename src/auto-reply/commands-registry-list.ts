@@ -1,6 +1,6 @@
-import type { SkillCommandSpec } from "../agents/skills/types.js";
 import { isCommandFlagEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SkillCommandSpec } from "../skills/types.js";
 import { getChatCommands } from "./commands-registry.data.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
 
@@ -8,16 +8,22 @@ function buildSkillCommandDefinitions(skillCommands?: SkillCommandSpec[]): ChatC
   if (!skillCommands || skillCommands.length === 0) {
     return [];
   }
-  return skillCommands.map((spec) => ({
-    key: `skill:${spec.skillName}`,
-    nativeName: spec.name,
-    description: spec.description,
-    textAliases: [`/${spec.name}`],
-    acceptsArgs: true,
-    argsParsing: "none",
-    scope: "both",
-    category: "tools",
-  }));
+  return skillCommands.map((spec) => {
+    const command: ChatCommandDefinition = {
+      key: `skill:${spec.skillName}`,
+      nativeName: spec.name,
+      description: spec.description,
+      textAliases: [`/${spec.name}`],
+      acceptsArgs: true,
+      argsParsing: "none",
+      scope: "both",
+      category: "tools",
+    };
+    if (spec.descriptionLocalizations) {
+      command.descriptionLocalizations = spec.descriptionLocalizations;
+    }
+    return command;
+  });
 }
 
 export function listChatCommands(params?: {

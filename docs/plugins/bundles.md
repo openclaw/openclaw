@@ -70,14 +70,14 @@ is detected but not yet wired.
 
 ### Supported now
 
-| Feature       | How it maps                                                                                 | Applies to     |
-| ------------- | ------------------------------------------------------------------------------------------- | -------------- |
-| Skill content | Bundle skill roots load as normal OpenClaw skills                                           | All formats    |
-| Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                  | Claude, Cursor |
-| Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                             | Codex          |
-| MCP tools     | Bundle MCP config merged into embedded Pi settings; supported stdio and HTTP servers loaded | All formats    |
-| LSP servers   | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded Pi LSP defaults  | Claude         |
-| Settings      | Claude `settings.json` imported as embedded Pi defaults                                     | Claude         |
+| Feature       | How it maps                                                                                       | Applies to     |
+| ------------- | ------------------------------------------------------------------------------------------------- | -------------- |
+| Skill content | Bundle skill roots load as normal OpenClaw skills                                                 | All formats    |
+| Commands      | `commands/` and `.cursor/commands/` treated as skill roots                                        | Claude, Cursor |
+| Hook packs    | OpenClaw-style `HOOK.md` + `handler.ts` layouts                                                   | Codex          |
+| MCP tools     | Bundle MCP config merged into embedded OpenClaw settings; supported stdio and HTTP servers loaded | All formats    |
+| LSP servers   | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded OpenClaw LSP defaults  | Claude         |
+| Settings      | Claude `settings.json` imported as embedded OpenClaw defaults                                     | Claude         |
 
 #### Skill content
 
@@ -95,16 +95,16 @@ loader. Cursor command markdown works through the same path.
   - `HOOK.md`
   - `handler.ts` or `handler.js`
 
-#### MCP for Pi
+#### MCP for embedded OpenClaw
 
 - enabled bundles can contribute MCP server config
-- OpenClaw merges bundle MCP config into the effective embedded Pi settings as
+- OpenClaw merges bundle MCP config into the effective embedded OpenClaw settings as
   `mcpServers`
-- OpenClaw exposes supported bundle MCP tools during embedded Pi agent turns by
+- OpenClaw exposes supported bundle MCP tools during embedded OpenClaw agent turns by
   launching stdio servers or connecting to HTTP servers
 - the `coding` and `messaging` tool profiles include bundle MCP tools by
   default; use `tools.deny: ["bundle-mcp"]` to opt out for an agent or gateway
-- project-local Pi settings still apply after bundle defaults, so workspace
+- project-local embedded agent settings still apply after bundle defaults, so workspace
   settings can override bundle MCP entries when needed
 - bundle MCP tool catalogs are sorted deterministically before registration, so
   upstream `listTools()` order changes do not thrash prompt-cache tool blocks
@@ -165,19 +165,21 @@ OpenClaw registers bundle MCP tools with provider-safe names in the form
 `memory_search` tool registers as `vigil-harbor__memory_search`.
 
 - characters outside `A-Za-z0-9_-` are replaced with `-`
+- fragments that would start with a non-letter get a letter prefix, so numeric
+  server keys such as `12306` become provider-safe tool prefixes
 - server prefixes are capped at 30 characters
 - full tool names are capped at 64 characters
 - empty server names fall back to `mcp`
 - colliding sanitized names are disambiguated with numeric suffixes
-- final exposed tool order is deterministic by safe name to keep repeated Pi
+- final exposed tool order is deterministic by safe name to keep repeated embedded-agent
   turns cache-stable
 - profile filtering treats all tools from one bundle MCP server as plugin-owned
   by `bundle-mcp`, so profile allowlists and deny lists can include either
   individual exposed tool names or the `bundle-mcp` plugin key
 
-#### Embedded Pi settings
+#### Embedded OpenClaw settings
 
-- Claude `settings.json` is imported as default embedded Pi settings when the
+- Claude `settings.json` is imported as default embedded OpenClaw settings when the
   bundle is enabled
 - OpenClaw sanitizes shell override keys before applying them
 
@@ -186,11 +188,11 @@ Sanitized keys:
 - `shellPath`
 - `shellCommandPrefix`
 
-#### Embedded Pi LSP
+#### Embedded OpenClaw LSP
 
 - enabled Claude bundles can contribute LSP server config
 - OpenClaw loads `.lsp.json` plus any manifest-declared `lspServers` paths
-- bundle LSP config is merged into the effective embedded Pi LSP defaults
+- bundle LSP config is merged into the effective embedded OpenClaw LSP defaults
 - only supported stdio-backed LSP servers are runnable today; unsupported
   transports still show up in `openclaw plugins inspect <id>`
 
@@ -224,9 +226,9 @@ These are recognized and shown in diagnostics, but OpenClaw does not run them:
     Claude-specific behavior:
 
     - `commands/` is treated as skill content
-    - `settings.json` is imported into embedded Pi settings (shell override keys are sanitized)
-    - `.mcp.json` exposes supported stdio tools to embedded Pi
-    - `.lsp.json` plus manifest-declared `lspServers` paths load into embedded Pi LSP defaults
+    - `settings.json` is imported into embedded OpenClaw settings (shell override keys are sanitized)
+    - `.mcp.json` exposes supported stdio tools to embedded OpenClaw
+    - `.lsp.json` plus manifest-declared `lspServers` paths load into embedded OpenClaw LSP defaults
     - `hooks/hooks.json` is detected but not executed
     - Custom component paths in the manifest are additive (they extend defaults, not replace them)
 
@@ -255,11 +257,15 @@ dual-format packages from being partially installed as bundles.
 
 ## Runtime dependencies and cleanup
 
-- Bundled plugin runtime dependencies ship inside the OpenClaw package under
-  `dist/*`. OpenClaw does **not** run `npm install` at startup for bundled
-  plugins; the release pipeline is responsible for shipping a complete bundled
-  dependency payload (see the postpublish verification rule in
-  [Releasing](/reference/RELEASING)).
+- Third-party compatible bundles do not get startup `npm install` repair. They
+  should be installed through `openclaw plugins install` and ship everything
+  they need in the installed plugin directory.
+- OpenClaw-owned bundled plugins are either shipped lightweight in core or
+  downloadable through the plugin installer. Gateway startup never runs a
+  package manager for them.
+- `openclaw doctor --fix` removes legacy staged dependency directories and can
+  recover downloadable plugins that are missing from the local plugin index when
+  config references them.
 
 ## Security
 
@@ -287,7 +293,7 @@ bundles as trusted content for the features they do expose.
   </Accordion>
 
   <Accordion title="Claude settings do not apply">
-    Only embedded Pi settings from `settings.json` are supported. OpenClaw does
+    Only embedded OpenClaw settings from `settings.json` are supported. OpenClaw does
     not treat bundle settings as raw config patches.
   </Accordion>
 

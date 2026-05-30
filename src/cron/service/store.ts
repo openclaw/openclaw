@@ -1,9 +1,15 @@
 import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
+import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import {
+  loadCronStoreWithConfigJobs,
+  saveCronQuarantineFile,
+  saveCronStore,
+  type QuarantinedCronConfigJob,
+} from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
@@ -20,11 +26,67 @@ function invalidateStaleNextRunOnScheduleChange(params: {
   params.hydrated.state.nextRunAtMs = undefined;
 }
 
+function warnInvalidPersistedCronJob(params: {
+  state: CronServiceState;
+  raw: Record<string, unknown>;
+  index: number;
+  reason: string;
+}) {
+  const jobId = typeof params.raw.id === "string" ? params.raw.id : undefined;
+  const dedupeKey = jobId ?? `index:${params.index}`;
+  if (params.state.warnedInvalidPersistedJobKeys.has(dedupeKey)) {
+    return;
+  }
+  params.state.warnedInvalidPersistedJobKeys.add(dedupeKey);
+  params.state.deps.log.warn(
+    {
+      storePath: params.state.deps.storePath,
+      jobId,
+      jobIndex: params.index,
+      reason: params.reason,
+    },
+    "cron: quarantined invalid persisted job and skipped it from runtime",
+  );
+}
+
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
     const stats = await fs.promises.stat(path);
     return stats.mtimeMs;
   } catch {
+    return null;
+  }
+}
+
+async function flushPendingQuarantine(
+  state: CronServiceState,
+  nowMs: number,
+): Promise<string | null> {
+  if (state.pendingQuarantineConfigJobs.length === 0) {
+    return null;
+  }
+  try {
+    const quarantinePath = await saveCronQuarantineFile({
+      storePath: state.deps.storePath,
+      entries: state.pendingQuarantineConfigJobs,
+      nowMs,
+    });
+    state.pendingQuarantineConfigJobs = [];
+    state.lastQuarantineFailureWarnKey = null;
+    return quarantinePath;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const warnKey = `${state.deps.storePath}\0${errorMessage}`;
+    if (state.lastQuarantineFailureWarnKey !== warnKey) {
+      state.lastQuarantineFailureWarnKey = warnKey;
+      state.deps.log.warn(
+        {
+          storePath: state.deps.storePath,
+          error: errorMessage,
+        },
+        "cron: failed to quarantine malformed persisted jobs; skipping active store sanitization",
+      );
+    }
     return null;
   }
 }
@@ -51,10 +113,15 @@ export async function ensureLoaded(
   // edits on filesystems with coarse mtime resolution.
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
-  const loaded = await loadCronStore(state.deps.storePath);
-  const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
-  for (const [index, job] of jobs.entries()) {
+  const loaded = await loadCronStoreWithConfigJobs(state.deps.storePath);
+  const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
+  const jobs: CronJob[] = [];
+  const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
+  for (const [index, job] of loadedJobs.entries()) {
     const raw = job as unknown as Record<string, unknown>;
+    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
+    const sourceIndex = loaded.configJobIndexes[index] ?? index;
+    const runtimeEntry = loaded.configJobRuntimeEntries[index];
     const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
     let normalized: Record<string, unknown> | null;
     try {
@@ -71,7 +138,31 @@ export async function ensureLoaded(
     }
     const hydrated =
       normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    jobs[index] = hydrated;
+    const invalidReason = getInvalidPersistedCronJobReason(
+      hydrated as unknown as Record<string, unknown>,
+    );
+    if (invalidReason) {
+      const quarantineEntry: QuarantinedCronConfigJob = {
+        sourceIndex,
+        reason: invalidReason,
+        job: rawConfigJob,
+      };
+      const runtimeState = runtimeEntry?.state ?? raw.state;
+      if (runtimeState && typeof runtimeState === "object" && !Array.isArray(runtimeState)) {
+        quarantineEntry.state = structuredClone(runtimeState as Record<string, unknown>);
+      }
+      const updatedAtMs = runtimeEntry?.updatedAtMs ?? raw.updatedAtMs;
+      if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs)) {
+        quarantineEntry.updatedAtMs = updatedAtMs;
+      }
+      if (typeof runtimeEntry?.scheduleIdentity === "string") {
+        quarantineEntry.scheduleIdentity = runtimeEntry.scheduleIdentity;
+      }
+      quarantinedConfigJobs.push(quarantineEntry);
+      warnInvalidPersistedCronJob({ state, raw, index: sourceIndex, reason: invalidReason });
+      continue;
+    }
+    jobs.push(hydrated);
     if (legacyJobIdIssue) {
       const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
       state.deps.log.warn(
@@ -130,6 +221,33 @@ export async function ensureLoaded(
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;
 
+  if (quarantinedConfigJobs.length > 0) {
+    state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
+    const quarantinePath = await flushPendingQuarantine(state, state.storeLoadedAtMs);
+    if (quarantinePath) {
+      try {
+        await saveCronStore(state.deps.storePath, state.store);
+        state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+        state.deps.log.warn(
+          {
+            storePath: state.deps.storePath,
+            quarantinePath,
+            quarantinedJobs: quarantinedConfigJobs.length,
+          },
+          "cron: sanitized active jobs.json after quarantining malformed persisted jobs",
+        );
+      } catch (error) {
+        state.deps.log.warn(
+          {
+            storePath: state.deps.storePath,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "cron: failed to sanitize malformed persisted jobs after quarantine; continuing with quarantined in-memory view",
+        );
+      }
+    }
+  }
+
   if (!opts?.skipRecompute) {
     recomputeNextRuns(state);
   }
@@ -149,11 +267,23 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
   );
 }
 
-export async function persist(state: CronServiceState, opts?: { skipBackup?: boolean }) {
+export async function persist(
+  state: CronServiceState,
+  opts?: { skipBackup?: boolean; stateOnly?: boolean },
+) {
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store, opts);
+  let flushedPendingQuarantine = false;
+  if (state.pendingQuarantineConfigJobs.length > 0) {
+    const quarantinePath = await flushPendingQuarantine(state, state.deps.nowMs());
+    if (!quarantinePath) {
+      return;
+    }
+    flushedPendingQuarantine = true;
+  }
+  const saveOpts = flushedPendingQuarantine ? { skipBackup: opts?.skipBackup } : opts;
+  await saveCronStore(state.deps.storePath, state.store, saveOpts);
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }

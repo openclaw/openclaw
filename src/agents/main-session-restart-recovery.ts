@@ -3,14 +3,27 @@
  */
 
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
+import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveStateDir } from "../config/paths.js";
-import { type SessionEntry, loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import {
+  type SessionEntry,
+  loadSessionStore,
+  resolveAllAgentSessionStoreTargetsSync,
+  resolveSessionFilePath,
+  resolveSessionTranscriptPathInDir,
+  updateSessionStore,
+} from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
-import { readSessionMessages } from "../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
+import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -19,6 +32,9 @@ const log = createSubsystemLogger("main-session-restart-recovery");
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 const MAX_RECOVERY_RETRIES = 3;
 const RETRY_BACKOFF_MULTIPLIER = 2;
+const UNRESUMABLE_SESSION_NOTICE =
+  "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
+  "Please send that last request again and I'll pick it up cleanly.";
 
 function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
@@ -32,13 +48,147 @@ function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolea
   );
 }
 
-function sessionIdFromLockPath(lockPath: string): string | undefined {
-  const fileName = path.basename(lockPath);
-  if (!fileName.endsWith(".jsonl.lock")) {
+function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
+  const normalized = new Set<string>();
+  for (const value of values ?? []) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return normalized;
+}
+
+function normalizeTranscriptLockPath(lockPath: string): string | undefined {
+  const trimmed = lockPath.trim();
+  if (!path.basename(trimmed).endsWith(".jsonl.lock")) {
     return undefined;
   }
-  const sessionId = fileName.slice(0, -".jsonl.lock".length).trim();
-  return sessionId || undefined;
+  const resolved = path.resolve(trimmed);
+  try {
+    return path.join(fs.realpathSync(path.dirname(resolved)), path.basename(resolved));
+  } catch {
+    return resolved;
+  }
+}
+
+function resolveEntryTranscriptLockPaths(params: {
+  entry: SessionEntry;
+  sessionsDir: string;
+}): string[] {
+  const paths = new Set<string>();
+  const push = (resolvePath: () => string) => {
+    try {
+      paths.add(path.resolve(`${resolvePath()}.lock`));
+    } catch {
+      // Keep restart recovery best-effort when session metadata is stale.
+    }
+  };
+  push(() =>
+    resolveSessionFilePath(params.entry.sessionId, params.entry, {
+      sessionsDir: params.sessionsDir,
+    }),
+  );
+  push(() => resolveSessionTranscriptPathInDir(params.entry.sessionId, params.sessionsDir));
+  return [...paths];
+}
+
+export async function markRestartAbortedMainSessions(params: {
+  cfg?: OpenClawConfig;
+  additionalCfgs?: Iterable<OpenClawConfig | undefined>;
+  stateDir?: string;
+  sessionKeys?: Iterable<string>;
+  sessionIds?: Iterable<string>;
+  reason?: string;
+}): Promise<{ marked: number; skipped: number }> {
+  const sessionKeys = normalizeStringSet(params.sessionKeys);
+  const sessionIds = normalizeStringSet(params.sessionIds);
+  const preferSessionIdMatch = sessionIds.size > 0;
+  const result = { marked: 0, skipped: 0 };
+  if (sessionKeys.size === 0 && sessionIds.size === 0) {
+    return result;
+  }
+
+  const storePaths = new Set<string>();
+  const env =
+    params.stateDir === undefined
+      ? process.env
+      : { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const stateDir = resolveStateDir(env);
+  const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(
+    (cfg): cfg is OpenClawConfig => Boolean(cfg),
+  );
+  for (const cfg of configs) {
+    try {
+      for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
+        storePaths.add(path.resolve(target.storePath));
+      }
+    } catch (err) {
+      log.warn(`failed to resolve configured session stores for restart marker: ${String(err)}`);
+    }
+    for (const sessionKey of sessionKeys) {
+      try {
+        const target = resolveGatewaySessionStoreTarget({
+          cfg,
+          key: sessionKey,
+          scanLegacyKeys: true,
+        });
+        storePaths.add(path.resolve(target.storePath));
+        for (const storeKey of target.storeKeys) {
+          const trimmed = storeKey.trim();
+          if (trimmed) {
+            sessionKeys.add(trimmed);
+          }
+        }
+      } catch (err) {
+        log.warn(
+          `failed to resolve session store for restart marker ${sessionKey}: ${String(err)}`,
+        );
+      }
+    }
+  }
+
+  for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
+    storePaths.add(path.join(sessionsDir, "sessions.json"));
+  }
+
+  for (const storePath of storePaths) {
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        for (const [sessionKey, entry] of Object.entries(store)) {
+          if (!entry || entry.status !== "running") {
+            continue;
+          }
+          const matches =
+            typeof entry.sessionId === "string" && sessionIds.has(entry.sessionId)
+              ? true
+              : !preferSessionIdMatch && sessionKeys.has(sessionKey);
+          if (!matches) {
+            continue;
+          }
+          if (shouldSkipMainRecovery(entry, sessionKey)) {
+            result.skipped++;
+            continue;
+          }
+          entry.abortedLastRun = true;
+          entry.updatedAt = Date.now();
+          store[sessionKey] = entry;
+          result.marked++;
+        }
+      },
+      { skipMaintenance: true },
+    );
+  }
+
+  if (result.marked > 0) {
+    log.warn(
+      `marked ${result.marked} interrupted main session(s) for restart recovery${
+        params.reason ? ` (${params.reason})` : ""
+      }`,
+    );
+  }
+  return result;
 }
 
 function getMessageRole(message: unknown): string | undefined {
@@ -62,17 +212,41 @@ function isResumableTailMessage(message: unknown): boolean {
   return role === "user" || role === "tool" || role === "toolResult";
 }
 
-function isMainSessionResumable(messages: unknown[]): boolean {
-  const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
-  return lastMeaningful ? isResumableTailMessage(lastMeaningful) : false;
+function isApprovalPendingToolResult(message: unknown): boolean {
+  if (!message || typeof message !== "object" || getMessageRole(message) !== "toolResult") {
+    return false;
+  }
+  const details = (message as { details?: unknown }).details;
+  if (!details || typeof details !== "object") {
+    return false;
+  }
+  return (details as { status?: unknown }).status === "approval-pending";
 }
 
-function buildResumeMessage(): string {
-  return (
+function resolveMainSessionResumeBlockReason(messages: unknown[]): string | null {
+  const lastMeaningful = messages.toReversed().find(isMeaningfulTailMessage);
+  if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
+    return "transcript tail is not resumable";
+  }
+  if (isApprovalPendingToolResult(lastMeaningful)) {
+    return "transcript tail is a stale approval-pending tool result";
+  }
+  return null;
+}
+
+function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
+  const base =
     "[System] Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. Continue from the existing " +
-    "transcript and finish the interrupted response."
-  );
+    "transcript and finish the interrupted response.";
+  const sanitizedPendingText =
+    typeof pendingFinalDeliveryText === "string"
+      ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
+      : "";
+  if (sanitizedPendingText) {
+    return `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
+  }
+  return base;
 }
 
 async function markSessionFailed(params: {
@@ -91,6 +265,13 @@ async function markSessionFailed(params: {
       entry.abortedLastRun = true;
       entry.endedAt = Date.now();
       entry.updatedAt = entry.endedAt;
+      entry.pendingFinalDelivery = undefined;
+      entry.pendingFinalDeliveryText = undefined;
+      entry.pendingFinalDeliveryCreatedAt = undefined;
+      entry.pendingFinalDeliveryLastAttemptAt = undefined;
+      entry.pendingFinalDeliveryAttemptCount = undefined;
+      entry.pendingFinalDeliveryLastError = undefined;
+      entry.pendingFinalDeliveryContext = undefined;
       store[params.sessionKey] = entry;
     },
     { skipMaintenance: true },
@@ -98,15 +279,71 @@ async function markSessionFailed(params: {
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
 }
 
+async function sendUnresumableSessionNotice(params: {
+  entry: SessionEntry;
+  reason: string;
+  sessionKey: string;
+}): Promise<boolean> {
+  const deliveryContext = deliveryContextFromSession(params.entry);
+  const channel = normalizeOptionalString(deliveryContext?.channel);
+  const to = normalizeOptionalString(deliveryContext?.to);
+  if (!channel || !to) {
+    return false;
+  }
+
+  const messageParams: Record<string, unknown> = {
+    to,
+    message: UNRESUMABLE_SESSION_NOTICE,
+    bestEffort: true,
+  };
+  if (deliveryContext?.threadId != null) {
+    messageParams.threadId = deliveryContext.threadId;
+  }
+  const actionParams: Record<string, unknown> = {
+    channel,
+    action: "send",
+    sessionKey: params.sessionKey,
+    sessionId: params.entry.sessionId,
+    idempotencyKey: `main-session-restart-recovery:${params.entry.sessionId}:failed-notice`,
+    params: messageParams,
+  };
+  const accountId = normalizeOptionalString(deliveryContext?.accountId);
+  if (accountId) {
+    actionParams.accountId = accountId;
+  }
+
+  try {
+    await callGateway({
+      method: "message.action",
+      params: actionParams,
+      timeoutMs: 10_000,
+    });
+    log.info(
+      `sent interrupted main session recovery notice: ${params.sessionKey} (${params.reason})`,
+    );
+    return true;
+  } catch (err) {
+    log.warn(
+      `failed to send interrupted main session recovery notice ${params.sessionKey}: ${String(err)}`,
+    );
+    return false;
+  }
+}
+
 async function resumeMainSession(params: {
   storePath: string;
   sessionKey: string;
+  pendingFinalDeliveryText?: string | null;
 }): Promise<boolean> {
+  const sanitizedPendingText =
+    typeof params.pendingFinalDeliveryText === "string"
+      ? sanitizePendingFinalDeliveryText(params.pendingFinalDeliveryText)
+      : "";
   try {
     await callGateway<{ runId: string }>({
       method: "agent",
       params: {
-        message: buildResumeMessage(),
+        message: buildResumeMessage(sanitizedPendingText),
         sessionKey: params.sessionKey,
         idempotencyKey: crypto.randomUUID(),
         deliver: false,
@@ -121,13 +358,35 @@ async function resumeMainSession(params: {
         if (!entry) {
           return;
         }
+        const now = Date.now();
         entry.abortedLastRun = false;
-        entry.updatedAt = Date.now();
+        entry.updatedAt = now;
+        if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
+          if (sanitizedPendingText) {
+            entry.pendingFinalDeliveryLastAttemptAt = now;
+            entry.pendingFinalDeliveryAttemptCount =
+              (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+            entry.pendingFinalDeliveryLastError = null;
+            entry.pendingFinalDeliveryText = sanitizedPendingText;
+          } else {
+            entry.pendingFinalDelivery = undefined;
+            entry.pendingFinalDeliveryText = undefined;
+            entry.pendingFinalDeliveryCreatedAt = undefined;
+            entry.pendingFinalDeliveryLastAttemptAt = undefined;
+            entry.pendingFinalDeliveryAttemptCount = undefined;
+            entry.pendingFinalDeliveryLastError = undefined;
+            entry.pendingFinalDeliveryContext = undefined;
+          }
+        }
         store[params.sessionKey] = entry;
       },
       { skipMaintenance: true },
     );
-    log.info(`resumed interrupted main session: ${params.sessionKey}`);
+    log.info(
+      `resumed interrupted main session: ${params.sessionKey}${
+        sanitizedPendingText ? " (with pending payload)" : ""
+      }`,
+    );
     return true;
   } catch (err) {
     log.warn(`failed to resume interrupted main session ${params.sessionKey}: ${String(err)}`);
@@ -140,16 +399,17 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   cleanedLocks: SessionLockInspection[];
 }): Promise<{ marked: number; skipped: number }> {
   const result = { marked: 0, skipped: 0 };
-  const interruptedSessionIds = new Set(
+  const sessionsDir = path.resolve(params.sessionsDir);
+  const interruptedLockPaths = new Set(
     params.cleanedLocks
-      .map((lock) => sessionIdFromLockPath(lock.lockPath))
-      .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      .map((lock) => normalizeTranscriptLockPath(lock.lockPath))
+      .filter((lockPath): lockPath is string => Boolean(lockPath)),
   );
-  if (interruptedSessionIds.size === 0) {
+  if (interruptedLockPaths.size === 0) {
     return result;
   }
 
-  const storePath = path.join(path.resolve(params.sessionsDir), "sessions.json");
+  const storePath = path.join(sessionsDir, "sessions.json");
   await updateSessionStore(
     storePath,
     (store) => {
@@ -161,7 +421,8 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
           result.skipped++;
           continue;
         }
-        if (!interruptedSessionIds.has(entry.sessionId)) {
+        const entryLockPaths = resolveEntryTranscriptLockPaths({ entry, sessionsDir });
+        if (!entryLockPaths.some((lockPath) => interruptedLockPaths.has(lockPath))) {
           continue;
         }
         entry.abortedLastRun = true;
@@ -209,18 +470,33 @@ async function recoverStore(params: {
 
     let messages: unknown[];
     try {
-      messages = readSessionMessages(entry.sessionId, params.storePath, entry.sessionFile);
+      messages = await readSessionMessagesAsync(
+        entry.sessionId,
+        params.storePath,
+        entry.sessionFile,
+        {
+          mode: "recent",
+          maxMessages: 20,
+          maxBytes: 256 * 1024,
+        },
+      );
     } catch (err) {
       log.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
       result.failed++;
       continue;
     }
 
-    if (!isMainSessionResumable(messages)) {
+    const resumeBlockReason = resolveMainSessionResumeBlockReason(messages);
+    if (resumeBlockReason) {
+      await sendUnresumableSessionNotice({
+        entry,
+        sessionKey,
+        reason: resumeBlockReason,
+      });
       await markSessionFailed({
         storePath: params.storePath,
         sessionKey,
-        reason: "transcript tail is not resumable",
+        reason: resumeBlockReason,
       });
       result.failed++;
       continue;
@@ -229,6 +505,7 @@ async function recoverStore(params: {
     const resumed = await resumeMainSession({
       storePath: params.storePath,
       sessionKey,
+      pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
     });
     if (resumed) {
       params.resumedSessionKeys.add(sessionKey);
@@ -241,20 +518,37 @@ async function recoverStore(params: {
   return result;
 }
 
+async function resolveRestartRecoveryStorePaths(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+}): Promise<string[]> {
+  const storePaths = new Set<string>();
+  const stateDir = params.stateDir ?? resolveStateDir(process.env);
+  for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
+    storePaths.add(path.join(sessionsDir, "sessions.json"));
+  }
+  if (params.cfg) {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
+      storePaths.add(path.resolve(target.storePath));
+    }
+  }
+  return [...storePaths].toSorted((a, b) => a.localeCompare(b));
+}
+
 export async function recoverRestartAbortedMainSessions(
   params: {
+    cfg?: OpenClawConfig;
     stateDir?: string;
     resumedSessionKeys?: Set<string>;
   } = {},
 ): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
-  const stateDir = params.stateDir ?? resolveStateDir(process.env);
-  const sessionDirs = await resolveAgentSessionDirs(stateDir);
 
-  for (const sessionsDir of sessionDirs) {
+  for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
     const storeResult = await recoverStore({
-      storePath: path.join(sessionsDir, "sessions.json"),
+      storePath,
       resumedSessionKeys,
     });
     result.recovered += storeResult.recovered;
@@ -272,6 +566,7 @@ export async function recoverRestartAbortedMainSessions(
 
 export function scheduleRestartAbortedMainSessionRecovery(
   params: {
+    cfg?: OpenClawConfig;
     delayMs?: number;
     maxRetries?: number;
     stateDir?: string;
@@ -284,6 +579,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
   const attemptRecovery = (attempt: number, delay: number) => {
     setTimeout(() => {
       void recoverRestartAbortedMainSessions({
+        cfg: params.cfg,
         stateDir: params.stateDir,
         resumedSessionKeys,
       })

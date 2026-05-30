@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isRecord } from "../shared/record-coerce.js";
 import type { PluginInstallRecord } from "./types.plugins.js";
 import { PluginInstallRecordShape } from "./zod-schema.installs.js";
 
@@ -6,10 +7,6 @@ const PluginInstallRecordsSchema = z.record(
   z.string(),
   z.object(PluginInstallRecordShape).passthrough(),
 );
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function pruneEmptyPluginsObject(plugins: Record<string, unknown>): unknown {
   const { installs: _installs, ...rest } = plugins;
@@ -35,14 +32,4 @@ export function stripShippedPluginInstallConfigRecords(config: unknown): unknown
   const plugins = pruneEmptyPluginsObject(config.plugins);
   const { plugins: _plugins, ...rest } = config;
   return plugins === undefined ? rest : { ...rest, plugins };
-}
-
-export function prepareShippedPluginInstallConfigMigration(config: unknown): {
-  config: unknown;
-  installRecords: Record<string, PluginInstallRecord>;
-} {
-  return {
-    config: stripShippedPluginInstallConfigRecords(config),
-    installRecords: extractShippedPluginInstallConfigRecords(config),
-  };
 }

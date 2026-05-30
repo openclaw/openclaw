@@ -48,6 +48,11 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     readEffectiveTools: fn,
     readSkillStatus: fn,
     readRawQaSessionStore: fn,
+    readGatewayLogs: fn,
+    markGatewayLogCursor: fn,
+    scanGatewayLogSentinels: fn,
+    assertNoGatewayLogSentinels: fn,
+    readSessionTranscriptSummary: fn,
     runQaCli: fn,
     extractMediaPathFromText: fn,
     resolveGeneratedImagePath: fn,
@@ -64,6 +69,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     runAgentPrompt: fn,
     ensureImageGenerationConfigured: fn,
     handleQaAction: fn,
+    runRuntimeToolFixture: fn,
     extractQaToolPayload: fn,
     formatMemoryDreamingDay: fn,
     resolveSessionTranscriptsDirForAgent: fn,
@@ -77,7 +83,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     hasDiscoveryLabels: fn,
     reportsDiscoveryScopeLeak: fn,
     reportsMissingDiscoveryFiles: fn,
-    hasModelSwitchContinuityEvidence: fn,
+    hasModelSwitchContinuitySignal: fn,
     ...overrides,
   };
 }
@@ -87,6 +93,19 @@ const constants: QaScenarioRuntimeConstants = {
   imageUnderstandingLargePngBase64: "png-large",
   imageUnderstandingValidPngBase64: "png-valid",
 };
+
+const browserAndWebRuntimeTools = [
+  "browserRequest",
+  "waitForBrowserReady",
+  "browserOpenTab",
+  "browserSnapshot",
+  "browserAct",
+  "webOpenPage",
+  "webWait",
+  "webType",
+  "webSnapshot",
+  "webEvaluate",
+] as const;
 
 describe("createQaScenarioRuntimeApi", () => {
   it("builds a markdown-flow runtime surface from generic transport capabilities", async () => {
@@ -128,11 +147,12 @@ describe("createQaScenarioRuntimeApi", () => {
         },
       },
     };
+    const deps = createDeps({ sleep });
 
     const api = createQaScenarioRuntimeApi({
       env,
       scenario,
-      deps: createDeps({ sleep }),
+      deps,
       constants,
     });
 
@@ -141,16 +161,12 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
-    expect(api.browserRequest).toBeDefined();
-    expect(api.waitForBrowserReady).toBeDefined();
-    expect(api.browserOpenTab).toBeDefined();
-    expect(api.browserSnapshot).toBeDefined();
-    expect(api.browserAct).toBeDefined();
-    expect(api.webOpenPage).toBeDefined();
-    expect(api.webWait).toBeDefined();
-    expect(api.webType).toBeDefined();
-    expect(api.webSnapshot).toBeDefined();
-    expect(api.webEvaluate).toBeDefined();
+    expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
+    expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
+    expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
+    for (const toolName of browserAndWebRuntimeTools) {
+      expect(api[toolName]).toBe(deps[toolName]);
+    }
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 
@@ -165,8 +181,8 @@ describe("createQaScenarioRuntimeApi", () => {
       to: "dm:qa-operator",
       text: "hi",
     });
-    expect(inbound.id).toBeTruthy();
-    expect(outbound.id).toBeTruthy();
+    expect(inbound.id.trim()).not.toBe("");
+    expect(outbound.id.trim()).not.toBe("");
     api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
     await api.reset();
     await api.resetBus();

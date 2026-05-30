@@ -1,8 +1,8 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { channelTestRoots } from "../../test/vitest/vitest.channel-paths.mjs";
 import { isAcpxExtensionRoot } from "../../test/vitest/vitest.extension-acpx-paths.mjs";
-import { isBlueBubblesExtensionRoot } from "../../test/vitest/vitest.extension-bluebubbles-paths.mjs";
 import { isBrowserExtensionRoot } from "../../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../../test/vitest/vitest.extension-channel-split-paths.mjs";
 import { isDiffsExtensionRoot } from "../../test/vitest/vitest.extension-diffs-paths.mjs";
@@ -28,13 +28,12 @@ import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-p
 import { listAvailableExtensionIds } from "./changed-extensions.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
-export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 6;
+export const DEFAULT_EXTENSION_TEST_SHARD_COUNT = 8;
 const EXTENSION_TEST_COST_MULTIPLIERS = {
   // CI shard planning uses measured wall time rather than raw file count.
   // These ratios come from Blacksmith extension batch timings; import-heavy
   // suites vary widely, and file count alone leaves long tail shards.
   "test/vitest/vitest.extension-acpx.config.ts": 0.75,
-  "test/vitest/vitest.extension-bluebubbles.config.ts": 0.8,
   "test/vitest/vitest.extension-browser.config.ts": 0.5,
   "test/vitest/vitest.extension-diffs.config.ts": 0.6,
   "test/vitest/vitest.extension-discord.config.ts": 0.62,
@@ -66,8 +65,44 @@ function normalizeRelative(inputPath) {
   return inputPath.split(path.sep).join("/");
 }
 
-function countTestFiles(rootPath) {
-  let total = 0;
+function isPathInsideRepo(relativePath) {
+  return relativePath !== ".." && !relativePath.startsWith("../") && !path.isAbsolute(relativePath);
+}
+
+function isSkippedTrackedTestFile(relativePath) {
+  return relativePath
+    .split("/")
+    .some((segment) => segment === "dist" || segment === "node_modules");
+}
+
+function listTrackedTestFiles(rootPath) {
+  const relativeRoot = normalizeRelative(path.relative(repoRoot, rootPath));
+  if (!isPathInsideRepo(relativeRoot)) {
+    return null;
+  }
+
+  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !isSkippedTrackedTestFile(line) &&
+        (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
+    );
+}
+
+function listFilesystemTestFiles(rootPath) {
+  const files = [];
   const stack = [rootPath];
 
   while (stack.length > 0) {
@@ -85,12 +120,31 @@ function countTestFiles(rootPath) {
         continue;
       }
       if (entry.isFile() && (fullPath.endsWith(".test.ts") || fullPath.endsWith(".test.tsx"))) {
-        total += 1;
+        files.push(normalizeRelative(path.relative(repoRoot, fullPath)));
       }
     }
   }
 
-  return total;
+  return files.toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listTrackedTestFilesForRoots(roots) {
+  const files = [];
+  for (const root of roots) {
+    const rootPath = path.join(repoRoot, root);
+    const trackedFiles = listTrackedTestFiles(rootPath) ?? listFilesystemTestFiles(rootPath);
+    files.push(...trackedFiles);
+  }
+  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function countTestFiles(rootPath) {
+  const trackedFiles = listTrackedTestFiles(rootPath);
+  if (trackedFiles) {
+    return trackedFiles.length;
+  }
+
+  return listFilesystemTestFiles(rootPath).length;
 }
 
 function estimatePlanCost(config, testFileCount) {
@@ -149,7 +203,6 @@ export function resolveExtensionTestPlan(params = {}) {
   const usesAcpxConfig = roots.some((root) => isAcpxExtensionRoot(root));
   const usesBrowserConfig = roots.some((root) => isBrowserExtensionRoot(root));
   const usesDiffsConfig = roots.some((root) => isDiffsExtensionRoot(root));
-  const usesBlueBubblesConfig = roots.some((root) => isBlueBubblesExtensionRoot(root));
   const usesFeishuConfig = roots.some((root) => isFeishuExtensionRoot(root));
   const usesIrcConfig = roots.some((root) => isIrcExtensionRoot(root));
   const usesMattermostConfig = roots.some((root) => isMattermostExtensionRoot(root));
@@ -172,45 +225,43 @@ export function resolveExtensionTestPlan(params = {}) {
       ? "test/vitest/vitest.extension-channels.config.ts"
       : usesAcpxConfig
         ? "test/vitest/vitest.extension-acpx.config.ts"
-        : usesBlueBubblesConfig
-          ? "test/vitest/vitest.extension-bluebubbles.config.ts"
-          : usesBrowserConfig
-            ? "test/vitest/vitest.extension-browser.config.ts"
-            : usesDiffsConfig
-              ? "test/vitest/vitest.extension-diffs.config.ts"
-              : usesFeishuConfig
-                ? "test/vitest/vitest.extension-feishu.config.ts"
-                : usesIrcConfig
-                  ? "test/vitest/vitest.extension-irc.config.ts"
-                  : usesMattermostConfig
-                    ? "test/vitest/vitest.extension-mattermost.config.ts"
-                    : usesMatrixConfig
-                      ? "test/vitest/vitest.extension-matrix.config.ts"
-                      : usesMediaConfig
-                        ? "test/vitest/vitest.extension-media.config.ts"
-                        : usesMemoryConfig
-                          ? "test/vitest/vitest.extension-memory.config.ts"
-                          : usesMessagingConfig
-                            ? "test/vitest/vitest.extension-messaging.config.ts"
-                            : usesMiscConfig
-                              ? "test/vitest/vitest.extension-misc.config.ts"
-                              : usesMsTeamsConfig
-                                ? "test/vitest/vitest.extension-msteams.config.ts"
-                                : usesQaConfig
-                                  ? "test/vitest/vitest.extension-qa.config.ts"
-                                  : usesTelegramConfig
-                                    ? "test/vitest/vitest.extension-telegram.config.ts"
-                                    : usesVoiceCallConfig
-                                      ? "test/vitest/vitest.extension-voice-call.config.ts"
-                                      : usesWhatsAppConfig
-                                        ? "test/vitest/vitest.extension-whatsapp.config.ts"
-                                        : usesZaloConfig
-                                          ? "test/vitest/vitest.extension-zalo.config.ts"
-                                          : usesProviderOpenAiConfig
-                                            ? "test/vitest/vitest.extension-provider-openai.config.ts"
-                                            : usesProviderConfig
-                                              ? "test/vitest/vitest.extension-providers.config.ts"
-                                              : "test/vitest/vitest.extensions.config.ts";
+        : usesBrowserConfig
+          ? "test/vitest/vitest.extension-browser.config.ts"
+          : usesDiffsConfig
+            ? "test/vitest/vitest.extension-diffs.config.ts"
+            : usesFeishuConfig
+              ? "test/vitest/vitest.extension-feishu.config.ts"
+              : usesIrcConfig
+                ? "test/vitest/vitest.extension-irc.config.ts"
+                : usesMattermostConfig
+                  ? "test/vitest/vitest.extension-mattermost.config.ts"
+                  : usesMatrixConfig
+                    ? "test/vitest/vitest.extension-matrix.config.ts"
+                    : usesMediaConfig
+                      ? "test/vitest/vitest.extension-media.config.ts"
+                      : usesMemoryConfig
+                        ? "test/vitest/vitest.extension-memory.config.ts"
+                        : usesMessagingConfig
+                          ? "test/vitest/vitest.extension-messaging.config.ts"
+                          : usesMiscConfig
+                            ? "test/vitest/vitest.extension-misc.config.ts"
+                            : usesMsTeamsConfig
+                              ? "test/vitest/vitest.extension-msteams.config.ts"
+                              : usesQaConfig
+                                ? "test/vitest/vitest.extension-qa.config.ts"
+                                : usesTelegramConfig
+                                  ? "test/vitest/vitest.extension-telegram.config.ts"
+                                  : usesVoiceCallConfig
+                                    ? "test/vitest/vitest.extension-voice-call.config.ts"
+                                    : usesWhatsAppConfig
+                                      ? "test/vitest/vitest.extension-whatsapp.config.ts"
+                                      : usesZaloConfig
+                                        ? "test/vitest/vitest.extension-zalo.config.ts"
+                                        : usesProviderOpenAiConfig
+                                          ? "test/vitest/vitest.extension-provider-openai.config.ts"
+                                          : usesProviderConfig
+                                            ? "test/vitest/vitest.extension-providers.config.ts"
+                                            : "test/vitest/vitest.extensions.config.ts";
   const testFileCount = roots.reduce(
     (sum, root) => sum + countTestFiles(path.join(repoRoot, root)),
     0,
@@ -231,7 +282,13 @@ export function resolveExtensionTestPlan(params = {}) {
 function mergeTestPlans(plans) {
   const groupsByConfig = new Map();
 
-  for (const plan of plans) {
+  const testPlans = plans.filter((plan) => plan.hasTests);
+  const noTestExtensionIds = plans
+    .filter((plan) => !plan.hasTests)
+    .map((plan) => plan.extensionId)
+    .toSorted((left, right) => left.localeCompare(right));
+
+  for (const plan of testPlans) {
     const current = groupsByConfig.get(plan.config) ?? {
       config: plan.config,
       extensionIds: [],
@@ -261,21 +318,23 @@ function mergeTestPlans(plans) {
     extensionIds: plans
       .map((plan) => plan.extensionId)
       .toSorted((left, right) => left.localeCompare(right)),
-    estimatedCost: plans.reduce((sum, plan) => sum + plan.estimatedCost, 0),
-    hasTests: plans.length > 0,
+    estimatedCost: testPlans.reduce((sum, plan) => sum + plan.estimatedCost, 0),
+    hasTests: testPlans.length > 0,
+    noTestExtensionIds,
     planGroups,
-    testFileCount: plans.reduce((sum, plan) => sum + plan.testFileCount, 0),
+    testFileCount: testPlans.reduce((sum, plan) => sum + plan.testFileCount, 0),
   };
 }
 
 export function resolveExtensionBatchPlan(params = {}) {
   const cwd = params.cwd ?? process.cwd();
+  const hasExplicitExtensionIds = params.extensionIds !== undefined;
   const extensionIds = params.extensionIds ?? listAvailableExtensionIds();
-  const plans = extensionIds
-    .map((extensionId) => resolveExtensionTestPlan({ cwd, targetArg: extensionId }))
-    .filter((plan) => plan.hasTests);
+  const plans = extensionIds.map((extensionId) =>
+    resolveExtensionTestPlan({ cwd, targetArg: extensionId }),
+  );
 
-  return mergeTestPlans(plans);
+  return mergeTestPlans(hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests));
 }
 
 function pickLeastLoadedShard(shards) {

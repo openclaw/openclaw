@@ -17,7 +17,7 @@ type ToolProfilePolicy = {
   deny?: string[];
 };
 
-export type CoreToolSection = {
+type CoreToolSection = {
   id: string;
   label: string;
   tools: Array<{
@@ -208,10 +208,9 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "canvas",
     label: "canvas",
-    description: "Control canvases",
+    description: "Control node Canvas surfaces when the Canvas plugin is enabled",
     sectionId: "ui",
     profiles: [],
-    includeInOpenClawGroup: true,
   },
   {
     id: "message",
@@ -219,6 +218,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Send messages",
     sectionId: "messaging",
     profiles: ["messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "heartbeat_respond",
+    label: "heartbeat_respond",
+    description: "Record heartbeat outcomes",
+    sectionId: "automation",
+    profiles: [],
     includeInOpenClawGroup: true,
   },
   {
@@ -251,6 +258,30 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "List agents",
     sectionId: "agents",
     profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "get_goal",
+    label: "get_goal",
+    description: "Get current thread goal",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "create_goal",
+    label: "create_goal",
+    description: "Create a thread goal",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "update_goal",
+    label: "update_goal",
+    description: "Complete or block a thread goal",
+    sectionId: "agents",
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {
@@ -323,7 +354,9 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   messaging: {
     allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
   },
-  full: {},
+  full: {
+    allow: ["*"],
+  },
 };
 
 function buildCoreToolGroupMap() {

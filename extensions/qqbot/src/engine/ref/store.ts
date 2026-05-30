@@ -7,6 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { appendRegularFileSync, replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
@@ -26,14 +27,14 @@ interface RefIndexLine {
   t: number;
 }
 
-let cache: Map<string, RefIndexEntry & { _createdAt: number }> | null = null;
+let cache: Map<string, RefIndexEntry & { createdAt: number }> | null = null;
 let totalLinesOnDisk = 0;
 
 function getRefIndexFile(): string {
   return path.join(getQQBotDataPath("data"), "ref-index.jsonl");
 }
 
-function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
+function loadFromFile(): Map<string, RefIndexEntry & { createdAt: number }> {
   if (cache !== null) {
     return cache;
   }
@@ -65,7 +66,7 @@ function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
           expired++;
           continue;
         }
-        cache.set(entry.k, { ...entry.v, _createdAt: entry.t });
+        cache.set(entry.k, { ...entry.v, createdAt: entry.t });
       } catch {}
     }
     debugLog(
@@ -88,7 +89,7 @@ function ensureDir(): void {
 function appendLine(line: RefIndexLine): void {
   try {
     ensureDir();
-    fs.appendFileSync(getRefIndexFile(), JSON.stringify(line) + "\n", "utf-8");
+    appendRegularFileSync({ filePath: getRefIndexFile(), content: JSON.stringify(line) + "\n" });
     totalLinesOnDisk++;
   } catch (err) {
     debugError(`[ref-index-store] Failed to append: ${formatErrorMessage(err)}`);
@@ -109,7 +110,6 @@ function compactFile(): void {
   try {
     ensureDir();
     const refIndexFile = getRefIndexFile();
-    const tmpPath = refIndexFile + ".tmp";
     const lines: string[] = [];
     for (const [key, entry] of cache) {
       lines.push(
@@ -123,12 +123,15 @@ function compactFile(): void {
             isBot: entry.isBot,
             attachments: entry.attachments,
           },
-          t: entry._createdAt,
+          t: entry.createdAt,
         }),
       );
     }
-    fs.writeFileSync(tmpPath, lines.join("\n") + "\n", "utf-8");
-    fs.renameSync(tmpPath, refIndexFile);
+    replaceFileAtomicSync({
+      filePath: refIndexFile,
+      content: `${lines.join("\n")}\n`,
+      tempPrefix: ".qqbot-ref-index",
+    });
     totalLinesOnDisk = cache.size;
     debugLog(`[ref-index-store] Compacted: ${before} lines → ${totalLinesOnDisk} lines`);
   } catch (err) {
@@ -142,12 +145,12 @@ function evictIfNeeded(): void {
   }
   const now = Date.now();
   for (const [key, entry] of cache) {
-    if (now - entry._createdAt > TTL_MS) {
+    if (now - entry.createdAt > TTL_MS) {
       cache.delete(key);
     }
   }
   if (cache.size >= MAX_ENTRIES) {
-    const sorted = [...cache.entries()].toSorted((a, b) => a[1]._createdAt - b[1]._createdAt);
+    const sorted = [...cache.entries()].toSorted((a, b) => a[1].createdAt - b[1].createdAt);
     const toRemove = sorted.slice(0, cache.size - MAX_ENTRIES + 1000);
     for (const [key] of toRemove) {
       cache.delete(key);
@@ -161,7 +164,7 @@ export function setRefIndex(refIdx: string, entry: RefIndexEntry): void {
   const store = loadFromFile();
   evictIfNeeded();
   const now = Date.now();
-  store.set(refIdx, { ...entry, _createdAt: now });
+  store.set(refIdx, { ...entry, createdAt: now });
   appendLine({
     k: refIdx,
     v: {
@@ -186,7 +189,7 @@ export function getRefIndex(refIdx: string): RefIndexEntry | null {
   if (!entry) {
     return null;
   }
-  if (Date.now() - entry._createdAt > TTL_MS) {
+  if (Date.now() - entry.createdAt > TTL_MS) {
     store.delete(refIdx);
     return null;
   }
@@ -205,20 +208,4 @@ export function flushRefIndex(): void {
   if (cache && shouldCompact()) {
     compactFile();
   }
-}
-
-/** Return ref-index stats for diagnostics. */
-export function getRefIndexStats(): {
-  size: number;
-  maxEntries: number;
-  totalLinesOnDisk: number;
-  filePath: string;
-} {
-  const store = loadFromFile();
-  return {
-    size: store.size,
-    maxEntries: MAX_ENTRIES,
-    totalLinesOnDisk,
-    filePath: getRefIndexFile(),
-  };
 }

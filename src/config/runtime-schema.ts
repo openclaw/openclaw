@@ -1,6 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { collectBundledChannelConfigs } from "../plugins/bundled-channel-config-metadata.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   collectChannelSchemaMetadata,
   collectPluginSchemaMetadata,
@@ -11,14 +10,12 @@ import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
 
 function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-  return loadPluginManifestRegistryForPluginRegistry({
+  return resolvePluginMetadataSnapshot({
     config,
-    cache: false,
-    env,
+    env: env ?? process.env,
     workspaceDir,
-    includeDisabled: true,
-    bundledChannelConfigCollector: collectBundledChannelConfigs,
-  });
+    allowWorkspaceScopedCurrent: true,
+  }).manifestRegistry;
 }
 
 export function loadGatewayRuntimeConfigSchema(): ConfigSchemaResponse {

@@ -1,8 +1,10 @@
 export type ChatAttachment = {
   id: string;
-  dataUrl: string;
+  dataUrl?: string;
+  previewUrl?: string;
   mimeType: string;
   fileName?: string;
+  sizeBytes?: number;
 };
 
 export type ChatQueueItem = {
@@ -15,6 +17,12 @@ export type ChatQueueItem = {
   localCommandArgs?: string;
   localCommandName?: string;
   pendingRunId?: string;
+  sendAttempts?: number;
+  sendError?: string;
+  sendRunId?: string;
+  sendState?: "sending" | "waiting-reconnect" | "failed";
+  sessionKey?: string;
+  agentId?: string;
 };
 
 export const CRON_CHANNEL_LAST = "last";

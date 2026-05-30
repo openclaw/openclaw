@@ -1,3 +1,4 @@
+import { createZalouserSendReceipt } from "./send-receipt.js";
 import { parseZalouserTextStyles } from "./text-styles.js";
 import type { ZaloEventMessage, ZaloSendOptions, ZaloSendResult } from "./types.js";
 import {
@@ -10,8 +11,8 @@ import {
 } from "./zalo-js.js";
 import { TextStyle } from "./zca-constants.js";
 
-export type ZalouserSendOptions = ZaloSendOptions;
-export type ZalouserSendResult = ZaloSendResult;
+type ZalouserSendOptions = ZaloSendOptions;
+type ZalouserSendResult = ZaloSendResult;
 
 const ZALO_TEXT_LIMIT = 2000;
 const DEFAULT_TEXT_CHUNK_MODE = "length";
@@ -59,7 +60,13 @@ export async function sendMessageZalouser(
     lastResult = result;
   }
 
-  return lastResult ?? { ok: false, error: "No message content provided" };
+  return (
+    lastResult ?? {
+      ok: false,
+      error: "No message content provided",
+      receipt: createZalouserSendReceipt({ threadId, kind: "text" }),
+    }
+  );
 }
 
 export async function sendImageZalouser(
@@ -110,6 +117,7 @@ export async function sendReactionZalouser(params: {
   return {
     ok: result.ok,
     error: result.error,
+    receipt: createZalouserSendReceipt({ threadId: params.threadId, kind: "unknown" }),
   };
 }
 

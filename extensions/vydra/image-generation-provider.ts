@@ -6,6 +6,7 @@ import {
   downloadVydraAsset,
   extractVydraResultUrls,
   resolveCompletedVydraPayload,
+  resolveVydraGeneratedMediaMaxBytes,
   resolveVydraResponseJobId,
   resolveVydraResponseStatus,
   resolveVydraRequestContext,
@@ -67,6 +68,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
         timeoutMs: req.timeoutMs,
         fetchFn,
         allowPrivateNetwork,
+        ssrfPolicy: req.ssrfPolicy,
         dispatcherPolicy,
       });
 
@@ -91,6 +93,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
           kind: "image",
           timeoutMs: req.timeoutMs,
           fetchFn,
+          maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "image" }),
         });
         return {
           images: [

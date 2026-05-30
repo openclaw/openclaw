@@ -20,7 +20,8 @@ export async function authorizeSlackDirectMessage(params: {
     await params.onDisabled();
     return false;
   }
-  if (params.ctx.dmPolicy === "open") {
+
+  if (params.ctx.dmPolicy === "open" && params.allowFromLower.includes("*")) {
     return true;
   }
 

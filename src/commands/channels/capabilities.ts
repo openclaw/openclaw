@@ -1,3 +1,4 @@
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   createMessageActionDiscoveryContext,
@@ -10,6 +11,9 @@ import type {
   ChannelCapabilitiesDisplayLine,
   ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { formatUnknownChannelMessage } from "../../cli/error-format.js";
+import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
@@ -24,7 +28,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 import { formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
@@ -48,14 +51,6 @@ type ChannelCapabilitiesReport = {
   probe?: unknown;
   diagnostics?: ChannelCapabilitiesDiagnostics;
 };
-
-function normalizeTimeout(raw: unknown, fallback = 10_000) {
-  const value = typeof raw === "string" ? Number(raw) : Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    return fallback;
-  }
-  return value;
-}
 
 function formatSupport(capabilities?: ChannelCapabilities) {
   if (!capabilities) {
@@ -224,23 +219,31 @@ export async function channelsCapabilitiesCommand(
     return;
   }
   let cfg = loadedCfg;
-  const timeoutMs = normalizeTimeout(opts.timeout, 10_000);
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 10_000);
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
   const rawTarget = normalizeOptionalString(opts.target) ?? "";
 
   if (opts.account && (!rawChannel || rawChannel === "all")) {
-    runtime.error(danger("--account requires a specific --channel."));
+    runtime.error(
+      danger(
+        `--account requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
+      ),
+    );
     runtime.exit(1);
     return;
   }
   if (rawTarget && (!rawChannel || rawChannel === "all")) {
-    runtime.error(danger("--target requires a specific --channel."));
+    runtime.error(
+      danger(
+        `--target requires a specific --channel. Run ${formatCliCommand("openclaw channels list")} to choose one.`,
+      ),
+    );
     runtime.exit(1);
     return;
   }
 
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
-    includeSetupRuntimeFallback: true,
+    includeSetupFallbackPlugins: true,
   });
   const selected =
     !rawChannel || rawChannel === "all"
@@ -287,7 +290,7 @@ export async function channelsCapabilitiesCommand(
         })();
 
   if (!selected || selected.length === 0) {
-    runtime.error(danger(`Unknown channel "${rawChannel}".`));
+    runtime.error(danger(formatUnknownChannelMessage({ channel: rawChannel })));
     runtime.exit(1);
     return;
   }

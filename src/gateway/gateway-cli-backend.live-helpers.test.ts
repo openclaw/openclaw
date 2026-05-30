@@ -1,30 +1,27 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 
-const gatewayClientState = vi.hoisted(() => ({
-  lastOptions: undefined as Record<string, unknown> | undefined,
-}));
-
-vi.mock("./client.js", () => ({
-  GatewayClient: class MockGatewayClient {
-    constructor(options: Record<string, unknown>) {
-      gatewayClientState.lastOptions = options;
-    }
-
-    start() {
-      const options = gatewayClientState.lastOptions as
-        | { onHelloOk?: (hello: { type: "hello-ok" }) => void }
-        | undefined;
-      queueMicrotask(() => options?.onHelloOk?.({ type: "hello-ok" }));
-    }
-
-    async stopAndWait() {}
+vi.mock("./client-start-readiness.js", () => ({
+  startGatewayClientWhenEventLoopReady: async (client: { start: () => void }) => {
+    client.start();
+    return { ready: true, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 };
   },
 }));
 
 describe("gateway cli backend live helpers", () => {
+  let liveHelpers: typeof import("./gateway-cli-backend.live-helpers.js");
+
+  beforeAll(async () => {
+    liveHelpers = await import("./gateway-cli-backend.live-helpers.js");
+  });
+
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
-    gatewayClientState.lastOptions = undefined;
+    vi.useRealTimers();
+    cliBackendsTesting.resetDepsForTest();
     delete process.env.OPENCLAW_SKIP_CHANNELS;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
@@ -39,7 +36,7 @@ describe("gateway cli backend live helpers", () => {
 
   it("applies and restores live env including minimal gateway mode", async () => {
     const { applyCliBackendLiveEnv, restoreCliBackendLiveEnv, snapshotCliBackendLiveEnv } =
-      await import("./gateway-cli-backend.live-helpers.js");
+      liveHelpers;
 
     process.env.OPENCLAW_SKIP_CHANNELS = "old-channels";
     process.env.OPENCLAW_SKIP_PROVIDERS = "old-providers";
@@ -80,27 +77,6 @@ describe("gateway cli backend live helpers", () => {
     expect(process.env.ANTHROPIC_API_KEY_OLD).toBe("old-anthropic-old");
   });
 
-  it("builds the live gateway client with test identity defaults", async () => {
-    const { connectTestGatewayClient } = await import("./gateway-cli-backend.live-helpers.js");
-
-    const client = await connectTestGatewayClient({
-      url: "ws://127.0.0.1:18789",
-      token: "gateway-token",
-    });
-
-    expect(client).toBeTruthy();
-    expect(gatewayClientState.lastOptions).toMatchObject({
-      url: "ws://127.0.0.1:18789",
-      token: "gateway-token",
-      clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: "vitest-live",
-      clientVersion: "dev",
-      mode: GATEWAY_CLIENT_MODES.TEST,
-      connectChallengeTimeoutMs: 45_000,
-    });
-    expect(gatewayClientState.lastOptions).not.toHaveProperty("requestTimeoutMs");
-  });
-
   it("defaults the model switch probe to Claude Sonnet -> Opus", async () => {
     const { resolveCliModelSwitchProbeTarget, shouldRunCliModelSwitchProbe } =
       await import("./gateway-cli-backend.live-helpers.js");
@@ -113,6 +89,56 @@ describe("gateway cli backend live helpers", () => {
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(true);
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-opus-4-6")).toBe(false);
     expect(shouldRunCliModelSwitchProbe("codex-cli", "codex-cli/gpt-5.5")).toBe(false);
+  });
+
+  it("rejects removed Codex CLI refs for live CLI backend selection", async () => {
+    const { resolveCliBackendLiveModelSelection } =
+      await import("./gateway-cli-backend.live-helpers.js");
+
+    expect(() =>
+      resolveCliBackendLiveModelSelection({
+        rawModel: "codex-cli/gpt-5.4",
+        defaultProvider: "claude-cli",
+      }),
+    ).toThrow(/codex-cli\/\.\.\. is no longer supported/u);
+  });
+
+  it("configures legacy CLI model refs as canonical provider models plus CLI runtime", async () => {
+    const { resolveCliBackendLiveModelSelection } =
+      await import("./gateway-cli-backend.live-helpers.js");
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [
+          {
+            pluginId: "claude",
+            backend: {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              config: { command: "claude", args: [] },
+            },
+          },
+        ],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+    });
+
+    expect(
+      resolveCliBackendLiveModelSelection({
+        rawModel: "claude-cli/claude-sonnet-4-6",
+        defaultProvider: "claude-cli",
+        modelSwitchTarget: "claude-cli/claude-opus-4-6",
+      }),
+    ).toEqual({
+      providerId: "claude-cli",
+      cliModelKey: "claude-cli/claude-sonnet-4-6",
+      configModelKey: "anthropic/claude-sonnet-4-6",
+      configModelSwitchTarget: "anthropic/claude-opus-4-6",
+      agentRuntime: { id: "claude-cli" },
+    });
   });
 
   it("lets env disable the model switch probe", async () => {

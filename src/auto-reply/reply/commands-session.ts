@@ -21,6 +21,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import { timestampMsToIsoString } from "../../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -29,7 +30,12 @@ import {
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import {
+  isSessionDefaultDirectiveValue,
+  normalizeFastMode,
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
@@ -78,18 +84,11 @@ function parseSessionDurationMs(raw: string): number {
   if (SESSION_DURATION_OFF_VALUES.has(normalized)) {
     return 0;
   }
-  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
-    const hours = Number(normalized);
-    if (!Number.isFinite(hours) || hours < 0) {
-      throw new Error("invalid duration");
-    }
-    return Math.round(hours * 60 * 60 * 1000);
-  }
   return parseDurationMs(normalized, { defaultUnit: "h" });
 }
 
 function formatSessionExpiry(expiresAt: number) {
-  return new Date(expiresAt).toISOString();
+  return timestampMsToIsoString(expiresAt) ?? "n/a";
 }
 
 function resolveSessionBindingDurationMs(
@@ -412,17 +411,29 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     };
   }
 
-  const nextMode = normalizeFastMode(rawMode);
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
+  const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
   if (nextMode === undefined) {
+    if (resetsToDefault) {
+      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+        delete targetSessionEntry.fastMode;
+        await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+      }
+      return {
+        shouldContinue: false,
+        reply: { text: "⚙️ Fast mode reset to default." },
+      };
+    }
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|on|off" },
+      reply: { text: "⚙️ Usage: /fast status|on|off|default" },
     };
   }
 
-  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
-    params.sessionEntry.fastMode = nextMode;
-    await persistSessionEntry(params);
+  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+    targetSessionEntry.fastMode = nextMode;
+    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
   }
 
   return {

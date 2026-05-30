@@ -13,11 +13,14 @@ Microsoft Teams ships as a bundled plugin in current OpenClaw releases, so no
 separate install is required in the normal packaged build.
 
 If you are on an older build or a custom install that excludes bundled Teams,
-install it manually:
+install the npm package directly:
 
 ```bash
 openclaw plugins install @openclaw/msteams
 ```
+
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Local checkout (when running from a git repo):
 
@@ -76,9 +79,9 @@ This single command:
 - Creates an Entra ID (Azure AD) application
 - Generates a client secret
 - Builds and uploads a Teams app manifest (with icons)
-- Registers the bot (Teams-managed by default — no Azure subscription needed)
+- Registers the bot (Teams-managed by default - no Azure subscription needed)
 
-The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams App ID** — note these for the next steps. It also offers to install the app in Teams directly.
+The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams App ID** - note these for the next steps. It also offers to install the app in Teams directly.
 
 **4. Configure OpenClaw** using the credentials from the output:
 
@@ -100,7 +103,7 @@ Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`,
 
 **5. Install the app in Teams**
 
-`teams app create` will prompt you to install the app — select "Install in Teams". If you skipped it, you can get the link later:
+`teams app create` will prompt you to install the app - select "Install in Teams". If you skipped it, you can get the link later:
 
 ```bash
 teams app get <teamsAppId> --install-link
@@ -143,15 +146,15 @@ Disable with:
 **DM access**
 
 - Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
-- `channels.msteams.allowFrom` should use stable AAD object IDs.
-- Do not rely on UPN/display-name matching for allowlists — they can change. OpenClaw disables direct name matching by default; opt in explicitly with `channels.msteams.dangerouslyAllowNameMatching: true`.
+- `channels.msteams.allowFrom` should use stable AAD object IDs or static sender access groups such as `accessGroup:core-team`.
+- Do not rely on UPN/display-name matching for allowlists - they can change. OpenClaw disables direct name matching by default; opt in explicitly with `channels.msteams.dangerouslyAllowNameMatching: true`.
 - The wizard can resolve names to IDs via Microsoft Graph when credentials allow.
 
 **Group access**
 
 - Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
-- `channels.msteams.groupAllowFrom` controls which senders can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
-- Set `groupPolicy: "open"` to allow any member (still mention‑gated by default).
+- `channels.msteams.groupAllowFrom` controls which senders or static sender access groups can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
+- Set `groupPolicy: "open"` to allow any member (still mention-gated by default).
 - To allow **no channels**, set `channels.msteams.groupPolicy: "disabled"`.
 
 Example:
@@ -161,7 +164,7 @@ Example:
   channels: {
     msteams: {
       groupPolicy: "allowlist",
-      groupAllowFrom: ["user@org.com"],
+      groupAllowFrom: ["00000000-0000-0000-0000-000000000000", "accessGroup:core-team"],
     },
   },
 }
@@ -170,8 +173,8 @@ Example:
 **Teams + channel allowlist**
 
 - Scope group/channel replies by listing teams and channels under `channels.msteams.teams`.
-- Keys should use stable team IDs and channel conversation IDs.
-- When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention‑gated).
+- Keys should use stable Teams conversation IDs from Teams links, not mutable display names.
+- When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention-gated).
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
 - On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow)
   and logs the mapping; unresolved team/channel names are kept as typed but ignored for routing by default unless `channels.msteams.dangerouslyAllowNameMatching: true` is enabled.
@@ -285,7 +288,7 @@ The Teams channel starts automatically when the plugin is available and `msteams
 
 ## Federated authentication (certificate plus managed identity)
 
-> Added in 2026.3.24
+> Added in 2026.4.11
 
 For production deployments, OpenClaw supports **federated authentication** as a more secure alternative to client secrets. Two methods are available:
 
@@ -413,7 +416,7 @@ For AKS deployments using workload identity:
        azure.workload.identity/use: "true"
    ```
 
-5. **Ensure network access** to IMDS (`169.254.169.254`) — if using NetworkPolicy, add an egress rule allowing traffic to `169.254.169.254/32` on port 80.
+5. **Ensure network access** to IMDS (`169.254.169.254`) - if using NetworkPolicy, add an egress rule allowing traffic to `169.254.169.254/32` on port 80.
 
 ### Auth type comparison
 
@@ -663,6 +666,58 @@ Teams delivers messages via HTTP webhook. If processing takes too long (e.g., sl
 
 OpenClaw handles this by returning quickly and sending replies proactively, but very slow responses may still cause issues.
 
+### Teams cloud and service URL support
+
+This SDK-backed Teams path is live-validated for Microsoft Teams public cloud.
+
+Inbound replies use the incoming Teams SDK turn context. Out-of-context proactive operations - sends, edits, deletes, cards, polls, file-consent messages, and queued long-running replies - use the stored conversation reference `serviceUrl`. Public cloud defaults to the Teams SDK public cloud environment and allows stored references on the public Teams Connector host: `https://smba.trafficmanager.net/`.
+
+Public cloud is the default. You do not need to set `channels.msteams.cloud` or `channels.msteams.serviceUrl` for normal public-cloud bots.
+
+For non-public Teams clouds, set `cloud` and the matching proactive boundary when Microsoft publishes one:
+
+- `channels.msteams.cloud` selects the Teams SDK cloud preset for authentication, JWT validation, token services, and Graph scope.
+- `channels.msteams.serviceUrl` selects the Bot Connector endpoint boundary used to validate stored conversation references before proactive sends, edits, deletes, cards, polls, file-consent messages, and queued long-running replies. It is required for USGov and DoD SDK clouds. For China/21Vianet, OpenClaw uses the SDK `China` preset and accepts stored/configured service URLs only on Azure China Bot Framework channel hosts.
+
+Microsoft publishes the global proactive Bot Connector endpoints in the [Create the conversation](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages?tabs=dotnet#create-the-conversation) section of the Teams proactive messaging docs. Use the incoming activity's `serviceUrl` when available; if you need a global proactive endpoint, use Microsoft's table.
+
+| Teams environment | OpenClaw config                                             | Proactive `serviceUrl`                             |
+| ----------------- | ----------------------------------------------------------- | -------------------------------------------------- |
+| Public            | no cloud/serviceUrl config needed                           | `https://smba.trafficmanager.net/teams`            |
+| GCC               | set `serviceUrl`; no separate Teams SDK cloud preset exists | `https://smba.infra.gcc.teams.microsoft.com/teams` |
+| GCC High          | `cloud: "USGov"` + `serviceUrl`                             | `https://smba.infra.gov.teams.microsoft.us/teams`  |
+| DoD               | `cloud: "USGovDoD"` + `serviceUrl`                          | `https://smba.infra.dod.teams.microsoft.us/teams`  |
+| China/21Vianet    | `cloud: "China"`                                            | use the incoming activity's `serviceUrl`           |
+
+Example for GCC, where Microsoft documents a separate proactive service URL but the Teams SDK does not expose a separate GCC cloud preset:
+
+```json
+{
+  "channels": {
+    "msteams": {
+      "serviceUrl": "https://smba.infra.gcc.teams.microsoft.com/teams"
+    }
+  }
+}
+```
+
+Example for GCC High:
+
+```json
+{
+  "channels": {
+    "msteams": {
+      "cloud": "USGov",
+      "serviceUrl": "https://smba.infra.gov.teams.microsoft.us/teams"
+    }
+  }
+}
+```
+
+`channels.msteams.serviceUrl` is restricted to supported Microsoft Teams Bot Connector hosts. When a service URL is configured, OpenClaw checks that the stored conversation `serviceUrl` uses the same host before proactive sends, edits, deletes, cards, polls, or queued long-running replies run. With the default public-cloud config, OpenClaw fails closed if a stored conversation points outside the public Teams Connector host. Receive a fresh message from the conversation after changing cloud/service URL settings so the stored conversation reference is current.
+
+China/21Vianet does not have a separate global proactive `smba` URL in Microsoft's Teams proactive endpoint table. Configure `cloud: "China"` so the Teams SDK uses Azure China auth, token, and JWT endpoints. Proactive sends then require a stored conversation reference from an incoming China Teams activity, or an explicitly configured service URL, on the Azure China Bot Framework channel boundary (`*.botframework.azure.cn`). Graph-backed Teams helpers are currently disabled for `cloud: "China"` until OpenClaw routes Graph requests through the Azure China Graph endpoint.
+
 ### Formatting
 
 Teams markdown is more limited than Slack or Discord:
@@ -677,6 +732,8 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 
 - `channels.msteams.enabled`: enable/disable the channel.
 - `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
+- `channels.msteams.cloud`: Teams SDK cloud environment (`Public`, `USGov`, `USGovDoD`, or `China`; default `Public`). Set this with `serviceUrl` for USGov/DoD SDK clouds; China uses the SDK preset and stored Azure China Bot Framework conversation references, with Graph-backed helpers disabled until Azure China Graph routing is implemented.
+- `channels.msteams.serviceUrl`: Bot Connector service URL boundary for SDK proactive operations. Public cloud uses the SDK default; set this for GCC (`https://smba.infra.gcc.teams.microsoft.com/teams`), GCC High, or DoD. China accepts Azure China Bot Framework channel hosts when the stored conversation reference comes from Teams operated by 21Vianet.
 - `channels.msteams.webhook.port` (default `3978`)
 - `channels.msteams.webhook.path` (default `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)
@@ -697,16 +754,16 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
 - `toolsBySender` keys should use explicit prefixes:
-  `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
+  `channel:`, `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
 - `channels.msteams.actions.memberInfo`: enable or disable the Graph-backed member info action (default: enabled when Graph credentials are available).
-- `channels.msteams.authType`: authentication type — `"secret"` (default) or `"federated"`.
+- `channels.msteams.authType`: authentication type - `"secret"` (default) or `"federated"`.
 - `channels.msteams.certificatePath`: path to PEM certificate file (federated + certificate auth).
 - `channels.msteams.certificateThumbprint`: certificate thumbprint (optional, not required for auth).
 - `channels.msteams.useManagedIdentity`: enable managed identity auth (federated mode).
 - `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
-## Routing & Sessions
+## Routing and sessions
 
 - Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
   - Direct messages share the main session (`agent:<agentId>:<mainKey>`).
@@ -749,7 +806,28 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 }
 ```
 
-## Attachments & Images
+### Resolution precedence
+
+When the bot sends a reply into a channel, `replyStyle` is resolved from the most specific override down to the default. The first non-`undefined` value wins:
+
+1. **Per-channel** — `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`
+2. **Per-team** — `channels.msteams.teams.<teamId>.replyStyle`
+3. **Global** — `channels.msteams.replyStyle`
+4. **Implicit default** — derived from `requireMention`:
+   - `requireMention: true` → `thread`
+   - `requireMention: false` → `top-level`
+
+If you set `requireMention: false` globally without an explicit `replyStyle`, mentions in Posts-style channels will surface as top-level posts even when the inbound was a thread reply. Pin `replyStyle: "thread"` at the global, team, or channel level to avoid surprises.
+
+### Thread context preservation
+
+When `replyStyle: "thread"` is in effect and the bot was @mentioned from inside a channel thread, OpenClaw re-attaches the original thread root to the outbound conversation reference (`19:…@thread.tacv2;messageid=<root>`) so the reply lands inside the same thread. This holds for both live (in-turn) sends and proactive sends made after the Bot Framework turn context has expired (e.g., long-running agents, queued tool-call replies via `mcp__openclaw__message`).
+
+The thread root is taken from the stored `threadId` on the conversation reference. Older stored references that predate `threadId` fall back to `activityId` (whatever inbound activity last seeded the conversation), so existing deployments keep working without a re-seed.
+
+When `replyStyle: "top-level"` is in effect, channel-thread inbounds are intentionally answered as new top-level posts — no thread suffix is attached. This is the correct behavior for Threads-style channels; if you see top-level posts where you expected threaded replies, your `replyStyle` is set incorrectly for that channel.
+
+## Attachments and images
 
 **Current limitations:**
 
@@ -843,9 +921,9 @@ OpenClaw sends Teams polls as Adaptive Cards (there is no native Teams poll API)
 
 ## Presentation cards
 
-Send semantic presentation payloads to Teams users or conversations using the `message` tool or CLI. OpenClaw renders them as Teams Adaptive Cards from the generic presentation contract.
+Send semantic presentation payloads to Teams users or conversations using the `message` tool, CLI, or normal reply delivery. OpenClaw renders them as Teams Adaptive Cards from the generic presentation contract.
 
-The `presentation` parameter accepts semantic blocks. When `presentation` is provided, the message text is optional.
+The `presentation` parameter accepts semantic blocks. When `presentation` is provided, the message text is optional. Buttons render as Adaptive Card submit or URL actions. Select menus are not native in the Teams renderer yet, so OpenClaw downgrades them to readable text before delivery.
 
 **Agent tool:**
 
@@ -940,7 +1018,7 @@ The `groupId` query parameter in Teams URLs is **NOT** the team ID used for conf
 ```
 https://teams.microsoft.com/l/team/19%3ABk4j...%40thread.tacv2/conversations?groupId=...
                                     └────────────────────────────┘
-                                    Team ID (URL-decode this)
+                                    Team conversation ID (URL-decode this)
 ```
 
 **Channel URL:**
@@ -953,9 +1031,9 @@ https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?gr
 
 **For config:**
 
-- Team ID = path segment after `/team/` (URL-decoded, e.g., `19:Bk4j...@thread.tacv2`)
-- Channel ID = path segment after `/channel/` (URL-decoded)
-- **Ignore** the `groupId` query parameter
+- Team key = path segment after `/team/` (URL-decoded, e.g., `19:Bk4j...@thread.tacv2`; older tenants may show `@thread.skype`, which is also valid)
+- Channel key = path segment after `/channel/` (URL-decoded)
+- **Ignore** the `groupId` query parameter for OpenClaw routing. It is the Microsoft Entra group ID, not the Bot Framework conversation ID used in incoming Teams activities.
 
 ## Private channels
 
@@ -1011,8 +1089,8 @@ Bots have limited support in private channels:
 
 ## Related
 
-- [Channels Overview](/channels) — all supported channels
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
-- [Security](/gateway/security) — access model and hardening
+- [Channels Overview](/channels) - all supported channels
+- [Pairing](/channels/pairing) - DM authentication and pairing flow
+- [Groups](/channels/groups) - group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Security](/gateway/security) - access model and hardening

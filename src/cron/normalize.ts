@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import {
   TimeoutSecondsFieldSchema,
@@ -12,8 +13,12 @@ import {
   parseOptionalField,
 } from "./delivery-field-schemas.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import { inferLegacyName } from "./service/normalize.js";
-import { assertSafeCronSessionTargetId } from "./session-target.js";
+import {
+  assertSafeCronSessionTargetId,
+  resolveCronCurrentSessionTarget,
+} from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -50,9 +55,7 @@ function normalizeTrimmedStringArray(
   options?: { allowNull?: boolean },
 ): string[] | null | undefined {
   if (Array.isArray(value)) {
-    const normalized = value
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry));
+    const normalized = normalizeTrimmedStringList(value);
     if (normalized.length === 0 && value.length > 0) {
       return undefined;
     }
@@ -71,6 +74,8 @@ function coerceSchedule(schedule: UnknownRecord) {
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
   const legacyCronRaw = normalizeOptionalString(schedule.cron) ?? "";
   const normalizedExpr = exprRaw || legacyCronRaw;
+  const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
+  const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
   const atMsRaw = schedule.atMs;
   const atRaw = schedule.at;
   const atString = normalizeOptionalString(atRaw) ?? "";
@@ -92,7 +97,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       typeof schedule.atMs === "string"
     ) {
       next.kind = "at";
-    } else if (typeof schedule.everyMs === "number") {
+    } else if (everyMs !== undefined) {
       next.kind = "every";
     } else if (normalizedExpr) {
       next.kind = "cron";
@@ -112,6 +117,13 @@ function coerceSchedule(schedule: UnknownRecord) {
     next.expr = normalizedExpr;
   } else if ("expr" in next) {
     delete next.expr;
+  }
+
+  if (everyMs !== undefined && everyMs >= 1) {
+    next.everyMs = Math.floor(everyMs);
+  }
+  if (anchorMs !== undefined && anchorMs >= 0) {
+    next.anchorMs = Math.floor(anchorMs);
   }
   if ("cron" in next) {
     delete next.cron;
@@ -170,13 +182,17 @@ function coercePayload(payload: UnknownRecord) {
     next.kind = kindRaw;
   }
   if (!next.kind) {
-    const hasMessage = Boolean(normalizeOptionalString(next.message));
-    const hasText = Boolean(normalizeOptionalString(next.text));
-    if (hasMessage) {
+    const message = normalizeOptionalString(next.message);
+    const text = normalizeOptionalString(next.text);
+    const hasAgentTurnHint = hasAgentTurnPayloadHint(next);
+    if (message) {
       next.kind = "agentTurn";
-    } else if (hasText) {
+    } else if (text && hasAgentTurnHint) {
+      next.kind = "agentTurn";
+      next.message = text;
+    } else if (text) {
       next.kind = "systemEvent";
-    } else if (hasAgentTurnPayloadHint(next)) {
+    } else if (hasAgentTurnHint) {
       // Accept partial agentTurn payload patches that only tweak agent-turn-only fields.
       next.kind = "agentTurn";
     }
@@ -311,6 +327,9 @@ function inferTopLevelPayload(next: UnknownRecord) {
 
   const text = normalizeOptionalString(next.text) ?? "";
   if (text) {
+    if (hasAgentTurnPayloadHint(next)) {
+      return { kind: "agentTurn", message: text } satisfies UnknownRecord;
+    }
     return { kind: "systemEvent", text } satisfies UnknownRecord;
   }
 
@@ -372,8 +391,11 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
   copyString("model");
   copyString("thinking");
 
-  if (typeof payload.timeoutSeconds !== "number" && typeof next.timeoutSeconds === "number") {
-    payload.timeoutSeconds = next.timeoutSeconds;
+  if (typeof payload.timeoutSeconds !== "number" && "timeoutSeconds" in next) {
+    const timeoutSeconds = parseOptionalField(TimeoutSecondsFieldSchema, next.timeoutSeconds);
+    if (timeoutSeconds !== undefined) {
+      payload.timeoutSeconds = timeoutSeconds;
+    }
   }
   if (!Array.isArray(payload.fallbacks) && Array.isArray(next.fallbacks)) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
@@ -574,28 +596,14 @@ export function normalizeCronJobInput(
       }
     }
 
-    // Resolve "current" sessionTarget to the actual sessionKey from context
-    if (next.sessionTarget === "current") {
-      if (options.sessionContext?.sessionKey) {
-        const sessionKey = options.sessionContext.sessionKey.trim();
-        if (sessionKey) {
-          // Store as session:customId format for persistence
-          next.sessionTarget = `session:${assertSafeCronSessionTargetId(sessionKey)}`;
-        }
-      }
-      // If "current" wasn't resolved, fall back to "isolated" behavior
-      // This handles CLI/headless usage where no session context exists
-      if (next.sessionTarget === "current") {
-        next.sessionTarget = "isolated";
-      }
-    }
-    if (next.sessionTarget === "current") {
-      const sessionKey = options.sessionContext?.sessionKey?.trim();
-      if (sessionKey) {
-        next.sessionTarget = `session:${assertSafeCronSessionTargetId(sessionKey)}`;
-      } else {
-        next.sessionTarget = "isolated";
-      }
+    const resolvedSessionTarget = resolveCronCurrentSessionTarget({
+      sessionTarget: typeof next.sessionTarget === "string" ? next.sessionTarget : undefined,
+      sessionKey: options.sessionContext?.sessionKey,
+    });
+    if (resolvedSessionTarget !== undefined) {
+      next.sessionTarget = resolvedSessionTarget;
+    } else {
+      delete next.sessionTarget;
     }
     if (
       "schedule" in next &&

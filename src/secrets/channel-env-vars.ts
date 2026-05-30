@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 export { isSafeChannelEnvVarTriggerName } from "./channel-env-var-names.js";
 
 type ChannelEnvVarLookupParams = {
@@ -32,14 +33,13 @@ function appendUniqueEnvVarCandidates(
 export function resolveChannelEnvVars(
   params?: ChannelEnvVarLookupParams,
 ): Record<string, readonly string[]> {
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: params?.config,
+  const snapshot = loadPluginMetadataSnapshot({
+    config: params?.config ?? {},
     workspaceDir: params?.workspaceDir,
-    env: params?.env,
-    includeDisabled: true,
+    env: params?.env ?? process.env,
   });
   const candidates: Record<string, string[]> = {};
-  for (const plugin of registry.plugins) {
+  for (const plugin of snapshot.plugins) {
     if (!plugin.channelEnvVars) {
       continue;
     }
@@ -59,5 +59,5 @@ export function getChannelEnvVars(channelId: string, params?: ChannelEnvVarLooku
 }
 
 export function listKnownChannelEnvVarNames(params?: ChannelEnvVarLookupParams): string[] {
-  return [...new Set(Object.values(resolveChannelEnvVars(params)).flatMap((keys) => keys))];
+  return uniqueStrings(Object.values(resolveChannelEnvVars(params)).flatMap((keys) => keys));
 }

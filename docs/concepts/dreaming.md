@@ -72,7 +72,7 @@ Dreaming can ingest redacted session transcripts into the dreaming corpus. When 
 
 ## Dream Diary
 
-Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn and appends a short diary entry. It uses the default runtime model unless `dreaming.model` is configured.
+Dreaming also keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has enough material, `memory-core` runs a best-effort background subagent turn and appends a short diary entry. It uses the default runtime model unless `dreaming.model` is configured. If the configured model is unavailable, Dream Diary retries once with the session default model.
 
 <Note>
 This diary is for human reading in the Dreams UI, not a promotion source. Dreaming-generated diary/report artifacts are excluded from short-term promotion. Only grounded memory snippets are eligible to promote into `MEMORY.md`.
@@ -86,6 +86,7 @@ There is also a grounded historical backfill lane for review and recovery work:
     - `memory rem-backfill --path ...` writes reversible grounded diary entries into `DREAMS.md`.
     - `memory rem-backfill --path ... --stage-short-term` stages grounded durable candidates into the same short-term evidence store the normal deep phase already uses.
     - `memory rem-backfill --rollback` and `--rollback-short-term` remove those staged backfill artifacts without touching ordinary diary entries or live short-term recall.
+
   </Accordion>
 </AccordionGroup>
 
@@ -106,9 +107,23 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 
 Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
 
+## QA shadow trial report coverage
+
+QA Lab includes a report-only scenario for exploring how a future dreaming
+shadow trial could review a candidate memory before promotion. The scenario asks
+an agent to compare a baseline answer with an answer that can use the candidate
+memory, then write a local report with a verdict, reason, and risk flags.
+
+This coverage is intentionally scoped to QA. It verifies that the report artifact
+stays separate from `MEMORY.md` and that the agent does not claim the candidate
+was promoted. It does not add production shadow-trial behavior or change the
+deep-phase promotion engine.
+
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.
+
+The sweep includes the primary runtime workspace and any configured agent workspaces, deduped by path, so subagent workspace fan-out does not exclude the main agent's `DREAMS.md` and memory state.
 
 Default cadence behavior:
 
@@ -214,13 +229,16 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 <ParamField path="model" type="string">
   Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
 </ParamField>
+<ParamField path="phases.deep.maxPromotedSnippetTokens" type="number" default="160">
+  Maximum estimated token count kept from each short-term recall snippet promoted into `MEMORY.md`. Ranking provenance remains visible.
+</ParamField>
 
 <Warning>
-`dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`.
+`dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`. Trust or allowlist failures stay visible instead of falling back silently; the retry only covers model-unavailable errors.
 </Warning>
 
 <Note>
-Phase policy, thresholds, and storage behavior are internal implementation details (not user-facing config). See [Memory configuration reference](/reference/memory-config#dreaming) for the full key list.
+Most phase policy, thresholds, and storage behavior are internal implementation details. See [Memory configuration reference](/reference/memory-config#dreaming) for the full key list.
 </Note>
 
 ## Dreams UI
@@ -233,6 +251,10 @@ When enabled, the Gateway **Dreams** tab shows:
 - next scheduled run timing
 - a distinct grounded Scene lane for staged historical replay entries
 - an expandable Dream Diary reader backed by `doctor.memory.dreamDiary`
+
+## Dreaming never runs: status shows blocked
+
+If `openclaw memory status` reports `Dreaming status: blocked`, the managed cron exists but the default agent heartbeat is not firing. Check that heartbeat is enabled for the default agent and that its target is not `none`, then run `openclaw memory status --deep` again after the next heartbeat interval.
 
 ## Related
 

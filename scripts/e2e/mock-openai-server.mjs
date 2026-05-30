@@ -1,48 +1,47 @@
 import fs from "node:fs";
 import http from "node:http";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { readBody, writeJson, writeSse } from "./lib/mock-openai-http.mjs";
 
-const port = Number(process.env.MOCK_PORT ?? process.env.OPENCLAW_MOCK_OPENAI_PORT);
+const port =
+  process.env.MOCK_PORT != null
+    ? readPositiveIntEnv("MOCK_PORT")
+    : readPositiveIntEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
 
-if (!Number.isInteger(port) || port <= 0) {
-  throw new Error("missing valid MOCK_PORT or OPENCLAW_MOCK_OPENAI_PORT");
-}
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
-}
-
-function writeJson(res, status, body) {
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
 function responseEvents(text) {
+  const itemId = "msg_e2e_1";
   return [
     {
       type: "response.output_item.added",
       item: {
         type: "message",
-        id: "msg_e2e_1",
+        id: itemId,
         role: "assistant",
         content: [],
         status: "in_progress",
       },
     },
     {
+      type: "response.output_text.delta",
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      delta: text,
+    },
+    {
+      type: "response.output_text.done",
+      item_id: itemId,
+      output_index: 0,
+      content_index: 0,
+      text,
+    },
+    {
       type: "response.output_item.done",
       item: {
         type: "message",
-        id: "msg_e2e_1",
+        id: itemId,
         role: "assistant",
         status: "completed",
         content: [{ type: "output_text", text, annotations: [] }],
@@ -51,7 +50,17 @@ function responseEvents(text) {
     {
       type: "response.completed",
       response: {
+        id: "resp_e2e",
         status: "completed",
+        output: [
+          {
+            type: "message",
+            id: itemId,
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text, annotations: [] }],
+          },
+        ],
         usage: {
           input_tokens: 11,
           output_tokens: 7,
@@ -63,26 +72,13 @@ function responseEvents(text) {
   ];
 }
 
-function writeSse(res, events) {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  for (const event of events) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  res.write("data: [DONE]\n\n");
-  res.end();
-}
-
-function writeChatCompletion(res, stream) {
+function writeChatCompletion(res, stream, text = successMarker) {
   if (stream) {
     writeSse(res, [
       {
         id: "chatcmpl_e2e",
         object: "chat.completion.chunk",
-        choices: [{ index: 0, delta: { role: "assistant", content: successMarker } }],
+        choices: [{ index: 0, delta: { role: "assistant", content: text } }],
       },
       {
         id: "chatcmpl_e2e",
@@ -95,11 +91,28 @@ function writeChatCompletion(res, stream) {
   writeJson(res, 200, {
     id: "chatcmpl_e2e",
     object: "chat.completion",
-    choices: [
-      { index: 0, message: { role: "assistant", content: successMarker }, finish_reason: "stop" },
-    ],
+    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
     usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 },
   });
+}
+
+function writeImageGeneration(res) {
+  writeJson(res, 200, {
+    created: Math.floor(Date.now() / 1000),
+    data: [
+      {
+        b64_json:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=",
+        mime_type: "image/png",
+        revised_prompt: "openclaw mock image",
+      },
+    ],
+  });
+}
+
+function resolveResponseText(bodyText) {
+  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_OK(?:_\d+)?\b/gu));
+  return matches.at(-1)?.[0] ?? successMarker;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -131,6 +144,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/v1/responses") {
+    const responseText = resolveResponseText(bodyText);
     if (body.stream === false) {
       writeJson(res, 200, {
         id: "resp_e2e",
@@ -142,19 +156,43 @@ const server = http.createServer(async (req, res) => {
             id: "msg_e2e_1",
             role: "assistant",
             status: "completed",
-            content: [{ type: "output_text", text: successMarker, annotations: [] }],
+            content: [{ type: "output_text", text: responseText, annotations: [] }],
           },
         ],
         usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
       });
       return;
     }
-    writeSse(res, responseEvents(successMarker));
+    writeSse(res, responseEvents(responseText));
     return;
   }
 
   if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-    writeChatCompletion(res, body.stream !== false);
+    const responseText = resolveResponseText(bodyText);
+    writeChatCompletion(res, body.stream !== false, responseText);
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+    const input = Array.isArray(body.input) ? body.input : [body.input ?? ""];
+    writeJson(res, 200, {
+      object: "list",
+      data: input.map((_, index) => ({
+        object: "embedding",
+        index,
+        embedding: [1, index / 100, 0, 0],
+      })),
+      model: body.model ?? "text-embedding-3-small",
+      usage: { prompt_tokens: input.length, total_tokens: input.length },
+    });
+    return;
+  }
+
+  if (
+    req.method === "POST" &&
+    (url.pathname === "/v1/images/generations" || url.pathname === "/v1/images/edits")
+  ) {
+    writeImageGeneration(res);
     return;
   }
 

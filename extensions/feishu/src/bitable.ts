@@ -1,5 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
@@ -208,6 +210,13 @@ async function listRecords(
   };
 }
 
+function readBitableListRecordsPageSize(params: Record<string, unknown>): number | undefined {
+  return readPositiveIntegerParam(params, "page_size", {
+    max: 500,
+    message: "page_size must be a positive integer between 1 and 500",
+  });
+}
+
 async function getRecord(client: Lark.Client, appToken: string, tableId: string, recordId: string) {
   const res = await client.bitable.appTableRecord.get({
     path: { app_token: appToken, table_id: tableId, record_id: recordId },
@@ -244,6 +253,35 @@ type CleanupLogger = {
 
 /** Default field types created for new Bitable tables (to be cleaned up) */
 const DEFAULT_CLEANUP_FIELD_TYPES = new Set([3, 5, 17]); // SingleSelect, DateTime, Attachment
+
+function isDefaultEmptyBitableFieldValue(value: unknown): boolean {
+  if (value === undefined || value === null || value === "") {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.every(isDefaultEmptyBitableFieldValue);
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    if (keys.length === 0) {
+      return true;
+    }
+    if ("text" in record && keys.every((key) => key === "text" || key === "type")) {
+      return record.text === undefined || record.text === null || record.text === "";
+    }
+    return Object.values(record).every(isDefaultEmptyBitableFieldValue);
+  }
+  return false;
+}
+
+function isPlaceholderBitableRecord(fields: unknown): boolean {
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
+    return true;
+  }
+  const values = Object.values(fields);
+  return values.every(isDefaultEmptyBitableFieldValue);
+}
 
 /** Clean up default placeholder rows and fields in a newly created Bitable table */
 async function cleanupNewBitable(
@@ -315,7 +353,7 @@ async function cleanupNewBitable(
 
   if (recordsRes.code === 0 && recordsRes.data?.items) {
     const emptyRecordIds = recordsRes.data.items
-      .filter((r) => !r.fields || Object.keys(r.fields).length === 0)
+      .filter((r) => isPlaceholderBitableRecord(r.fields))
       .map((r) => r.record_id)
       .filter((id): id is string => Boolean(id));
 
@@ -467,13 +505,10 @@ const ListRecordsSchema = Type.Object({
     description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
   }),
   table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
-  page_size: Type.Optional(
-    Type.Number({
-      description: "Number of records per page (1-500, default 100)",
-      minimum: 1,
-      maximum: 500,
-    }),
-  ),
+  page_size: optionalPositiveIntegerSchema({
+    description: "Number of records per page (1-500, default 100)",
+    maximum: 500,
+  }),
   page_token: Type.Optional(
     Type.String({ description: "Pagination token from previous response" }),
   ),
@@ -543,13 +578,11 @@ const UpdateRecordSchema = Type.Object({
 
 export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_bitable: No config available, skipping bitable tools");
     return;
   }
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_bitable: No Feishu accounts configured, skipping bitable tools");
     return;
   }
 
@@ -628,7 +661,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         getClient(params, defaultAccountId),
         params.app_token,
         params.table_id,
-        params.page_size,
+        readBitableListRecordsPageSize(params as Record<string, unknown>),
         params.page_token,
       );
     },
@@ -732,6 +765,4 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
       );
     },
   });
-
-  api.logger.debug?.("feishu_bitable: Registered bitable tools");
 }

@@ -342,13 +342,41 @@ describe("runMessageAction context isolation", () => {
       },
       message: 'Channel id "U12345678" resolved to a user target.',
     },
-  ])("$name", async ({ action, cfg, actionParams, toolContext, message }) => {
+    {
+      name: "blocks actions outside the per-agent allowlist",
+      action: "channel-info" as const,
+      cfg: {
+        ...workspaceConfig,
+        agents: {
+          list: [
+            {
+              id: "sandbox",
+              tools: {
+                message: {
+                  actions: {
+                    allow: ["send"],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      agentId: "sandbox",
+      actionParams: {
+        channel: "workspace",
+        channelId: "C12345678",
+      },
+      message: 'Message action "channel-info" is disabled for this agent.',
+    },
+  ])("$name", async ({ action, cfg, actionParams, toolContext, message, agentId }) => {
     await expect(
       runDryAction({
         cfg,
         action,
         actionParams,
         toolContext,
+        agentId,
       }),
     ).rejects.toThrow(message);
   });
@@ -384,6 +412,12 @@ describe("runMessageAction context isolation", () => {
   ])("aborts $name when abortSignal is already aborted", async ({ run }) => {
     const controller = new AbortController();
     controller.abort();
-    await expect(run(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    let rejection: unknown;
+    try {
+      await run(controller.signal);
+    } catch (error) {
+      rejection = error;
+    }
+    expect((rejection as { name?: unknown }).name).toBe("AbortError");
   });
 });

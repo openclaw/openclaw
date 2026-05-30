@@ -24,6 +24,7 @@ Auto-compaction is on by default. It runs when the session nears the context lim
 
 You will see:
 
+- `embedded run auto-compaction start` / `complete` in normal Gateway logs.
 - `🧹 Auto-compaction complete` in verbose mode.
 - `/status` showing `🧹 Compactions: <count>`.
 
@@ -53,7 +54,7 @@ Type `/compact` in any chat to force a compaction. Add instructions to guide the
 /compact Focus on the API design decisions
 ```
 
-When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction honors that Pi cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
+When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction honors that OpenClaw cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
 
 ## Configuration
 
@@ -89,7 +90,7 @@ This works with local models too, for example a second Ollama model dedicated to
 }
 ```
 
-When unset, compaction uses the agent's primary model.
+When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
 ### Identifier preservation
 
@@ -105,14 +106,14 @@ The byte guard requires `truncateAfterCompaction: true`. Without transcript rota
 
 ### Successor transcripts
 
-When `agents.defaults.compaction.truncateAfterCompaction` is enabled, OpenClaw does not rewrite the existing transcript in place. It creates a new active successor transcript from the compaction summary, preserved state, and unsummarized tail, then keeps the previous JSONL as the archived checkpoint source.
+When `agents.defaults.compaction.truncateAfterCompaction` is enabled, OpenClaw does not rewrite the existing transcript in place. It creates a new active successor transcript from the compaction summary, preserved state, and unsummarized tail, then records checkpoint metadata that points branch/restore flows at that compacted successor.
 Successor transcripts also drop exact duplicate long user turns that arrive
 inside a short retry window, so channel retry storms are not carried into the
 next active transcript after compaction.
 
-Pre-compaction checkpoints are retained only while they stay below OpenClaw's
-checkpoint size cap; oversized active transcripts still compact, but OpenClaw
-skips the large debug snapshot instead of doubling disk usage.
+OpenClaw no longer writes separate `.checkpoint.*.jsonl` copies for new
+compactions. Existing legacy checkpoint files can still be used while referenced
+and are pruned by normal session cleanup.
 
 ### Compaction notices
 
@@ -132,7 +133,23 @@ By default, compaction runs silently. Set `notifyUser` to show brief status mess
 
 ### Memory flush
 
-Before compaction, OpenClaw can run a **silent memory flush** turn to store durable notes to disk. See [Memory](/concepts/memory) for details and config.
+Before compaction, OpenClaw can run a **silent memory flush** turn to store durable notes to disk. Set `agents.defaults.compaction.memoryFlush.model` when this housekeeping turn should use a local model instead of the active conversation model:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "memoryFlush": {
+          "model": "ollama/qwen3:8b"
+        }
+      }
+    }
+  }
+}
+```
+
+The memory-flush model override is exact and does not inherit the active session fallback chain. See [Memory](/concepts/memory) for details and config.
 
 ## Pluggable compaction providers
 

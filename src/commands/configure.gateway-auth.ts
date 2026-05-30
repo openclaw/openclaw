@@ -1,5 +1,6 @@
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -13,10 +14,18 @@ import {
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
+import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-catalog.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
-import { randomToken } from "./onboard-helpers.js";
+import { randomToken } from "./random-token.js";
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
+type ProviderChoiceModelPrompt = {
+  provider?: string;
+  allowedKeys?: string[];
+  initialSelections?: string[];
+  message?: string;
+  loadCatalog?: boolean;
+};
 
 /** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
 function sanitizeTokenValue(value: unknown): string | undefined {
@@ -30,19 +39,12 @@ function sanitizeTokenValue(value: unknown): string | undefined {
   return trimmed;
 }
 
-async function resolveProviderChoiceModelAllowlist(params: {
+async function resolveProviderChoiceModelPrompt(params: {
   authChoice: string;
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<
-  | {
-      allowedKeys?: string[];
-      initialSelections?: string[];
-      message?: string;
-    }
-  | undefined
-> {
+}): Promise<ProviderChoiceModelPrompt | undefined> {
   const { resolvePluginProviders, resolveProviderPluginChoice } =
     await import("../plugins/provider-auth-choice.runtime.js");
   const providers = resolvePluginProviders({
@@ -51,10 +53,88 @@ async function resolveProviderChoiceModelAllowlist(params: {
     env: params.env,
     mode: "setup",
   });
-  return resolveProviderPluginChoice({
+  const resolved = resolveProviderPluginChoice({
     providers,
     choice: params.authChoice,
-  })?.wizard?.modelAllowlist;
+  });
+  const wizard = resolved?.provider.wizard?.setup;
+  if (!wizard) {
+    return resolved?.provider.id ? { provider: resolved.provider.id } : undefined;
+  }
+  return {
+    provider: resolved.provider.id,
+    ...wizard.modelAllowlist,
+    ...(wizard.modelSelection?.promptWhenAuthChoiceProvided === true ? { loadCatalog: true } : {}),
+  };
+}
+
+function hasConfiguredProviderModels(cfg: OpenClawConfig, provider: string | undefined): boolean {
+  if (!provider) {
+    return false;
+  }
+  if ((cfg.models?.providers?.[provider]?.models?.length ?? 0) > 0) {
+    return true;
+  }
+  const providerPrefix = `${provider}/`;
+  return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
+    key.trim().startsWith(providerPrefix),
+  );
+}
+
+function hasStaticManifestCatalogRows(cfg: OpenClawConfig, provider: string | undefined): boolean {
+  if (!provider) {
+    return false;
+  }
+  return (
+    loadStaticManifestCatalogRowsForList({
+      cfg,
+      providerFilter: provider,
+    }).length > 0
+  );
+}
+
+function listConfiguredModelProviders(cfg: OpenClawConfig): string[] {
+  return Object.entries(cfg.models?.providers ?? {})
+    .filter(([, provider]) => (provider.models?.length ?? 0) > 0)
+    .map(([provider]) => provider);
+}
+
+function resolveSingleConfiguredProvider(cfg: OpenClawConfig): string | undefined {
+  const configuredProviders = listConfiguredModelProviders(cfg);
+  return configuredProviders.length === 1 ? configuredProviders[0] : undefined;
+}
+
+function resolveProviderFromModelRef(model: string | undefined): string | undefined {
+  const trimmed = model?.trim();
+  const slashIndex = trimmed?.indexOf("/") ?? -1;
+  return slashIndex > 0 ? trimmed?.slice(0, slashIndex) : undefined;
+}
+
+function resolveConfiguredProviderFromAuthChange(params: {
+  before: OpenClawConfig;
+  after: OpenClawConfig;
+  preferredProvider?: string;
+}): string | undefined {
+  if (hasConfiguredProviderModels(params.after, params.preferredProvider)) {
+    return params.preferredProvider;
+  }
+
+  const beforeProviders = params.before.models?.providers ?? {};
+  const configuredProviders = listConfiguredModelProviders(params.after);
+  const changedProviders = configuredProviders.filter((provider) => {
+    const beforeCount = beforeProviders[provider]?.models?.length ?? 0;
+    const afterCount = params.after.models?.providers?.[provider]?.models?.length ?? 0;
+    return afterCount > beforeCount;
+  });
+
+  if (changedProviders.length === 1) {
+    return changedProviders[0];
+  }
+
+  return (
+    params.preferredProvider ??
+    (configuredProviders.length === 1 ? configuredProviders[0] : undefined)
+  );
 }
 
 export function buildGatewayAuthConfig(params: {
@@ -88,7 +168,9 @@ export function buildGatewayAuthConfig(params: {
   }
   if (params.mode === "trusted-proxy") {
     if (!params.trustedProxy) {
-      throw new Error("trustedProxy config is required when mode is trusted-proxy");
+      throw new Error(
+        `trustedProxy config is required when mode is trusted-proxy. Run ${formatCliCommand("openclaw configure --section gateway")} to configure Gateway auth interactively.`,
+      );
     }
     return { ...base, mode: "trusted-proxy", trustedProxy: params.trustedProxy };
   }
@@ -134,7 +216,8 @@ export async function promptAuthConfig(
         allowKeep: true,
         ignoreAllowlist: true,
         includeProviderPluginSetups: false,
-        loadCatalog: false,
+        loadCatalog: true,
+        browseCatalogOnDemand: true,
         preferredProvider,
         workspaceDir: resolveDefaultAgentWorkspaceDir(),
         runtime,
@@ -144,10 +227,12 @@ export async function promptAuthConfig(
       }
       if (modelSelection.model) {
         next = applyPrimaryModel(next, modelSelection.model);
+        preferredProvider = resolveProviderFromModelRef(modelSelection.model) ?? preferredProvider;
       }
       break;
     }
 
+    const beforeAuthConfig = next;
     const applied = await applyAuthChoice({
       authChoice,
       config: next,
@@ -157,6 +242,11 @@ export async function promptAuthConfig(
       preserveExistingDefaultModel: true,
     });
     next = applied.config;
+    preferredProvider = resolveConfiguredProviderFromAuthChange({
+      before: beforeAuthConfig,
+      after: next,
+      preferredProvider,
+    });
     if (applied.retrySelection) {
       continue;
     }
@@ -164,20 +254,35 @@ export async function promptAuthConfig(
   }
 
   if (authChoice !== "custom-api-key") {
-    const modelAllowlist = await resolveProviderChoiceModelAllowlist({
+    const modelPrompt = await resolveProviderChoiceModelPrompt({
       authChoice,
       config: next,
       workspaceDir: resolveDefaultAgentWorkspaceDir(),
       env: process.env,
     });
+    const promptProvider =
+      modelPrompt?.provider ?? preferredProvider ?? resolveSingleConfiguredProvider(next);
+    const hasPromptProviderConfiguredModels = hasConfiguredProviderModels(next, promptProvider);
+    const hasPromptProviderStaticManifestRows = hasStaticManifestCatalogRows(next, promptProvider);
+    const shouldLoadModelCatalog =
+      modelPrompt?.loadCatalog ??
+      (hasPromptProviderConfiguredModels || hasPromptProviderStaticManifestRows);
+    const useProviderScopedCatalog = Boolean(
+      promptProvider &&
+      shouldLoadModelCatalog &&
+      (modelPrompt?.loadCatalog === true || hasPromptProviderConfiguredModels),
+    );
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
-      allowedKeys: modelAllowlist?.allowedKeys,
-      initialSelections: modelAllowlist?.initialSelections,
-      message: modelAllowlist?.message,
-      preferredProvider,
-      loadCatalog: false,
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      env: process.env,
+      allowedKeys: modelPrompt?.allowedKeys,
+      initialSelections: modelPrompt?.initialSelections,
+      message: modelPrompt?.message,
+      preferredProvider: promptProvider,
+      providerScopedCatalog: useProviderScopedCatalog,
+      loadCatalog: shouldLoadModelCatalog,
     });
     if (allowlistSelection.models) {
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {

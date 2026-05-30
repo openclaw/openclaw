@@ -1,5 +1,8 @@
+import { formatSlackError } from "../errors.js";
+
 const SLACK_AUTH_ERROR_RE =
   /account_inactive|invalid_auth|token_revoked|token_expired|not_authed|org_login_required|team_access_not_granted|missing_scope|cannot_find_service|invalid_token/i;
+const NO_ERROR_DETAIL = "no error detail";
 
 export const SLACK_SOCKET_RECONNECT_POLICY = {
   initialMs: 2_000,
@@ -9,7 +12,7 @@ export const SLACK_SOCKET_RECONNECT_POLICY = {
   maxAttempts: 12,
 } as const;
 
-export type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
+type SlackSocketDisconnectEvent = "disconnect" | "unable_to_socket_mode_start" | "error";
 
 type EmitterLike = {
   on: (event: string, listener: (...args: unknown[]) => void) => unknown;
@@ -89,20 +92,9 @@ export function waitForSlackSocketDisconnect(
  * and retrying will never succeed — continuing to retry blocks the entire gateway.
  */
 export function isNonRecoverableSlackAuthError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  return SLACK_AUTH_ERROR_RE.test(msg);
+  return SLACK_AUTH_ERROR_RE.test(formatUnknownError(error, ""));
 }
 
-export function formatUnknownError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return "unknown error";
-  }
+export function formatUnknownError(error: unknown, fallback = NO_ERROR_DETAIL): string {
+  return formatSlackError(error, fallback);
 }

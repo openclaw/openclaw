@@ -1,11 +1,7 @@
 import type { Command } from "commander";
-import { dashboardCommand } from "../../commands/dashboard.js";
-import { doctorCommand } from "../../commands/doctor.js";
-import { resetCommand } from "../../commands/reset.js";
-import { uninstallCommand } from "../../commands/uninstall.js";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 
 export function registerMaintenanceCommands(program: Command) {
@@ -24,9 +20,61 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
+    .option(
+      "--allow-exec",
+      "Allow doctor to execute exec SecretRefs while verifying configured secrets",
+      false,
+    )
     .option("--deep", "Scan system services for extra gateway installs", false)
+    .option("--lint", "Run read-only health checks and report findings", false)
+    .option("--json", "With --lint: emit JSON findings instead of human output", false)
+    .option(
+      "--severity-min <level>",
+      "With --lint: drop findings below this severity (info|warning|error)",
+    )
+    .option(
+      "--skip <id>",
+      "With --lint: skip a specific check id (repeatable)",
+      (v: string, prev: string[]) => [...prev, v],
+      [],
+    )
+    .option(
+      "--only <id>",
+      "With --lint: run only the specified check id (repeatable)",
+      (v: string, prev: string[]) => [...prev, v],
+      [],
+    )
     .action(async (opts) => {
+      if (opts.lint === true) {
+        await runCommandWithRuntime(
+          defaultRuntime,
+          async () => {
+            const { runDoctorLintCli } = await import("../../commands/doctor-lint.js");
+            const exitCode = await runDoctorLintCli(defaultRuntime, {
+              json: Boolean(opts.json),
+              severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
+              skipIds: Array.isArray(opts.skip) ? opts.skip : [],
+              onlyIds: Array.isArray(opts.only) ? opts.only : [],
+              allowExec: Boolean(opts.allowExec),
+            });
+            defaultRuntime.exit(exitCode);
+          },
+          (err) => {
+            defaultRuntime.error(String(err));
+            defaultRuntime.exit(2);
+          },
+        );
+        return;
+      }
+      if (hasLintOnlyDoctorOptions(opts)) {
+        defaultRuntime.error(
+          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+        );
+        defaultRuntime.exit(2);
+        return;
+      }
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { doctorCommand } = await import("../../commands/doctor.js");
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
@@ -34,6 +82,7 @@ export function registerMaintenanceCommands(program: Command) {
           force: Boolean(opts.force),
           nonInteractive: Boolean(opts.nonInteractive),
           generateGatewayToken: Boolean(opts.generateGatewayToken),
+          allowExec: Boolean(opts.allowExec),
           deep: Boolean(opts.deep),
         });
         defaultRuntime.exit(0);
@@ -49,10 +98,13 @@ export function registerMaintenanceCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dashboard", "docs.openclaw.ai/cli/dashboard")}\n`,
     )
     .option("--no-open", "Print URL but do not launch a browser")
+    .option("--yes", "Start/install the gateway without prompting when needed", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { dashboardCommand } = await import("../../commands/dashboard.js");
         await dashboardCommand(defaultRuntime, {
           noOpen: opts.open === false,
+          yes: Boolean(opts.yes),
         });
       });
     });
@@ -71,6 +123,7 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--dry-run", "Print actions without removing files", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { resetCommand } = await import("../../commands/reset.js");
         await resetCommand(defaultRuntime, {
           scope: opts.scope,
           yes: Boolean(opts.yes),
@@ -98,6 +151,7 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--dry-run", "Print actions without removing files", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const { uninstallCommand } = await import("../../commands/uninstall.js");
         await uninstallCommand(defaultRuntime, {
           service: Boolean(opts.service),
           state: Boolean(opts.state),
@@ -110,4 +164,18 @@ export function registerMaintenanceCommands(program: Command) {
         });
       });
     });
+}
+
+function hasLintOnlyDoctorOptions(opts: {
+  readonly json?: boolean;
+  readonly severityMin?: unknown;
+  readonly skip?: unknown;
+  readonly only?: unknown;
+}): boolean {
+  return (
+    opts.json === true ||
+    typeof opts.severityMin === "string" ||
+    (Array.isArray(opts.skip) && opts.skip.length > 0) ||
+    (Array.isArray(opts.only) && opts.only.length > 0)
+  );
 }

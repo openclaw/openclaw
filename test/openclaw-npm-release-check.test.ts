@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
 import {
@@ -17,48 +18,91 @@ import {
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolveNpmCommandInvocation,
+  resolveNpmReleaseCheckCommandTimeoutMs,
+  runNpmReleaseCheckCommand,
   shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
-import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../src/infra/package-dist-inventory.ts";
 
 const REQUIRED_PACKED_PATHS = [
+  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
+describe("workspace template package paths", () => {
+  it("keeps the runtime heartbeat template in the npm pack guard", () => {
+    expect(WORKSPACE_TEMPLATE_PACK_PATHS).toContain("src/agents/templates/HEARTBEAT.md");
+    expect(WORKSPACE_TEMPLATE_PACK_PATHS).not.toContain("docs/reference/templates/HEARTBEAT.md");
+  });
+
+  it("keeps runtime heartbeat templates allowlisted in package.json", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf-8")) as {
+      files?: unknown;
+    };
+
+    expect(packageJson.files).toContain("src/agents/templates/");
+  });
+});
+
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
-    expect(parseReleaseVersion("2026.3.10")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10")).toStrictEqual({
       version: "2026.3.10",
       baseVersion: "2026.3.10",
       channel: "stable",
       year: 2026,
       month: 3,
       day: 10,
+      alphaNumber: undefined,
+      betaNumber: undefined,
+      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
   it("parses beta CalVer releases", () => {
-    expect(parseReleaseVersion("2026.3.10-beta.2")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10-beta.2")).toStrictEqual({
       version: "2026.3.10-beta.2",
       baseVersion: "2026.3.10",
       channel: "beta",
       year: 2026,
       month: 3,
       day: 10,
+      alphaNumber: undefined,
       betaNumber: 2,
+      date: new Date(Date.UTC(2026, 2, 10)),
+    });
+  });
+
+  it("parses alpha CalVer releases", () => {
+    expect(parseReleaseVersion("2026.3.10-alpha.2")).toStrictEqual({
+      version: "2026.3.10-alpha.2",
+      baseVersion: "2026.3.10",
+      channel: "alpha",
+      year: 2026,
+      month: 3,
+      day: 10,
+      alphaNumber: 2,
+      betaNumber: undefined,
+      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
   it("parses stable correction releases", () => {
-    expect(parseReleaseVersion("2026.3.10-1")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10-1")).toStrictEqual({
       version: "2026.3.10-1",
       baseVersion: "2026.3.10",
       channel: "stable",
       year: 2026,
       month: 3,
       day: 10,
+      alphaNumber: undefined,
+      betaNumber: undefined,
+      date: new Date(Date.UTC(2026, 2, 10)),
       correctionNumber: 1,
     });
   });
@@ -74,11 +118,12 @@ describe("parseReleaseVersion", () => {
 
 describe("parseReleaseTagVersion", () => {
   it("accepts correction release tags", () => {
-    expect(parseReleaseTagVersion("2026.3.10-2")).toMatchObject({
+    expect(parseReleaseTagVersion("2026.3.10-2")).toStrictEqual({
       version: "2026.3.10-2",
       packageVersion: "2026.3.10-2",
       baseVersion: "2026.3.10",
       channel: "stable",
+      date: new Date(Date.UTC(2026, 2, 10)),
       correctionNumber: 2,
     });
   });
@@ -94,6 +139,14 @@ describe("resolveNpmPublishPlan", () => {
     expect(resolveNpmPublishPlan("2026.3.29-beta.2")).toEqual({
       channel: "beta",
       publishTag: "beta",
+      mirrorDistTags: [],
+    });
+  });
+
+  it("publishes alpha prereleases to alpha only", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "alpha")).toEqual({
+      channel: "alpha",
+      publishTag: "alpha",
       mirrorDistTags: [],
     });
   });
@@ -122,6 +175,14 @@ describe("resolveNpmPublishPlan", () => {
     });
   });
 
+  it("can publish stable correction releases directly to latest when requested", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-1", undefined, "latest")).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: [],
+    });
+  });
+
   it("ignores current beta dist-tag state for stable publishes", () => {
     expect(resolveNpmPublishPlan("2026.3.29", "2026.4.1-beta.1")).toEqual({
       channel: "stable",
@@ -133,6 +194,15 @@ describe("resolveNpmPublishPlan", () => {
   it("rejects publishing beta prereleases to latest", () => {
     expect(() => resolveNpmPublishPlan("2026.3.29-beta.2", undefined, "latest")).toThrow(
       "Beta prereleases must publish to the beta dist-tag.",
+    );
+  });
+
+  it("rejects publishing alpha prereleases to beta or latest", () => {
+    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2")).toThrow(
+      "Alpha prereleases must publish to the alpha dist-tag.",
+    );
+    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "latest")).toThrow(
+      "Alpha prereleases must publish to the alpha dist-tag.",
     );
   });
 });
@@ -202,6 +272,10 @@ describe("compareReleaseVersions", () => {
     expect(compareReleaseVersions("2026.3.29", "2026.3.29-beta.2")).toBe(1);
   });
 
+  it("orders alpha before beta on the same day", () => {
+    expect(compareReleaseVersions("2026.3.29-alpha.2", "2026.3.29-beta.1")).toBe(-1);
+  });
+
   it("treats a newer beta day as newer than an older stable day", () => {
     expect(compareReleaseVersions("2026.4.1-beta.1", "2026.3.29")).toBe(1);
   });
@@ -228,33 +302,172 @@ describe("resolveNpmCommandInvocation", () => {
     expect(
       resolveNpmCommandInvocation({
         npmExecPath: "/usr/local/lib/node_modules/npm/bin/npm-cli.js",
+        npmArgs: ["view", "openclaw", "version"],
         nodeExecPath: "/usr/local/bin/node",
         platform: "linux",
       }),
     ).toEqual({
       command: "/usr/local/bin/node",
-      args: ["/usr/local/lib/node_modules/npm/bin/npm-cli.js"],
+      args: ["/usr/local/lib/node_modules/npm/bin/npm-cli.js", "view", "openclaw", "version"],
     });
   });
 
   it("falls back to the npm command when npm_execpath points to pnpm", () => {
     expect(
       resolveNpmCommandInvocation({
+        npmArgs: ["pack"],
         npmExecPath: "/home/test/.cache/node/corepack/v1/pnpm/10.23.0/bin/pnpm.cjs",
         nodeExecPath: "/usr/local/bin/node",
         platform: "linux",
       }),
     ).toEqual({
       command: "npm",
-      args: [],
+      args: ["pack"],
     });
   });
 
-  it("uses the platform npm command when npm_execpath is missing", () => {
-    expect(resolveNpmCommandInvocation({ platform: "win32" })).toEqual({
-      command: "npm.cmd",
-      args: [],
+  it("wraps the Windows npm command when npm_execpath is missing", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["view", "openclaw@beta", "version"],
+        npmExecPath: "",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd view openclaw@beta version"],
+      windowsVerbatimArguments: true,
     });
+  });
+
+  it("wraps Windows npm_execpath command shims", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["install", "-g", "C:\\tmp\\openclaw package.tgz"],
+        npmExecPath: "C:\\Program Files\\nodejs\\npm.cmd",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Program Files\\nodejs\\npm.cmd" install -g "C:\\tmp\\openclaw package.tgz""',
+      ],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("runs Windows npm_execpath executables directly", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        npmArgs: ["--version"],
+        npmExecPath: "C:\\Program Files\\nodejs\\npm.exe",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\npm.exe",
+      args: ["--version"],
+    });
+  });
+
+  if (process.platform === "win32") {
+    it("executes fallback npm.cmd through cmd.exe on Windows", () => {
+      const dir = mkdtempSync(join(tmpdir(), "openclaw-fake-npm-cmd-"));
+      try {
+        const outputPath = join(dir, "args.json");
+        writeFileSync(
+          join(dir, "fake-npm.js"),
+          [
+            "const fs = require('node:fs');",
+            "fs.writeFileSync(process.env.OPENCLAW_FAKE_NPM_OUT, JSON.stringify(process.argv.slice(2)));",
+          ].join("\n"),
+        );
+        writeFileSync(
+          join(dir, "npm.cmd"),
+          `@echo off\r\n"${process.execPath}" "%~dp0fake-npm.js" %*\r\n`,
+        );
+
+        const invocation = resolveNpmCommandInvocation({
+          comSpec: process.env.ComSpec ?? "cmd.exe",
+          npmArgs: ["view", "openclaw@beta", "version"],
+          npmExecPath: "",
+          platform: "win32",
+        });
+        execFileSync(invocation.command, invocation.args, {
+          cwd: dir,
+          env: {
+            ...process.env,
+            OPENCLAW_FAKE_NPM_OUT: outputPath,
+            PATH: `${dir}${delimiter}${process.env.PATH ?? ""}`,
+          },
+          windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+        });
+
+        expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual([
+          "view",
+          "openclaw@beta",
+          "version",
+        ]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+describe("runNpmReleaseCheckCommand", () => {
+  it("returns captured command output", () => {
+    expect(
+      runNpmReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('ok')"] },
+        { stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toBe("ok");
+  });
+
+  it("bounds commands that ignore termination", () => {
+    const startedAt = Date.now();
+
+    expect(() =>
+      runNpmReleaseCheckCommand(
+        {
+          command: process.execPath,
+          args: ["--eval", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+        },
+        { stdio: ["ignore", "pipe", "pipe"], timeoutMs: 100 },
+      ),
+    ).toThrow();
+    expect(Date.now() - startedAt).toBeLessThan(2500);
+  });
+
+  it("bounds captured command output", () => {
+    expect(() =>
+      runNpmReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('x'.repeat(4096))"] },
+        { maxBuffer: 1024, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toThrow();
+  });
+});
+
+describe("resolveNpmReleaseCheckCommandTimeoutMs", () => {
+  it("parses only positive integer environment timeouts", () => {
+    for (const [raw, expected] of [
+      ["1234", 1234],
+      ["nope", 10 * 60 * 1000],
+      ["10m", 10 * 60 * 1000],
+    ] as const) {
+      expect(
+        resolveNpmReleaseCheckCommandTimeoutMs({
+          OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: raw,
+        }),
+      ).toBe(expected);
+    }
   });
 });
 
@@ -308,7 +521,7 @@ describe("collectControlUiPackErrors", () => {
         "dist/control-ui/assets/index-Bu8rSoJV.js",
         "dist/control-ui/assets/index-BK0yXA_h.css",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 
@@ -323,6 +536,15 @@ describe("collectForbiddenPackedPathErrors", () => {
     ).toEqual([
       'npm package must not include generated docs artifact "docs/.generated/config-baseline.json".',
       'npm package must not include generated docs artifact "docs/.generated/config-baseline.plugin.json".',
+    ]);
+  });
+
+  it("rejects local build metadata in npm pack output", () => {
+    expect(
+      collectForbiddenPackedPathErrors(["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS]),
+    ).toEqual([
+      'npm package must not include local build metadata "dist/.buildstamp".',
+      'npm package must not include local build metadata "dist/.runtime-postbuildstamp".',
     ]);
   });
 
@@ -416,12 +638,12 @@ describe("collectPackedTestCargoErrors", () => {
       collectPackedTestCargoErrors([
         "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts",
         "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js",
-        "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap",
+        "dist/extensions/whatsapp/node_modules/example-codec/src/__snapshots__/codec.test.ts.snap",
         "dist/index.js",
       ]),
     ).toEqual([
       'npm package must not include test cargo "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts".',
-      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/example-codec/src/__snapshots__/codec.test.ts.snap".',
       'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js".',
     ]);
   });
@@ -433,7 +655,7 @@ describe("collectPackedTestCargoErrors", () => {
         "dist/extensions/whatsapp/node_modules/pino/lib/proto.js",
         "dist/extensions/webhooks/node_modules/zod/v4/core/api.js",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("allows legitimate package roots named test under node_modules", () => {
@@ -442,7 +664,7 @@ describe("collectPackedTestCargoErrors", () => {
         "dist/extensions/fixture-plugin/node_modules/direct/node_modules/test/index.js",
         "dist/extensions/fixture-plugin/node_modules/direct/node_modules/@scope/tests/index.js",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("allows leaf runtime filenames named test or tests", () => {
@@ -451,7 +673,7 @@ describe("collectPackedTestCargoErrors", () => {
         "dist/extensions/fixture-plugin/node_modules/direct/bin/test",
         "dist/extensions/fixture-plugin/node_modules/direct/bin/tests",
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("normalizes Windows or mixed separators before classifying test cargo", () => {
@@ -476,7 +698,7 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10",
         now: new Date("2026-03-11T12:00:00Z"),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("rejects versions outside the two-day CalVer window", () => {
@@ -486,7 +708,9 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10",
         now: new Date("2026-03-13T00:00:00Z"),
       }),
-    ).toContainEqual(expect.stringContaining("must be within 2 days"));
+    ).toStrictEqual([
+      "Release version 2026.3.10 is 3 days away from current UTC date 2026-03-13; release CalVer date 2026-03-10 must be within 2 days.",
+    ]);
   });
 
   it("accepts fallback correction tags for stable package versions", () => {
@@ -496,7 +720,7 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("accepts correction package versions paired with matching correction tags", () => {
@@ -506,7 +730,7 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("rejects beta package versions paired with fallback correction tags", () => {
@@ -516,7 +740,9 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toContainEqual(expect.stringContaining("does not match package.json version"));
+    ).toStrictEqual([
+      "Release tag v2026.3.10-1 does not match package.json version 2026.3.10-beta.1; expected v2026.3.10-beta.1.",
+    ]);
   });
 });
 
@@ -530,7 +756,7 @@ describe("collectReleasePackageMetadataErrors", () => {
         repository: { url: "git+https://github.com/openclaw/openclaw.git" },
         bin: { openclaw: "openclaw.mjs" },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("rejects node-llama-cpp as a peer dependency", () => {
@@ -561,6 +787,21 @@ describe("collectReleasePackageMetadataErrors", () => {
         dependencies: { "node-llama-cpp": "3.18.1" },
       }),
     ).toContain('package.json dependencies["node-llama-cpp"] must be omitted; keep it optional.');
+  });
+
+  it("rejects local fs-safe dependency specs for npm release", () => {
+    expect(
+      collectReleasePackageMetadataErrors({
+        name: "openclaw",
+        description: "Multi-channel AI gateway with extensible messaging integrations",
+        license: "MIT",
+        repository: { url: "git+https://github.com/openclaw/openclaw.git" },
+        bin: { openclaw: "openclaw.mjs" },
+        dependencies: { "@openclaw/fs-safe": "link:../fs-safe" },
+      }),
+    ).toContain(
+      'package.json dependencies["@openclaw/fs-safe"] must use a published semver range before npm release; found "link:../fs-safe".',
+    );
   });
 
   it("rejects node-llama-cpp as an optional dependency", () => {

@@ -12,17 +12,69 @@
       "types": "./dist/src/plugin-sdk/acp-runtime.d.ts",
       "default": "./src/acp-runtime.ts"
     },
-    "./browser-config-runtime": {
-      "types": "./dist/src/plugin-sdk/browser-config-runtime.d.ts",
-      "default": "./src/browser-config-runtime.ts"
+    "./acp-runtime-backend": {
+      "types": "./dist/src/plugin-sdk/acp-runtime-backend.d.ts",
+      "default": "./src/acp-runtime-backend.ts"
+    },
+    "./async-lock-runtime": {
+      "types": "./dist/src/plugin-sdk/async-lock-runtime.d.ts",
+      "default": "./src/async-lock-runtime.ts"
+    },
+    "./browser-config": {
+      "types": "./dist/src/plugin-sdk/browser-config.d.ts",
+      "default": "./src/browser-config.ts"
+    },
+    "./channel-activity-runtime": {
+      "types": "./dist/src/plugin-sdk/channel-activity-runtime.d.ts",
+      "default": "./src/channel-activity-runtime.ts"
+    },
+    "./concurrency-runtime": {
+      "types": "./dist/src/plugin-sdk/concurrency-runtime.d.ts",
+      "default": "./src/concurrency-runtime.ts"
+    },
+    "./dedupe-runtime": {
+      "types": "./dist/src/plugin-sdk/dedupe-runtime.d.ts",
+      "default": "./src/dedupe-runtime.ts"
+    },
+    "./delivery-queue-runtime": {
+      "types": "./dist/src/plugin-sdk/delivery-queue-runtime.d.ts",
+      "default": "./src/delivery-queue-runtime.ts"
+    },
+    "./file-access-runtime": {
+      "types": "./dist/src/plugin-sdk/file-access-runtime.d.ts",
+      "default": "./src/file-access-runtime.ts"
+    },
+    "./heartbeat-runtime": {
+      "types": "./dist/src/plugin-sdk/heartbeat-runtime.d.ts",
+      "default": "./src/heartbeat-runtime.ts"
+    },
+    "./number-runtime": {
+      "types": "./dist/src/plugin-sdk/number-runtime.d.ts",
+      "default": "./src/number-runtime.ts"
+    },
+    "./secure-random-runtime": {
+      "types": "./dist/src/plugin-sdk/secure-random-runtime.d.ts",
+      "default": "./src/secure-random-runtime.ts"
+    },
+    "./system-event-runtime": {
+      "types": "./dist/src/plugin-sdk/system-event-runtime.d.ts",
+      "default": "./src/system-event-runtime.ts"
+    },
+    "./time-runtime": {
+      "types": "./dist/src/plugin-sdk/time-runtime.d.ts",
+      "default": "./src/time-runtime.ts"
+    },
+    "./transport-ready-runtime": {
+      "types": "./dist/src/plugin-sdk/transport-ready-runtime.d.ts",
+      "default": "./src/transport-ready-runtime.ts"
+    },
+    "./exec-approvals-runtime": {
+      "types": "./dist/src/plugin-sdk/exec-approvals-runtime.d.ts",
+      "default": "./src/exec-approvals-runtime.ts"
     },
     "./core": {
       "types": "./dist/src/plugin-sdk/core.d.ts",
       "default": "./src/core.ts"
-    },
-    "./browser-node-runtime": {
-      "types": "./dist/src/plugin-sdk/browser-node-runtime.d.ts",
-      "default": "./src/browser-node-runtime.ts"
     },
     "./config-runtime": {
       "types": "./dist/src/plugin-sdk/config-runtime.d.ts",
@@ -44,14 +96,6 @@
       "types": "./dist/src/plugin-sdk/cron-store-runtime.d.ts",
       "default": "./src/cron-store-runtime.ts"
     },
-    "./browser-setup-tools": {
-      "types": "./dist/src/plugin-sdk/browser-setup-tools.d.ts",
-      "default": "./src/browser-setup-tools.ts"
-    },
-    "./browser-security-runtime": {
-      "types": "./dist/src/plugin-sdk/browser-security-runtime.d.ts",
-      "default": "./src/browser-security-runtime.ts"
-    },
     "./channel-secret-runtime": {
       "types": "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",
       "default": "./src/channel-secret-runtime.ts"
@@ -60,9 +104,17 @@
       "types": "./dist/src/plugin-sdk/channel-streaming.d.ts",
       "default": "./src/channel-streaming.ts"
     },
+    "./channel-runtime": {
+      "types": "./dist/src/plugin-sdk/channel-runtime.d.ts",
+      "default": "./src/channel-runtime.ts"
+    },
     "./cli-runtime": {
       "types": "./dist/src/plugin-sdk/cli-runtime.d.ts",
       "default": "./src/cli-runtime.ts"
+    },
+    "./gateway-method-runtime": {
+      "types": "./dist/src/plugin-sdk/gateway-method-runtime.d.ts",
+      "default": "./src/gateway-method-runtime.ts"
     },
     "./error-runtime": {
       "types": "./dist/src/plugin-sdk/error-runtime.d.ts",
@@ -79,6 +131,10 @@
     "./provider-auth": {
       "types": "./dist/src/plugin-sdk/provider-auth.d.ts",
       "default": "./src/provider-auth.ts"
+    },
+    "./compat": {
+      "types": "./dist/src/plugin-sdk/compat.d.ts",
+      "default": "./src/compat.ts"
     },
     "./provider-auth-runtime": {
       "types": "./dist/src/plugin-sdk/provider-auth-runtime.d.ts",
@@ -148,6 +204,10 @@
       "types": "./dist/src/plugin-sdk/runtime-env.d.ts",
       "default": "./src/runtime-env.ts"
     },
+    "./infra-runtime": {
+      "types": "./dist/src/plugin-sdk/infra-runtime.d.ts",
+      "default": "./src/infra-runtime.ts"
+    },
     "./security-runtime": {
       "types": "./dist/src/plugin-sdk/security-runtime.d.ts",
       "default": "./src/security-runtime.ts"
@@ -164,10 +224,6 @@
       "types": "./dist/src/plugin-sdk/secret-input.d.ts",
       "default": "./src/secret-input.ts"
     },
-    "./text-runtime": {
-      "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
-      "default": "./src/text-runtime.ts"
-    },
     "./tts-runtime": {
       "types": "./dist/src/plugin-sdk/tts-runtime.d.ts",
       "default": "./src/tts-runtime.ts"
@@ -176,9 +232,21 @@
       "types": "./dist/src/plugin-sdk/testing.d.ts",
       "default": "./src/testing.ts"
     },
+    "./text-runtime": {
+      "types": "./dist/src/plugin-sdk/text-runtime.d.ts",
+      "default": "./src/text-runtime.ts"
+    },
     "./video-generation": {
       "types": "./dist/src/plugin-sdk/video-generation.d.ts",
       "default": "./src/video-generation.ts"
+    },
+    "./config-contracts": {
+      "types": "./dist/src/plugin-sdk/config-contracts.d.ts",
+      "default": "./src/config-contracts.ts"
+    },
+    "./text-utility-runtime": {
+      "types": "./dist/src/plugin-sdk/text-utility-runtime.d.ts",
+      "default": "./src/text-utility-runtime.ts"
     },
     "./zod": {
       "types": "./dist/src/plugin-sdk/zod.d.ts",

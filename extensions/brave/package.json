@@ -1,18 +1,34 @@
 {
   "name": "@openclaw/brave-plugin",
-  "version": "2026.4.25",
-  "private": true,
-  "description": "OpenClaw Brave plugin",
-  "type": "module",
-  "dependencies": {
-    "typebox": "1.1.33"
+  "version": "2026.5.30",
+  "description": "OpenClaw Brave Search provider plugin for web search.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
   },
+  "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/brave-plugin",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.10",
+      "allowInvalidConfigRecovery": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.30"
+    },
+    "build": {
+      "openclawVersion": "2026.5.30"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
   }
 }

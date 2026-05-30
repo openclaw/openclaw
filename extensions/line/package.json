@@ -1,18 +1,22 @@
 {
   "name": "@openclaw/line",
-  "version": "2026.4.25",
-  "private": true,
-  "description": "OpenClaw LINE channel plugin",
+  "version": "2026.5.30",
+  "description": "OpenClaw LINE channel plugin for LINE Bot API chats.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "@line/bot-sdk": "^11.0.0"
+    "@line/bot-sdk": "11.0.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.25"
+    "openclaw": ">=2026.5.30"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -40,6 +44,16 @@
       "npmSpec": "@openclaw/line",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.30"
+    },
+    "build": {
+      "openclawVersion": "2026.5.30"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

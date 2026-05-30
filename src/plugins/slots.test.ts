@@ -58,16 +58,10 @@ describe("applyExclusiveSlotSelection", () => {
   function expectSelectionWarnings(
     warnings: string[],
     params: {
-      contains?: readonly string[];
-      excludes?: readonly string[];
+      expected: readonly string[];
     },
   ) {
-    if (params.contains?.length) {
-      expect(warnings).toEqual(expect.arrayContaining([...params.contains]));
-    }
-    for (const warning of params.excludes ?? []) {
-      expect(warnings).not.toEqual(expect.arrayContaining([warning]));
-    }
+    expect(warnings).toEqual([...params.expected]);
   }
 
   function expectUnchangedSelection(result: ReturnType<typeof applyExclusiveSlotSelection>) {
@@ -109,8 +103,7 @@ describe("applyExclusiveSlotSelection", () => {
     selectedId?: string;
     expectedDisabled?: boolean;
     warningChecks: {
-      contains?: readonly string[];
-      excludes?: readonly string[];
+      expected: readonly string[];
     };
   }) {
     const result = runMemorySelection(params.config, params.selectedId);
@@ -134,7 +127,7 @@ describe("applyExclusiveSlotSelection", () => {
       }),
       expectedDisabled: false,
       warningChecks: {
-        contains: [
+        expected: [
           'Exclusive slot "memory" switched from "memory-core" to "memory".',
           'Disabled other "memory" slot plugins: memory-core.',
         ],
@@ -144,7 +137,10 @@ describe("applyExclusiveSlotSelection", () => {
       name: "warns when the slot falls back to a default",
       config: createMemoryConfig(),
       warningChecks: {
-        contains: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
+        expected: [
+          'Exclusive slot "memory" switched from "memory-core" to "memory".',
+          'Disabled other "memory" slot plugins: memory-core.',
+        ],
       },
     },
     {
@@ -156,8 +152,7 @@ describe("applyExclusiveSlotSelection", () => {
       }),
       expectedDisabled: false,
       warningChecks: {
-        contains: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
-        excludes: ['Disabled other "memory" slot plugins: memory-core.'],
+        expected: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
       },
     },
   ] as const)("$name", ({ config, expectedDisabled, warningChecks }) => {
@@ -271,7 +266,7 @@ describe("applyExclusiveSlotSelection", () => {
 
 describe("normalizeKinds", () => {
   it("returns empty array for undefined", () => {
-    expect(normalizeKinds(undefined)).toEqual([]);
+    expect(normalizeKinds(undefined)).toStrictEqual([]);
   });
 
   it("wraps a single kind in an array", () => {
@@ -301,7 +296,7 @@ describe("hasKind", () => {
 
 describe("slotKeysForPluginKind", () => {
   it("returns empty for undefined", () => {
-    expect(slotKeysForPluginKind(undefined)).toEqual([]);
+    expect(slotKeysForPluginKind(undefined)).toStrictEqual([]);
   });
 
   it("returns single slot key for single kind", () => {

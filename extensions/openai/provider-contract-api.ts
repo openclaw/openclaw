@@ -1,68 +1,59 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  OPENAI_ACCOUNT_WIZARD_GROUP,
   OPENAI_API_KEY_LABEL,
-  OPENAI_CODEX_DEVICE_PAIRING_HINT,
-  OPENAI_CODEX_DEVICE_PAIRING_LABEL,
-  OPENAI_CODEX_LOGIN_HINT,
-  OPENAI_CODEX_LOGIN_LABEL,
-  OPENAI_API_KEY_WIZARD_GROUP,
-  OPENAI_CODEX_WIZARD_GROUP,
+  OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
+  OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
+  OPENAI_CHATGPT_LOGIN_HINT,
+  OPENAI_CHATGPT_LOGIN_LABEL,
 } from "./auth-choice-copy.js";
 
 const noopAuth = async () => ({ profiles: [] });
 
-export function createOpenAICodexProvider(): ProviderPlugin {
+export function createOpenAIProvider(): ProviderPlugin {
   return {
-    id: "openai-codex",
-    label: "OpenAI Codex",
+    id: "openai",
+    label: "OpenAI",
+    hookAliases: ["openai-codex", "azure-openai", "azure-openai-responses"],
     docsPath: "/providers/models",
+    envVars: ["OPENAI_API_KEY"],
     oauthProfileIdRepairs: [
       {
         legacyProfileId: "openai-codex:default",
-        promptLabel: "OpenAI Codex",
+        promptLabel: "OpenAI",
       },
     ],
     auth: [
       {
         id: "oauth",
         kind: "oauth",
-        label: OPENAI_CODEX_LOGIN_LABEL,
-        hint: OPENAI_CODEX_LOGIN_HINT,
+        label: OPENAI_CHATGPT_LOGIN_LABEL,
+        hint: OPENAI_CHATGPT_LOGIN_HINT,
         run: noopAuth,
         wizard: {
-          choiceId: "openai-codex",
-          choiceLabel: OPENAI_CODEX_LOGIN_LABEL,
-          choiceHint: OPENAI_CODEX_LOGIN_HINT,
-          assistantPriority: -30,
-          ...OPENAI_CODEX_WIZARD_GROUP,
+          choiceId: "openai",
+          choiceLabel: OPENAI_CHATGPT_LOGIN_LABEL,
+          choiceHint: OPENAI_CHATGPT_LOGIN_HINT,
+          assistantPriority: -40,
+          onboardingFeatured: true,
+          ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },
       {
         id: "device-code",
         kind: "device_code",
-        label: OPENAI_CODEX_DEVICE_PAIRING_LABEL,
-        hint: OPENAI_CODEX_DEVICE_PAIRING_HINT,
+        label: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
+        hint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
         run: noopAuth,
         wizard: {
-          choiceId: "openai-codex-device-code",
-          choiceLabel: OPENAI_CODEX_DEVICE_PAIRING_LABEL,
-          choiceHint: OPENAI_CODEX_DEVICE_PAIRING_HINT,
+          choiceId: "openai-device-code",
+          choiceLabel: OPENAI_CHATGPT_DEVICE_PAIRING_LABEL,
+          choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
           assistantPriority: -10,
-          ...OPENAI_CODEX_WIZARD_GROUP,
+          assistantVisibility: "manual-only",
+          ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },
-    ],
-  };
-}
-
-export function createOpenAIProvider(): ProviderPlugin {
-  return {
-    id: "openai",
-    label: "OpenAI",
-    hookAliases: ["azure-openai", "azure-openai-responses"],
-    docsPath: "/providers/models",
-    envVars: ["OPENAI_API_KEY"],
-    auth: [
       {
         id: "api-key",
         kind: "api_key",
@@ -72,8 +63,9 @@ export function createOpenAIProvider(): ProviderPlugin {
         wizard: {
           choiceId: "openai-api-key",
           choiceLabel: OPENAI_API_KEY_LABEL,
-          assistantPriority: -40,
-          ...OPENAI_API_KEY_WIZARD_GROUP,
+          choiceHint: "Use your OpenAI API key directly",
+          assistantPriority: 5,
+          ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },
     ],

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const REM_BLOCKED_SECTION_RE =
   /\b(morning reminders|tasks? for today|to-?do|pickups?|action items?|next steps?|open questions?|stats|setup tasks?|priority contacts|visitors?|top priority candidates|timeline coverage|action items for morning review|test .* skill|heartbeat checks?|date semantics guardrail|still broken|last message (?:&|and) status|plugin \/ service warning|email triage cron)\b/i;
@@ -63,16 +64,16 @@ const REM_SUMMARY_FACT_LIMIT = 4;
 const REM_SUMMARY_REFLECTION_LIMIT = 4;
 const REM_SUMMARY_MEMORY_LIMIT = 3;
 
-export type GroundedRemPreviewItem = {
+type GroundedRemPreviewItem = {
   text: string;
   refs: string[];
 };
 
-export type GroundedRemCandidate = GroundedRemPreviewItem & {
+type GroundedRemCandidate = GroundedRemPreviewItem & {
   lean: "likely_durable" | "unclear" | "likely_situational";
 };
 
-export type GroundedRemFilePreview = {
+type GroundedRemFilePreview = {
   path: string;
   facts: GroundedRemPreviewItem[];
   reflections: GroundedRemPreviewItem[];
@@ -638,7 +639,7 @@ function atomizeClaimText(text: string): string[] {
     .flatMap((part) => splitSubjectLeadClaim(part))
     .map((part) => normalizeWhitespace(part))
     .filter(Boolean);
-  return Array.from(new Set(atomic)).slice(0, 3);
+  return uniqueStrings(atomic).slice(0, 3);
 }
 
 function classifyCandidateLeanFromText(text: string, title: string): GroundedRemCandidate["lean"] {

@@ -1,7 +1,7 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,
@@ -17,7 +17,7 @@ type ResolvedBaseMcpTransportConfig = {
   connectionTimeoutMs: number;
 };
 
-export type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
+type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   kind: "stdio";
   transportType: "stdio";
   command: string;
@@ -26,16 +26,14 @@ export type ResolvedStdioMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   cwd?: string;
 };
 
-export type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
+type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   kind: "http";
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
 };
 
-export type ResolvedMcpTransportConfig =
-  | ResolvedStdioMcpTransportConfig
-  | ResolvedHttpMcpTransportConfig;
+type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttpMcpTransportConfig;
 
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
 

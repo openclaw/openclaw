@@ -1,5 +1,6 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../config/sessions/types.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { InboundLastRouteUpdate } from "./session.types.js";
 export type { InboundLastRouteUpdate, RecordInboundSession } from "./session.types.js";
@@ -36,11 +37,12 @@ export async function recordInboundSession(params: {
   createIfMissing?: boolean;
   updateLastRoute?: InboundLastRouteUpdate;
   onRecordError: (err: unknown) => void;
+  trackSessionMetaTask?: (task: Promise<unknown>) => void;
 }): Promise<void> {
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
-  const canonicalSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const canonicalSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   const runtime = await loadInboundSessionRuntime();
-  void runtime
+  const metaTask = runtime
     .recordSessionMetaFromInbound({
       storePath,
       sessionKey: canonicalSessionKey,
@@ -49,6 +51,8 @@ export async function recordInboundSession(params: {
       createIfMissing,
     })
     .catch(params.onRecordError);
+  params.trackSessionMetaTask?.(metaTask);
+  void metaTask;
 
   const update = params.updateLastRoute;
   if (!update) {
@@ -57,10 +61,11 @@ export async function recordInboundSession(params: {
   if (shouldSkipPinnedMainDmRouteUpdate(update.mainDmOwnerPin)) {
     return;
   }
-  const targetSessionKey = normalizeLowercaseStringOrEmpty(update.sessionKey);
+  const targetSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(update.sessionKey);
   await runtime.updateLastRoute({
     storePath,
     sessionKey: targetSessionKey,
+    route: update.route,
     deliveryContext: {
       channel: update.channel,
       to: update.to,
@@ -70,5 +75,6 @@ export async function recordInboundSession(params: {
     // Avoid leaking inbound origin metadata into a different target session.
     ctx: targetSessionKey === canonicalSessionKey ? ctx : undefined,
     groupResolution,
+    createIfMissing,
   });
 }

@@ -56,7 +56,7 @@ function deprecatedCompatRecord<Code extends string>(
 // path they repair. Release removals must check this inventory before deleting
 // doctor fixes, and replacement notes should be revalidated against the current
 // architecture because ownership and config footprint can shift during rollout.
-export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
+const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
     code: "doctor-agent-llm-timeout",
     owner: "agent-runtime",
@@ -67,7 +67,7 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/gateway/config-agents",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
     notes:
-      "The old agent-level idle timeout knob was collapsed into provider request timeout handling.",
+      "The old agent-level idle timeout knob was collapsed into provider request timeout handling, bounded by the agent/run timeout ceiling.",
   }),
   deprecatedCompatRecord({
     code: "doctor-agent-runtime-embedded-harness",
@@ -75,11 +75,23 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     introduced: "2026-04-25",
     source: "agents.defaults.embeddedHarness; agents.list[].embeddedHarness",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
-    replacement: "agents.defaults.agentRuntime and agents.list[].agentRuntime",
+    replacement: "models.providers.<provider>.agentRuntime or model-scoped agentRuntime",
     docsPath: "/plugins/sdk-agent-harness",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
     notes:
-      "Runtime-policy naming changed during the plugin architecture work; verify replacement wording against current agentRuntime docs before removal.",
+      "Whole-agent runtime pins are retired; doctor preserves intent only when it can move the value to provider/model runtime policy.",
+  }),
+  deprecatedCompatRecord({
+    code: "doctor-agent-embedded-pi-config",
+    owner: "agent-runtime",
+    introduced: "2026-05-21",
+    source: "agents.defaults.embeddedPi; agents.list[].embeddedPi",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts",
+    replacement: "agents.defaults.embeddedAgent; agents.list[].embeddedAgent",
+    docsPath: "/gateway/config-agents",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "Runtime code no longer reads the legacy key; doctor keeps this migration only to preserve shipped configs during upgrade.",
   }),
   deprecatedCompatRecord({
     code: "doctor-agent-sandbox-persession",
@@ -154,6 +166,16 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-message-queue-steering-modes",
+    owner: "config",
+    introduced: "2026-05-04",
+    source: "messages.queue.mode and messages.queue.byChannel retired queue modes",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.queue.ts",
+    replacement: "steer, followup, collect, or interrupt queue modes",
+    docsPath: "/concepts/queue",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-channel-dm-aliases",
     owner: "channel",
     introduced: "2026-04-26",
@@ -184,6 +206,28 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-tts-enabled-auto-mode",
+    owner: "tts",
+    introduced: "2026-04-29",
+    source:
+      "messages.tts.enabled, agents.*.tts.enabled, channels.*.tts.enabled, and voice-call plugin tts.enabled",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
+    replacement:
+      'messages/agents/channels/plugins TTS auto mode, for example auto: "always" or auto: "off"',
+    docsPath: "/tools/tts",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
+  }),
+  deprecatedCompatRecord({
+    code: "doctor-tts-speaker-selection-fields",
+    owner: "tts",
+    introduced: "2026-05-28",
+    source: "TTS provider speaker selection fields named voice, voiceName, and voiceId",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
+    replacement: "speakerVoice and speakerVoiceId",
+    docsPath: "/tools/tts",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-plugin-install-config-ledger",
     owner: "plugin",
     introduced: "2026-04-25",
@@ -205,6 +249,18 @@ export const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "packaged bundled plugins and the persisted plugin registry",
     docsPath: "/cli/plugins#registry",
     tests: ["src/commands/doctor/shared/bundled-plugin-load-paths.test.ts"],
+  }),
+  deprecatedCompatRecord({
+    code: "doctor-bundled-provider-discovery-allowlist",
+    owner: "plugin",
+    introduced: "2026-04-25",
+    source: "plugins.allow configs created before bundled provider discovery was explicit",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.providers.ts",
+    replacement: "plugins.bundledDiscovery allowlist mode plus explicit plugin/provider entries",
+    docsPath: "/cli/plugins#registry",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "Doctor preserves the shipped upgrade path only; runtime compatibility should stay behind explicit bundledDiscovery config.",
   }),
   deprecatedCompatRecord({
     code: "doctor-web-search-plugin-config",

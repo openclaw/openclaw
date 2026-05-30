@@ -7,32 +7,9 @@ import {
 } from "openclaw/plugin-sdk/migration";
 import { readString } from "./helpers.js";
 
-export type HermesModelDetails = {
-  model: string;
-};
-
-export type HermesSecretDetails = {
-  envVar: string;
-  provider: string;
-  profileId: string;
-};
-
-export type HermesModelItem = MigrationItem & {
-  id: "config:default-model";
-  kind: "config";
-  action: "skip" | "update";
-  details: HermesModelDetails;
-};
-
-export type HermesSecretItem = MigrationItem & {
-  kind: "secret";
-  action: "skip" | "create";
-  details: HermesSecretDetails;
-};
-
 export const HERMES_REASON_ALREADY_CONFIGURED = "already configured";
 export const HERMES_REASON_DEFAULT_MODEL_CONFIGURED = "default model already configured";
-export const HERMES_REASON_INCLUDE_SECRETS = "use --include-secrets to import";
+export const HERMES_REASON_INCLUDE_SECRETS = "auth credential migration not selected";
 export const HERMES_REASON_AUTH_PROFILE_EXISTS = "auth profile exists";
 export const HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE = "config runtime unavailable";
 export const HERMES_REASON_MISSING_SECRET_METADATA = "missing secret metadata";
@@ -43,7 +20,7 @@ export function createHermesModelItem(params: {
   model: string;
   currentModel?: string;
   overwrite?: boolean;
-}): HermesModelItem {
+}): MigrationItem {
   const alreadyConfigured = params.currentModel === params.model;
   const conflict = Boolean(params.currentModel && !params.overwrite && !alreadyConfigured);
   return createMigrationItem({
@@ -58,10 +35,10 @@ export function createHermesModelItem(params: {
         ? HERMES_REASON_DEFAULT_MODEL_CONFIGURED
         : undefined,
     details: { model: params.model },
-  }) as HermesModelItem;
+  });
 }
 
-export function readHermesModelDetails(item: MigrationItem): HermesModelDetails | undefined {
+export function readHermesModelDetails(item: MigrationItem): { model: string } | undefined {
   const model = readString(item.details?.model);
   return model ? { model } : undefined;
 }
@@ -72,8 +49,16 @@ export function createHermesSecretItem(params: {
   target: string;
   includeSecrets?: boolean;
   existsAlready?: boolean;
-  details: HermesSecretDetails;
-}): HermesSecretItem {
+  details: {
+    envVar?: string;
+    provider: string;
+    profileId: string;
+    mode?: "token";
+    sourceKind?: "hermes-env" | "opencode-auth-json";
+    sourceProvider?: string;
+    secretField?: string;
+  };
+}): MigrationItem {
   const skipped = !params.includeSecrets;
   const conflict = Boolean(params.existsAlready && !skipped);
   return createMigrationItem({
@@ -90,14 +75,39 @@ export function createHermesSecretItem(params: {
         ? HERMES_REASON_AUTH_PROFILE_EXISTS
         : undefined,
     details: params.details,
-  }) as HermesSecretItem;
+  });
 }
 
-export function readHermesSecretDetails(item: MigrationItem): HermesSecretDetails | undefined {
+export function readHermesSecretDetails(item: MigrationItem):
+  | {
+      envVar?: string;
+      provider: string;
+      profileId: string;
+      mode?: "token";
+      sourceKind?: string;
+      sourceProvider?: string;
+      secretField?: string;
+    }
+  | undefined {
   const envVar = readString(item.details?.envVar);
   const provider = readString(item.details?.provider);
   const profileId = readString(item.details?.profileId);
-  return envVar && provider && profileId ? { envVar, provider, profileId } : undefined;
+  if (!provider || !profileId) {
+    return undefined;
+  }
+  const mode = item.details?.mode === "token" ? "token" : undefined;
+  const sourceKind = readString(item.details?.sourceKind);
+  const sourceProvider = readString(item.details?.sourceProvider);
+  const secretField = readString(item.details?.secretField);
+  return {
+    ...(envVar ? { envVar } : {}),
+    provider,
+    profileId,
+    ...(mode ? { mode } : {}),
+    ...(sourceKind ? { sourceKind } : {}),
+    ...(sourceProvider ? { sourceProvider } : {}),
+    ...(secretField ? { secretField } : {}),
+  };
 }
 
 export function hermesItemConflict(item: MigrationItem, reason: string): MigrationItem {

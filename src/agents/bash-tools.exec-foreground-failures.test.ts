@@ -40,14 +40,47 @@ describe("exec foreground failures", () => {
       command: longDelayCmd,
     });
 
-    expect(result.content[0]).toMatchObject({ type: "text" });
+    expect(result.content[0]?.type).toBe("text");
     expect((result.content[0] as { text?: string }).text).toMatch(/timed out/i);
     expect((result.content[0] as { text?: string }).text).toMatch(/re-run with a higher timeout/i);
-    expect(result.details).toMatchObject({
-      status: "failed",
-      exitCode: null,
-      aggregated: "",
+    const details = result.details as {
+      status?: string;
+      exitCode?: number | null;
+      aggregated?: string;
+      durationMs?: number;
+    };
+    expect(details.status).toBe("failed");
+    expect(details.exitCode).toBeNull();
+    expect(details.aggregated).toBe("");
+    expect(details.durationMs).toBeTypeOf("number");
+    expect(details.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("rejects invalid host values before launching a command", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+      allowBackground: false,
     });
-    expect((result.details as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
+    for (const testCase of [
+      {
+        host: "spark-ff13",
+        message: 'Invalid exec host "spark-ff13". Allowed values: auto, sandbox, gateway, node.',
+      },
+      {
+        host: 42,
+        message:
+          "Invalid exec host value type number. Allowed values: auto, sandbox, gateway, node.",
+      },
+    ]) {
+      const malformedArgs = {
+        command: "echo should-not-run",
+        host: testCase.host,
+      } as unknown as Parameters<typeof tool.execute>[1];
+
+      await expect(tool.execute("call-invalid-host", malformedArgs)).rejects.toThrow(
+        testCase.message,
+      );
+    }
   });
 });

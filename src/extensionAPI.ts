@@ -1,5 +1,8 @@
-// Legacy compat surface for plugins that still import openclaw/extension-api.
-// Keep this file intentionally narrow and forward-only.
+/**
+ * @deprecated Legacy compat surface for plugins that still import
+ * openclaw/extension-api. Use the injected plugin runtime or focused
+ * openclaw/plugin-sdk subpaths instead.
+ */
 
 const shouldWarnExtensionApiImport =
   process.env.VITEST !== "true" &&
@@ -21,12 +24,18 @@ export { resolveAgentDir, resolveAgentWorkspaceDir } from "./agents/agent-scope.
 export { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./agents/defaults.js";
 export { resolveAgentIdentity } from "./agents/identity.js";
 export { resolveThinkingDefault } from "./agents/model-selection.js";
-export { runEmbeddedPiAgent } from "./agents/pi-embedded.js";
+export {
+  runEmbeddedAgent,
+  /** @deprecated Use runEmbeddedAgent. */
+  runEmbeddedAgent as runEmbeddedPiAgent,
+} from "./agents/embedded-agent.js";
 export { resolveAgentTimeoutMs } from "./agents/timeout.js";
 export { ensureAgentWorkspace } from "./agents/workspace.js";
 export {
   resolveStorePath,
   loadSessionStore,
   saveSessionStore,
+  updateSessionStore,
+  updateSessionStoreEntry,
   resolveSessionFilePath,
 } from "./config/sessions.js";

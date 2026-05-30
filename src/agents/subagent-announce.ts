@@ -7,6 +7,7 @@ import {
 } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -38,35 +39,38 @@ import {
 } from "./subagent-announce-output.js";
 import {
   callGateway,
-  isEmbeddedPiRunActive,
+  dispatchGatewayMethodInProcess,
+  isEmbeddedAgentRunActive,
   getRuntimeConfig,
-  waitForEmbeddedPiRunEnd,
+  waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
+  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
   loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
 };
 
 const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
   callGateway,
+  dispatchGatewayMethodInProcess,
   getRuntimeConfig,
   loadSubagentRegistryRuntime,
 };
 
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
 
-let subagentRegistryRuntimePromise: Promise<
-  typeof import("./subagent-announce.registry.runtime.js")
-> | null = null;
+const subagentRegistryRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-announce.registry.runtime.js"),
+);
 
 function loadSubagentRegistryRuntime() {
-  subagentRegistryRuntimePromise ??= import("./subagent-announce.registry.runtime.js");
-  return subagentRegistryRuntimePromise;
+  return subagentRegistryRuntimeLoader.load();
 }
 
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
@@ -84,9 +88,9 @@ function buildAnnounceReplyInstruction(params: {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+    return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type). Reply ONLY: ${SILENT_REPLY_TOKEN} when no user-facing update is needed.`;
   }
-  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+  return `A completed ${params.announceType} is ready for parent review. Review/verify the result above before deciding whether the original task is done. If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
 
 function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
@@ -185,9 +189,9 @@ async function wakeSubagentRunAfterDescendants(params: {
       operation: "descendant wake agent call",
       signal: params.signal,
       run: async () =>
-        await subagentAnnounceDeps.callGateway({
-          method: "agent",
-          params: {
+        await subagentAnnounceDeps.dispatchGatewayMethodInProcess(
+          "agent",
+          {
             sessionKey: params.childSessionKey,
             message: wakeMessage,
             deliver: false,
@@ -199,8 +203,10 @@ async function wakeSubagentRunAfterDescendants(params: {
             },
             idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
           },
-          timeoutMs: announceTimeoutMs,
-        }),
+          {
+            timeoutMs: announceTimeoutMs,
+          },
+        ),
     });
     wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
@@ -263,11 +269,14 @@ export async function runSubagentAnnounceFlow(params: {
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
     let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
-    if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
-      const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
-      if (!settled && isEmbeddedPiRunActive(childSessionId)) {
+    if (childSessionId && isEmbeddedAgentRunActive(childSessionId)) {
+      const settled = await waitForEmbeddedAgentRunEnd(childSessionId, settleTimeoutMs);
+      if (!settled && isEmbeddedAgentRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
-        return false;
+        // Keep delete cleanup retryable until the active child can be removed.
+        if (outcome?.status !== "timeout" || params.cleanup === "delete") {
+          return false;
+        }
       }
     }
 
@@ -454,7 +463,7 @@ export async function runSubagentAnnounceFlow(params: {
     // Build status label
     const statusLabel =
       outcome.status === "ok"
-        ? "completed successfully"
+        ? "completed; ready for parent review"
         : outcome.status === "timeout"
           ? "timed out"
           : outcome.status === "error"
@@ -567,8 +576,8 @@ export async function runSubagentAnnounceFlow(params: {
     params.onDeliveryResult?.(delivery);
     didAnnounce = delivery.delivered;
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
-      defaultRuntime.error?.(
-        `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
+      defaultRuntime.log(
+        `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
       );
     }
   } catch (err) {
@@ -588,31 +597,43 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
     if (shouldDeleteChildSession) {
-      try {
-        await subagentAnnounceDeps.callGateway({
-          method: "sessions.delete",
-          params: {
-            key: params.childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: params.spawnMode === "session",
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // ignore
-      }
+      await deleteSubagentSessionForCleanup({
+        callGateway: subagentAnnounceDeps.callGateway,
+        childSessionKey: params.childSessionKey,
+        spawnMode: params.spawnMode,
+      });
     }
   }
   return didAnnounce;
 }
 
-export const __testing = {
-  setDepsForTest(overrides?: Partial<SubagentAnnounceDeps>) {
+export const testing = {
+  setDepsForTest(
+    overrides?: Partial<SubagentAnnounceDeps> & {
+      callGateway?: typeof callGateway;
+    },
+  ) {
+    const callGatewayOverride = overrides?.callGateway;
+    const dispatchGatewayMethodInProcessOverride =
+      overrides?.dispatchGatewayMethodInProcess ??
+      (callGatewayOverride
+        ? ((async (method, agentParams, options) =>
+            await callGatewayOverride({
+              method,
+              params: agentParams,
+              expectFinal: options?.expectFinal,
+              timeoutMs: options?.timeoutMs,
+            })) satisfies typeof dispatchGatewayMethodInProcess)
+        : undefined);
     subagentAnnounceDeps = overrides
       ? {
           ...defaultSubagentAnnounceDeps,
           ...overrides,
+          ...(dispatchGatewayMethodInProcessOverride
+            ? { dispatchGatewayMethodInProcess: dispatchGatewayMethodInProcessOverride }
+            : {}),
         }
       : defaultSubagentAnnounceDeps;
   },
 };
+export { testing as __testing };

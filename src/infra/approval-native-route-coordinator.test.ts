@@ -44,7 +44,14 @@ describe("createApprovalNativeRouteReporter", () => {
         },
       });
 
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 5 * 60_000);
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+      const cleanupCall = setTimeoutSpy.mock.calls[0];
+      if (cleanupCall === undefined) {
+        throw new Error("expected cleanup timeout call");
+      }
+      const [cleanupCallback, cleanupDelayMs] = cleanupCall;
+      expect(cleanupDelayMs).toBe(5 * 60_000);
+      expect(cleanupCallback).toBeTypeOf("function");
     } finally {
       vi.useRealTimers();
     }
@@ -211,5 +218,67 @@ describe("createApprovalNativeRouteReporter", () => {
       idempotencyKey: "approval-route-notice:approval-2",
     });
     expect(otherGateway).not.toHaveBeenCalled();
+  });
+
+  it("sends a manual fallback notice when native delivery reaches no targets", async () => {
+    const requestGateway = createGatewayRequestMock();
+    const request = {
+      id: "deadbeef-1234-4567-89ab-cdef01234567",
+      request: {
+        command: "echo hi",
+        allowedDecisions: ["allow-once", "deny"],
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:C123",
+        turnSourceAccountId: "default",
+      },
+      createdAtMs: 0,
+      expiresAtMs: Date.now() + 60_000,
+    } as const;
+
+    const reporter = createApprovalNativeRouteReporter({
+      handledKinds: new Set(["exec"]),
+      channel: "discord",
+      channelLabel: "Discord",
+      accountId: "default",
+      requestGateway,
+    });
+    reporter.start();
+    reporter.observeRequest({
+      approvalKind: "exec",
+      request,
+    });
+
+    await reporter.reportDelivery({
+      approvalKind: "exec",
+      request,
+      deliveryPlan: {
+        targets: [
+          {
+            surface: "approver-dm",
+            target: {
+              to: "user:owner",
+            },
+            reason: "preferred",
+          },
+        ],
+        originTarget: {
+          to: "channel:C123",
+        },
+        notifyOriginWhenDmOnly: true,
+      },
+      deliveredTargets: [],
+    });
+
+    expect(requestGateway).toHaveBeenCalledWith("send", {
+      channel: "discord",
+      to: "channel:C123",
+      accountId: "default",
+      threadId: undefined,
+      message:
+        "Approval required. I could not deliver the native approval request.\n" +
+        "Reply with: /approve deadbeef allow-once|deny\n" +
+        "If the short code is ambiguous, use the full id in /approve.",
+      idempotencyKey: "approval-route-notice:deadbeef-1234-4567-89ab-cdef01234567",
+    });
   });
 });

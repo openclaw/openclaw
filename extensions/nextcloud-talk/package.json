@@ -1,17 +1,18 @@
 {
   "name": "@openclaw/nextcloud-talk",
-  "version": "2026.4.25",
-  "description": "OpenClaw Nextcloud Talk channel plugin",
-  "type": "module",
-  "dependencies": {
-    "zod": "^4.3.6"
+  "version": "2026.5.30",
+  "description": "OpenClaw Nextcloud Talk channel plugin for conversations.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
   },
+  "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.25"
+    "openclaw": ">=2026.5.30"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -43,14 +44,17 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.4.25"
+      "pluginApi": ">=2026.5.30"
     },
     "build": {
-      "openclawVersion": "2026.4.25"
+      "openclawVersion": "2026.5.30"
     },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true
     }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
   }
 }

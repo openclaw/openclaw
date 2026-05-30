@@ -1,12 +1,14 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
+import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
-import { hashJson, safeHashFile } from "./installed-plugin-index-hash.js";
+import { hashJson, safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
+import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import type {
   InstalledPluginIndexRecord,
   InstalledPluginInstallRecordInfo,
@@ -16,54 +18,25 @@ import type {
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginPackageChannel } from "./manifest.js";
-import { safeRealpathSync } from "./path-safety.js";
+import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import { hasKind } from "./slots.js";
 
-function sortUnique(values: readonly string[] | undefined): readonly string[] {
-  if (!values || values.length === 0) {
-    return [];
-  }
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).toSorted(
-    (left, right) => left.localeCompare(right),
-  );
-}
-
-function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
-  const providers = record.providers ?? [];
-  const cliBackends = record.cliBackends ?? [];
-  return Boolean(
-    providers.length > 0 ||
-    cliBackends.length > 0 ||
-    record.contracts?.speechProviders?.length ||
-    record.contracts?.mediaUnderstandingProviders?.length ||
-    record.contracts?.documentExtractors?.length ||
-    record.contracts?.imageGenerationProviders?.length ||
-    record.contracts?.videoGenerationProviders?.length ||
-    record.contracts?.musicGenerationProviders?.length ||
-    record.contracts?.webContentExtractors?.length ||
-    record.contracts?.webFetchProviders?.length ||
-    record.contracts?.webSearchProviders?.length ||
-    record.contracts?.migrationProviders?.length ||
-    record.contracts?.memoryEmbeddingProviders?.length ||
-    hasKind(record.kind, "memory"),
-  );
-}
-
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
-  const channels = record.channels ?? [];
   return {
-    sidecar: channels.length === 0 && !hasRuntimeContractSurface(record),
+    sidecar: record.activation?.onStartup === true,
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
-    agentHarnesses: sortUnique([
+    agentHarnesses: normalizeSortedUniqueStringEntries([
       ...(record.activation?.onAgentHarnesses ?? []),
       ...(record.cliBackends ?? []),
     ]),
   };
 }
 
-function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompatCode[] {
+export function collectPluginManifestCompatCodes(
+  record: PluginManifestRecord,
+): readonly PluginCompatCode[] {
   const codes: PluginCompatCode[] = [];
   if (record.providerAuthEnvVars && Object.keys(record.providerAuthEnvVars).length > 0) {
     codes.push("provider-auth-env-vars");
@@ -92,20 +65,38 @@ function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompat
   if (record.activation?.onCapabilities?.length) {
     codes.push("activation-capability-hint");
   }
-  return sortUnique(codes) as readonly PluginCompatCode[];
+  return normalizeSortedUniqueStringEntries(codes) as readonly PluginCompatCode[];
 }
 
-function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string | undefined {
+function resolvePackageJsonPath(
+  candidate: PluginCandidate | undefined,
+  realpathCache: Map<string, string>,
+): string | undefined {
   if (!candidate?.packageDir) {
     return undefined;
   }
-  const packageDir = safeRealpathSync(candidate.packageDir) ?? path.resolve(candidate.packageDir);
+  const packageDir =
+    safeRealpathSync(candidate.packageDir, realpathCache) ?? path.resolve(candidate.packageDir);
   const packageJsonPath = path.join(packageDir, "package.json");
-  return fs.existsSync(packageJsonPath) ? packageJsonPath : undefined;
+  const rootDir =
+    candidate.rootDir === candidate.packageDir
+      ? packageDir
+      : (safeRealpathSync(candidate.rootDir, realpathCache) ?? path.resolve(candidate.rootDir));
+  const packageJsonRealPath = safeRealpathSync(packageJsonPath, realpathCache);
+  return packageJsonRealPath && isPathInside(rootDir, packageJsonRealPath)
+    ? packageJsonPath
+    : undefined;
 }
 
-function resolvePackageJsonRelativePath(rootDir: string, packageJsonPath: string): string {
-  const resolvedRootDir = safeRealpathSync(rootDir) ?? path.resolve(rootDir);
+function resolvePackageJsonRelativePath(
+  rootDir: string,
+  packageJsonPath: string,
+  realpathCache: Map<string, string>,
+): string {
+  const resolvedRootDir =
+    rootDir === path.dirname(packageJsonPath)
+      ? path.dirname(packageJsonPath)
+      : (safeRealpathSync(rootDir, realpathCache) ?? path.resolve(rootDir));
   const relativePath = path.relative(resolvedRootDir, packageJsonPath) || "package.json";
   return relativePath.split(path.sep).join("/");
 }
@@ -115,6 +106,7 @@ function resolvePackageJsonRecord(params: {
   packageJsonPath: string | undefined;
   diagnostics: PluginDiagnostic[];
   pluginId: string;
+  realpathCache: Map<string, string>;
 }): InstalledPluginIndexRecord["packageJson"] | undefined {
   if (!params.candidate?.packageDir || !params.packageJsonPath) {
     return undefined;
@@ -128,9 +120,15 @@ function resolvePackageJsonRecord(params: {
   if (!hash) {
     return undefined;
   }
+  const fileSignature = safeFileSignature(params.packageJsonPath);
   return {
-    path: resolvePackageJsonRelativePath(params.candidate.rootDir, params.packageJsonPath),
+    path: resolvePackageJsonRelativePath(
+      params.candidate.rootDir,
+      params.packageJsonPath,
+      params.realpathCache,
+    ),
     hash,
+    ...(fileSignature ? { fileSignature } : {}),
   };
 }
 
@@ -154,19 +152,6 @@ function normalizeStringField(value: unknown): string | undefined {
   return normalized ? normalized : undefined;
 }
 
-function normalizeStringListField(value: unknown): readonly string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .flatMap((entry) => {
-      const normalizedEntry = normalizeStringField(entry);
-      return normalizedEntry ? [normalizedEntry] : [];
-    })
-    .filter((entry, index, all) => all.indexOf(entry) === index);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function normalizePackageChannel(
   channel: PluginPackageChannel | undefined,
 ): InstalledPluginPackageChannelInfo | undefined {
@@ -174,31 +159,44 @@ function normalizePackageChannel(
   if (!id) {
     return undefined;
   }
-  const label = normalizeStringField(channel?.label);
-  const blurb = normalizeStringField(channel?.blurb);
-  const preferOver = normalizeStringListField(channel?.preferOver);
-  const commands =
-    channel?.commands &&
-    typeof channel.commands === "object" &&
-    !Array.isArray(channel.commands) &&
-    (typeof channel.commands.nativeCommandsAutoEnabled === "boolean" ||
-      typeof channel.commands.nativeSkillsAutoEnabled === "boolean")
-      ? {
-          ...(typeof channel.commands.nativeCommandsAutoEnabled === "boolean"
-            ? { nativeCommandsAutoEnabled: channel.commands.nativeCommandsAutoEnabled }
-            : {}),
-          ...(typeof channel.commands.nativeSkillsAutoEnabled === "boolean"
-            ? { nativeSkillsAutoEnabled: channel.commands.nativeSkillsAutoEnabled }
-            : {}),
-        }
-      : undefined;
   return {
+    ...structuredClone(channel),
     id,
-    ...(label ? { label } : {}),
-    ...(blurb ? { blurb } : {}),
-    ...(preferOver ? { preferOver } : {}),
-    ...(commands ? { commands } : {}),
   };
+}
+
+function hashManifestlessBundleRecord(record: PluginManifestRecord): string {
+  return hashJson({
+    id: record.id,
+    name: record.name,
+    description: record.description,
+    version: record.version,
+    format: record.format,
+    bundleFormat: record.bundleFormat,
+    bundleCapabilities: record.bundleCapabilities ?? [],
+    skills: record.skills ?? [],
+    settingsFiles: record.settingsFiles ?? [],
+    hooks: record.hooks ?? [],
+  });
+}
+
+function resolveManifestHash(params: {
+  record: PluginManifestRecord;
+  diagnostics: PluginDiagnostic[];
+}): string {
+  if (hasOptionalMissingPluginManifestFile(params.record)) {
+    return hashManifestlessBundleRecord(params.record);
+  }
+  const hash = safeHashFile({
+    filePath: params.record.manifestPath,
+    pluginId: params.record.id,
+    diagnostics: params.diagnostics,
+    required: true,
+  });
+  if (hash) {
+    return hash;
+  }
+  return "";
 }
 
 function buildCandidateLookup(
@@ -220,42 +218,44 @@ export function buildInstalledPluginIndexRecords(params: {
 }): InstalledPluginIndexRecord[] {
   const candidateByRootDir = buildCandidateLookup(params.candidates);
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const realpathCache = new Map<string, string>();
   return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateByRootDir.get(record.rootDir);
-    const packageJsonPath = resolvePackageJsonPath(candidate);
+    const packageJsonPath = resolvePackageJsonPath(candidate, realpathCache);
     const installRecord = params.installRecords[record.id];
     const packageInstall = describePackageInstallSource(candidate);
-    const packageChannel = normalizePackageChannel(candidate?.packageManifest?.channel);
-    const manifestHash =
-      safeHashFile({
-        filePath: record.manifestPath,
-        pluginId: record.id,
-        diagnostics: params.diagnostics,
-        required: true,
-      }) ?? "";
+    const packageChannel = normalizePackageChannel(
+      record.packageChannel ?? candidate?.packageManifest?.channel,
+    );
+    const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
+    const manifestFile = hasOptionalMissingPluginManifestFile(record)
+      ? undefined
+      : safeFileSignature(record.manifestPath);
     const packageJson = resolvePackageJsonRecord({
       candidate,
       packageJsonPath,
       diagnostics: params.diagnostics,
       pluginId: record.id,
+      realpathCache,
     });
     const enabled = resolveEffectiveEnableState({
       id: record.id,
       origin: record.origin,
       config: normalizedConfig,
       rootConfig: params.config,
-      enabledByDefault: record.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     }).enabled;
     const indexRecord: InstalledPluginIndexRecord = {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
+      ...(manifestFile ? { manifestFile } : {}),
       source: record.source,
       rootDir: record.rootDir,
       origin: record.origin,
       enabled,
       startup: buildStartupInfo(record),
-      compat: collectCompatCodes(record),
+      compat: collectPluginManifestCompatCodes(record),
     };
     if (record.format && record.format !== "openclaw") {
       indexRecord.format = record.format;
@@ -266,8 +266,11 @@ export function buildInstalledPluginIndexRecords(params: {
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
     }
-    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
-      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    if (record.enabledByDefaultOnPlatforms?.length) {
+      indexRecord.enabledByDefaultOnPlatforms = [...record.enabledByDefaultOnPlatforms];
+    }
+    if (record.syntheticAuthRefs?.length) {
+      indexRecord.syntheticAuthRefs = [...record.syntheticAuthRefs];
     }
     if (record.setupSource) {
       indexRecord.setupSource = record.setupSource;

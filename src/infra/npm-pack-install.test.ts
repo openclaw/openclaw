@@ -90,7 +90,15 @@ describe("installFromNpmSpecArchive", () => {
 
     expect(result).toEqual({ ok: false, error: "pack failed" });
     expect(installFromArchive).not.toHaveBeenCalled();
-    expect(withTempDir).toHaveBeenCalledWith("openclaw-test-", expect.any(Function));
+    const withTempDirMock = vi.mocked(withTempDir);
+    expect(withTempDirMock).toHaveBeenCalledTimes(1);
+    const tempDirCall = withTempDirMock.mock.calls[0];
+    if (tempDirCall === undefined) {
+      throw new Error("expected temp dir call");
+    }
+    const [tempDirPrefix, tempDirCallback] = tempDirCall;
+    expect(tempDirPrefix).toBe("openclaw-test-");
+    expect(tempDirCallback).toBeTypeOf("function");
   });
 
   it("rejects unsupported npm specs before packing", async () => {
@@ -123,7 +131,11 @@ describe("installFromNpmSpecArchive", () => {
     const okResult = expectWrappedOkResult(result, { ok: true, target: "done" });
     expect(okResult.integrityDrift).toBeUndefined();
     expect(okResult.npmResolution.resolvedSpec).toBe("@openclaw/test@1.0.0");
-    expect(okResult.npmResolution.resolvedAt).toBeTruthy();
+    const resolvedAt = okResult.npmResolution.resolvedAt;
+    if (!resolvedAt) {
+      throw new Error("expected npm resolution timestamp");
+    }
+    expect(Date.parse(resolvedAt)).not.toBeNaN();
     expect(installFromArchive).toHaveBeenCalledWith({ archivePath: "/tmp/openclaw-test.tgz" });
   });
 

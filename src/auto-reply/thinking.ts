@@ -8,6 +8,7 @@ import {
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
   formatXHighModelHint,
+  isSessionDefaultDirectiveValue,
   normalizeElevatedLevel,
   normalizeFastMode,
   normalizeNoticeLevel,
@@ -56,6 +57,22 @@ type ResolvedThinkingProfile = {
   defaultLevel?: ThinkLevel | null;
 };
 
+function buildCatalogModelKey(provider: string, model: string): string {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return normalizeOptionalLowercaseString(modelId)?.startsWith(
+    `${normalizeOptionalLowercaseString(providerId)}/`,
+  )
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
 function resolveThinkingPolicyContext(params: {
   provider?: string | null;
   model?: string | null;
@@ -65,10 +82,28 @@ function resolveThinkingPolicyContext(params: {
   const normalizedProvider = providerRaw ? normalizeProviderId(providerRaw) : "";
   const modelId = normalizeOptionalString(params.model) ?? "";
   const modelKey = normalizeOptionalLowercaseString(params.model) ?? "";
+  const selectedCatalogKey =
+    normalizedProvider && modelId ? buildCatalogModelKey(normalizedProvider, modelId) : undefined;
   const candidate = params.catalog?.find(
-    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+    (entry) =>
+      selectedCatalogKey !== undefined &&
+      buildCatalogModelKey(normalizeProviderId(entry.provider), entry.id) === selectedCatalogKey,
   );
-  return { normalizedProvider, modelId, modelKey, reasoning: candidate?.reasoning };
+  return {
+    normalizedProvider,
+    modelId,
+    modelKey,
+    reasoning: candidate?.reasoning,
+    compat: candidate?.compat,
+  };
+}
+
+function catalogSupportsXHigh(compat: ThinkingCatalogEntry["compat"]): boolean {
+  const efforts = compat?.supportedReasoningEfforts;
+  if (!Array.isArray(efforts)) {
+    return false;
+  }
+  return efforts.some((effort) => normalizeThinkLevel(effort) === "xhigh");
 }
 
 function normalizeProfileLevel(
@@ -112,6 +147,13 @@ function buildBaseThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThi
   };
 }
 
+function buildOffOnlyThinkingProfile(): ResolvedThinkingProfile {
+  return {
+    levels: [{ id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
+    defaultLevel: "off",
+  };
+}
+
 function buildBinaryThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThinkingProfile {
   return {
     levels: [
@@ -143,6 +185,7 @@ export function resolveThinkingProfile(params: {
     provider: context.normalizedProvider,
     modelId: context.modelId,
     reasoning: context.reasoning,
+    compat: context.compat,
   };
   const pluginProfile = resolveProviderThinkingProfile({
     provider: context.normalizedProvider,
@@ -150,9 +193,15 @@ export function resolveThinkingProfile(params: {
   });
   if (pluginProfile) {
     const normalized = normalizeThinkingProfile(pluginProfile);
-    if (normalized.levels.length > 0) {
+    if (
+      normalized.levels.length > 0 &&
+      (context.reasoning !== false || pluginProfile.preserveWhenCatalogReasoningFalse === true)
+    ) {
       return normalized;
     }
+  }
+  if (context.reasoning === false) {
+    return buildOffOnlyThinkingProfile();
   }
 
   const defaultLevel = resolveProviderDefaultThinkingLevel({
@@ -170,11 +219,15 @@ export function resolveThinkingProfile(params: {
     binaryDecision === true
       ? buildBinaryThinkingProfile(defaultLevel)
       : buildBaseThinkingProfile(defaultLevel);
+  if (binaryDecision !== true && catalogSupportsXHigh(context.compat)) {
+    appendProfileLevel(profile, "xhigh");
+  }
   const policyContext = {
     provider: context.normalizedProvider,
     modelId: context.modelKey || context.modelId,
   };
   if (
+    binaryDecision !== true &&
     resolveProviderXHighThinking({
       provider: context.normalizedProvider,
       context: policyContext,
@@ -205,21 +258,30 @@ export function supportsXHighThinking(provider?: string | null, model?: string |
   return supportsThinkingLevel(provider, model, "xhigh");
 }
 
-export function listThinkingLevels(provider?: string | null, model?: string | null): ThinkLevel[] {
-  const profile = resolveThinkingProfile({ provider, model });
+export function listThinkingLevels(
+  provider?: string | null,
+  model?: string | null,
+  catalog?: ThinkingCatalogEntry[],
+): ThinkLevel[] {
+  const profile = resolveThinkingProfile({ provider, model, catalog });
   return profile.levels.map((level) => level.id);
 }
 
 export function listThinkingLevelOptions(
   provider?: string | null,
   model?: string | null,
+  catalog?: ThinkingCatalogEntry[],
 ): ThinkingLevelOption[] {
-  const profile = resolveThinkingProfile({ provider, model });
+  const profile = resolveThinkingProfile({ provider, model, catalog });
   return profile.levels.map(({ id, label }) => ({ id, label }));
 }
 
-export function listThinkingLevelLabels(provider?: string | null, model?: string | null): string[] {
-  return listThinkingLevelOptions(provider, model).map((level) => level.label);
+export function listThinkingLevelLabels(
+  provider?: string | null,
+  model?: string | null,
+  catalog?: ThinkingCatalogEntry[],
+): string[] {
+  return listThinkingLevelOptions(provider, model, catalog).map((level) => level.label);
 }
 
 export function formatThinkingLevels(
@@ -257,10 +319,16 @@ export function resolveLargestSupportedThinkingLevel(
   model?: string | null,
 ): ThinkLevel {
   const profile = resolveThinkingProfile({ provider, model });
-  return (
-    profile.levels.filter((level) => level.id !== "off").toSorted((a, b) => b.rank - a.rank)[0]
-      ?.id ?? "off"
-  );
+  let bestLevel: ResolvedThinkingProfile["levels"][number] | undefined;
+  for (const level of profile.levels) {
+    if (level.id === "off") {
+      continue;
+    }
+    if (!bestLevel || level.rank > bestLevel.rank) {
+      bestLevel = level;
+    }
+  }
+  return bestLevel?.id ?? "off";
 }
 
 export function isThinkingLevelSupported(params: {

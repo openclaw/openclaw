@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
 import {
@@ -106,7 +107,7 @@ describe("globals", () => {
     setVerbose(true);
     logVerbose("shown");
     expect(isVerbose()).toBe(true);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("shown"));
+    expect(logSpy).toHaveBeenCalledWith(theme.muted("shown"));
   });
 
   it("stores yes flag", () => {

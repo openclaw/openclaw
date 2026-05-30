@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
 import {
   promptSetupWizardAllowFrom,
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 import {
   createAllowlistSetupWizardProxy,
   createDelegatedFinalize,
@@ -153,7 +153,7 @@ describe("createAllowlistSetupWizardProxy", () => {
 
     expect(
       await promptSetupWizardAllowFrom({ promptAllowFrom: wizard.dmPolicy?.promptAllowFrom }),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       await resolveSetupWizardAllowFromEntries({
         resolveEntries: wizard.allowFrom?.resolveEntries,

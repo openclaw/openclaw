@@ -1,9 +1,7 @@
+import { filterChannelInboundQuoteContext } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import {
-  evaluateSupplementalContextVisibility,
-  type ContextVisibilityDecision,
-} from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { ContextVisibilityDecision } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   formatSignalSenderDisplay,
   isSignalSenderAllowed,
@@ -11,7 +9,7 @@ import {
 } from "../identity.js";
 import type { SignalDataMessage } from "./event-handler.types.js";
 
-export type SignalQuoteContext = {
+type SignalQuoteContext = {
   contextVisibilityMode: ReturnType<typeof resolveChannelContextVisibilityMode>;
   decision: ContextVisibilityDecision;
   quoteSenderAllowed: boolean;
@@ -42,18 +40,28 @@ export function resolveSignalQuoteContext(params: {
       : quoteSender
         ? isSignalSenderAllowed(quoteSender, params.effectiveGroupAllow)
         : false;
-  const decision = evaluateSupplementalContextVisibility({
-    mode: contextVisibilityMode,
-    kind: "quote",
+  const visibleQuote = filterChannelInboundQuoteContext(contextVisibilityMode, {
+    body: quoteText,
+    sender: quoteSender ? formatSignalSenderDisplay(quoteSender) : undefined,
     senderAllowed: quoteSenderAllowed,
+    isQuote: true,
   });
+  const decision: ContextVisibilityDecision = {
+    include: Boolean(visibleQuote),
+    reason: visibleQuote
+      ? contextVisibilityMode === "all"
+        ? "mode_all"
+        : quoteSenderAllowed
+          ? "sender_allowed"
+          : "quote_override"
+      : "blocked",
+  };
 
   return {
     contextVisibilityMode,
     decision,
     quoteSenderAllowed,
-    visibleQuoteText: decision.include ? quoteText : "",
-    visibleQuoteSender:
-      decision.include && quoteSender ? formatSignalSenderDisplay(quoteSender) : undefined,
+    visibleQuoteText: visibleQuote?.body ?? "",
+    visibleQuoteSender: visibleQuote?.sender,
   };
 }

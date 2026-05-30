@@ -7,7 +7,7 @@ read_when:
   - You need the exact metric names, span names, or attribute shapes to build dashboards or alerts
 ---
 
-OpenClaw exports diagnostics through the bundled `diagnostics-otel` plugin
+OpenClaw exports diagnostics through the official `diagnostics-otel` plugin
 using **OTLP/HTTP (protobuf)**. Any collector or backend that accepts OTLP/HTTP
 works without code changes. For local file logs and how to read them, see
 [Logging](/logging).
@@ -26,6 +26,12 @@ works without code changes. For local file logs and how to read them, see
   enabled, so the in-process cost stays near zero by default.
 
 ## Quick start
+
+For packaged installs, install the plugin first:
+
+```bash
+openclaw plugins install clawhub:@openclaw/diagnostics-otel
+```
 
 ```json5
 {
@@ -64,14 +70,15 @@ openclaw plugins enable diagnostics-otel
 
 ## Signals exported
 
-| Signal      | What goes in it                                                                                                                            |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Metrics** | Counters and histograms for token usage, cost, run duration, message flow, queue lanes, session state, exec, and memory pressure.          |
-| **Traces**  | Spans for model usage, model calls, harness lifecycle, tool execution, exec, webhook/message processing, context assembly, and tool loops. |
-| **Logs**    | Structured `logging.file` records exported over OTLP when `diagnostics.otel.logs` is enabled.                                              |
+| Signal      | What goes in it                                                                                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Metrics** | Counters and histograms for token usage, cost, run duration, failover, skill usage, message flow, Talk events, queue lanes, session state/recovery, tool execution, oversized payloads, exec, and memory pressure. |
+| **Traces**  | Spans for model usage, model calls, harness lifecycle, skill usage, tool execution, exec, webhook/message processing, context assembly, and tool loops.                                                            |
+| **Logs**    | Structured `logging.file` records exported over OTLP when `diagnostics.otel.logs` is enabled; log bodies are withheld unless content capture is explicitly enabled.                                                |
 
-Toggle `traces`, `metrics`, and `logs` independently. All three default to on
-when `diagnostics.otel.enabled` is true.
+Toggle `traces`, `metrics`, and `logs` independently. Traces and metrics
+default to on when `diagnostics.otel.enabled` is true. Logs default to off and
+are exported only when `diagnostics.otel.logs` is explicitly `true`.
 
 ## Configuration reference
 
@@ -100,6 +107,7 @@ when `diagnostics.otel.enabled` is true.
         toolInputs: false,
         toolOutputs: false,
         systemPrompt: false,
+        toolDefinitions: false,
       },
     },
   },
@@ -108,21 +116,29 @@ when `diagnostics.otel.enabled` is true.
 
 ### Environment variables
 
-| Variable                                                                                                          | Purpose                                                                                                                                                                                                                                    |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                     | Override `diagnostics.otel.endpoint`. If the value already contains `/v1/traces`, `/v1/metrics`, or `/v1/logs`, it is used as-is.                                                                                                          |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Signal-specific endpoint overrides used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                     |
-| `OTEL_SERVICE_NAME`                                                                                               | Override `diagnostics.otel.serviceName`.                                                                                                                                                                                                   |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Override the wire protocol (only `http/protobuf` is honored today).                                                                                                                                                                        |
-| `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest experimental GenAI span attribute (`gen_ai.provider.name`) instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality semantic attributes regardless. |
-| `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                |
+| Variable                                                                                                          | Purpose                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                     | Override `diagnostics.otel.endpoint`. If the value already contains `/v1/traces`, `/v1/metrics`, or `/v1/logs`, it is used as-is.                                                                                                                                                                                                              |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` / `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` / `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Signal-specific endpoint overrides used when the matching `diagnostics.otel.*Endpoint` config key is unset. Signal-specific config wins over signal-specific env, which wins over the shared endpoint.                                                                                                                                         |
+| `OTEL_SERVICE_NAME`                                                                                               | Override `diagnostics.otel.serviceName`.                                                                                                                                                                                                                                                                                                       |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`                                                                                     | Override the wire protocol (only `http/protobuf` is honored today).                                                                                                                                                                                                                                                                            |
+| `OTEL_SEMCONV_STABILITY_OPT_IN`                                                                                   | Set to `gen_ai_latest_experimental` to emit the latest experimental GenAI inference span shape, including `{gen_ai.operation.name} {gen_ai.request.model}` span names, `CLIENT` span kind, and `gen_ai.provider.name` instead of the legacy `gen_ai.system`. GenAI metrics always use bounded, low-cardinality semantic attributes regardless. |
+| `OPENCLAW_OTEL_PRELOADED`                                                                                         | Set to `1` when another preload or host process already registered the global OpenTelemetry SDK. The plugin then skips its own NodeSDK lifecycle but still wires diagnostic listeners and honors `traces`/`metrics`/`logs`.                                                                                                                    |
 
 ## Privacy and content capture
 
 Raw model/tool content is **not** exported by default. Spans carry bounded
-identifiers (channel, provider, model, error category, hash-only request ids)
-and never include prompt text, response text, tool inputs, tool outputs, or
-session keys.
+identifiers (channel, provider, model, error category, hash-only request ids,
+tool source, tool owner, and skill name/source) and never include prompt text,
+response text, tool inputs, tool outputs, skill file paths, or session keys.
+OTLP log records keep severity, logger, code location, trusted trace context,
+and sanitized attributes by default, but the raw log message body is exported
+only when `diagnostics.otel.captureContent` is set to boolean `true`. Granular
+`captureContent.*` subkeys do not enable log bodies. Labels that look like
+scoped agent session keys are replaced with `unknown`.
+Talk metrics export only bounded event metadata such as mode, transport,
+provider, and event type. They do not include transcripts, audio payloads,
+session ids, turn ids, call ids, room ids, or handoff tokens.
 
 Outbound model requests may include a W3C `traceparent` header. That header is
 generated only from OpenClaw-owned diagnostic trace context for the active model
@@ -133,14 +149,17 @@ Set `diagnostics.otel.captureContent.*` to `true` only when your collector and
 retention policy are approved for prompt, response, tool, or system-prompt
 text. Each subkey is opt-in independently:
 
-- `inputMessages` — user prompt content.
-- `outputMessages` — model response content.
-- `toolInputs` — tool argument payloads.
-- `toolOutputs` — tool result payloads.
-- `systemPrompt` — assembled system/developer prompt.
+- `inputMessages` - user prompt content.
+- `outputMessages` - model response content.
+- `toolInputs` - tool argument payloads.
+- `toolOutputs` - tool result payloads.
+- `systemPrompt` - assembled system/developer prompt.
+- `toolDefinitions` - model tool names, descriptions, and schemas.
 
 When any subkey is enabled, model and tool spans get bounded, redacted
-`openclaw.content.*` attributes for that class only.
+`openclaw.content.*` attributes for that class only. Use boolean
+`captureContent: true` only for broad diagnostics captures where OTLP log
+message bodies are also approved for export.
 
 ## Sampling and flushing
 
@@ -173,6 +192,8 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.model_call.request_bytes` (histogram, UTF-8 byte size of the final model request payload; no raw payload content)
 - `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed model response events; no raw response content)
 - `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event)
+- `openclaw.model.failover` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.failover.to_provider`, `openclaw.failover.to_model`, `openclaw.failover.reason`, `openclaw.failover.suspended`, `openclaw.lane`)
+- `openclaw.skill.used` (counter, attrs: `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent`, optional `openclaw.toolName`)
 
 ### Message flow
 
@@ -180,10 +201,20 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.webhook.error` (counter, attrs: `openclaw.channel`, `openclaw.webhook`)
 - `openclaw.webhook.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.webhook`)
 - `openclaw.message.queued` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.received` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.dispatch.started` (counter, attrs: `openclaw.channel`, `openclaw.source`)
+- `openclaw.message.dispatch.completed` (counter, attrs: `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, `openclaw.source`)
+- `openclaw.message.dispatch.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, `openclaw.source`)
 - `openclaw.message.processed` (counter, attrs: `openclaw.channel`, `openclaw.outcome`)
 - `openclaw.message.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.outcome`)
 - `openclaw.message.delivery.started` (counter, attrs: `openclaw.channel`, `openclaw.delivery.kind`)
 - `openclaw.message.delivery.duration_ms` (histogram, attrs: `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`)
+
+### Talk
+
+- `openclaw.talk.event` (counter, attrs: `openclaw.talk.event_type`, `openclaw.talk.mode`, `openclaw.talk.transport`, `openclaw.talk.brain`, `openclaw.talk.provider`)
+- `openclaw.talk.event.duration_ms` (histogram, attrs: same as `openclaw.talk.event`; emitted when a Talk event reports duration)
+- `openclaw.talk.audio.bytes` (histogram, attrs: same as `openclaw.talk.event`; emitted for Talk audio frame events that report byte length)
 
 ### Queues and sessions
 
@@ -192,13 +223,64 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.queue.depth` (histogram, attrs: `openclaw.lane` or `openclaw.channel=heartbeat`)
 - `openclaw.queue.wait_ms` (histogram, attrs: `openclaw.lane`)
 - `openclaw.session.state` (counter, attrs: `openclaw.state`, `openclaw.reason`)
-- `openclaw.session.stuck` (counter, attrs: `openclaw.state`)
-- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`)
+- `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted for recoverable stale session bookkeeping)
+- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted for recoverable stale session bookkeeping)
+- `openclaw.session.turn.created` (counter, attrs: `openclaw.agent`, `openclaw.channel`, `openclaw.trigger`)
+- `openclaw.session.recovery.requested` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.active_work_kind`, `openclaw.reason`)
+- `openclaw.session.recovery.completed` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.status`, `openclaw.active_work_kind`, `openclaw.reason`)
+- `openclaw.session.recovery.age_ms` (histogram, attrs: same as the matching recovery counter)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
+
+### Session liveness telemetry
+
+`diagnostics.stuckSessionWarnMs` is the no-progress age threshold for session
+liveness diagnostics. A `processing` session does not age toward this threshold
+while OpenClaw observes reply, tool, status, block, or ACP runtime progress.
+Typing keepalives are not counted as progress, so a silent model or harness can
+still be detected.
+
+OpenClaw classifies sessions by the work it can still observe:
+
+- `session.long_running`: active embedded work, model calls, or tool calls are
+  still making progress.
+- `session.stalled`: active work exists, but the active run has not reported
+  recent progress. Stalled embedded runs stay observe-only at first, then
+  abort-drain after `diagnostics.stuckSessionAbortMs` with no progress so queued
+  turns behind the lane can resume. When unset, the abort threshold defaults to
+  the safer extended window of at least 5 minutes and 3x
+  `diagnostics.stuckSessionWarnMs`.
+- `session.stuck`: stale session bookkeeping with no active work, or an idle
+  queued session with stale ownerless model/tool activity. This releases the
+  affected session lane immediately after recovery gates pass.
+
+Recovery emits structured `session.recovery.requested` and
+`session.recovery.completed` events. Diagnostic session state is marked idle
+only after a mutating recovery outcome (`aborted` or `released`) and only if the
+same processing generation is still current.
+
+Only `session.stuck` emits the `openclaw.session.stuck` counter, the
+`openclaw.session.stuck_age_ms` histogram, and the `openclaw.session.stuck`
+span. Repeated `session.stuck` diagnostics back off while the session remains
+unchanged, so dashboards should alert on sustained increases rather than every
+heartbeat tick. For the config knob and defaults, see
+[Configuration reference](/gateway/configuration-reference#diagnostics).
+
+Liveness warnings also emit:
+
+- `openclaw.liveness.warning` (counter, attrs: `openclaw.liveness.reason`)
+- `openclaw.liveness.event_loop_delay_p99_ms` (histogram, attrs: `openclaw.liveness.reason`)
+- `openclaw.liveness.event_loop_delay_max_ms` (histogram, attrs: `openclaw.liveness.reason`)
+- `openclaw.liveness.event_loop_utilization` (histogram, attrs: `openclaw.liveness.reason`)
+- `openclaw.liveness.cpu_core_ratio` (histogram, attrs: `openclaw.liveness.reason`)
 
 ### Harness lifecycle
 
 - `openclaw.harness.duration_ms` (histogram, attrs: `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.harness.phase` on errors)
+
+### Tool execution
+
+- `openclaw.tool.execution.duration_ms` (histogram, attrs: `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.tool.source`, `openclaw.tool.owner`, `openclaw.tool.params.kind`, plus `openclaw.errorCategory` on errors)
+- `openclaw.tool.execution.blocked` (counter, attrs: `gen_ai.tool.name`, `openclaw.toolName`, `openclaw.tool.source`, `openclaw.tool.owner`, `openclaw.tool.params.kind`, `openclaw.deniedReason`)
 
 ### Exec
 
@@ -206,6 +288,8 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 
 ### Diagnostics internals (memory and tool loop)
 
+- `openclaw.payload.large` (counter, attrs: `openclaw.payload.surface`, `openclaw.payload.action`, `openclaw.channel`, `openclaw.plugin`, `openclaw.reason`)
+- `openclaw.payload.large_bytes` (histogram, attrs: same as `openclaw.payload.large`)
 - `openclaw.memory.heap_used_bytes` (histogram, attrs: `openclaw.memory.kind`)
 - `openclaw.memory.rss_bytes` (histogram)
 - `openclaw.memory.pressure` (counter, attrs: `openclaw.memory.level`)
@@ -227,6 +311,7 @@ When any subkey is enabled, model and tool spans get bounded, redacted
   - `openclaw.errorCategory` and optional `openclaw.failureKind` on errors
   - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
   - `openclaw.provider.request_id_hash` (bounded SHA-based hash of the upstream provider request id; raw ids are not exported)
+  - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, model-call spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}` and `CLIENT` span kind instead of `openclaw.model.call`.
 - `openclaw.harness.run`
   - `openclaw.harness.id`, `openclaw.harness.plugin`, `openclaw.outcome`, `openclaw.provider`, `openclaw.model`, `openclaw.channel`
   - On completion: `openclaw.harness.result_classification`, `openclaw.harness.yield_detected`, `openclaw.harness.items.started`, `openclaw.harness.items.completed`, `openclaw.harness.items.active`
@@ -236,11 +321,11 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.exec`
   - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`, `openclaw.exec.command_length`, `openclaw.exec.exit_code`, `openclaw.exec.timed_out`
 - `openclaw.webhook.processed`
-  - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`
+  - `openclaw.channel`, `openclaw.webhook`
 - `openclaw.webhook.error`
-  - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`, `openclaw.error`
+  - `openclaw.channel`, `openclaw.webhook`, `openclaw.error`
 - `openclaw.message.processed`
-  - `openclaw.channel`, `openclaw.outcome`, `openclaw.chatId`, `openclaw.messageId`, `openclaw.reason`
+  - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`
@@ -263,7 +348,7 @@ to them directly without OTLP export.
 
 **Model usage**
 
-- `model.usage` — tokens, cost, duration, context, provider/model/channel,
+- `model.usage` - tokens, cost, duration, context, provider/model/channel,
   session ids. `usage` is provider/turn accounting for cost and telemetry;
   `context.used` is the current prompt/context snapshot and can be lower than
   provider `usage.total` when cached input or tool-loop calls are involved.
@@ -277,13 +362,13 @@ to them directly without OTLP export.
 **Queue and session**
 
 - `queue.lane.enqueue` / `queue.lane.dequeue`
-- `session.state` / `session.stuck`
-- `run.attempt`
+- `session.state` / `session.long_running` / `session.stalled` / `session.stuck`
+- `run.attempt` / `run.progress`
 - `diagnostic.heartbeat` (aggregate counters: webhooks/queue/session)
 
 **Harness lifecycle**
 
-- `harness.run.started` / `harness.run.completed` / `harness.run.error` —
+- `harness.run.started` / `harness.run.completed` / `harness.run.error` -
   per-run lifecycle for the agent harness. Includes `harnessId`, optional
   `pluginId`, provider/model/channel, and run id. Completion adds
   `durationMs`, `outcome`, optional `resultClassification`, `yieldDetected`,
@@ -293,7 +378,7 @@ to them directly without OTLP export.
 
 **Exec**
 
-- `exec.process.completed` — terminal outcome, duration, target, mode, exit
+- `exec.process.completed` - terminal outcome, duration, target, mode, exit
   code, and failure kind. Command text and working directories are not
   included.
 
@@ -341,8 +426,8 @@ You can also leave `diagnostics-otel` out of `plugins.allow`, or run
 
 ## Related
 
-- [Logging](/logging) — file logs, console output, CLI tailing, and the Control UI Logs tab
-- [Gateway logging internals](/gateway/logging) — WS log styles, subsystem prefixes, and console capture
-- [Diagnostics flags](/diagnostics/flags) — targeted debug-log flags
-- [Diagnostics export](/gateway/diagnostics) — operator support-bundle tool (separate from OTEL export)
-- [Configuration reference](/gateway/configuration-reference#diagnostics) — full `diagnostics.*` field reference
+- [Logging](/logging) - file logs, console output, CLI tailing, and the Control UI Logs tab
+- [Gateway logging internals](/gateway/logging) - WS log styles, subsystem prefixes, and console capture
+- [Diagnostics flags](/diagnostics/flags) - targeted debug-log flags
+- [Diagnostics export](/gateway/diagnostics) - operator support-bundle tool (separate from OTEL export)
+- [Configuration reference](/gateway/configuration-reference#diagnostics) - full `diagnostics.*` field reference

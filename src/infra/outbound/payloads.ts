@@ -6,22 +6,20 @@ import {
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyChannelData,
   hasReplyPayloadContent,
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
   type InteractiveReply,
   type MessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
-import {
-  resolveSilentReplyRewriteText,
-  type SilentReplyConversationType,
-} from "../../shared/silent-reply-policy.js";
-import { resolvePendingSpawnedChildren } from "./pending-spawn-query.js";
+import { type SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -47,6 +45,7 @@ export type OutboundPayloadJson = {
 };
 
 export type OutboundPayloadPlan = {
+  sourceIndex: number;
   payload: ReplyPayload;
   parts: ReturnType<typeof resolveSendableOutboundReplyParts>;
   hasPresentation: boolean;
@@ -59,14 +58,6 @@ type OutboundPayloadPlanContext = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
-  /**
-   * When true, bare silent payloads are dropped instead of being rewritten to
-   * visible fallback text. Set by callers that know the parent session has at
-   * least one pending spawned child whose completion will deliver the real
-   * reply. If omitted, the outbound plan consults the registered runtime query
-   * (see `pending-spawn-query.ts`).
-   */
-  hasPendingSpawnedChildren?: boolean;
   extractMarkdownImages?: boolean;
 };
 
@@ -74,6 +65,75 @@ export type OutboundPayloadMirror = {
   text: string;
   mediaUrls: string[];
 };
+
+type MirrorTextBlock = MessagePresentation["blocks"][number] | InteractiveReply["blocks"][number];
+
+function collectBlockMirrorText(
+  blocks: readonly MirrorTextBlock[],
+  options: { includeContext?: boolean } = {},
+): string[] {
+  const lines: string[] = [];
+  for (const block of blocks) {
+    if (
+      (block.type === "text" || (options.includeContext === true && block.type === "context")) &&
+      block.text.trim()
+    ) {
+      lines.push(block.text.trim());
+      continue;
+    }
+    if (block.type === "buttons") {
+      for (const button of block.buttons) {
+        if (button.label.trim()) {
+          lines.push(button.label.trim());
+        }
+      }
+      continue;
+    }
+    if (block.type === "select") {
+      if (block.placeholder?.trim()) {
+        lines.push(block.placeholder.trim());
+      }
+      for (const option of block.options) {
+        if (option.label.trim()) {
+          lines.push(option.label.trim());
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+function collectPresentationMirrorText(presentation: MessagePresentation | undefined): string[] {
+  if (!presentation) {
+    return [];
+  }
+  const lines: string[] = [];
+  if (presentation.title?.trim()) {
+    lines.push(presentation.title.trim());
+  }
+  lines.push(...collectBlockMirrorText(presentation.blocks, { includeContext: true }));
+  return lines;
+}
+
+function collectInteractiveMirrorText(interactive: InteractiveReply | undefined): string[] {
+  if (!interactive) {
+    return [];
+  }
+  return collectBlockMirrorText(interactive.blocks);
+}
+
+function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
+  const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
+  if (text?.trim()) {
+    return text;
+  }
+  const presentation = normalizeMessagePresentation(entry.payload.presentation);
+  const interactive = normalizeInteractiveReply(entry.payload.interactive);
+  return [
+    ...collectPresentationMirrorText(presentation),
+    ...collectInteractiveMirrorText(interactive),
+  ].join("\n");
+}
 
 function isSuppressedRelayStatusText(text: string): boolean {
   const normalized = text.trim();
@@ -130,6 +190,10 @@ type PreparedOutboundPayloadPlanEntry = {
   isSilent: boolean;
 };
 
+type IndexedPreparedOutboundPayloadPlanEntry = PreparedOutboundPayloadPlanEntry & {
+  sourceIndex: number;
+};
+
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
@@ -146,11 +210,14 @@ function createOutboundPayloadPlanEntry(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
   );
-  const parsedText = parsed.text ?? "";
+  const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
+  const strippedParsed =
+    strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
+  const parsedText = strippedParsed.text ?? "";
   if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
     return null;
   }
-  const isSilent = parsed.isSilent && mergedMedia.length === 0;
+  const isSilent = strippedParsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
@@ -187,38 +254,21 @@ export function createOutboundPayloadPlan(
   // Intentionally scoped to channel-agnostic normalization and projection inputs.
   // Transport concerns (queueing, hooks, retries), channel transforms, and
   // heartbeat-specific token semantics remain outside this plan boundary.
-  const resolvedSilentReplySettings = resolveSilentReplySettings({
-    cfg: context.cfg,
-    sessionKey: context.sessionKey,
-    surface: context.surface,
-    conversationType: context.conversationType,
-  });
-  const hasPendingSpawnedChildren =
-    context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
-  const prepared: PreparedOutboundPayloadPlanEntry[] = [];
-  for (const payload of payloads) {
+  const prepared: IndexedPreparedOutboundPayloadPlanEntry[] = [];
+  for (const [sourceIndex, payload] of payloads.entries()) {
     const entry = createOutboundPayloadPlanEntry(payload, {
       extractMarkdownImages: context.extractMarkdownImages,
     });
     if (!entry) {
       continue;
     }
-    prepared.push(entry);
+    prepared.push({ ...entry, sourceIndex });
   }
-  const hasVisibleNonSilentContent = prepared.some((entry) => {
-    if (entry.isSilent) {
-      return false;
-    }
-    const parts = resolveSendableOutboundReplyParts(entry.payload);
-    return hasReplyPayloadContent(
-      { ...entry.payload, text: parts.text, mediaUrls: parts.mediaUrls },
-      { hasChannelData: entry.hasChannelData },
-    );
-  });
   const plan: OutboundPayloadPlan[] = [];
   for (const entry of prepared) {
     if (!entry.isSilent) {
       plan.push({
+        sourceIndex: entry.sourceIndex,
         payload: entry.payload,
         parts: resolveSendableOutboundReplyParts(entry.payload),
         hasPresentation: entry.hasPresentation,
@@ -227,46 +277,6 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    if (
-      hasVisibleNonSilentContent ||
-      resolvedSilentReplySettings.policy === "allow" ||
-      hasPendingSpawnedChildren
-    ) {
-      continue;
-    }
-    if (!resolvedSilentReplySettings.rewrite) {
-      const visibleSilentPayload: ReplyPayload = {
-        ...entry.payload,
-        text: entry.payload.text?.trim() || "NO_REPLY",
-      };
-      if (!isRenderablePayload(visibleSilentPayload)) {
-        continue;
-      }
-      plan.push({
-        payload: visibleSilentPayload,
-        parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
-        hasPresentation: entry.hasPresentation,
-        hasInteractive: entry.hasInteractive,
-        hasChannelData: entry.hasChannelData,
-      });
-      continue;
-    }
-    const visibleSilentPayload: ReplyPayload = {
-      ...entry.payload,
-      text: resolveSilentReplyRewriteText({
-        seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${entry.payload.text ?? ""}`,
-      }),
-    };
-    if (!isRenderablePayload(visibleSilentPayload)) {
-      continue;
-    }
-    plan.push({
-      payload: visibleSilentPayload,
-      parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
-      hasPresentation: entry.hasPresentation,
-      hasInteractive: entry.hasInteractive,
-      hasChannelData: entry.hasChannelData,
-    });
   }
   return plan;
 }
@@ -330,7 +340,7 @@ export function projectOutboundPayloadPlanForMirror(
 ): OutboundPayloadMirror {
   return {
     text: plan
-      .map((entry) => entry.payload.text)
+      .map(resolveOutboundMirrorText)
       .filter((text): text is string => Boolean(text))
       .join("\n"),
     mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
@@ -341,16 +351,21 @@ export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
   const parts = resolveSendableOutboundReplyParts(payload);
-  const spokenText = payload.spokenText?.trim() ? payload.spokenText : undefined;
+  const text = stripUnsupportedCitationControlMarkers(parts.text);
+  const strippedSpokenText =
+    typeof payload.spokenText === "string"
+      ? stripUnsupportedCitationControlMarkers(payload.spokenText)
+      : undefined;
+  const spokenText = strippedSpokenText?.trim() ? strippedSpokenText : undefined;
   return {
-    text: parts.text,
+    text,
     mediaUrls: parts.mediaUrls,
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     presentation: payload.presentation,
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
-    ...(parts.text || !spokenText ? {} : { hookContent: spokenText }),
+    ...(text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }
 

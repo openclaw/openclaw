@@ -1,6 +1,10 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { timestampMsToIsoString } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
@@ -10,14 +14,16 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { isRich, theme } from "../terminal/theme.js";
 
 const ID_PAD = 10;
 const STATUS_PAD = 10;
 const MODE_PAD = 14;
 const REV_PAD = 6;
 const CTRL_PAD = 20;
+
+function formatFlowLookupMiss(lookup: string): string {
+  return `TaskFlow not found: ${lookup}. Run ${formatCliCommand("openclaw tasks flow list")} to see recent flow ids.`;
+}
 
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -43,6 +49,10 @@ function shortToken(value: string | undefined, maxChars = ID_PAD): string {
     return "n/a";
   }
   return truncate(trimmed, maxChars);
+}
+
+function formatFlowTimestamp(value: number | undefined | null): string {
+  return timestampMsToIsoString(value) ?? "n/a";
 }
 
 function formatFlowStatusCell(status: TaskFlowStatus, rich: boolean) {
@@ -173,7 +183,9 @@ export async function flowsListCommand(
     runtime.log(info(`Status filter: ${statusFilter}`));
   }
   if (flows.length === 0) {
-    runtime.log("No TaskFlows found.");
+    runtime.log(
+      `No TaskFlows found. Run ${formatCliCommand("openclaw tasks list")} to inspect standalone background tasks.`,
+    );
     return;
   }
   const rich = isRich();
@@ -188,7 +200,7 @@ export async function flowsShowCommand(
 ) {
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
-    runtime.error(`TaskFlow not found: ${opts.lookup}`);
+    runtime.error(formatFlowLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -221,11 +233,11 @@ export async function flowsShowCommand(
     `notify: ${flow.notifyPolicy}`,
     ...(stateSummary ? [`state: ${safeFlowDisplayText(stateSummary)}`] : []),
     ...(flow.cancelRequestedAt
-      ? [`cancelRequestedAt: ${new Date(flow.cancelRequestedAt).toISOString()}`]
+      ? [`cancelRequestedAt: ${formatFlowTimestamp(flow.cancelRequestedAt)}`]
       : []),
-    `createdAt: ${new Date(flow.createdAt).toISOString()}`,
-    `updatedAt: ${new Date(flow.updatedAt).toISOString()}`,
-    `endedAt: ${flow.endedAt ? new Date(flow.endedAt).toISOString() : "n/a"}`,
+    `createdAt: ${formatFlowTimestamp(flow.createdAt)}`,
+    `updatedAt: ${formatFlowTimestamp(flow.updatedAt)}`,
+    `endedAt: ${formatFlowTimestamp(flow.endedAt)}`,
     `tasks: ${taskSummary.total} total · ${taskSummary.active} active · ${taskSummary.failures} issues`,
   ];
   for (const line of lines) {
@@ -245,7 +257,7 @@ export async function flowsShowCommand(
 export async function flowsCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
-    runtime.error(`Flow not found: ${opts.lookup}`);
+    runtime.error(formatFlowLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -254,7 +266,7 @@ export async function flowsCancelCommand(opts: { lookup: string }, runtime: Runt
     flowId: flow.flowId,
   });
   if (!result.found) {
-    runtime.error(result.reason ?? `Flow not found: ${opts.lookup}`);
+    runtime.error(result.reason ?? formatFlowLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }

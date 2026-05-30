@@ -20,6 +20,10 @@ describe("resolveTokenExpiryState", () => {
     expect(resolveTokenExpiryState(Number.POSITIVE_INFINITY, now)).toBe("invalid_expires");
   });
 
+  it("treats Date-invalid future timestamps as invalid_expires", () => {
+    expect(resolveTokenExpiryState(8_700_000_000_000_000, now)).toBe("invalid_expires");
+  });
+
   it("returns expired when expires is in the past", () => {
     expect(resolveTokenExpiryState(now - 1, now)).toBe("expired");
   });
@@ -102,5 +106,19 @@ describe("evaluateStoredCredentialEligibility", () => {
       now,
     });
     expect(result).toEqual({ eligible: false, reasonCode: "invalid_expires" });
+  });
+
+  it("marks oauth without inline credential material as ineligible", () => {
+    const result = evaluateStoredCredentialEligibility({
+      credential: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "",
+        refresh: "",
+        expires: now + 60_000,
+      },
+      now,
+    });
+    expect(result).toEqual({ eligible: false, reasonCode: "missing_credential" });
   });
 });

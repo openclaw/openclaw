@@ -1,17 +1,24 @@
-import { randomBytes } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
+import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
+import { appendRegularFile, isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";
+import { privateFileStore } from "../infra/private-file-store.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
+import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type {
   CronDeliveryStatus,
   CronDeliveryTrace,
+  CronFailureNotificationDelivery,
+  CronRunDiagnostics,
   CronRunStatus,
   CronRunTelemetry,
 } from "./types.js";
@@ -22,25 +29,30 @@ export type CronRunLogEntry = {
   action: "finished";
   status?: CronRunStatus;
   error?: string;
+  errorReason?: FailoverReason;
   summary?: string;
+  diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
+  runId?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
 } & CronRunTelemetry;
 
-export type CronRunLogSortDir = "asc" | "desc";
-export type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
+type CronRunLogSortDir = "asc" | "desc";
+type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
 
-export type ReadCronRunLogPageOptions = {
+type ReadCronRunLogPageOptions = {
   limit?: number;
   offset?: number;
   jobId?: string;
+  runId?: string;
   status?: CronRunLogStatusFilter;
   statuses?: CronRunStatus[];
   deliveryStatus?: CronDeliveryStatus;
@@ -49,7 +61,7 @@ export type ReadCronRunLogPageOptions = {
   sortDir?: CronRunLogSortDir;
 };
 
-export type CronRunLogPageResult = {
+type CronRunLogPageResult = {
   entries: CronRunLogEntry[];
   total: number;
   offset: number;
@@ -62,6 +74,29 @@ type ReadCronRunLogAllPageOptions = Omit<ReadCronRunLogPageOptions, "jobId"> & {
   storePath: string;
   jobNameById?: Record<string, string>;
 };
+
+const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "format",
+  "rate_limit",
+  "overloaded",
+  "billing",
+  "server_error",
+  "timeout",
+  "model_not_found",
+  "session_expired",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+  "unknown",
+]);
+
+function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefined {
+  return typeof value === "string" && CRON_FAILOVER_REASONS.has(value as FailoverReason)
+    ? (value as FailoverReason)
+    : undefined;
+}
 
 function assertSafeCronRunLogJobId(jobId: string): string {
   const trimmed = jobId.trim();
@@ -80,7 +115,7 @@ export function resolveCronRunLogPath(params: { storePath: string; jobId: string
   const runsDir = path.resolve(dir, "runs");
   const safeJobId = assertSafeCronRunLogJobId(params.jobId);
   const resolvedPath = path.resolve(runsDir, `${safeJobId}.jsonl`);
-  if (!resolvedPath.startsWith(`${runsDir}${path.sep}`)) {
+  if (!isPathInside(runsDir, resolvedPath)) {
     throw new Error("invalid cron run log job id");
   }
   return resolvedPath;
@@ -138,16 +173,12 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
   }
 
   const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(raw.split("\n"));
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
-  const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.writeFile(tmp, `${kept.join("\n")}\n`, { encoding: "utf-8", mode: 0o600 });
-  await setSecureFileMode(tmp);
-  await fs.rename(tmp, filePath);
-  await setSecureFileMode(filePath);
+  await privateFileStore(path.dirname(filePath)).writeText(
+    path.basename(filePath),
+    `${kept.join("\n")}\n`,
+  );
 }
 
 export async function appendCronRunLog(
@@ -163,9 +194,10 @@ export async function appendCronRunLog(
       const runDir = path.dirname(resolved);
       await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
       await fs.chmod(runDir, 0o700).catch(() => undefined);
-      await fs.appendFile(resolved, `${JSON.stringify(entry)}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
+      await appendRegularFile({
+        filePath: resolved,
+        content: `${JSON.stringify(entry)}\n`,
+        rejectSymlinkParents: true,
       });
       await setSecureFileMode(resolved);
       await pruneIfNeeded(resolved, {
@@ -233,7 +265,7 @@ function normalizeRunStatuses(opts?: {
         status === "ok" || status === "error" || status === "skipped",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   const status = normalizeRunStatusFilter(opts?.status);
@@ -256,7 +288,7 @@ function normalizeDeliveryStatuses(opts?: {
         status === "not-requested",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   if (
@@ -303,19 +335,28 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         obj.usage && typeof obj.usage === "object"
           ? (obj.usage as Record<string, unknown>)
           : undefined;
+      const normalizedError = typeof obj.error === "string" ? obj.error : undefined;
+      const normalizedProvider =
+        typeof obj.provider === "string" && obj.provider.trim() ? obj.provider : undefined;
+      const normalizedErrorReason =
+        normalizeCronRunLogErrorReason(obj.errorReason) ??
+        resolveFailoverReasonFromError(normalizedError, normalizedProvider) ??
+        undefined;
       const entry: CronRunLogEntry = {
         ts: obj.ts,
         jobId: obj.jobId,
         action: "finished",
         status: obj.status,
-        error: obj.error,
+        error: normalizedError,
+        errorReason: normalizedErrorReason,
         summary: obj.summary,
+        runId: typeof obj.runId === "string" && obj.runId.trim() ? obj.runId : undefined,
+        diagnostics: normalizeCronRunDiagnostics(obj.diagnostics),
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
         nextRunAtMs: obj.nextRunAtMs,
         model: typeof obj.model === "string" && obj.model.trim() ? obj.model : undefined,
-        provider:
-          typeof obj.provider === "string" && obj.provider.trim() ? obj.provider : undefined,
+        provider: normalizedProvider,
         usage: usage
           ? {
               input_tokens: typeof usage.input_tokens === "number" ? usage.input_tokens : undefined,
@@ -343,6 +384,29 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
       if (typeof obj.deliveryError === "string") {
         entry.deliveryError = obj.deliveryError;
       }
+      if (obj.failureNotificationDelivery && typeof obj.failureNotificationDelivery === "object") {
+        const failureNotificationDelivery = obj.failureNotificationDelivery as {
+          delivered?: unknown;
+          status?: unknown;
+          error?: unknown;
+        };
+        if (
+          failureNotificationDelivery.status === "delivered" ||
+          failureNotificationDelivery.status === "not-delivered" ||
+          failureNotificationDelivery.status === "unknown" ||
+          failureNotificationDelivery.status === "not-requested"
+        ) {
+          entry.failureNotificationDelivery = {
+            status: failureNotificationDelivery.status,
+            ...(typeof failureNotificationDelivery.delivered === "boolean"
+              ? { delivered: failureNotificationDelivery.delivered }
+              : {}),
+            ...(typeof failureNotificationDelivery.error === "string"
+              ? { error: failureNotificationDelivery.error }
+              : {}),
+          };
+        }
+      }
       if (obj.delivery && typeof obj.delivery === "object") {
         entry.delivery = obj.delivery;
       }
@@ -360,9 +424,15 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
   return parsed;
 }
 
+function runIdMatches(entry: CronRunLogEntry, runId?: string): boolean {
+  const normalized = normalizeOptionalString(runId);
+  return !normalized || entry.runId === normalized;
+}
+
 function filterRunLogEntries(
   entries: CronRunLogEntry[],
   opts: {
+    runId?: string;
     statuses: CronRunStatus[] | null;
     deliveryStatuses: CronDeliveryStatus[] | null;
     query: string;
@@ -370,6 +440,9 @@ function filterRunLogEntries(
   },
 ): CronRunLogEntry[] {
   return entries.filter((entry) => {
+    if (!runIdMatches(entry, opts.runId)) {
+      return false;
+    }
     if (opts.statuses && (!entry.status || !opts.statuses.includes(entry.status))) {
       return false;
     }
@@ -399,6 +472,7 @@ export async function readCronRunLogEntriesPage(
   const sortDir: CronRunLogSortDir = opts?.sortDir === "asc" ? "asc" : "desc";
   const all = parseAllRunLogEntries(raw, { jobId: opts?.jobId });
   const filtered = filterRunLogEntries(all, {
+    runId: opts?.runId,
     statuses,
     deliveryStatuses,
     query,
@@ -406,6 +480,9 @@ export async function readCronRunLogEntriesPage(
       [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.errorReason ?? "",
+        entry.diagnostics?.summary ?? "",
+        ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
         entry.jobId,
         entry.delivery?.intended?.channel ?? "",
         entry.delivery?.resolved?.channel ?? "",
@@ -439,10 +516,31 @@ export async function readCronRunLogEntriesPageAll(
   const query = normalizeLowercaseStringOrEmpty(opts.query);
   const sortDir: CronRunLogSortDir = opts.sortDir === "asc" ? "asc" : "desc";
   const runsDir = path.resolve(path.dirname(path.resolve(opts.storePath)), "runs");
-  const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
+  if (!(await pathExists(runsDir))) {
+    return {
+      entries: [],
+      total: 0,
+      offset: 0,
+      limit,
+      hasMore: false,
+      nextOffset: null,
+    };
+  }
+  const runsRoot = await fsRoot(runsDir).catch(() => null);
+  if (!runsRoot) {
+    return {
+      entries: [],
+      total: 0,
+      offset: 0,
+      limit,
+      hasMore: false,
+      nextOffset: null,
+    };
+  }
+  const files = await runsRoot.list(".", { withFileTypes: true }).catch(() => []);
   const jsonlFiles = files
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-    .map((entry) => path.join(runsDir, entry.name));
+    .filter((entry) => entry.isFile && entry.name.endsWith(".jsonl"))
+    .map((entry) => entry.name);
   if (jsonlFiles.length === 0) {
     return {
       entries: [],
@@ -453,15 +551,16 @@ export async function readCronRunLogEntriesPageAll(
       nextOffset: null,
     };
   }
-  await Promise.all(jsonlFiles.map((f) => drainPendingWrite(f)));
+  await Promise.all(jsonlFiles.map((fileName) => drainPendingWrite(path.join(runsDir, fileName))));
   const chunks = await Promise.all(
-    jsonlFiles.map(async (filePath) => {
-      const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
+    jsonlFiles.map(async (fileName) => {
+      const raw = await runsRoot.readText(fileName).catch(() => "");
       return parseAllRunLogEntries(raw);
     }),
   );
   const all = chunks.flat();
   const filtered = filterRunLogEntries(all, {
+    runId: opts.runId,
     statuses,
     deliveryStatuses,
     query,
@@ -470,6 +569,9 @@ export async function readCronRunLogEntriesPageAll(
       return [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.errorReason ?? "",
+        entry.diagnostics?.summary ?? "",
+        ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
         entry.jobId,
         jobName,
         entry.delivery?.intended?.channel ?? "",

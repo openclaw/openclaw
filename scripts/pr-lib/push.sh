@@ -102,23 +102,39 @@ mutation($input: CreateCommitOnBranchInput!) {
 GRAPHQL
 )
 
+  local additions_file deletions_file
+  additions_file=$(mktemp)
+  deletions_file=$(mktemp)
+  printf '%s\n' "$additions" >"$additions_file"
+  printf '%s\n' "$deletions" >"$deletions_file"
+
   local variables
   variables=$(jq -n \
     --arg nwo "$repo_nwo" \
     --arg branch "$branch" \
     --arg oid "$expected_oid" \
     --arg headline "$commit_headline" \
-    --argjson additions "$additions" \
-    --argjson deletions "$deletions" \
+    --slurpfile additions "$additions_file" \
+    --slurpfile deletions "$deletions_file" \
     '{input: {
       branch: { repositoryNameWithOwner: $nwo, branchName: $branch },
       message: { headline: $headline },
-      fileChanges: { additions: $additions, deletions: $deletions },
+      fileChanges: { additions: $additions[0], deletions: $deletions[0] },
       expectedHeadOid: $oid
     }}')
+  rm -f "$additions_file" "$deletions_file"
+
+  local variables_file
+  variables_file=$(mktemp)
+  printf '%s\n' "$variables" >"$variables_file"
+
+  local payload
+  payload=$(jq -n --arg query "$query" --slurpfile variables "$variables_file" \
+    '{query: $query, variables: $variables[0]}')
+  rm -f "$variables_file"
 
   local result
-  result=$(gh api graphql -f query="$query" --input - <<< "$variables" 2>&1) || {
+  result=$(gh api graphql --input - <<< "$payload" 2>&1) || {
     echo "GraphQL push failed: $result" >&2
     return 1
   }
@@ -202,6 +218,27 @@ resolve_prhead_remote_sha() {
   printf '%s\n' "$remote_sha"
 }
 
+push_prep_head_once() {
+  local pr_head="$1"
+  local lease_sha="$2"
+  local prep_head_sha="$3"
+
+  if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ] && [ "${OPENCLAW_PR_PUSH_MODE:-graphql}" != "git" ]; then
+    echo "Pushing PR branch through GitHub createCommitOnBranch so the prepared commit is verified." >&2
+    graphql_push_to_fork "${PR_HEAD_OWNER}/${PR_HEAD_REPO_NAME}" "$pr_head" "$lease_sha"
+    return $?
+  fi
+
+  if [ "${OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH:-}" != "1" ]; then
+    echo "Refusing git-protocol PR branch push because it can publish unsigned commits." >&2
+    echo "Use the default GitHub createCommitOnBranch path, or set OPENCLAW_ALLOW_UNSIGNED_GIT_PUSH=1 for an explicit manual override." >&2
+    return 2
+  fi
+
+  git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head >&2
+  printf '%s\n' "$prep_head_sha"
+}
+
 push_prep_head_to_pr_branch() {
   local pr="$1"
   local pr_head="$2"
@@ -226,9 +263,7 @@ push_prep_head_to_pr_branch() {
     fi
     pushed_from_sha="$lease_sha"
     local push_output
-    if ! push_output=$(
-      git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head 2>&1
-    ); then
+    if ! push_output=$(push_prep_head_once "$pr_head" "$lease_sha" "$prep_head_sha" 2>&1); then
       echo "Push failed: $push_output"
 
       if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
@@ -253,9 +288,7 @@ push_prep_head_to_pr_branch() {
           run_prepare_push_retry_gates "$docs_only"
         fi
 
-        if ! push_output=$(
-          git push --force-with-lease=refs/heads/$pr_head:$lease_sha prhead HEAD:$pr_head 2>&1
-        ); then
+        if ! push_output=$(push_prep_head_once "$pr_head" "$lease_sha" "$prep_head_sha" 2>&1); then
           echo "Retry push failed: $push_output"
           if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
             echo "Retry failed; trying GraphQL createCommitOnBranch fallback..."
@@ -266,8 +299,12 @@ push_prep_head_to_pr_branch() {
             echo "Git push failed and no fork owner/repo info for GraphQL fallback."
             exit 1
           fi
+        else
+          prep_head_sha=$(printf '%s\n' "$push_output" | tail -n 1)
         fi
       fi
+    else
+      prep_head_sha=$(printf '%s\n' "$push_output" | tail -n 1)
     fi
   fi
 

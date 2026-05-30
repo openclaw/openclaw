@@ -1,9 +1,17 @@
 {
   "id": "synthetic",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["synthetic"],
-  "providerAuthEnvVars": {
-    "synthetic": ["SYNTHETIC_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "synthetic",
+        "envVars": ["SYNTHETIC_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

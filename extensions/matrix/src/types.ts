@@ -1,3 +1,4 @@
+import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ContextVisibilityMode,
   DmPolicy,
@@ -5,11 +6,10 @@ import type {
   OpenClawConfig,
   SecretInput,
 } from "./runtime-api.js";
-export type { ContextVisibilityMode, DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all" | "batched";
 
-export type MatrixDmConfig = {
+type MatrixDmConfig = {
   /** If false, ignore all incoming Matrix DMs. Default: true. */
   enabled?: boolean;
   /** Direct message access policy (default: pairing). */
@@ -38,6 +38,8 @@ export type MatrixRoomConfig = {
    * true accepts all configured bot senders; "mentions" requires they mention this bot.
    */
   allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted configured-bot messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Optional tool policy overrides for this room. */
   tools?: { allow?: string[]; deny?: string[] };
   /** If true, reply without mention requirements. */
@@ -50,7 +52,7 @@ export type MatrixRoomConfig = {
   systemPrompt?: string;
 };
 
-export type MatrixActionConfig = {
+type MatrixActionConfig = {
   reactions?: boolean;
   messages?: boolean;
   pins?: boolean;
@@ -60,15 +62,19 @@ export type MatrixActionConfig = {
   verification?: boolean;
 };
 
-export type MatrixThreadBindingsConfig = {
+type MatrixThreadBindingsConfig = {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
+  spawnSessions?: boolean;
+  defaultSpawnContext?: "isolated" | "fork";
+  /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
+  /** @deprecated Use spawnSessions instead. */
   spawnAcpSessions?: boolean;
 };
 
-export type MatrixExecApprovalTarget = "dm" | "channel" | "both";
+type MatrixExecApprovalTarget = "dm" | "channel" | "both";
 
 export type MatrixExecApprovalConfig = {
   /** If true, deliver exec approvals through Matrix-native prompts. */
@@ -83,9 +89,19 @@ export type MatrixExecApprovalConfig = {
   target?: MatrixExecApprovalTarget;
 };
 
-export type MatrixStreamingMode = "partial" | "quiet" | "off";
+export type MatrixStreamingMode = "partial" | "quiet" | "progress" | "off";
 
-export type MatrixNetworkConfig = {
+export type MatrixStreamingConfig = {
+  /** Preview streaming mode for Matrix replies. Default: "off". */
+  mode?: MatrixStreamingMode;
+  progress?: import("openclaw/plugin-sdk/channel-outbound").ChannelStreamingProgressConfig;
+  preview?: {
+    /** Show tool/progress activity in the live draft preview. Default: true. */
+    toolProgress?: boolean;
+  };
+};
+
+type MatrixNetworkConfig = {
   /** Dangerous opt-in for trusted private/internal Matrix homeservers. */
   dangerouslyAllowPrivateNetwork?: boolean;
 };
@@ -126,11 +142,15 @@ export type MatrixConfig = {
   encryption?: boolean;
   /** If true, enforce allowlists for groups + DMs regardless of policy. */
   allowlistOnly?: boolean;
+  /** Break-glass compatibility mode for resolving mutable Matrix display names and room names in allowlists. */
+  dangerouslyAllowNameMatching?: boolean;
   /**
    * Allow messages from other configured Matrix bot accounts.
    * true accepts all configured bot senders; "mentions" requires they mention this bot.
    */
   allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted configured-bot messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   /** Group message policy (default: allowlist). */
   groupPolicy?: GroupPolicy;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
@@ -184,7 +204,7 @@ export type MatrixConfig = {
   execApprovals?: MatrixExecApprovalConfig;
   /** Room config allowlist keyed by room ID or alias (names resolved to IDs when possible). */
   groups?: Record<string, MatrixRoomConfig>;
-  /** Room config allowlist keyed by room ID or alias. Legacy; use groups. */
+  /** @deprecated Use groups. */
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
@@ -195,16 +215,21 @@ export type MatrixConfig = {
    *   messages. This preserves legacy preview-first notification behavior.
    * - `"quiet"`: edit a single quiet draft notice in place for the current
    *   assistant block as the model generates text.
+   * - `"progress"`: edit a single draft status message with shared progress
+   *   labels and optional tool/task lines until the final answer is ready.
    * - `"off"`: deliver the full reply once the model finishes.
    * - Use `blockStreaming: true` when you want completed assistant blocks to
    *   stay visible as separate progress messages. When combined with
    *   preview streaming, Matrix keeps a live draft for the current block and
    *   preserves completed blocks as separate messages.
+   * - `streaming.progress.toolProgress: false` hides interim tool/progress
+   *   lines in progress mode. `streaming.preview.toolProgress: false` keeps
+   *   legacy answer preview edits but hides interim tool/progress lines.
    * - `true` maps to `"partial"`, `false` maps to `"off"` for backward
-   *   compatibility.
+   *   compatibility. Object form uses `streaming.mode`.
    * Default: `"off"`.
    */
-  streaming?: MatrixStreamingMode | boolean;
+  streaming?: MatrixStreamingMode | MatrixStreamingConfig | boolean;
 };
 
 export type CoreConfig = {
@@ -213,6 +238,7 @@ export type CoreConfig = {
     defaults?: {
       groupPolicy?: "open" | "allowlist" | "disabled";
       contextVisibility?: ContextVisibilityMode;
+      botLoopProtection?: ChannelBotLoopProtectionConfig;
     };
   };
   commands?: {
@@ -220,6 +246,7 @@ export type CoreConfig = {
   };
   session?: {
     store?: string;
+    dmScope?: NonNullable<OpenClawConfig["session"]>["dmScope"];
   };
   messages?: {
     ackReaction?: string;

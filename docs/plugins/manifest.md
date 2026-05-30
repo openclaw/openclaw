@@ -100,8 +100,13 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
   },
   "cliBackends": ["openrouter-cli"],
   "syntheticAuthRefs": ["openrouter-cli"],
-  "providerAuthEnvVars": {
-    "openrouter": ["OPENROUTER_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "openrouter",
+        "envVars": ["OPENROUTER_API_KEY"]
+      }
+    ]
   },
   "providerAuthAliases": {
     "openrouter-coding": "openrouter"
@@ -145,42 +150,189 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 
 ## Top-level field reference
 
-| Field                                | Required | Type                             | What it means                                                                                                                                                                                                                     |
-| ------------------------------------ | -------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                                 | Yes      | `string`                         | Canonical plugin id. This is the id used in `plugins.entries.<id>`.                                                                                                                                                               |
-| `configSchema`                       | Yes      | `object`                         | Inline JSON Schema for this plugin's config.                                                                                                                                                                                      |
-| `enabledByDefault`                   | No       | `true`                           | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.                                                                                                      |
-| `legacyPluginIds`                    | No       | `string[]`                       | Legacy ids that normalize to this canonical plugin id.                                                                                                                                                                            |
-| `autoEnableWhenConfiguredProviders`  | No       | `string[]`                       | Provider ids that should auto-enable this plugin when auth, config, or model refs mention them.                                                                                                                                   |
-| `kind`                               | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                                                                                                                      |
-| `channels`                           | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                                       |
-| `providers`                          | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                                                |
-| `providerDiscoveryEntry`             | No       | `string`                         | Lightweight provider-discovery module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                             |
-| `modelSupport`                       | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                       |
-| `modelCatalog`                       | No       | `object`                         | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.       |
-| `modelPricing`                       | No       | `object`                         | Provider-owned external pricing lookup policy. Use it to opt local/self-hosted providers out of remote pricing catalogs or map provider refs to OpenRouter/LiteLLM catalog ids without hardcoding provider ids in core.           |
-| `modelIdNormalization`               | No       | `object`                         | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                         |
-| `providerEndpoints`                  | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                          |
-| `providerRequest`                    | No       | `object`                         | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                            |
-| `cliBackends`                        | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                       |
-| `syntheticAuthRefs`                  | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                            |
-| `nonSecretAuthMarkers`               | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                              |
-| `commandAliases`                     | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                                              |
-| `providerAuthEnvVars`                | No       | `Record<string, string[]>`       | Deprecated compatibility env metadata for provider auth/status lookup. Prefer `setup.providers[].envVars` for new plugins; OpenClaw still reads this during the deprecation window.                                               |
-| `providerAuthAliases`                | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                        |
-| `channelEnvVars`                     | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                                          |
-| `providerAuthChoices`                | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                     |
-| `activation`                         | No       | `object`                         | Cheap activation planner metadata for provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                              |
-| `setup`                              | No       | `object`                         | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                                                  |
-| `qaRunners`                          | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                                                    |
-| `contracts`                          | No       | `object`                         | Static bundled capability snapshot for external auth hooks, speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
-| `mediaUnderstandingProviderMetadata` | No       | `Record<string, object>`         | Cheap media-understanding defaults for provider ids declared in `contracts.mediaUnderstandingProviders`.                                                                                                                          |
-| `channelConfigs`                     | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                                        |
-| `skills`                             | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                                           |
-| `name`                               | No       | `string`                         | Human-readable plugin name.                                                                                                                                                                                                       |
-| `description`                        | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                                                                                                                           |
-| `version`                            | No       | `string`                         | Informational plugin version.                                                                                                                                                                                                     |
-| `uiHints`                            | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                 |
+| Field                                | Required | Type                             | What it means                                                                                                                                                                                                                                   |
+| ------------------------------------ | -------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                                 | Yes      | `string`                         | Canonical plugin id. This is the id used in `plugins.entries.<id>`.                                                                                                                                                                             |
+| `configSchema`                       | Yes      | `object`                         | Inline JSON Schema for this plugin's config.                                                                                                                                                                                                    |
+| `requiresPlugins`                    | No       | `string[]`                       | Plugin ids that must also be installed for this plugin to have an effect. Discovery keeps the plugin loadable but warns when any required plugin is missing.                                                                                    |
+| `enabledByDefault`                   | No       | `true`                           | Marks a bundled plugin as enabled by default. Omit it, or set any non-`true` value, to leave the plugin disabled by default.                                                                                                                    |
+| `enabledByDefaultOnPlatforms`        | No       | `string[]`                       | Marks a bundled plugin as enabled by default only on the listed Node.js platforms, for example `["darwin"]`. Explicit config still wins.                                                                                                        |
+| `legacyPluginIds`                    | No       | `string[]`                       | Legacy ids that normalize to this canonical plugin id.                                                                                                                                                                                          |
+| `autoEnableWhenConfiguredProviders`  | No       | `string[]`                       | Provider ids that should auto-enable this plugin when auth, config, or model refs mention them.                                                                                                                                                 |
+| `kind`                               | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                                                                                                                                    |
+| `channels`                           | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                                                     |
+| `providers`                          | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                                                              |
+| `providerCatalogEntry`               | No       | `string`                         | Lightweight provider-catalog module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                                             |
+| `modelSupport`                       | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                                     |
+| `modelCatalog`                       | No       | `object`                         | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.                     |
+| `modelPricing`                       | No       | `object`                         | Provider-owned external pricing lookup policy. Use it to opt local/self-hosted providers out of remote pricing catalogs or map provider refs to OpenRouter/LiteLLM catalog ids without hardcoding provider ids in core.                         |
+| `modelIdNormalization`               | No       | `object`                         | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                       |
+| `providerEndpoints`                  | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                        |
+| `providerRequest`                    | No       | `object`                         | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                          |
+| `secretProviderIntegrations`         | No       | `Record<string, object>`         | Declarative SecretRef exec provider presets that setup or install surfaces can offer without hardcoding provider-specific integrations in core.                                                                                                 |
+| `cliBackends`                        | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                                     |
+| `syntheticAuthRefs`                  | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                                          |
+| `nonSecretAuthMarkers`               | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                                            |
+| `commandAliases`                     | No       | `object[]`                       | Command names owned by this plugin that should produce plugin-aware config and CLI diagnostics before runtime loads.                                                                                                                            |
+| `providerAuthEnvVars`                | No       | `Record<string, string[]>`       | Deprecated compatibility env metadata for provider auth/status lookup. Prefer `setup.providers[].envVars` for new plugins; OpenClaw still reads this during the deprecation window.                                                             |
+| `providerAuthAliases`                | No       | `Record<string, string>`         | Provider ids that should reuse another provider id for auth lookup, for example a coding provider that shares the base provider API key and auth profiles.                                                                                      |
+| `channelEnvVars`                     | No       | `Record<string, string[]>`       | Cheap channel env metadata that OpenClaw can inspect without loading plugin code. Use this for env-driven channel setup or auth surfaces that generic startup/config helpers should see.                                                        |
+| `providerAuthChoices`                | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                                   |
+| `activation`                         | No       | `object`                         | Cheap activation planner metadata for startup, provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                                   |
+| `setup`                              | No       | `object`                         | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                                                                |
+| `qaRunners`                          | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                                                                  |
+| `contracts`                          | No       | `object`                         | Static capability ownership snapshot for external auth hooks, embeddings, speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
+| `mediaUnderstandingProviderMetadata` | No       | `Record<string, object>`         | Cheap media-understanding defaults for provider ids declared in `contracts.mediaUnderstandingProviders`.                                                                                                                                        |
+| `imageGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap image-generation auth metadata for provider ids declared in `contracts.imageGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                              |
+| `videoGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap video-generation auth metadata for provider ids declared in `contracts.videoGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                              |
+| `musicGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap music-generation auth metadata for provider ids declared in `contracts.musicGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                              |
+| `toolMetadata`                       | No       | `Record<string, object>`         | Cheap availability metadata for plugin-owned tools declared in `contracts.tools`. Use it when a tool should not load runtime unless config, env, or auth evidence exists.                                                                       |
+| `channelConfigs`                     | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                                                      |
+| `skills`                             | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                                                         |
+| `name`                               | No       | `string`                         | Human-readable plugin name.                                                                                                                                                                                                                     |
+| `description`                        | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                                                                                                                                         |
+| `version`                            | No       | `string`                         | Informational plugin version.                                                                                                                                                                                                                   |
+| `uiHints`                            | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                               |
+
+## Generation provider metadata reference
+
+The generation provider metadata fields describe static auth signals for
+providers declared in the matching `contracts.*GenerationProviders` list.
+OpenClaw reads these fields before provider runtime loads so core tools can
+decide whether a generation provider is available without importing every
+provider plugin.
+
+Use these fields only for cheap, declarative facts. Transport, request
+transforms, token refresh, credential validation, and actual generation behavior
+stay in the plugin runtime.
+
+```json
+{
+  "contracts": {
+    "imageGenerationProviders": ["example-image"]
+  },
+  "imageGenerationProviderMetadata": {
+    "example-image": {
+      "aliases": ["example-image-oauth"],
+      "authProviders": ["example-image"],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.example-image.config",
+          "overlayPath": "image",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        }
+      ],
+      "authSignals": [
+        {
+          "provider": "example-image"
+        },
+        {
+          "provider": "example-image-oauth",
+          "providerBaseUrl": {
+            "provider": "example-image",
+            "defaultBaseUrl": "https://api.example.com/v1",
+            "allowedBaseUrls": ["https://api.example.com/v1"]
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Each metadata entry supports:
+
+| Field                  | Required | Type       | What it means                                                                                                                                       |
+| ---------------------- | -------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `aliases`              | No       | `string[]` | Additional provider ids that should count as static auth aliases for the generation provider.                                                       |
+| `authProviders`        | No       | `string[]` | Provider ids whose configured auth profiles should count as auth for this generation provider.                                                      |
+| `configSignals`        | No       | `object[]` | Cheap config-only availability signals for local or self-hosted providers that can be configured without auth profiles or env vars.                 |
+| `authSignals`          | No       | `object[]` | Explicit auth signals. When present, these replace the default signal set from the provider id, `aliases`, and `authProviders`.                     |
+| `referenceAudioInputs` | No       | `boolean`  | Video-generation only. Set to `true` when the provider accepts reference audio assets; otherwise `video_generate` hides audio reference parameters. |
+
+Each `configSignals` entry supports:
+
+| Field         | Required | Type       | What it means                                                                                                                                                                           |
+| ------------- | -------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rootPath`    | Yes      | `string`   | Dot path to the plugin-owned config object to inspect, for example `plugins.entries.example.config`.                                                                                    |
+| `overlayPath` | No       | `string`   | Dot path inside the root config whose object should overlay the root object before evaluating the signal. Use this for capability-specific config such as `image`, `video`, or `music`. |
+| `required`    | No       | `string[]` | Dot paths inside the effective config that must have configured values. Strings must be non-empty; objects and arrays must not be empty.                                                |
+| `requiredAny` | No       | `string[]` | Dot paths inside the effective config where at least one must have a configured value.                                                                                                  |
+| `mode`        | No       | `object`   | Optional string mode guard inside the effective config. Use this when config-only availability applies only to one mode.                                                                |
+
+Each `mode` guard supports:
+
+| Field        | Required | Type       | What it means                                                                      |
+| ------------ | -------- | ---------- | ---------------------------------------------------------------------------------- |
+| `path`       | No       | `string`   | Dot path inside the effective config. Defaults to `mode`.                          |
+| `default`    | No       | `string`   | Mode value to use when the config omits the path.                                  |
+| `allowed`    | No       | `string[]` | If present, the signal passes only when the effective mode is one of these values. |
+| `disallowed` | No       | `string[]` | If present, the signal fails when the effective mode is one of these values.       |
+
+Each `authSignals` entry supports:
+
+| Field             | Required | Type     | What it means                                                                                                                                                                 |
+| ----------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`        | Yes      | `string` | Provider id to check in configured auth profiles.                                                                                                                             |
+| `providerBaseUrl` | No       | `object` | Optional guard that makes the signal count only when the referenced configured provider uses an allowed base URL. Use this when an auth alias is valid only for certain APIs. |
+
+Each `providerBaseUrl` guard supports:
+
+| Field             | Required | Type       | What it means                                                                                                                                        |
+| ----------------- | -------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`        | Yes      | `string`   | Provider config id whose `baseUrl` should be checked.                                                                                                |
+| `defaultBaseUrl`  | No       | `string`   | Base URL to assume when the provider config omits `baseUrl`.                                                                                         |
+| `allowedBaseUrls` | Yes      | `string[]` | Allowed base URLs for this auth signal. The signal is ignored when the configured or default base URL does not match one of these normalized values. |
+
+## Tool metadata reference
+
+`toolMetadata` uses the same `configSignals` and `authSignals` shapes as
+generation provider metadata, keyed by tool name. `contracts.tools` declares
+ownership. `toolMetadata` declares cheap availability evidence so OpenClaw can
+avoid importing a plugin runtime just to have its tool factory return `null`.
+
+```json
+{
+  "setup": {
+    "providers": [
+      {
+        "id": "example",
+        "envVars": ["EXAMPLE_API_KEY"]
+      }
+    ]
+  },
+  "contracts": {
+    "tools": ["example_search"]
+  },
+  "toolMetadata": {
+    "example_search": {
+      "authSignals": [
+        {
+          "provider": "example"
+        }
+      ],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.example.config",
+          "overlayPath": "search",
+          "required": ["apiKey"]
+        }
+      ]
+    }
+  }
+}
+```
+
+If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and
+loads the owning plugin when the tool contract matches policy. For hot-path
+tools whose factory depends on auth/config, plugin authors should declare
+`toolMetadata` instead of making core import runtime to ask.
 
 ## providerAuthChoices reference
 
@@ -189,24 +341,24 @@ OpenClaw reads this before provider runtime loads.
 Provider setup lists use these manifest choices, descriptor-derived setup
 choices, and install-catalog metadata without loading provider runtime.
 
-| Field                 | Required | Type                                            | What it means                                                                                            |
-| --------------------- | -------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `provider`            | Yes      | `string`                                        | Provider id this choice belongs to.                                                                      |
-| `method`              | Yes      | `string`                                        | Auth method id to dispatch to.                                                                           |
-| `choiceId`            | Yes      | `string`                                        | Stable auth-choice id used by onboarding and CLI flows.                                                  |
-| `choiceLabel`         | No       | `string`                                        | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                        |
-| `choiceHint`          | No       | `string`                                        | Short helper text for the picker.                                                                        |
-| `assistantPriority`   | No       | `number`                                        | Lower values sort earlier in assistant-driven interactive pickers.                                       |
-| `assistantVisibility` | No       | `"visible"` \| `"manual-only"`                  | Hide the choice from assistant pickers while still allowing manual CLI selection.                        |
-| `deprecatedChoiceIds` | No       | `string[]`                                      | Legacy choice ids that should redirect users to this replacement choice.                                 |
-| `groupId`             | No       | `string`                                        | Optional group id for grouping related choices.                                                          |
-| `groupLabel`          | No       | `string`                                        | User-facing label for that group.                                                                        |
-| `groupHint`           | No       | `string`                                        | Short helper text for the group.                                                                         |
-| `optionKey`           | No       | `string`                                        | Internal option key for simple one-flag auth flows.                                                      |
-| `cliFlag`             | No       | `string`                                        | CLI flag name, such as `--openrouter-api-key`.                                                           |
-| `cliOption`           | No       | `string`                                        | Full CLI option shape, such as `--openrouter-api-key <key>`.                                             |
-| `cliDescription`      | No       | `string`                                        | Description used in CLI help.                                                                            |
-| `onboardingScopes`    | No       | `Array<"text-inference" \| "image-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`. |
+| Field                 | Required | Type                                                                  | What it means                                                                                            |
+| --------------------- | -------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `provider`            | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                      |
+| `method`              | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                           |
+| `choiceId`            | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                  |
+| `choiceLabel`         | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                        |
+| `choiceHint`          | No       | `string`                                                              | Short helper text for the picker.                                                                        |
+| `assistantPriority`   | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                       |
+| `assistantVisibility` | No       | `"visible"` \| `"manual-only"`                                        | Hide the choice from assistant pickers while still allowing manual CLI selection.                        |
+| `deprecatedChoiceIds` | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                 |
+| `groupId`             | No       | `string`                                                              | Optional group id for grouping related choices.                                                          |
+| `groupLabel`          | No       | `string`                                                              | User-facing label for that group.                                                                        |
+| `groupHint`           | No       | `string`                                                              | Short helper text for the group.                                                                         |
+| `optionKey`           | No       | `string`                                                              | Internal option key for simple one-flag auth flows.                                                      |
+| `cliFlag`             | No       | `string`                                                              | CLI flag name, such as `--openrouter-api-key`.                                                           |
+| `cliOption`           | No       | `string`                                                              | Full CLI option shape, such as `--openrouter-api-key <key>`.                                             |
+| `cliDescription`      | No       | `string`                                                              | Description used in CLI help.                                                                            |
+| `onboardingScopes`    | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`. |
 
 ## commandAliases reference
 
@@ -249,18 +401,26 @@ Prefer the narrowest metadata that already describes ownership. Use
 when those fields express the relationship. Use `activation` for extra planner
 hints that cannot be represented by those ownership fields.
 Use top-level `cliBackends` for CLI runtime aliases such as `claude-cli`,
-`codex-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
+`my-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
 embedded agent harness ids that do not already have an ownership field.
 
 This block is metadata only. It does not register runtime behavior, and it does
 not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
 Current consumers use it as a narrowing hint before broader plugin loading, so
-missing activation metadata usually only costs performance; it should not
-change correctness while legacy manifest ownership fallbacks still exist.
+missing non-startup activation metadata usually only costs performance; it
+should not change correctness while manifest ownership fallbacks still exist.
+
+Every plugin should set `activation.onStartup` intentionally. Set it to `true`
+only when the plugin must run during Gateway startup. Set it to `false` when
+the plugin is inert at startup and should load only from narrower triggers.
+Omitting `onStartup` no longer startup-loads the plugin implicitly; use explicit
+activation metadata for startup, channel, config, agent-harness, memory, or
+other narrower activation triggers.
 
 ```json
 {
   "activation": {
+    "onStartup": false,
     "onProviders": ["openai"],
     "onCommands": ["models"],
     "onChannels": ["web"],
@@ -271,18 +431,21 @@ change correctness while legacy manifest ownership fallbacks still exist.
 }
 ```
 
-| Field              | Required | Type                                                 | What it means                                                                                                                                     |
-| ------------------ | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onProviders`      | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                                                            |
-| `onAgentHarnesses` | No       | `string[]`                                           | Embedded agent harness runtime ids that should include this plugin in activation/load plans. Use top-level `cliBackends` for CLI backend aliases. |
-| `onCommands`       | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                                                             |
-| `onChannels`       | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                                                             |
-| `onRoutes`         | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                                                             |
-| `onConfigPaths`    | No       | `string[]`                                           | Root-relative config paths that should include this plugin in startup/load plans when the path is present and not explicitly disabled.            |
-| `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                           |
+| Field              | Required | Type                                                 | What it means                                                                                                                                                                               |
+| ------------------ | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onStartup`        | No       | `boolean`                                            | Explicit Gateway startup activation. Every plugin should set this. `true` imports the plugin during startup; `false` keeps it startup-lazy unless another matched trigger requires loading. |
+| `onProviders`      | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                                                                                                      |
+| `onAgentHarnesses` | No       | `string[]`                                           | Embedded agent harness runtime ids that should include this plugin in activation/load plans. Use top-level `cliBackends` for CLI backend aliases.                                           |
+| `onCommands`       | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                                                                                                       |
+| `onChannels`       | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                                                                                                       |
+| `onRoutes`         | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                                                                                                       |
+| `onConfigPaths`    | No       | `string[]`                                           | Root-relative config paths that should include this plugin in startup/load plans when the path is present and not explicitly disabled.                                                      |
+| `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                                                                     |
 
 Current live consumers:
 
+- Gateway startup planning uses `activation.onStartup` for explicit startup
+  import
 - command-triggered CLI planning falls back to legacy
   `commandAliases[].cliCommand` or `commandAliases[].name`
 - agent-runtime startup planning uses `activation.onAgentHarnesses` for
@@ -337,7 +500,16 @@ before runtime loads.
       {
         "id": "openai",
         "authMethods": ["api-key"],
-        "envVars": ["OPENAI_API_KEY"]
+        "envVars": ["OPENAI_API_KEY"],
+        "authEvidence": [
+          {
+            "type": "local-file-with-env",
+            "fileEnvVar": "OPENAI_CREDENTIALS_FILE",
+            "requiresAllEnv": ["OPENAI_PROJECT"],
+            "credentialMarker": "openai-local-credentials",
+            "source": "openai local credentials"
+          }
+        ]
       }
     ],
     "cliBackends": ["openai-cli"],
@@ -388,11 +560,29 @@ registration. These diagnostics are additive and do not reject legacy plugins.
 
 ### setup.providers reference
 
-| Field         | Required | Type       | What it means                                                                        |
-| ------------- | -------- | ---------- | ------------------------------------------------------------------------------------ |
-| `id`          | Yes      | `string`   | Provider id exposed during setup or onboarding. Keep normalized ids globally unique. |
-| `authMethods` | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.           |
-| `envVars`     | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.   |
+| Field          | Required | Type       | What it means                                                                                    |
+| -------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| `id`           | Yes      | `string`   | Provider id exposed during setup or onboarding. Keep normalized ids globally unique.             |
+| `authMethods`  | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.                       |
+| `envVars`      | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.               |
+| `authEvidence` | No       | `object[]` | Cheap local auth evidence checks for providers that can authenticate through non-secret markers. |
+
+`authEvidence` is for provider-owned local credential markers that can be
+verified without loading runtime code. These checks must stay cheap and local:
+no network calls, no keychain or secret-manager reads, no shell commands, and no
+provider API probes.
+
+Supported evidence entries:
+
+| Field              | Required | Type       | What it means                                                                                                  |
+| ------------------ | -------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
+| `type`             | Yes      | `string`   | Currently `local-file-with-env`.                                                                               |
+| `fileEnvVar`       | No       | `string`   | Env var containing an explicit credential file path.                                                           |
+| `fallbackPaths`    | No       | `string[]` | Local credential file paths checked when `fileEnvVar` is absent or empty. Supports `${HOME}` and `${APPDATA}`. |
+| `requiresAnyEnv`   | No       | `string[]` | At least one listed env var must be non-empty before the evidence is valid.                                    |
+| `requiresAllEnv`   | No       | `string[]` | Every listed env var must be non-empty before the evidence is valid.                                           |
+| `credentialMarker` | Yes      | `string`   | Non-secret marker returned when the evidence is present.                                                       |
+| `source`           | No       | `string`   | User-facing source label for auth/status output.                                                               |
 
 ### setup fields
 
@@ -439,18 +629,20 @@ read without importing the plugin runtime.
 ```json
 {
   "contracts": {
-    "agentToolResultMiddleware": ["pi", "codex"],
+    "agentToolResultMiddleware": ["openclaw", "codex"],
     "externalAuthProviders": ["acme-ai"],
+    "embeddingProviders": ["openai-compatible"],
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
     "memoryEmbeddingProviders": ["local"],
-    "mediaUnderstandingProviders": ["openai", "openai-codex"],
+    "mediaUnderstandingProviders": ["openai"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["qwen"],
     "webFetchProviders": ["firecrawl"],
     "webSearchProviders": ["gemini"],
     "migrationProviders": ["hermes"],
+    "gatewayMethodDispatch": ["authenticated-request"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
   }
 }
@@ -458,22 +650,25 @@ read without importing the plugin runtime.
 
 Each list is optional:
 
-| Field                            | Type       | What it means                                                         |
-| -------------------------------- | ---------- | --------------------------------------------------------------------- |
-| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`. |
-| `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for. |
-| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.       |
-| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                 |
-| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                 |
-| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                         |
-| `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                       |
-| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                    |
-| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                       |
-| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                       |
-| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                              |
-| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                             |
-| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.          |
-| `tools`                          | `string[]` | Agent tool names this plugin owns for bundled contract checks.        |
+| Field                            | Type       | What it means                                                                                        |
+| -------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------- |
+| `embeddedExtensionFactories`     | `string[]` | Codex app-server extension factory ids, currently `codex-app-server`.                                |
+| `agentToolResultMiddleware`      | `string[]` | Runtime ids a bundled plugin may register tool-result middleware for.                                |
+| `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                      |
+| `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory. |
+| `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                |
+| `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                |
+| `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                        |
+| `memoryEmbeddingProviders`       | `string[]` | Deprecated memory-specific embedding provider ids this plugin owns.                                  |
+| `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                   |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                     |
+| `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                      |
+| `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                      |
+| `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                             |
+| `webSearchProviders`             | `string[]` | Web-search provider ids this plugin owns.                                                            |
+| `migrationProviders`             | `string[]` | Import provider ids this plugin owns for `openclaw migrate`.                                         |
+| `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.  |
+| `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                   |
 
 `contracts.embeddedExtensionFactories` is retained for bundled Codex
 app-server-only extension factories. Bundled tool-result transforms should
@@ -482,16 +677,25 @@ declare `contracts.agentToolResultMiddleware` and register with
 register tool-result middleware because the seam can rewrite high-trust tool
 output before the model sees it.
 
-Provider plugins that implement `resolveExternalAuthProfiles` should declare
-`contracts.externalAuthProviders`. Plugins without the declaration still run
-through a deprecated compatibility fallback, but that fallback is slower and
-will be removed after the migration window.
+Runtime `api.registerTool(...)` registrations must match `contracts.tools`.
+Tool discovery uses this list to load only the plugin runtimes that can own the
+requested tools.
 
-Bundled memory embedding providers should declare
-`contracts.memoryEmbeddingProviders` for every adapter id they expose, including
-built-in adapters such as `local`. Standalone CLI paths use this manifest
-contract to load only the owning plugin before the full Gateway runtime has
-registered providers.
+Provider plugins that implement `resolveExternalAuthProfiles` should declare
+`contracts.externalAuthProviders`; undeclared external-auth hooks are ignored.
+
+General embedding providers should declare `contracts.embeddingProviders` for
+each adapter registered with `api.registerEmbeddingProvider(...)`. Use the
+general contract for reusable vector generation, including providers consumed by
+memory search. `contracts.memoryEmbeddingProviders` is deprecated
+memory-specific compatibility and remains only while existing providers migrate
+to the generic embedding provider seam.
+
+`contracts.gatewayMethodDispatch` currently accepts
+`"authenticated-request"`. It is an API hygiene gate for native plugin HTTP
+routes that intentionally dispatch Gateway control-plane methods in-process, not
+a sandbox against malicious native plugins. Use it only for tightly reviewed
+bundled/operator surfaces that already require Gateway HTTP auth.
 
 ## mediaUnderstandingProviderMetadata reference
 
@@ -666,6 +870,11 @@ Fields:
 | `modelPrefixes` | `string[]` | Prefixes matched with `startsWith` against shorthand model ids.                 |
 | `modelPatterns` | `string[]` | Regex sources matched against shorthand model ids after profile suffix removal. |
 
+`modelPatterns` entries are compiled through `compileSafeRegex`, which rejects
+patterns containing nested repetition (for example `(a+)+$`). Patterns that fail
+the safety check are silently skipped, the same as syntactically invalid regex.
+Keep patterns simple and avoid nested quantifiers.
+
 ## modelCatalog reference
 
 Use `modelCatalog` when OpenClaw should know provider model metadata before
@@ -723,23 +932,25 @@ is required.
 
 Top-level fields:
 
-| Field          | Type                                                     | What it means                                                                                               |
-| -------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `providers`    | `Record<string, object>`                                 | Catalog rows for provider ids owned by this plugin. Keys should also appear in top-level `providers`.       |
-| `aliases`      | `Record<string, object>`                                 | Provider aliases that should resolve to an owned provider for catalog or suppression planning.              |
-| `suppressions` | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.                  |
-| `discovery`    | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
+| Field            | Type                                                     | What it means                                                                                               |
+| ---------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `providers`      | `Record<string, object>`                                 | Catalog rows for provider ids owned by this plugin. Keys should also appear in top-level `providers`.       |
+| `aliases`        | `Record<string, object>`                                 | Provider aliases that should resolve to an owned provider for catalog or suppression planning.              |
+| `suppressions`   | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.                  |
+| `discovery`      | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
+| `runtimeAugment` | `boolean`                                                | Set to `true` only when the provider runtime must append catalog rows after manifest/config planning.       |
 
 `aliases` participates in provider ownership lookup for model-catalog planning.
 Alias targets must be top-level providers owned by the same plugin. When a
 provider-filtered list uses an alias, OpenClaw can read the owning manifest and
 apply alias API/base URL overrides without loading provider runtime.
+Aliases do not expand unfiltered catalog listings; broad lists emit the owning
+canonical provider rows only.
 
-`suppressions` is the preferred static replacement for provider runtime
-`suppressBuiltInModel` hooks. Suppression entries are honored only when the
-provider is owned by the plugin or declared as a `modelCatalog.aliases` key that
-targets an owned provider. Runtime suppression hooks still run as deprecated
-compatibility fallback for plugins that have not migrated.
+`suppressions` replaces the old provider runtime `suppressBuiltInModel` hook.
+Suppression entries are honored only when the provider is owned by the plugin or
+declared as a `modelCatalog.aliases` key that targets an owned provider. Runtime
+suppression hooks are no longer called during model resolution.
 
 Provider fields:
 
@@ -772,9 +983,22 @@ Model fields:
 | `replacedBy`    | `string`                                                       | Replacement provider-local model id for deprecated rows.                    |
 | `tags`          | `string[]`                                                     | Stable tags used by pickers and filters.                                    |
 
-Do not put runtime-only data in `modelCatalog`. If a provider needs account
-state, an API request, or local process discovery to know the complete model
-set, declare that provider as `refreshable` or `runtime` in `discovery`.
+Suppression fields:
+
+| Field                      | Type       | What it means                                                                                             |
+| -------------------------- | ---------- | --------------------------------------------------------------------------------------------------------- |
+| `provider`                 | `string`   | Provider id for the upstream row to suppress. Must be owned by this plugin or declared as an owned alias. |
+| `model`                    | `string`   | Provider-local model id to suppress.                                                                      |
+| `reason`                   | `string`   | Optional message shown when the suppressed row is requested directly.                                     |
+| `when.baseUrlHosts`        | `string[]` | Optional list of effective provider base URL hosts required before the suppression applies.               |
+| `when.providerConfigApiIn` | `string[]` | Optional list of exact provider-config `api` values required before the suppression applies.              |
+
+Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest
+rows are complete enough for provider-filtered list and picker surfaces to skip
+registry/runtime discovery. Use `refreshable` when manifest rows are useful
+listable seeds or supplements but a refresh/cache can add more rows later;
+refreshable rows are not authoritative by themselves. Use `runtime` when OpenClaw
+must load provider runtime to know the list.
 
 ## modelIdNormalization reference
 
@@ -856,6 +1080,72 @@ Provider fields:
 | `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics. |
 | `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.              |
 | `openAICompletions`   | `object`     | OpenAI-compatible completions request flags, currently `supportsStreamingUsage`.       |
+
+## secretProviderIntegrations reference
+
+Use `secretProviderIntegrations` when a plugin can publish a reusable SecretRef
+exec provider preset. OpenClaw reads this metadata before plugin runtime loads,
+stores plugin ownership in `secrets.providers.<alias>.pluginIntegration`, and
+leaves actual secret resolution to the SecretRef runtime.
+Presets are exposed only for bundled plugins and installed plugins discovered
+from the managed plugin install roots, such as git and ClawHub installs.
+
+```json
+{
+  "secretProviderIntegrations": {
+    "secret-store": {
+      "providerAlias": "team-secrets",
+      "displayName": "Team secrets",
+      "source": "exec",
+      "command": "${node}",
+      "args": ["./bin/resolve-secrets.mjs"]
+    }
+  }
+}
+```
+
+The map key is the integration id. If `providerAlias` is omitted, OpenClaw uses
+the integration id as the SecretRef provider alias. Provider aliases must match
+the normal SecretRef provider alias pattern, for example `team-secrets` or
+`onepassword-work`.
+
+When an operator selects the preset, OpenClaw writes a provider reference like:
+
+```json
+{
+  "secrets": {
+    "providers": {
+      "team-secrets": {
+        "source": "exec",
+        "pluginIntegration": {
+          "pluginId": "acme-secrets",
+          "integrationId": "secret-store"
+        }
+      }
+    }
+  }
+}
+```
+
+At startup/reload, OpenClaw resolves that provider by loading current plugin
+manifest metadata, checking that the owning plugin is installed and active, and
+materializing the exec command from the manifest. Disabling or removing the
+plugin revokes the provider for active SecretRefs. Operators who want standalone
+exec configuration can still write manual `command`/`args` providers directly.
+
+Only `source: "exec"` presets are currently supported. `command` must be
+`${node}`, and `args[0]` must be a `./` plugin-root-relative resolver script.
+OpenClaw materializes it at startup/reload to the current Node executable and
+the absolute in-plugin script path. Node options such as `--require`, `--import`,
+`--loader`, `--env-file`, `--eval`, and `--print` are not part of the manifest
+preset contract. Operators who need non-Node commands can configure standalone
+manual exec providers directly.
+
+OpenClaw derives `trustedDirs` for manifest presets from the plugin root and,
+for `${node}` presets, the current Node executable directory. Manifest-authored
+`trustedDirs` are ignored. Other exec provider options such as `timeoutMs`,
+`maxOutputBytes`, `jsonOnly`, `env`, `passEnv`, and `allowInsecurePath` pass
+through to the normal SecretRef exec provider config.
 
 ## modelPricing reference
 
@@ -955,25 +1245,29 @@ If you are unsure where a piece of metadata belongs, use this rule:
 
 Some pre-runtime plugin metadata intentionally lives in `package.json` under the
 `openclaw` block instead of `openclaw.plugin.json`.
+`openclaw.bundle` and `openclaw.bundle.json` are not OpenClaw plugin contracts;
+native plugins must use `openclaw.plugin.json` plus the supported
+`package.json#openclaw` fields below.
 
 Important examples:
 
-| Field                                                             | What it means                                                                                                                                                                        |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `openclaw.extensions`                                             | Declares native plugin entrypoints. Must stay inside the plugin package directory.                                                                                                   |
-| `openclaw.runtimeExtensions`                                      | Declares built JavaScript runtime entrypoints for installed packages. Must stay inside the plugin package directory.                                                                 |
-| `openclaw.setupEntry`                                             | Lightweight setup-only entrypoint used during onboarding, deferred channel startup, and read-only channel status/SecretRef discovery. Must stay inside the plugin package directory. |
-| `openclaw.runtimeSetupEntry`                                      | Declares the built JavaScript setup entrypoint for installed packages. Must stay inside the plugin package directory.                                                                |
-| `openclaw.channel`                                                | Cheap channel catalog metadata like labels, docs paths, aliases, and selection copy.                                                                                                 |
-| `openclaw.channel.commands`                                       | Static native command and native skill auto-default metadata used by config, audit, and command-list surfaces before channel runtime loads.                                          |
-| `openclaw.channel.configuredState`                                | Lightweight configured-state checker metadata that can answer "does env-only setup already exist?" without loading the full channel runtime.                                         |
-| `openclaw.channel.persistedAuthState`                             | Lightweight persisted-auth checker metadata that can answer "is anything already signed in?" without loading the full channel runtime.                                               |
-| `openclaw.install.npmSpec` / `openclaw.install.localPath`         | Install/update hints for bundled and externally published plugins.                                                                                                                   |
-| `openclaw.install.defaultChoice`                                  | Preferred install path when multiple install sources are available.                                                                                                                  |
-| `openclaw.install.minHostVersion`                                 | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22`.                                                                                                    |
-| `openclaw.install.expectedIntegrity`                              | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                            |
-| `openclaw.install.allowInvalidConfigRecovery`                     | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                                                                       |
-| `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen` | Lets setup-only channel surfaces load before the full channel plugin during startup.                                                                                                 |
+| Field                                                                                      | What it means                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `openclaw.extensions`                                                                      | Declares native plugin entrypoints. Must stay inside the plugin package directory.                                                                                                   |
+| `openclaw.runtimeExtensions`                                                               | Declares built JavaScript runtime entrypoints for installed packages. Must stay inside the plugin package directory.                                                                 |
+| `openclaw.setupEntry`                                                                      | Lightweight setup-only entrypoint used during onboarding, deferred channel startup, and read-only channel status/SecretRef discovery. Must stay inside the plugin package directory. |
+| `openclaw.runtimeSetupEntry`                                                               | Declares the built JavaScript setup entrypoint for installed packages. Requires `setupEntry`, must exist, and must stay inside the plugin package directory.                         |
+| `openclaw.channel`                                                                         | Cheap channel catalog metadata like labels, docs paths, aliases, and selection copy.                                                                                                 |
+| `openclaw.channel.commands`                                                                | Static native command and native skill auto-default metadata used by config, audit, and command-list surfaces before channel runtime loads.                                          |
+| `openclaw.channel.configuredState`                                                         | Lightweight configured-state checker metadata that can answer "does env-only setup already exist?" without loading the full channel runtime.                                         |
+| `openclaw.channel.persistedAuthState`                                                      | Lightweight persisted-auth checker metadata that can answer "is anything already signed in?" without loading the full channel runtime.                                               |
+| `openclaw.install.clawhubSpec` / `openclaw.install.npmSpec` / `openclaw.install.localPath` | Install/update hints for bundled and externally published plugins.                                                                                                                   |
+| `openclaw.install.defaultChoice`                                                           | Preferred install path when multiple install sources are available.                                                                                                                  |
+| `openclaw.install.minHostVersion`                                                          | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22` or `>=2026.5.1-beta.1`.                                                                             |
+| `openclaw.compat.pluginApi`                                                                | Minimum OpenClaw plugin API range required by this package, using a semver floor like `>=2026.5.27`.                                                                                 |
+| `openclaw.install.expectedIntegrity`                                                       | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                            |
+| `openclaw.install.allowInvalidConfigRecovery`                                              | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                                                                       |
+| `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen`                          | Lets setup-runtime channel surfaces load before listen, then defers the full configured channel plugin until post-listen activation.                                                 |
 
 Manifest metadata decides which provider/channel/setup choices appear in
 onboarding before runtime loads. `package.json#openclaw.install` tells
@@ -981,8 +1275,25 @@ onboarding how to fetch or enable that plugin when the user picks one of those
 choices. Do not move install hints into `openclaw.plugin.json`.
 
 `openclaw.install.minHostVersion` is enforced during install and manifest
-registry loading. Invalid values are rejected; newer-but-valid values skip the
-plugin on older hosts.
+registry loading for non-bundled plugin sources. Invalid values are rejected;
+newer-but-valid values skip external plugins on older hosts. Bundled source
+plugins are assumed to be co-versioned with the host checkout.
+
+`openclaw.compat.pluginApi` is enforced during package install for non-bundled
+plugin sources. Use it for the OpenClaw plugin SDK/runtime API floor that the
+package was built against. It can be stricter than `minHostVersion` when a
+plugin package needs a newer API but still keeps a lower install hint for other
+flows. Official OpenClaw release sync bumps existing official plugin API floors
+to the OpenClaw release version by default, but plugin-only releases can keep a
+lower floor when the package intentionally supports older hosts. Do not use the
+package version alone as the compatibility contract. `peerDependencies.openclaw`
+remains npm package metadata; OpenClaw uses the `openclaw.compat.pluginApi`
+contract for install compatibility decisions.
+
+Official install-on-demand metadata should use `clawhubSpec` when the plugin is
+published on ClawHub; onboarding treats that as the preferred remote source and
+records ClawHub artifact facts after install. `npmSpec` remains the compatibility
+fallback for packages that have not moved to ClawHub yet.
 
 Exact npm version pinning already lives in `npmSpec`, for example
 `"npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3"`. Official external catalog
@@ -1031,10 +1342,12 @@ module:
 }
 ```
 
-Use it when setup, doctor, or configured-state flows need a cheap yes/no auth
-probe before the full channel plugin loads. The target export should be a small
-function that reads persisted state only; do not route it through the full
-channel runtime barrel.
+Use it when setup, doctor, status, or read-only presence flows need a cheap
+yes/no auth probe before the full channel plugin loads. Persisted auth state is
+not configured channel state: do not use this metadata to auto-enable plugins,
+repair runtime dependencies, or decide whether a channel runtime should load.
+The target export should be a small function that reads persisted state only; do
+not route it through the full channel runtime barrel.
 
 `openclaw.channel.configuredState` follows the same shape for cheap env-only
 configured checks:
@@ -1060,7 +1373,11 @@ hook instead.
 
 ## Discovery precedence (duplicate plugin ids)
 
-OpenClaw discovers plugins from several roots (bundled, global install, workspace, explicit config-selected paths). If two discoveries share the same `id`, only the **highest-precedence** manifest is kept; lower-precedence duplicates are dropped instead of loading beside it.
+OpenClaw discovers plugins from several roots. For the raw filesystem scan
+order, see [Plugin scan
+order](/gateway/configuration-reference#plugin-scan-order). If two discoveries
+share the same `id`, only the **highest-precedence** manifest is kept;
+lower-precedence duplicates are dropped instead of loading beside it.
 
 Precedence, highest to lowest:
 
@@ -1074,12 +1391,30 @@ Implications:
 - A forked or stale copy of a bundled plugin sitting in the workspace will not shadow the bundled build.
 - To actually override a bundled plugin with a local one, pin it via `plugins.entries.<id>` so it wins by precedence rather than relying on workspace discovery.
 - Duplicate drops are logged so Doctor and startup diagnostics can point at the discarded copy.
+- Config-selected duplicate overrides are worded as explicit overrides in diagnostics, but still warn so stale forks and accidental shadows stay visible.
 
 ## JSON Schema requirements
 
 - **Every plugin must ship a JSON Schema**, even if it accepts no config.
 - An empty schema is acceptable (for example, `{ "type": "object", "additionalProperties": false }`).
 - Schemas are validated at config read/write time, not at runtime.
+- When extending or forking a bundled plugin with new config keys, update that plugin's `openclaw.plugin.json` `configSchema` at the same time. Bundled plugin schemas are strict, so adding `plugins.entries.<id>.config.myNewKey` in user config without adding `myNewKey` to `configSchema.properties` will be rejected before the plugin runtime loads.
+
+Example schema extension:
+
+```json
+{
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "myNewKey": {
+        "type": "string"
+      }
+    }
+  }
+}
+```
 
 ## Validation behavior
 
@@ -1100,8 +1435,9 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
-- `providerDiscoveryEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
+- `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
+- Declare exclusive plugin kind in this manifest. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older plugins.
 - Env-var metadata (`setup.providers[].envVars`, deprecated `providerAuthEnvVars`, and `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
 - For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).
 - If your plugin depends on native modules, document the build steps and any package-manager allowlist requirements (for example, pnpm `allow-build-scripts` + `pnpm rebuild <package>`).

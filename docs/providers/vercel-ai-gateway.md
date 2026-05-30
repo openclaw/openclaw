@@ -89,10 +89,10 @@ configuration. OpenClaw resolves the canonical form automatically.
     `AI_GATEWAY_API_KEY` is available to that process.
 
     <Warning>
-    A key set only in `~/.profile` will not be visible to a launchd/systemd
-    daemon unless that environment is explicitly imported. Set the key in
-    `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway process can
-    read it.
+    A key exported only in an interactive shell will not be visible to a
+    launchd/systemd daemon unless that environment is explicitly imported. Set
+    the key in `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway
+    process can read it.
     </Warning>
 
   </Accordion>
@@ -104,6 +104,15 @@ configuration. OpenClaw resolves the canonical form automatically.
     OpenAI and `vercel-ai-gateway/moonshotai/kimi-k2.6` routes through
     MoonshotAI. Your single `AI_GATEWAY_API_KEY` handles authentication for all
     upstream providers.
+  </Accordion>
+  <Accordion title="Thinking levels">
+    `/think` options follow trusted upstream model prefixes when OpenClaw knows
+    the upstream provider contract. `vercel-ai-gateway/anthropic/...` uses the
+    Claude thinking profile, including adaptive defaults for Claude 4.6 models.
+    `vercel-ai-gateway/openai/gpt-5.4`, `gpt-5.5`, and Codex-style refs expose
+    `/think xhigh` just like the direct OpenAI/OpenAI Codex providers. Other
+    namespaced refs keep the normal reasoning levels unless their catalog
+    metadata declares more.
   </Accordion>
 </AccordionGroup>
 

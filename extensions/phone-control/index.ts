@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+  normalizeStringEntries,
+  sortUniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -43,7 +46,7 @@ const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
 };
 
 function uniqSorted(values: string[]): string[] {
-  return [...new Set(values.map((v) => v.trim()).filter(Boolean))].toSorted();
+  return sortUniqueStrings(normalizeStringEntries(values));
 }
 
 function resolveCommandsForGroup(group: ArmGroup): string[] {
@@ -72,7 +75,8 @@ function parseDurationMs(input: string | undefined): number | null {
   }
   const unit = m[2];
   const mult = unit === "s" ? 1000 : unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
-  return n * mult;
+  const durationMs = n * mult;
+  return Number.isSafeInteger(durationMs) ? durationMs : null;
 }
 
 function formatDuration(ms: number): string {
@@ -150,7 +154,6 @@ async function readArmState(statePath: string): Promise<ArmStateFile | null> {
 }
 
 async function writeArmState(statePath: string, state: ArmStateFile | null): Promise<void> {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
   if (!state) {
     try {
       await fs.unlink(statePath);
@@ -159,7 +162,11 @@ async function writeArmState(statePath: string, state: ArmStateFile | null): Pro
     }
     return;
   }
-  await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await replaceFileAtomic({
+    filePath: statePath,
+    content: `${JSON.stringify(state, null, 2)}\n`,
+    tempPrefix: ".phone-control-arm",
+  });
 }
 
 function normalizeDenyList(cfg: OpenClawPluginApi["config"]): string[] {
@@ -226,13 +233,15 @@ async function disarmNow(params: {
   }
 
   if (removed.length > 0 || restored.length > 0) {
-    const next = patchConfigNodeLists(cfg, {
-      allowCommands: uniqSorted([...allow]),
-      denyCommands: uniqSorted([...deny]),
-    });
-    await api.runtime.config.replaceConfigFile({
-      nextConfig: next,
+    await api.runtime.config.mutateConfigFile({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        const next = patchConfigNodeLists(draft, {
+          allowCommands: uniqSorted([...allow]),
+          denyCommands: uniqSorted([...deny]),
+        });
+        Object.assign(draft, next);
+      },
     });
   }
   await writeArmState(statePath, null);
@@ -274,14 +283,15 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   return null;
 }
 
-function requiresAdminToMutatePhoneControl(
-  channel: string,
-  gatewayClientScopes?: readonly string[],
-): boolean {
+function lacksAdminToMutatePhoneControl(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  const { senderIsOwner, gatewayClientScopes } = params;
   if (Array.isArray(gatewayClientScopes)) {
     return !gatewayClientScopes.includes(PHONE_ADMIN_SCOPE);
   }
-  return channel === "webchat";
+  return senderIsOwner !== true;
 }
 
 function formatStatus(state: ArmStateFile | null): string {
@@ -355,6 +365,7 @@ export default definePluginEntry({
       name: "phone",
       description: "Arm/disarm high-risk phone node commands (camera/screen/writes).",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
@@ -374,7 +385,12 @@ export default definePluginEntry({
         }
 
         if (action === "disarm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutatePhoneControl({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: "⚠️ /phone disarm requires operator.admin.",
             };
@@ -396,7 +412,12 @@ export default definePluginEntry({
         }
 
         if (action === "arm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutatePhoneControl({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: "⚠️ /phone arm requires operator.admin.",
             };
@@ -405,7 +426,10 @@ export default definePluginEntry({
           if (!group) {
             return { text: `Usage: /phone arm <group> [duration]\nGroups: ${formatGroupList()}` };
           }
-          const durationMs = parseDurationMs(tokens[2]) ?? 10 * 60_000;
+          const durationMs = tokens[2] === undefined ? 10 * 60_000 : parseDurationMs(tokens[2]);
+          if (durationMs === null) {
+            return { text: "Invalid duration. Use values like 30s, 10m, 2h, or 1d." };
+          }
           const expiresAtMs = Date.now() + durationMs;
 
           const commands = resolveCommandsForGroup(group);
@@ -424,13 +448,15 @@ export default definePluginEntry({
               removedFromDeny.push(cmd);
             }
           }
-          const next = patchConfigNodeLists(cfg, {
-            allowCommands: uniqSorted([...allowSet]),
-            denyCommands: uniqSorted([...denySet]),
-          });
-          await api.runtime.config.replaceConfigFile({
-            nextConfig: next,
+          await api.runtime.config.mutateConfigFile({
             afterWrite: { mode: "auto" },
+            mutate: (draft) => {
+              const next = patchConfigNodeLists(draft, {
+                allowCommands: uniqSorted([...allowSet]),
+                denyCommands: uniqSorted([...denySet]),
+              });
+              Object.assign(draft, next);
+            },
           });
 
           await writeArmState(statePath, {

@@ -1,13 +1,15 @@
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { Mock, vi } from "vitest";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { HooksConfig } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RunCronAgentTurnResult } from "../cron/isolated-agent/run.types.js";
 import type { TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -16,20 +18,18 @@ export type GetReplyFromConfigFn = (
   opts?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ) => Promise<ReplyPayload | ReplyPayload[] | undefined>;
-export type CronIsolatedRunFn = (
-  ...args: unknown[]
-) => Promise<{ status: string; summary: string }>;
-export type AgentCommandFn = (...args: unknown[]) => Promise<void>;
-export type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
+type CronIsolatedRunFn = (...args: unknown[]) => Promise<RunCronAgentTurnResult>;
+type AgentCommandFn = (...args: unknown[]) => Promise<void>;
+type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
-export type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
-export type CompactEmbeddedPiSessionFn = (...args: unknown[]) => Promise<unknown>;
+type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
+type CompactEmbeddedAgentSessionFn = (...args: unknown[]) => Promise<unknown>;
 
 const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
 
-export type GatewayTestHoistedState = {
+type GatewayTestHoistedState = {
   testTailnetIPv4: { value: string | undefined };
-  piSdkMock: {
+  agentDiscoveryMock: {
     enabled: boolean;
     discoverCalls: number;
     models: Array<{
@@ -38,6 +38,7 @@ export type GatewayTestHoistedState = {
       provider: string;
       contextWindow?: number;
       reasoning?: boolean;
+      input?: string[];
     }>;
   };
   cronIsolatedRun: Mock<CronIsolatedRunFn>;
@@ -51,7 +52,7 @@ export type GatewayTestHoistedState = {
     abortCalls: string[];
     waitCalls: string[];
     waitResults: Map<string, boolean>;
-    compactEmbeddedPiSession: Mock<CompactEmbeddedPiSessionFn>;
+    compactEmbeddedAgentSession: Mock<CompactEmbeddedAgentSessionFn>;
   };
   testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
   getReplyFromConfig: Mock<GetReplyFromConfigFn>;
@@ -70,7 +71,6 @@ export type GatewayTestHoistedState = {
     gatewayAuth: Record<string, unknown> | undefined;
     gatewayControlUi: Record<string, unknown> | undefined;
     hooksConfig: HooksConfig | undefined;
-    canvasHostPort: number | undefined;
     legacyIssues: Array<{ path: string; message: string }>;
     legacyParsed: Record<string, unknown>;
     migrationConfig: Record<string, unknown> | null;
@@ -86,7 +86,7 @@ const gatewayTestHoisted = vi.hoisted(() => {
   }
   const created: GatewayTestHoistedState = {
     testTailnetIPv4: { value: undefined },
-    piSdkMock: {
+    agentDiscoveryMock: {
       enabled: false,
       discoverCalls: 0,
       models: [],
@@ -102,7 +102,7 @@ const gatewayTestHoisted = vi.hoisted(() => {
       abortCalls: [],
       waitCalls: [],
       waitResults: new Map<string, boolean>(),
-      compactEmbeddedPiSession: vi.fn().mockResolvedValue({
+      compactEmbeddedAgentSession: vi.fn().mockResolvedValue({
         ok: true,
         compacted: true,
         result: {
@@ -130,7 +130,6 @@ const gatewayTestHoisted = vi.hoisted(() => {
       gatewayAuth: undefined,
       gatewayControlUi: undefined,
       hooksConfig: undefined,
-      canvasHostPort: undefined,
       legacyIssues: [],
       legacyParsed: {},
       migrationConfig: null,
@@ -147,7 +146,7 @@ export function getGatewayTestHoistedState(): GatewayTestHoistedState {
 
 export const testTailnetIPv4 = gatewayTestHoisted.testTailnetIPv4;
 export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
-export const piSdkMock = gatewayTestHoisted.piSdkMock;
+export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
 export const agentCommand = gatewayTestHoisted.agentCommand;
 export const runBtwSideQuestion = gatewayTestHoisted.runBtwSideQuestion;

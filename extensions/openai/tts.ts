@@ -1,14 +1,19 @@
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  resolveProviderRequestHeaders,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
 } from "openclaw/plugin-sdk/proxy-capture";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
 export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
 
@@ -75,6 +80,17 @@ export function resolveOpenAITtsInstructions(
   return model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
+function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string, unknown> {
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") {
+      continue;
+    }
+    sanitized[key] = entry;
+  }
+  return sanitized;
+}
+
 export async function openaiTTS(params: {
   text: string;
   apiKey: string;
@@ -84,10 +100,23 @@ export async function openaiTTS(params: {
   speed?: number;
   instructions?: string;
   responseFormat: "mp3" | "opus" | "pcm" | "wav";
+  extraBody?: Record<string, unknown>;
   timeoutMs: number;
+  maxBytes?: number;
 }): Promise<Buffer> {
-  const { text, apiKey, baseUrl, model, voice, speed, instructions, responseFormat, timeoutMs } =
-    params;
+  const {
+    text,
+    apiKey,
+    baseUrl,
+    model,
+    voice,
+    speed,
+    instructions,
+    responseFormat,
+    extraBody,
+    timeoutMs,
+    maxBytes = DEFAULT_TTS_MAX_BYTES,
+  } = params;
   const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions, baseUrl);
 
   if (!isValidOpenAIModel(model, baseUrl)) {
@@ -97,7 +126,16 @@ export async function openaiTTS(params: {
     throw new Error(`Invalid voice: ${voice}`);
   }
 
-  const requestHeaders = {
+  const requestHeaders = resolveProviderRequestHeaders({
+    provider: "openai",
+    baseUrl,
+    capability: "audio",
+    transport: "http",
+    defaultHeaders: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+  }) ?? {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
   };
@@ -108,6 +146,7 @@ export async function openaiTTS(params: {
     response_format: responseFormat,
     ...(speed != null && { speed }),
     ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+    ...(extraBody == null ? {} : sanitizeExtraBodyRecord(extraBody)),
   });
   const requestUrl = `${baseUrl}/audio/speech`;
   const debugProxyFetchPatchInstalled = isDebugProxyGlobalFetchPatchInstalled();
@@ -142,7 +181,10 @@ export async function openaiTTS(params: {
 
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
-    return Buffer.from(await response.arrayBuffer());
+    return await readResponseWithLimit(response, maxBytes, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`OpenAI TTS audio response exceeds ${maxBytes} bytes`),
+    });
   } finally {
     await release();
   }

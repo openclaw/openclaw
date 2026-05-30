@@ -27,8 +27,6 @@ function makeTempDir() {
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
@@ -219,7 +217,7 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
       preferPersisted: false,
     };
 
-    expect(resolveInstalledPluginProviderContributionIds(params)).toEqual([]);
+    expect(resolveInstalledPluginProviderContributionIds(params)).toStrictEqual([]);
     expect(
       resolveInstalledPluginProviderContributionIds({
         ...params,
@@ -414,12 +412,29 @@ describe("runProviderStaticCatalog", () => {
       },
     });
 
-    expect(seenContexts).toEqual([
-      expect.objectContaining({
-        config: {},
-        env: {},
-      }),
-    ]);
+    expect(seenContexts).toHaveLength(1);
+    const sterileContext = seenContexts[0] as {
+      config: Record<string, never>;
+      env: Record<string, never>;
+      resolveProviderApiKey: () => { apiKey: string | undefined };
+      resolveProviderAuth: () => {
+        apiKey: string | undefined;
+        mode: "none";
+        source: "none";
+      };
+    };
+    expect(sterileContext).toEqual({
+      config: {},
+      env: {},
+      resolveProviderApiKey: sterileContext.resolveProviderApiKey,
+      resolveProviderAuth: sterileContext.resolveProviderAuth,
+    });
+    expect(sterileContext.resolveProviderApiKey()).toEqual({ apiKey: undefined });
+    expect(sterileContext.resolveProviderAuth()).toEqual({
+      apiKey: undefined,
+      mode: "none",
+      source: "none",
+    });
     expect(seenContexts[0]).not.toHaveProperty("agentDir");
     expect(seenContexts[0]).not.toHaveProperty("workspaceDir");
   });

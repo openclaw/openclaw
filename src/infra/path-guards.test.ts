@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   hasNodeErrorCode,
   isNodeError,
@@ -8,19 +9,12 @@ import {
   normalizeWindowsPathForComparison,
 } from "./path-guards.js";
 
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
 function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
+  mockProcessPlatform(platform);
 }
 
 afterEach(() => {
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
+  vi.restoreAllMocks();
 });
 
 describe("normalizeWindowsPathForComparison", () => {
@@ -74,6 +68,15 @@ describe("isPathInside", () => {
     ["/workspace/root", "/workspace/root/nested/file.txt", true],
     ["/workspace/root", "/workspace/root/..file.txt", true],
     ["/workspace/root", "/workspace/root/../escape.txt", false],
+    ["/workspace/root", "/workspace/rootless/file.txt", false],
+    ["/workspace/root", "/workspace/root/a/b/c/d/e/file.txt", true],
+    ["/workspace/root", "/workspace/root/a/..", true],
+    ["/workspace/root", "/workspace/root/a/../..", false],
+    ["/workspace/root", "/workspace/root/a/b/../../../escape", false],
+    ["/", "/anything/at/all", true],
+    ["/", "/", true],
+    ["foo", "foo/bar", true],
+    ["foo", "../escape", false],
   ])("checks posix containment %s -> %s", (basePath, targetPath, expected) => {
     expect(isPathInside(basePath, targetPath)).toBe(expected);
   });

@@ -1,11 +1,13 @@
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
+import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
 
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
@@ -38,11 +40,7 @@ const resolveInboundPeerId = (ctx: MsgContext) =>
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   const sessionKey =
-    (ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined) ||
-    normalizeOptionalString(ctx.SessionKey) ||
-    "";
+    resolveCommandTurnTargetSessionKey(ctx) || normalizeOptionalString(ctx.SessionKey) || "";
   if (!sessionKey) {
     return "";
   }
@@ -68,11 +66,13 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   }
   const sessionScope = resolveInboundDedupeSessionScope(ctx);
   const accountId = normalizeOptionalString(ctx.AccountId) ?? "";
-  const threadId =
-    ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
-      ? String(ctx.MessageThreadId)
-      : "";
-  return [provider, accountId, sessionScope, peerId, threadId, messageId].filter(Boolean).join("|");
+  const routeKey = channelRouteDedupeKey({
+    channel: provider,
+    to: peerId,
+    accountId,
+    threadId: ctx.MessageThreadId,
+  });
+  return JSON.stringify([sessionScope, routeKey, messageId]);
 }
 
 export function shouldSkipDuplicateInbound(

@@ -17,12 +17,21 @@ function createJsonResponse(body: unknown, init?: { status?: number }) {
   });
 }
 
+function fetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, index: number) {
+  const call = fetchMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetch call ${index}`);
+  }
+  return call;
+}
+
 describe("loginOpenAICodexDeviceCode", () => {
   it("requests a device code, polls for authorization, and exchanges OAuth tokens", async () => {
     vi.useFakeTimers();
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     try {
       const fetchMock = vi
-        .fn()
+        .fn<typeof fetch>()
         .mockResolvedValueOnce(
           createJsonResponse({
             device_auth_id: "device-auth-123",
@@ -73,13 +82,35 @@ describe("loginOpenAICodexDeviceCode", () => {
       await vi.advanceTimersByTimeAsync(1);
       const credentials = await credentialsPromise;
 
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        1,
-        "https://auth.openai.com/api/accounts/deviceauth/usercode",
-        expect.objectContaining({
-          method: "POST",
-        }),
-      );
+      const userCodeRequest = fetchCall(fetchMock, 0);
+      expect(userCodeRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/usercode");
+      expect(userCodeRequest[1]?.method).toBe("POST");
+      expect(userCodeRequest[1]?.headers).toEqual({
+        "Content-Type": "application/json",
+        originator: "openclaw",
+        version: "2026.3.22",
+        "User-Agent": "openclaw/2026.3.22",
+      });
+
+      const deviceTokenRequest = fetchCall(fetchMock, 1);
+      expect(deviceTokenRequest[0]).toBe("https://auth.openai.com/api/accounts/deviceauth/token");
+      expect(deviceTokenRequest[1]?.method).toBe("POST");
+      expect(deviceTokenRequest[1]?.headers).toEqual({
+        "Content-Type": "application/json",
+        originator: "openclaw",
+        version: "2026.3.22",
+        "User-Agent": "openclaw/2026.3.22",
+      });
+
+      const oauthTokenRequest = fetchCall(fetchMock, 3);
+      expect(oauthTokenRequest[0]).toBe("https://auth.openai.com/oauth/token");
+      expect(oauthTokenRequest[1]?.method).toBe("POST");
+      expect(oauthTokenRequest[1]?.headers).toEqual({
+        "Content-Type": "application/x-www-form-urlencoded",
+        originator: "openclaw",
+        version: "2026.3.22",
+        "User-Agent": "openclaw/2026.3.22",
+      });
       expect(onVerification).toHaveBeenCalledWith({
         verificationUrl: "https://auth.openai.com/codex/device",
         userCode: "CODE-12345",
@@ -88,14 +119,14 @@ describe("loginOpenAICodexDeviceCode", () => {
       expect(onProgress).toHaveBeenNthCalledWith(1, "Requesting device code…");
       expect(onProgress).toHaveBeenNthCalledWith(2, "Waiting for device authorization…");
       expect(onProgress).toHaveBeenNthCalledWith(3, "Exchanging device code…");
-      expect(credentials).toMatchObject({
-        access: expect.any(String),
-        refresh: "refresh-token-123",
-      });
+      expect(typeof credentials.access).toBe("string");
+      expect(credentials.access.length).toBeGreaterThan(0);
+      expect(credentials.refresh).toBe("refresh-token-123");
       expect(credentials).not.toHaveProperty("accountId");
       expect(credentials.expires).toBeGreaterThan(Date.now());
     } finally {
       vi.useRealTimers();
+      vi.unstubAllEnvs();
     }
   });
 
@@ -134,8 +165,64 @@ describe("loginOpenAICodexDeviceCode", () => {
       onVerification: async () => {},
     });
 
-    expect(expectedExpiry).toBeDefined();
+    if (expectedExpiry === undefined) {
+      throw new Error("expected device-code expiry to be calculated");
+    }
     expect(credentials.expires).toBe(expectedExpiry);
+  });
+
+  it("falls back when device-code intervals and token lifetimes overflow safe milliseconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const accessToken = createJwt({
+        exp: Math.floor(Date.now() / 1000) + 600,
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct_123",
+        },
+      });
+      const expectedExpiry = resolveCodexAccessTokenExpiry(accessToken);
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            device_auth_id: "device-auth-123",
+            user_code: "CODE-12345",
+            interval: Number.MAX_SAFE_INTEGER,
+          }),
+        )
+        .mockResolvedValueOnce(new Response(null, { status: 404 }))
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            authorization_code: "authorization-code-123",
+            code_verifier: "code-verifier-123",
+          }),
+        )
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            access_token: accessToken,
+            refresh_token: "refresh-token-123",
+            expires_in: Number.MAX_SAFE_INTEGER,
+          }),
+        );
+
+      const credentialsPromise = loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock as typeof fetch,
+        onVerification: async () => {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      const credentials = await credentialsPromise;
+
+      if (expectedExpiry === undefined) {
+        throw new Error("expected device-code expiry to be calculated");
+      }
+      expect(credentials.expires).toBe(expectedExpiry);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces user-code request failures", async () => {

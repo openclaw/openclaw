@@ -6,8 +6,6 @@ read_when:
 title: "Webhooks plugin"
 ---
 
-# Webhooks (plugin)
-
 The Webhooks plugin adds authenticated HTTP routes that bind external
 automation to OpenClaw TaskFlows.
 
@@ -89,7 +87,7 @@ The plugin applies:
 - Request body size and timeout guards
 - Fixed-window rate limiting
 - In-flight request limiting
-- Owner-bound TaskFlow access through `api.runtime.taskFlow.bindSession(...)`
+- Owner-bound TaskFlow access through `api.runtime.tasks.managedFlows.bindSession(...)`
 
 ## Request format
 

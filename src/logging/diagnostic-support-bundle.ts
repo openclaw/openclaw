@@ -1,5 +1,6 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "../infra/path-guards.js";
 
 export type DiagnosticSupportBundleFile = {
   path: string;
@@ -13,7 +14,7 @@ export type DiagnosticSupportBundleContent = {
   bytes: number;
 };
 
-export function supportBundleByteLength(content: string): number {
+function supportBundleByteLength(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
 
@@ -60,7 +61,7 @@ export function supportBundleContents(
   }));
 }
 
-export function assertSafeBundleRelativePath(pathName: string): string {
+function assertSafeBundleRelativePath(pathName: string): string {
   const normalized = pathName.replaceAll("\\", "/");
   if (
     !normalized ||
@@ -72,56 +73,41 @@ export function assertSafeBundleRelativePath(pathName: string): string {
   return normalized;
 }
 
-export function prepareSupportBundleDirectory(outputDir: string): void {
-  fs.mkdirSync(path.dirname(outputDir), { recursive: true, mode: 0o700 });
-  fs.mkdirSync(outputDir, { mode: 0o700 });
+async function prepareSupportBundleDirectory(outputDir: string): Promise<void> {
+  await fsp.mkdir(path.dirname(outputDir), { recursive: true, mode: 0o700 });
+  await fsp.mkdir(outputDir, { mode: 0o700 });
 }
 
-export function resolveSupportBundleFilePath(outputDir: string, pathName: string): string {
+function resolveSupportBundleFilePath(outputDir: string, pathName: string): string {
   const safePath = assertSafeBundleRelativePath(pathName);
   const resolvedBase = path.resolve(outputDir);
   const resolvedFile = path.resolve(resolvedBase, safePath);
-  const relative = path.relative(resolvedBase, resolvedFile);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (resolvedFile === resolvedBase || !isPathInside(resolvedBase, resolvedFile)) {
     throw new Error(`Bundle file path escaped output directory: ${pathName}`);
   }
   return resolvedFile;
 }
 
-export function writeSupportBundleFile(outputDir: string, file: DiagnosticSupportBundleFile): void {
+async function writeSupportBundleFile(
+  outputDir: string,
+  file: DiagnosticSupportBundleFile,
+): Promise<void> {
   const filePath = resolveSupportBundleFilePath(outputDir, file.path);
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(filePath, file.content, {
+  await fsp.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fsp.writeFile(filePath, file.content, {
     encoding: "utf8",
     flag: "wx",
     mode: 0o600,
   });
 }
 
-export function copySupportBundleFile(params: {
-  outputDir: string;
-  sourceFile: string;
-  path: string;
-}): DiagnosticSupportBundleContent {
-  const outputPath = resolveSupportBundleFilePath(params.outputDir, params.path);
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-  fs.copyFileSync(params.sourceFile, outputPath, fs.constants.COPYFILE_EXCL);
-  fs.chmodSync(outputPath, 0o600);
-  const stat = fs.statSync(outputPath);
-  return {
-    path: assertSafeBundleRelativePath(params.path),
-    mediaType: "application/x-ndjson",
-    bytes: stat.size,
-  };
-}
-
-export function writeSupportBundleDirectory(params: {
+export async function writeSupportBundleDirectory(params: {
   outputDir: string;
   files: readonly DiagnosticSupportBundleFile[];
-}): DiagnosticSupportBundleContent[] {
-  prepareSupportBundleDirectory(params.outputDir);
+}): Promise<DiagnosticSupportBundleContent[]> {
+  await prepareSupportBundleDirectory(params.outputDir);
   for (const file of params.files) {
-    writeSupportBundleFile(params.outputDir, file);
+    await writeSupportBundleFile(params.outputDir, file);
   }
   return supportBundleContents(params.files);
 }
@@ -141,7 +127,7 @@ export async function writeSupportBundleZip(params: {
     compression: "DEFLATE",
     compressionOptions: { level: params.compressionLevel ?? 6 },
   });
-  fs.mkdirSync(path.dirname(params.outputPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(params.outputPath, buffer, { mode: 0o600 });
+  await fsp.mkdir(path.dirname(params.outputPath), { recursive: true, mode: 0o700 });
+  await fsp.writeFile(params.outputPath, buffer, { mode: 0o600 });
   return buffer.length;
 }

@@ -7,14 +7,13 @@ import { normalizeChannelId as normalizeChatChannelId } from "../../channels/reg
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
-  ANNOUNCE_SKIP_TOKEN,
-  REPLY_SKIP_TOKEN,
   isAnnounceSkip,
+  isNonDeliverableSessionsReply,
   isReplySkip,
 } from "./sessions-send-tokens.js";
 
-const DEFAULT_PING_PONG_TURNS = 5;
-const MAX_PING_PONG_TURNS = 5;
+const DEFAULT_AGENTNG_PONG_TURNS = 5;
+const MAX_PING_PONG_TURNS = 20;
 
 export type AnnounceTarget = {
   channel: string;
@@ -122,7 +121,7 @@ export function buildAgentToAgentAnnounceContext(params: {
 
 export function resolvePingPongTurns(cfg?: OpenClawConfig) {
   const raw = cfg?.session?.agentToAgent?.maxPingPongTurns;
-  const fallback = DEFAULT_PING_PONG_TURNS;
+  const fallback = DEFAULT_AGENTNG_PONG_TURNS;
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return fallback;
   }

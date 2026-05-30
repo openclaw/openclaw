@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -200,6 +201,26 @@ type SessionHistorySseStream = {
   streamState: { buffer: string };
 };
 
+function expectOpenClawMetadata(
+  metadata: { id?: string; seq?: number } | undefined,
+  expected: { id?: string; seq: number },
+) {
+  if (expected.id !== undefined) {
+    expect(metadata?.id).toBe(expected.id);
+  }
+  expect(metadata?.seq).toBe(expected.seq);
+}
+
+function expectErrorResponse(body: unknown, expected: { type: string; message: string }) {
+  expect(body).toEqual({
+    ok: false,
+    error: {
+      type: expected.type,
+      message: expected.message,
+    },
+  });
+}
+
 async function openSessionHistorySse(
   port: number,
   sessionKey: string,
@@ -211,8 +232,10 @@ async function openSessionHistorySse(
   });
   expect(res.status).toBe(200);
   const reader = res.body?.getReader();
-  expect(reader).toBeTruthy();
-  return { reader: reader!, streamState: { buffer: "" } };
+  if (reader === undefined) {
+    throw new Error("expected session-history SSE reader");
+  }
+  return { reader, streamState: { buffer: "" } };
 }
 
 async function expectHistoryEventTexts(stream: SessionHistorySseStream, expectedTexts: string[]) {
@@ -238,13 +261,15 @@ async function expectMessageEventMatch(
   ).toBe(params.text);
   expect((event.data as { messageSeq?: number }).messageSeq).toBe(params.seq);
   if (params.id !== undefined) {
-    expect(
-      (event.data as { message?: { __openclaw?: { id?: string; seq?: number } } }).message
-        ?.__openclaw,
-    ).toMatchObject({
-      id: params.id,
-      seq: params.seq,
-    });
+    expectOpenClawMetadata(
+      (event.data as { message?: { __openclaw?: { id?: string; seq?: number } } }).message?.[
+        "__openclaw"
+      ],
+      {
+        id: params.id,
+        seq: params.seq,
+      },
+    );
   }
   return event;
 }
@@ -280,15 +305,32 @@ describe("session history HTTP endpoints", () => {
       expect(body.sessionKey).toBe("agent:main:main");
       expect(body.messages).toHaveLength(1);
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("hello from history");
-      expect(
+      expectOpenClawMetadata(
         (
           body.messages?.[0] as {
             __openclaw?: { id?: string; seq?: number };
           }
-        )?.__openclaw,
-      ).toMatchObject({
-        seq: 1,
+        )?.["__openclaw"],
+        {
+          seq: 1,
+        },
+      );
+    });
+  });
+
+  test("matches direct REST history paths without trusting malformed Host headers", async () => {
+    await seedSession({ text: "history with bad host" });
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        headers: { Host: "[" },
       });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        sessionKey?: string;
+        messages?: Array<{ content?: Array<{ text?: string }> }>;
+      };
+      expect(body.sessionKey).toBe("agent:main:main");
+      expect(body.messages?.[0]?.content?.[0]?.text).toBe("history with bad host");
     });
   });
 
@@ -297,12 +339,9 @@ describe("session history HTTP endpoints", () => {
     await withGatewayHarness(async (harness) => {
       const res = await fetchSessionHistory(harness.port, "agent:main:missing");
       expect(res.status).toBe(404);
-      await expect(res.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "not_found",
-          message: "Session not found: agent:main:missing",
-        },
+      expectErrorResponse(await res.json(), {
+        type: "not_found",
+        message: "Session not found: agent:main:missing",
       });
     });
   });
@@ -391,7 +430,7 @@ describe("session history HTTP endpoints", () => {
         "second message",
         "third message",
       ]);
-      expect(firstBody.messages?.map((message) => message.__openclaw?.seq)).toEqual([2, 3]);
+      expect(firstBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([2, 3]);
       expect(firstBody.hasMore).toBe(true);
       expect(firstBody.nextCursor).toBe("2");
 
@@ -408,7 +447,7 @@ describe("session history HTTP endpoints", () => {
       expect(secondBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
         "first message",
       ]);
-      expect(secondBody.messages?.map((message) => message.__openclaw?.seq)).toEqual([1]);
+      expect(secondBody.messages?.map((message) => message["__openclaw"]?.seq)).toEqual([1]);
       expect(secondBody.hasMore).toBe(false);
       expect(secondBody.nextCursor).toBeUndefined();
     });
@@ -436,7 +475,7 @@ describe("session history HTTP endpoints", () => {
         }>;
       };
       expect(nextData.messages?.[0]?.content?.[0]?.text).toBe("third message");
-      expect(nextData.messages?.[0]?.__openclaw).toMatchObject({
+      expectOpenClawMetadata(nextData.messages?.[0]?.["__openclaw"], {
         id: thirdMessageId,
         seq: 3,
       });
@@ -464,7 +503,7 @@ describe("session history HTTP endpoints", () => {
         messages?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
       };
       expect(refreshData.messages?.[0]?.content?.[0]?.text).toBe("second message");
-      expect(refreshData.messages?.[0]?.__openclaw?.seq).toBe(2);
+      expect(refreshData.messages?.[0]?.["__openclaw"]?.seq).toBe(2);
 
       await stream.reader.cancel();
     });
@@ -526,7 +565,7 @@ describe("session history HTTP endpoints", () => {
       expect(body.sessionKey).toBe("agent:main:main");
       expect(body.messages).toHaveLength(1);
       expect(body.messages?.[0]?.content?.[0]?.text).toBe("Done.");
-      expect(body.messages?.[0]?.__openclaw).toMatchObject({
+      expectOpenClawMetadata(body.messages?.[0]?.["__openclaw"], {
         id: visibleMessageId,
         seq: 2,
       });
@@ -555,6 +594,59 @@ describe("session history HTTP endpoints", () => {
         seq: 2,
         id: appended.messageId,
       });
+
+      await stream.reader.cancel();
+    });
+  });
+
+  test("refreshes SSE history for non-monotonic carried sequence", async () => {
+    const storePath = await createSessionStoreFile();
+    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          id: "msg-first",
+          message: makeTranscriptAssistantMessage({ text: "first message" }),
+        }),
+        JSON.stringify({
+          id: "msg-second",
+          message: makeTranscriptAssistantMessage({ text: "second message" }),
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withGatewayHarness(async (harness) => {
+      const stream = await openSessionHistorySse(harness.port, "agent:main:main");
+      await expectHistoryEventTexts(stream, ["first message", "second message"]);
+
+      emitSessionTranscriptUpdate({
+        sessionFile: transcriptPath,
+        sessionKey: "agent:main:main",
+        message: makeTranscriptAssistantMessage({ text: "rewound branch message" }),
+        messageId: "msg-rewound",
+        messageSeq: 1,
+      });
+
+      const refreshEvent = await readSseEvent(stream.reader, stream.streamState);
+      expect(refreshEvent.event).toBe("history");
+      expect(
+        (
+          refreshEvent.data as { messages?: Array<{ content?: Array<{ text?: string }> }> }
+        ).messages?.map((message) => message.content?.[0]?.text),
+      ).toEqual(["first message", "second message"]);
 
       await stream.reader.cancel();
     });
@@ -697,39 +789,76 @@ describe("session history HTTP endpoints", () => {
       });
       expect(wsHistory.ok).toBe(false);
       expect(wsHistory.error?.message).toBe("missing scope: operator.read");
+    } finally {
+      ws.close();
+      await server.close();
+      envSnapshot.restore();
+    }
+  });
 
+  test("allows HTTP session history reads with shared-secret bearer auth and default scopes", async () => {
+    await seedSession({ text: "bearer allowed history" });
+
+    const started = await startServerWithClient("test-gateway-token-1234567890");
+    const { server, ws, port, envSnapshot } = started;
+    try {
       const httpHistory = await fetch(
-        `http://127.0.0.1:${port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=1`,
-        {
-          headers: {
-            ...AUTH_HEADER,
-            "x-openclaw-scopes": "operator.approvals",
-          },
-        },
-      );
-      expect(httpHistory.status).toBe(403);
-      await expect(httpHistory.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "missing scope: operator.read",
-        },
-      });
-
-      const httpHistoryWithoutScopes = await fetch(
         `http://127.0.0.1:${port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=1`,
         {
           headers: AUTH_HEADER,
         },
       );
-      expect(httpHistoryWithoutScopes.status).toBe(403);
-      await expect(httpHistoryWithoutScopes.json()).resolves.toMatchObject({
-        ok: false,
-        error: {
-          type: "forbidden",
-          message: "missing scope: operator.read",
+      expect(httpHistory.status).toBe(200);
+      const body = await httpHistory.json();
+      expect(body.sessionKey).toBe("agent:main:main");
+      expect(body.messages?.[0]?.content?.[0]?.text).toBe("bearer allowed history");
+    } finally {
+      ws.close();
+      await server.close();
+      envSnapshot.restore();
+    }
+  });
+
+  test("maintains HTTP SSE streams with shared-secret bearer auth across transcript updates", async () => {
+    const { storePath } = await seedSession({ text: "bearer allowed history" });
+
+    const started = await startServerWithClient("test-gateway-token-1234567890");
+    const { server, ws, port, envSnapshot } = started;
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/sessions/${encodeURIComponent("agent:main:main")}/history`,
+        {
+          headers: {
+            ...AUTH_HEADER,
+            Accept: "text/event-stream",
+          },
         },
+      );
+      expect(res.status).toBe(200);
+      const reader = res.body?.getReader();
+      expect(reader).toBeDefined();
+      const stream = { reader: reader!, streamState: { buffer: "" } };
+
+      await expectHistoryEventTexts(stream, ["bearer allowed history"]);
+
+      const appended = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "bearer sse update",
+        storePath,
       });
+      expect(appended.ok).toBe(true);
+
+      if (!appended.ok) {
+        throw new Error(`append failed: ${appended.reason}`);
+      }
+
+      await expectMessageEventMatch(stream, {
+        text: "bearer sse update",
+        seq: 2,
+        id: appended.messageId,
+      });
+
+      await stream.reader.cancel();
     } finally {
       ws.close();
       await server.close();

@@ -1,50 +1,108 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
-import {
-  resolveWebSearchDefinition,
-  resolveWebSearchProviderId,
-  runWebSearch,
-} from "../../web-search/runtime.js";
+import { resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult } from "./common.js";
-import { SEARCH_CACHE } from "./web-search-provider-common.js";
+import { MAX_SEARCH_COUNT, SEARCH_CACHE } from "./web-search-provider-common.js";
+import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.js";
+
+const WebSearchSchema = {
+  type: "object",
+  required: ["query"],
+  properties: {
+    query: { type: "string", description: "Search query." },
+    count: {
+      type: "number",
+      description: "Result count.",
+      minimum: 1,
+      maximum: MAX_SEARCH_COUNT,
+    },
+    country: {
+      type: "string",
+      description: "2-letter country code.",
+    },
+    language: {
+      type: "string",
+      description: "ISO 639-1 language.",
+    },
+    freshness: {
+      type: "string",
+      description: "Time filter: day/week/month/year.",
+    },
+    date_after: {
+      type: "string",
+      description: "Published after YYYY-MM-DD.",
+    },
+    date_before: {
+      type: "string",
+      description: "Published before YYYY-MM-DD.",
+    },
+    search_lang: {
+      type: "string",
+      description: "Brave result language.",
+    },
+    ui_lang: {
+      type: "string",
+      description: "Brave UI locale.",
+    },
+    domain_filter: {
+      type: "array",
+      items: { type: "string" },
+      description: "Perplexity domain filter.",
+    },
+    max_tokens: {
+      type: "number",
+      description: "Perplexity total token budget.",
+      minimum: 1,
+      maximum: 1000000,
+    },
+    max_tokens_per_page: {
+      type: "number",
+      description: "Perplexity tokens per page.",
+      minimum: 1,
+    },
+  },
+} satisfies Record<string, unknown>;
+
+function isWebSearchDisabled(config?: OpenClawConfig): boolean {
+  const search = config?.tools?.web?.search;
+  return Boolean(search && typeof search === "object" && search.enabled === false);
+}
 
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
+  agentDir?: string;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
+  lateBindRuntimeConfig?: boolean;
 }): AnyAgentTool | null {
-  const runtimeProviderId =
-    options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
-  const preferRuntimeProviders =
-    Boolean(runtimeProviderId) &&
-    !resolveManifestContractOwnerPluginId({
-      contract: "webSearchProviders",
-      value: runtimeProviderId,
-      origin: "bundled",
-      config: options?.config,
-    });
-  const resolved = resolveWebSearchDefinition({
-    ...options,
-    preferRuntimeProviders,
-  });
-  if (!resolved) {
+  if (isWebSearchDisabled(options?.config)) {
     return null;
   }
 
   return {
     label: "Web Search",
     name: "web_search",
-    description: resolved.definition.description,
-    parameters: resolved.definition.parameters,
-    execute: async (_toolCallId, args) => {
+    description: "Search web for current info; returns normalized provider results.",
+    parameters: WebSearchSchema,
+    execute: async (_toolCallId, args, signal) => {
+      const { config, preferRuntimeProviders, runtimeWebSearch } =
+        resolveWebSearchToolRuntimeContext({
+          config: options?.config,
+          lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+          runtimeWebSearch: options?.runtimeWebSearch,
+        });
+      if (isWebSearchDisabled(config)) {
+        throw new Error("web_search is disabled.");
+      }
       const result = await runWebSearch({
-        config: options?.config,
+        config,
+        agentDir: options?.agentDir,
         sandboxed: options?.sandboxed,
-        runtimeWebSearch: options?.runtimeWebSearch,
+        runtimeWebSearch,
         preferRuntimeProviders,
         args: asToolParamsRecord(args),
+        signal,
       });
       return jsonResult({
         ...result.result,
@@ -54,8 +112,9 @@ export function createWebSearchTool(options?: {
   };
 }
 
-export const __testing = {
+export const testing = {
   SEARCH_CACHE,
   resolveSearchProvider: (search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"]) =>
     resolveWebSearchProviderId({ search }),
 };
+export { testing as __testing };

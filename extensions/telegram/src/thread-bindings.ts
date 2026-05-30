@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   formatThreadBindingDurationLabel,
   registerSessionBindingAdapter,
@@ -18,7 +18,7 @@ import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
@@ -35,7 +35,7 @@ async function loadTelegramSendModule() {
 
 type TelegramBindingTargetKind = "subagent" | "acp";
 
-export type TelegramThreadBindingRecord = {
+type TelegramThreadBindingRecord = {
   accountId: string;
   conversationId: string;
   targetKind: TelegramBindingTargetKind;
@@ -55,7 +55,7 @@ type StoredTelegramBindingState = {
   bindings: TelegramThreadBindingRecord[];
 };
 
-export type TelegramThreadBindingManager = {
+type TelegramThreadBindingManager = {
   accountId: string;
   shouldPersistMutations: () => boolean;
   getIdleTimeoutMs: () => number;
@@ -917,6 +917,7 @@ export async function resetTelegramThreadBindingsForTests() {
   getThreadBindingsState().bindingsByAccountConversation.clear();
 }
 
-export const __testing = {
+export const testing = {
   resetTelegramThreadBindingsForTests,
 };
+export { testing as __testing };

@@ -63,14 +63,21 @@ describe("handlePluginCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe("from plugin");
-    expect(executePluginCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gatewayClientScopes: ["operator.write", "operator.pairing"],
-        sessionKey: "agent:main:whatsapp:direct:test-user",
-        sessionId: "session-plugin-command",
-        commandBody: "/card",
-      }),
-    );
+    expect(executePluginCommandMock).toHaveBeenCalledTimes(1);
+    const [[commandParams]] = executePluginCommandMock.mock.calls as unknown as Array<
+      [
+        {
+          gatewayClientScopes?: string[];
+          sessionKey?: string;
+          sessionId?: string;
+          commandBody?: string;
+        },
+      ]
+    >;
+    expect(commandParams.gatewayClientScopes).toEqual(["operator.write", "operator.pairing"]);
+    expect(commandParams.sessionKey).toBe("agent:main:whatsapp:direct:test-user");
+    expect(commandParams.sessionId).toBe("session-plugin-command");
+    expect(commandParams.commandBody).toBe("/card");
   });
 
   it("prefers the target session entry from sessionStore for plugin command metadata", async () => {
@@ -93,17 +100,95 @@ describe("handlePluginCommand", () => {
       [params.sessionKey]: {
         sessionId: "target-session",
         sessionFile: "/tmp/target-session.jsonl",
+        authProfileOverride: "openai-codex:owner@example.com",
         updatedAt: Date.now(),
       },
     };
 
     await handlePluginCommand(params, true);
 
-    expect(executePluginCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "target-session",
-        sessionFile: "/tmp/target-session.jsonl",
-      }),
+    expect(executePluginCommandMock).toHaveBeenCalledTimes(1);
+    const [[commandParams]] = executePluginCommandMock.mock.calls as unknown as Array<
+      [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]
+    >;
+    expect(commandParams.sessionId).toBe("target-session");
+    expect(commandParams.sessionFile).toBe("/tmp/target-session.jsonl");
+    expect(commandParams.authProfileId).toBe("openai-codex:owner@example.com");
+  });
+
+  it("continues the agent without leaking continueAgent into the reply payload", async () => {
+    matchPluginCommandMock.mockReturnValue({
+      command: { name: "card" },
+      args: "",
+    });
+    executePluginCommandMock.mockResolvedValue({
+      text: "from plugin",
+      continueAgent: true,
+    });
+
+    const result = await handlePluginCommand(
+      buildPluginParams("/card", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      true,
     );
+
+    expect(result).toEqual({
+      shouldContinue: true,
+      reply: { text: "from plugin" },
+    });
+  });
+
+  it("enforces requiredScopes through the command handler path", async () => {
+    const actualCommands = await vi.importActual<typeof import("../../plugins/commands.js")>(
+      "../../plugins/commands.js",
+    );
+    const handler = vi.fn().mockResolvedValue({
+      text: "approved",
+      continueAgent: true,
+    });
+    const command = {
+      pluginId: "approval-plugin",
+      pluginName: "Approval Plugin",
+      pluginRoot: "/tmp/approval-plugin",
+      name: "approve-deploy",
+      description: "Approve deployment",
+      requiredScopes: ["operator.approvals"],
+      handler,
+    };
+    matchPluginCommandMock.mockReturnValue({
+      command,
+      args: "",
+    });
+    executePluginCommandMock.mockImplementation(actualCommands.executePluginCommand);
+
+    const denied = await handlePluginCommand(
+      buildPluginParams("/approve-deploy", {
+        commands: { text: true },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig),
+      true,
+    );
+
+    expect(denied).toEqual({
+      shouldContinue: false,
+      reply: { text: "⚠️ This command requires gateway scope: operator.approvals." },
+    });
+    expect(handler).not.toHaveBeenCalled();
+
+    const allowedParams = buildPluginParams("/approve-deploy", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    allowedParams.ctx.GatewayClientScopes = ["operator.approvals"];
+
+    const allowed = await handlePluginCommand(allowedParams, true);
+
+    expect(allowed).toEqual({
+      shouldContinue: true,
+      reply: { text: "approved" },
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

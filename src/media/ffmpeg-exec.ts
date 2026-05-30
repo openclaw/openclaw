@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 export type MediaExecOptions = {
   timeoutMs?: number;
   maxBufferBytes?: number;
+  input?: Buffer | string;
 };
 
 function resolveExecOptions(
@@ -40,18 +41,44 @@ function requireSystemBin(name: string): string {
   return resolved;
 }
 
+export function resolveFfmpegBin(): string {
+  return requireSystemBin("ffmpeg");
+}
+
+function isBrokenPipeError(error: Error): boolean {
+  return (error as NodeJS.ErrnoException).code === "EPIPE";
+}
+
 export async function runFfprobe(args: string[], options?: MediaExecOptions): Promise<string> {
-  const { stdout } = await execFileAsync(
-    requireSystemBin("ffprobe"),
-    args,
-    resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options),
-  );
-  return stdout.toString();
+  const execOptions = resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options);
+  if (options?.input == null) {
+    const { stdout } = await execFileAsync(requireSystemBin("ffprobe"), args, execOptions);
+    return stdout.toString();
+  }
+
+  return await new Promise<string>((resolve, reject) => {
+    let stdinWriteError: Error | undefined;
+    const proc = execFile(requireSystemBin("ffprobe"), args, execOptions, (err, stdout) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      if (stdinWriteError && !isBrokenPipeError(stdinWriteError)) {
+        reject(stdinWriteError);
+        return;
+      }
+      resolve(stdout.toString());
+    });
+    proc.stdin?.once("error", (err: Error) => {
+      stdinWriteError = err;
+    });
+    proc.stdin?.end(options.input);
+  });
 }
 
 export async function runFfmpeg(args: string[], options?: MediaExecOptions): Promise<string> {
   const { stdout } = await execFileAsync(
-    requireSystemBin("ffmpeg"),
+    resolveFfmpegBin(),
     args,
     resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
   );
@@ -65,15 +92,22 @@ export function parseFfprobeCsvFields(stdout: string, maxFields: number): string
     .map((field) => normalizeLowercaseStringOrEmpty(field));
 }
 
+function parseFfprobeSampleRateHz(value: string | undefined): number | null {
+  if (!value || !/^\d+$/.test(value)) {
+    return null;
+  }
+  const sampleRate = Number(value);
+  return Number.isSafeInteger(sampleRate) && sampleRate > 0 ? sampleRate : null;
+}
+
 export function parseFfprobeCodecAndSampleRate(stdout: string): {
   codec: string | null;
   sampleRateHz: number | null;
 } {
   const [codecRaw, sampleRateRaw] = parseFfprobeCsvFields(stdout, 2);
   const codec = codecRaw ? codecRaw : null;
-  const sampleRate = sampleRateRaw ? Number.parseInt(sampleRateRaw, 10) : Number.NaN;
   return {
     codec,
-    sampleRateHz: Number.isFinite(sampleRate) ? sampleRate : null,
+    sampleRateHz: parseFfprobeSampleRateHz(sampleRateRaw),
   };
 }

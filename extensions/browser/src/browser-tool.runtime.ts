@@ -1,16 +1,29 @@
-export { getRuntimeConfig } from "openclaw/plugin-sdk/browser-config-runtime";
+import { getRuntimeConfig } from "./sdk-config.js";
+
+export { getRuntimeConfig };
+export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | undefined {
+  const configured = getRuntimeConfig().agents?.defaults?.imageMaxDimensionPx;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return undefined;
+  }
+  return { maxDimensionPx: Math.max(1, Math.floor(configured)) };
+}
 export {
   callGatewayTool,
   imageResultFromFile,
   jsonResult,
   listNodes,
+  readPositiveIntegerParam,
   readStringParam,
   resolveNodeIdFromList,
   selectDefaultNodeFromList,
-} from "openclaw/plugin-sdk/browser-setup-tools";
-export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/browser-setup-tools";
-export { wrapExternalContent } from "openclaw/plugin-sdk/browser-security-runtime";
-export { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+} from "./sdk-setup-tools.js";
+export type { AnyAgentTool, NodeListNode } from "./sdk-setup-tools.js";
+export { wrapExternalContent } from "./sdk-security-runtime.js";
+export {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 export { BrowserToolSchema } from "./browser-tool.schema.js";
 export {
   browserAct,

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   getShellEnvAppliedKeys,
   getShellPathFromLoginShell,
@@ -47,12 +48,14 @@ describe("shell env fallback", () => {
     env: NodeJS.ProcessEnv;
     expectedKeys: string[];
     exec: ReturnType<typeof vi.fn>;
+    platform?: NodeJS.Platform;
   }) {
     return loadShellEnvFallback({
       enabled: params.enabled,
       env: params.env,
       expectedKeys: params.expectedKeys,
       exec: params.exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      platform: params.platform,
     });
   }
 
@@ -67,12 +70,14 @@ describe("shell env fallback", () => {
   }
 
   function expectSanitizedStartupEnv(receivedEnv: NodeJS.ProcessEnv | undefined) {
-    expect(receivedEnv).toBeDefined();
-    expect(receivedEnv?.BASH_ENV).toBeUndefined();
-    expect(receivedEnv?.PS4).toBeUndefined();
-    expect(receivedEnv?.ZDOTDIR).toBeUndefined();
-    expect(receivedEnv?.SHELL).toBeUndefined();
-    expect(receivedEnv?.HOME).toBe(os.homedir());
+    if (receivedEnv === undefined) {
+      throw new Error("expected sanitized startup env");
+    }
+    expect(receivedEnv.BASH_ENV).toBeUndefined();
+    expect(receivedEnv.PS4).toBeUndefined();
+    expect(receivedEnv.ZDOTDIR).toBeUndefined();
+    expect(receivedEnv.SHELL).toBeUndefined();
+    expect(receivedEnv.HOME).toBe(os.homedir());
   }
 
   function withEtcShells(shells: string[], fn: () => void) {
@@ -90,6 +95,14 @@ describe("shell env fallback", () => {
     } finally {
       readFileSyncSpy.mockRestore();
     }
+  }
+
+  function requireExecCall(exec: ReturnType<typeof vi.fn>): unknown[] {
+    const call = exec.mock.calls[0];
+    if (!call) {
+      throw new Error("expected shell env exec call");
+    }
+    return call;
   }
 
   function getShellPathTwiceWithExec(params: {
@@ -112,7 +125,10 @@ describe("shell env fallback", () => {
 
   function expectBinShFallbackExec(exec: ReturnType<typeof vi.fn>) {
     expect(exec).toHaveBeenCalledTimes(1);
-    expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
+    const [shell, args, options] = requireExecCall(exec);
+    expect(shell).toBe("/bin/sh");
+    expect(args).toStrictEqual(["-l", "-c", "env -0"]);
+    expect((options as { windowsHide?: unknown } | undefined)?.windowsHide).toBe(true);
   }
 
   it("is disabled by default", () => {
@@ -135,6 +151,37 @@ describe("shell env fallback", () => {
         OPENCLAW_SHELL_ENV_TIMEOUT_MS: "nope",
       }),
     ).toBe(15000);
+    expect(
+      resolveShellEnvFallbackTimeoutMs({
+        OPENCLAW_SHELL_ENV_TIMEOUT_MS: "42abc",
+      }),
+    ).toBe(15000);
+    expect(
+      resolveShellEnvFallbackTimeoutMs({
+        OPENCLAW_SHELL_ENV_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("caps oversized fallback exec timeouts before probing the login shell", () => {
+    resetShellPathCacheForTests();
+    const env: NodeJS.ProcessEnv = {};
+    let receivedTimeout: number | undefined;
+    const exec = vi.fn((_shell: string, _args: string[], options: { timeout?: number }) => {
+      receivedTimeout = options.timeout;
+      return Buffer.from("OPENAI_API_KEY=from-shell\0");
+    });
+
+    const res = loadShellEnvFallback({
+      enabled: true,
+      env,
+      expectedKeys: ["OPENAI_API_KEY"],
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+    });
+
+    expect(res.ok).toBe(true);
+    expect(receivedTimeout).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("skips when already has all expected keys", () => {
@@ -149,7 +196,7 @@ describe("shell env fallback", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.applied).toEqual([]);
+    expect(res.applied).toStrictEqual([]);
     expect(res.ok && res.skippedReason).toBe("already-has-keys");
     expect(exec).not.toHaveBeenCalled();
   });
@@ -197,7 +244,7 @@ describe("shell env fallback", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.applied).toEqual([]);
+    expect(res.applied).toStrictEqual([]);
     expect(res.ok && res.skippedReason).toBe("already-has-keys");
     expect(env.OPENAI_API_KEY).toBe("");
     expect(exec).not.toHaveBeenCalled();
@@ -270,6 +317,33 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
+  it("caches login-shell env probe failures for repeated fallback reads", () => {
+    resetShellPathCacheForTests();
+    const env: NodeJS.ProcessEnv = {};
+    const logger = { warn: vi.fn() };
+    const exec = vi.fn(() => {
+      throw new Error("shell unavailable");
+    });
+
+    for (let i = 0; i < 2; i += 1) {
+      const result = loadShellEnvFallback({
+        enabled: true,
+        env,
+        expectedKeys: ["OPENAI_API_KEY"],
+        exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+        logger,
+      });
+      expect(result).toEqual({
+        ok: false,
+        applied: [],
+        error: "shell unavailable",
+      });
+    }
+
+    expect(exec).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+  });
+
   it("tracks last applied keys across success, skip, and failure paths", () => {
     const successEnv: NodeJS.ProcessEnv = {};
     const successExec = vi.fn(() =>
@@ -300,7 +374,7 @@ describe("shell env fallback", () => {
       applied: [],
       skippedReason: "disabled",
     });
-    expect(getShellEnvAppliedKeys()).toEqual([]);
+    expect(getShellEnvAppliedKeys()).toStrictEqual([]);
 
     const failureExec = vi.fn(() => {
       throw new Error("boom");
@@ -313,12 +387,12 @@ describe("shell env fallback", () => {
         exec: failureExec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
         logger: { warn: vi.fn() },
       }),
-    ).toMatchObject({
+    ).toEqual({
       ok: false,
       applied: [],
       error: "boom",
     });
-    expect(getShellEnvAppliedKeys()).toEqual([]);
+    expect(getShellEnvAppliedKeys()).toStrictEqual([]);
   });
 
   it("resolves PATH via login shell and caches it", () => {
@@ -395,8 +469,33 @@ describe("shell env fallback", () => {
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
-      expect(exec).toHaveBeenCalledWith(trustedShell, ["-l", "-c", "env -0"], expect.any(Object));
+      const [shell, args, options] = requireExecCall(exec);
+      expect(shell).toBe(trustedShell);
+      expect(args).toStrictEqual(["-l", "-c", "env -0"]);
+      expect((options as { windowsHide?: unknown } | undefined)?.windowsHide).toBe(true);
     });
+  });
+
+  it("skips shell env fallback on win32 without probing /bin/sh", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const exec = vi.fn(() => {
+      throw new Error("spawnSync /bin/sh ENOENT");
+    });
+    const logger = { warn: vi.fn() };
+
+    const res = loadShellEnvFallback({
+      enabled: true,
+      env,
+      expectedKeys: ["OPENAI_API_KEY"],
+      exec: exec as unknown as Parameters<typeof loadShellEnvFallback>[0]["exec"],
+      logger,
+      platform: "win32",
+    });
+
+    expect(res).toEqual({ ok: true, applied: [] });
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(exec).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("sanitizes startup-related env vars before shell fallback exec", () => {

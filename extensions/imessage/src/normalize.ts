@@ -2,7 +2,7 @@ import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SERVICE_PREFIXES = ["imessage:", "sms:", "auto:"] as const;
 const CHAT_TARGET_PREFIX_RE =
@@ -26,7 +26,7 @@ function looksLikeHandleOrPhoneTarget(params: {
   return (params.phonePattern ?? /^\+?\d{3,}$/).test(trimmed);
 }
 
-export function normalizeIMessageHandle(raw: string): string {
+function normalizeIMessageHandle(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return "";

@@ -1,23 +1,30 @@
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
-import { describe, expect, it } from "vitest";
+import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
+const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+const OPENROUTER_MISTRAL_PROVIDER_PREFIX = "mistralai/";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const LIVE_MODEL_ID =
   process.env.OPENCLAW_LIVE_OPENROUTER_PLUGIN_MODEL?.trim() || "openai/gpt-5.4-nano";
 const LIVE_CACHE_MODEL_ID =
   process.env.OPENCLAW_LIVE_OPENROUTER_CACHE_MODEL?.trim() || "deepseek/deepseek-v3.2";
 const liveEnabled = OPENROUTER_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
+const liveCatalogEnabled = process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
+const describeCatalogLive = liveCatalogEnabled ? describe : describe.skip;
 const describeCacheLive =
   liveEnabled && process.env.OPENCLAW_LIVE_CACHE_TEST === "1" ? describe : describe.skip;
 const ModelRegistryCtor = ModelRegistry as unknown as {
   new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
+};
+type OpenRouterModelsResponse = {
+  data?: Array<{ id?: unknown }>;
 };
 
 const registerOpenRouterPlugin = async () =>
@@ -49,6 +56,17 @@ async function completeOpenRouterChat(params: {
   });
 }
 
+async function fetchOpenRouterModelIds(): Promise<string[]> {
+  const response = await fetch(OPENROUTER_MODELS_URL, {
+    headers: { "accept-encoding": "identity" },
+  });
+  expect(response.ok).toBe(true);
+  const json = (await response.json()) as OpenRouterModelsResponse;
+  return (json.data ?? [])
+    .map((model) => model.id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+}
+
 describeLive("openrouter plugin live", () => {
   it("registers an OpenRouter provider that can complete a live request", async () => {
     const { providers } = await registerOpenRouterPlugin();
@@ -63,12 +81,10 @@ describeLive("openrouter plugin live", () => {
       throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);
     }
 
-    expect(resolved).toMatchObject({
-      provider: "openrouter",
-      id: LIVE_MODEL_ID,
-      api: "openai-completions",
-      baseUrl: "https://openrouter.ai/api/v1",
-    });
+    expect(resolved.provider).toBe("openrouter");
+    expect(resolved.id).toBe(LIVE_MODEL_ID);
+    expect(resolved.api).toBe("openai-completions");
+    expect(resolved.baseUrl).toBe("https://openrouter.ai/api/v1");
 
     const client = new OpenAI({
       apiKey: OPENROUTER_API_KEY,
@@ -81,6 +97,28 @@ describeLive("openrouter plugin live", () => {
     });
 
     expect(response.choices[0]?.message?.content?.trim()).toMatch(/^OK[.!]?$/);
+  }, 30_000);
+});
+
+describeCatalogLive("openrouter plugin live model catalog", () => {
+  it("applies strict9 replay policy to current OpenRouter Mistral-family routes", async () => {
+    const liveMistralModelIds = (await fetchOpenRouterModelIds()).filter((id) =>
+      id.startsWith(OPENROUTER_MISTRAL_PROVIDER_PREFIX),
+    );
+    expect(liveMistralModelIds.length).toBeGreaterThan(0);
+
+    const { providers } = await registerOpenRouterPlugin();
+    const provider = requireRegisteredProvider(providers, "openrouter");
+
+    for (const modelId of liveMistralModelIds) {
+      const policy = provider.buildReplayPolicy?.({
+        provider: "openrouter",
+        modelApi: "openai-completions",
+        modelId,
+      } as never);
+      expect.soft(policy?.sanitizeToolCallIds, modelId).toBe(true);
+      expect.soft(policy?.toolCallIdMode, modelId).toBe("strict9");
+    }
   }, 30_000);
 });
 

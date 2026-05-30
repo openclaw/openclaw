@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
@@ -8,9 +6,18 @@ import { info, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOAuthDir } from "./auth-store.runtime.js";
-import { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath } from "./creds-files.js";
+import {
+  assertWebCredsPathRegularFileOrMissing,
+  hasWebCredsSync,
+  readWebCredsJsonRaw,
+  readWebCredsJsonRawSync,
+  resolveWebCredsBackupPath,
+  resolveWebCredsPath,
+  statWebCredsFileSync,
+} from "./creds-files.js";
 import {
   waitForCredsSaveQueueWithTimeout,
+  writeWebCredsRawAtomically,
   type CredsQueueWaitResult,
 } from "./creds-persistence.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
@@ -39,18 +46,7 @@ export function resolveDefaultWebAuthDir(): string {
 export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
 
 export function readCredsJsonRaw(filePath: string): string | null {
-  try {
-    if (!fsSync.existsSync(filePath)) {
-      return null;
-    }
-    const stats = fsSync.statSync(filePath);
-    if (!stats.isFile() || stats.size <= 1) {
-      return null;
-    }
-    return fsSync.readFileSync(filePath, "utf-8");
-  } catch {
-    return null;
-  }
+  return readWebCredsJsonRawSync(filePath);
 }
 
 async function waitForWebAuthBarrier(
@@ -72,10 +68,14 @@ async function waitForWebAuthBarrier(
 
 export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<boolean> {
   const logger = getChildLogger({ module: "web-session" });
-  let tempRestorePath: string | null = null;
   try {
     const credsPath = resolveWebCredsPath(authDir);
     const backupPath = resolveWebCredsBackupPath(authDir);
+    try {
+      await assertWebCredsPathRegularFileOrMissing(credsPath);
+    } catch {
+      return false;
+    }
     const raw = readCredsJsonRaw(credsPath);
     if (raw) {
       // Validate that creds.json is parseable.
@@ -87,31 +87,18 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
     if (!backupRaw) {
       return false;
     }
-    const backupStats = await fs.lstat(backupPath).catch(() => null);
-    if (!backupStats?.isFile()) {
-      return false;
-    }
 
     // Ensure backup is parseable before restoring.
     JSON.parse(backupRaw);
-    tempRestorePath = path.join(authDir, `.creds.restore-${randomUUID()}.tmp`);
-    await fs.writeFile(tempRestorePath, backupRaw, {
-      encoding: "utf-8",
-      mode: 0o600,
-      flag: "wx",
+    await writeWebCredsRawAtomically({
+      filePath: credsPath,
+      content: backupRaw,
+      tempPrefix: ".creds.restore",
     });
-    await fs.rename(tempRestorePath, credsPath);
-    tempRestorePath = null;
     logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");
     return true;
   } catch {
     // ignore
-  } finally {
-    if (tempRestorePath) {
-      await fs.rm(tempRestorePath, { force: true }).catch(() => {
-        // best-effort temp cleanup
-      });
-    }
   }
   return false;
 }
@@ -119,17 +106,11 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
 export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()) {
   const resolvedAuthDir = resolveUserPath(authDir);
   const credsPath = resolveWebCredsPath(resolvedAuthDir);
-  try {
-    await fs.access(resolvedAuthDir);
-  } catch {
+  const raw = await readWebCredsJsonRaw(credsPath);
+  if (!raw) {
     return false;
   }
   try {
-    const stats = await fs.stat(credsPath);
-    if (!stats.isFile() || stats.size <= 1) {
-      return false;
-    }
-    const raw = await fs.readFile(credsPath, "utf-8");
     JSON.parse(raw);
     return true;
   } catch {
@@ -220,26 +201,31 @@ export async function readWebAuthSnapshotBestEffort(authDir: string = resolveDef
   } as const;
 }
 
-async function clearLegacyBaileysAuthState(authDir: string) {
+function isBaileysAuthFileName(name: string): boolean {
+  if (name === "oauth.json") {
+    return false;
+  }
+  if (name === "creds.json" || name === "creds.json.bak") {
+    return true;
+  }
+  if (!name.endsWith(".json")) {
+    return false;
+  }
+  return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
+}
+
+async function clearBaileysAuthFiles(authDir: string) {
+  const rootStats = await fs.lstat(authDir).catch(() => null);
+  if (!rootStats?.isDirectory() || rootStats.isSymbolicLink()) {
+    return;
+  }
   const entries = await fs.readdir(authDir, { withFileTypes: true });
-  const shouldDelete = (name: string) => {
-    if (name === "oauth.json") {
-      return false;
-    }
-    if (name === "creds.json" || name === "creds.json.bak") {
-      return true;
-    }
-    if (!name.endsWith(".json")) {
-      return false;
-    }
-    return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
-  };
   await Promise.all(
     entries.map(async (entry) => {
       if (!entry.isFile()) {
         return;
       }
-      if (!shouldDelete(entry.name)) {
+      if (!isBaileysAuthFileName(entry.name)) {
         return;
       }
       await fs.rm(path.join(authDir, entry.name), { force: true });
@@ -249,9 +235,9 @@ async function clearLegacyBaileysAuthState(authDir: string) {
 
 async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): Promise<boolean> {
   try {
-    const stats = await fs.stat(authDir);
-    if (!stats.isDirectory()) {
-      return true;
+    const stats = await fs.lstat(authDir);
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      return false;
     }
     if (isLegacyAuthDir) {
       const entries = await fs.readdir(authDir, { withFileTypes: true });
@@ -259,22 +245,14 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
         if (!entry.isFile()) {
           return false;
         }
-        if (entry.name === "oauth.json") {
-          return false;
-        }
-        if (entry.name === "creds.json" || entry.name === "creds.json.bak") {
-          return true;
-        }
-        return entry.name.endsWith(".json")
-          ? /^(app-state-sync|session|sender-key|pre-key)-/.test(entry.name)
-          : false;
+        return isBaileysAuthFileName(entry.name);
       });
     }
-    const credsStats = await fs.stat(resolveWebCredsPath(authDir)).catch(() => null);
+    const credsStats = await fs.lstat(resolveWebCredsPath(authDir)).catch(() => null);
     if (credsStats?.isFile()) {
       return true;
     }
-    const backupStats = await fs.stat(resolveWebCredsBackupPath(authDir)).catch(() => null);
+    const backupStats = await fs.lstat(resolveWebCredsBackupPath(authDir)).catch(() => null);
     return backupStats?.isFile() === true;
   } catch (error) {
     const codeValue =
@@ -284,6 +262,62 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
     const code = typeof codeValue === "string" ? codeValue : "";
     return code !== "ENOENT";
   }
+}
+
+function isPathInsideDirectory(baseDir: string, targetPath: string): boolean {
+  const relativePath = path.relative(baseDir, targetPath);
+  return relativePath !== "" && !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
+}
+
+async function pathHasSymlinkComponent(baseDir: string, targetPath: string): Promise<boolean> {
+  const relativePath = path.relative(baseDir, targetPath);
+  let currentPath = baseDir;
+  for (const segment of relativePath.split(path.sep)) {
+    currentPath = path.join(currentPath, segment);
+    const stats = await fs.lstat(currentPath).catch(() => null);
+    if (!stats || stats.isSymbolicLink()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+type WebAuthDirOwnership =
+  | { kind: "owned"; authDir: string }
+  | { kind: "unsafe-owned" }
+  | { kind: "external" };
+
+async function isLegacyWebAuthDir(authDir: string): Promise<boolean> {
+  const legacyAuthDir = path.resolve(resolveOAuthDir());
+  const resolvedAuthDir = path.resolve(authDir);
+  if (resolvedAuthDir !== legacyAuthDir) {
+    return false;
+  }
+  const stats = await fs.lstat(resolvedAuthDir).catch(() => null);
+  return stats?.isDirectory() === true && !stats.isSymbolicLink();
+}
+
+async function classifyWebAuthDirOwnership(authDir: string): Promise<WebAuthDirOwnership> {
+  const whatsappAuthBase = path.resolve(resolveOAuthDir(), "whatsapp");
+  const resolvedAuthDir = path.resolve(authDir);
+  if (!isPathInsideDirectory(whatsappAuthBase, resolvedAuthDir)) {
+    return { kind: "external" };
+  }
+
+  const [baseRealPath, authDirRealPath] = await Promise.all([
+    fs.realpath(whatsappAuthBase).catch(() => null),
+    fs.realpath(resolvedAuthDir).catch(() => null),
+  ]);
+  if (!baseRealPath || !authDirRealPath) {
+    return { kind: "unsafe-owned" };
+  }
+  if (!isPathInsideDirectory(baseRealPath, authDirRealPath)) {
+    return { kind: "unsafe-owned" };
+  }
+  if (await pathHasSymlinkComponent(whatsappAuthBase, resolvedAuthDir)) {
+    return { kind: "unsafe-owned" };
+  }
+  return { kind: "owned", authDir: resolvedAuthDir };
 }
 
 export async function logoutWeb(params: {
@@ -304,9 +338,30 @@ export async function logoutWeb(params: {
     return false;
   }
   if (params.isLegacyAuthDir) {
-    await clearLegacyBaileysAuthState(resolvedAuthDir);
+    if (!(await isLegacyWebAuthDir(resolvedAuthDir))) {
+      runtime.log(
+        info("Skipped WhatsApp Web credential cleanup outside the managed legacy auth directory."),
+      );
+      return false;
+    }
+    await clearBaileysAuthFiles(resolvedAuthDir);
   } else {
-    await fs.rm(resolvedAuthDir, { recursive: true, force: true });
+    const ownership = await classifyWebAuthDirOwnership(resolvedAuthDir);
+    if (ownership.kind === "owned") {
+      await fs.rm(ownership.authDir, { recursive: true, force: true });
+    } else if (ownership.kind === "unsafe-owned") {
+      runtime.log(
+        info(
+          "Skipped WhatsApp Web credential cleanup because the auth directory crosses a symlink boundary.",
+        ),
+      );
+      return false;
+    } else {
+      runtime.log(
+        info("Skipped WhatsApp Web credential cleanup outside the managed auth directory."),
+      );
+      return false;
+    }
   }
   runtime.log(success("Cleared WhatsApp Web credentials."));
   return true;
@@ -316,10 +371,10 @@ export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
   // Read the cached WhatsApp Web identity (jid + E.164) from disk if present.
   try {
     const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
-    if (!fsSync.existsSync(credsPath)) {
+    const raw = readCredsJsonRaw(credsPath);
+    if (!raw) {
       return emptyWebSelfId();
     }
-    const raw = fsSync.readFileSync(credsPath, "utf-8");
     const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
     const identity = resolveComparableIdentity(
       {
@@ -343,25 +398,28 @@ export async function readWebSelfIdentity(
   fallback?: { id?: string | null; lid?: string | null } | null,
 ): Promise<WhatsAppSelfIdentity> {
   const resolvedAuthDir = resolveUserPath(authDir);
-  try {
-    const raw = await fs.readFile(resolveWebCredsPath(resolvedAuthDir), "utf-8");
-    const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
-    return resolveComparableIdentity(
-      {
-        jid: parsed?.me?.id ?? null,
-        lid: parsed?.me?.lid ?? null,
-      },
-      resolvedAuthDir,
-    );
-  } catch {
-    return resolveComparableIdentity(
-      {
-        jid: fallback?.id ?? null,
-        lid: fallback?.lid ?? null,
-      },
-      resolvedAuthDir,
-    );
+  const raw = await readWebCredsJsonRaw(resolveWebCredsPath(resolvedAuthDir));
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
+      return resolveComparableIdentity(
+        {
+          jid: parsed?.me?.id ?? null,
+          lid: parsed?.me?.lid ?? null,
+        },
+        resolvedAuthDir,
+      );
+    } catch {
+      // Fall through to the live message identity below when cached creds are corrupt.
+    }
   }
+  return resolveComparableIdentity(
+    {
+      jid: fallback?.id ?? null,
+      lid: fallback?.lid ?? null,
+    },
+    resolvedAuthDir,
+  );
 }
 
 export async function readWebSelfIdentityForDecision(
@@ -384,12 +442,8 @@ export async function readWebSelfIdentityForDecision(
  * Helpful for heartbeats/observability to spot stale credentials.
  */
 export function getWebAuthAgeMs(authDir: string = resolveDefaultWebAuthDir()): number | null {
-  try {
-    const stats = fsSync.statSync(resolveWebCredsPath(resolveUserPath(authDir)));
-    return Date.now() - stats.mtimeMs;
-  } catch {
-    return null;
-  }
+  const stats = statWebCredsFileSync(resolveWebCredsPath(resolveUserPath(authDir)));
+  return stats ? Math.max(0, Date.now() - stats.mtimeMs) : null;
 }
 
 export function logWebSelfId(

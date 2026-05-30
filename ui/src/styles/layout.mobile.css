@@ -4,45 +4,95 @@
 
 @media (max-width: 1320px) {
   .content--chat .content-header {
-    align-items: stretch;
-    gap: 12px;
-    row-gap: 10px;
-    max-height: 180px;
+    align-items: center;
+    gap: 8px;
+    row-gap: 0;
+    min-height: 44px;
+    max-height: 44px;
     overflow: visible;
   }
 
   .content--chat .content-header > div:first-child {
-    flex: 1 1 100%;
     min-width: 0;
   }
 
   .content--chat .page-meta {
-    width: 100%;
+    align-self: center;
+    height: 36px;
+    align-items: center;
     min-width: 0;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    row-gap: 8px;
+    justify-content: flex-end;
+    flex-wrap: nowrap;
+    row-gap: 0;
   }
 
   .content--chat .chat-controls {
-    margin-left: auto;
+    margin-left: 0;
     justify-content: flex-end;
-    row-gap: 8px;
+    row-gap: 0;
+  }
+
+  .shell--chat-focus .content--chat .content-header {
+    min-height: 0;
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    overflow: hidden;
   }
 
   .chat-controls__session-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    align-items: start;
-    gap: 10px 12px;
+    grid-template-columns:
+      minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
+      minmax(112px, 4fr);
+    grid-template-areas: "agent session model thinking";
+    align-items: center;
+    gap: 8px;
     width: 100%;
   }
 
+  .chat-controls__session-row--single-agent {
+    grid-template-columns: minmax(112px, 7fr) minmax(116px, 5fr) minmax(112px, 4fr);
+    grid-template-areas: "session model thinking";
+  }
+
+  .chat-controls__session-row--has-quota {
+    grid-template-columns:
+      minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
+      minmax(112px, 4fr) minmax(96px, auto);
+    grid-template-areas: "agent session model thinking quota";
+  }
+
+  .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+    grid-template-columns: minmax(112px, 7fr) minmax(116px, 5fr) minmax(112px, 4fr) minmax(
+        96px,
+        auto
+      );
+    grid-template-areas: "session model thinking quota";
+  }
+
+  .chat-controls__agent {
+    grid-area: agent;
+  }
+
+  .chat-controls__session-picker {
+    grid-area: session;
+  }
+
+  .chat-controls__model {
+    grid-area: model;
+  }
+
   .chat-controls__thinking-select {
-    grid-column: 1 / -1;
+    grid-area: thinking;
+  }
+
+  .chat-controls__quota {
+    grid-area: quota;
+    min-width: 96px;
   }
 
   .chat-controls__session,
+  .chat-controls__agent,
   .chat-controls__model,
   .chat-controls__thinking-select {
     min-width: 0;
@@ -50,6 +100,7 @@
   }
 
   .chat-controls__session select,
+  .chat-controls__agent select,
   .chat-controls__model select,
   .chat-controls__thinking-select select {
     width: 100%;
@@ -69,7 +120,7 @@
   }
 
   .shell--chat-focus {
-    grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
+    grid-template-rows: 0 minmax(0, 1fr);
   }
 
   .shell-nav,
@@ -126,16 +177,6 @@
   /* Show the hamburger toggle at the same breakpoint where the drawer takes over. */
   .topbar-nav-toggle {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 38px;
-    height: 38px;
-    padding: 0;
-    border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-    border-radius: var(--radius-full);
-    background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
-    color: var(--muted);
-    box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
   }
 
   .sidebar,
@@ -309,17 +350,6 @@
 
   .topbar-nav-toggle {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    width: 38px;
-    height: 38px;
-    padding: 0;
-    border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
-    border-radius: var(--radius-full);
-    background: color-mix(in srgb, var(--bg-elevated) 80%, transparent);
-    color: var(--muted);
-    box-shadow: inset 0 1px 0 color-mix(in srgb, white 8%, transparent);
   }
 
   .topbar-status {
@@ -402,23 +432,31 @@
 
   .chat-mobile-controls-wrapper .chat-controls-mobile-toggle {
     display: flex;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
   }
 
-  /* The dropdown panel — anchored below the gear in topbar */
+  /* The dropdown panel is viewport-clamped so narrow phones never crop controls. */
   .chat-mobile-controls-wrapper .chat-controls-dropdown {
     display: none;
-    position: absolute;
-    top: 100%;
-    right: 0;
+    position: fixed;
+    top: calc(var(--shell-topbar-height) + 8px);
+    right: max(8px, var(--safe-area-right));
+    left: auto;
     z-index: 100;
+    width: min(420px, calc(100vw - var(--safe-area-left) - var(--safe-area-right) - 16px));
     background: var(--card, #161b22);
     border: 1px solid var(--border, #30363d);
     border-radius: var(--radius-md);
-    padding: 8px;
+    padding: 10px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     flex-direction: column;
-    gap: 4px;
-    min-width: 220px;
+    gap: 8px;
+    min-width: 0;
+    max-height: min(72vh, 520px);
+    overflow: auto;
+    overscroll-behavior: contain;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown.open {
@@ -428,8 +466,42 @@
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    align-items: stretch;
+    gap: 8px;
     width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    grid-template-areas:
+      "agent session"
+      "model thinking";
+    gap: 8px;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--single-agent {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    grid-template-areas:
+      "session thinking"
+      "model model";
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--has-quota {
+    grid-template-areas:
+      "agent session"
+      "model thinking"
+      "quota quota";
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+    grid-template-areas:
+      "session thinking"
+      "model model"
+      "quota quota";
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
@@ -438,24 +510,101 @@
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__agent {
+    grid-area: agent;
+    min-width: unset;
+    max-width: unset;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-picker {
+    grid-area: session;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker {
+    position: static;
+    width: 100%;
+    max-height: min(52vh, 420px);
+    margin-top: 8px;
+    box-shadow: none;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-session-picker
+    .chat-session-picker__icon-button.btn--icon {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
+    grid-area: model;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select {
+    grid-area: thinking;
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__quota {
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select-full {
+    display: block;
+    width: 100%;
+    max-width: none;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
     width: 100%;
     font-size: 14px;
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__agent select {
+    width: 100%;
+    font-size: 14px;
+    min-height: 44px;
     padding: 10px 12px;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking {
-    display: flex;
-    flex-direction: row;
-    gap: 6px;
-    padding: 4px 0;
-    justify-content: center;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: center;
+    justify-content: stretch;
+    gap: 8px;
+    width: 100%;
+    padding: 0;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .btn--icon {
-    min-width: 44px;
+    width: 100%;
+    min-width: 0;
     height: 44px;
   }
+
   .content {
     padding: 4px 4px 16px;
     gap: 12px;
@@ -569,29 +718,67 @@
   }
 
   .agent-chat__input {
-    margin: 0 8px 10px;
+    margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
 
   .agent-chat__toolbar {
-    padding: 4px 8px;
+    align-items: stretch;
+    gap: 8px;
+    padding: 6px 8px;
+  }
+
+  .agent-chat__toolbar-left,
+  .agent-chat__toolbar-right {
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn--ghost {
-    width: 28px;
-    height: 28px;
+  .agent-chat__toolbar .btn--ghost,
+  .chat-send-btn {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
   }
 
   .agent-chat__input-btn svg,
-  .agent-chat__toolbar .btn--ghost svg {
-    width: 14px;
-    height: 14px;
+  .agent-chat__toolbar .btn--ghost svg,
+  .chat-send-btn svg {
+    width: 16px;
+    height: 16px;
   }
 
   /* Log stream */
   .log-stream {
     border-radius: var(--radius-md);
     max-height: 380px;
+  }
+
+  /* Reset the desktop fill-height chain on mobile — single page scroll is
+     more usable on small viewports than a tiny pinned log panel.
+     Selectors are intentionally double-classed so they outrank the
+     desktop rules in components.css / config-quick.css, which are
+     imported AFTER this file (see ui/src/styles.css). */
+  .card--fill-height.card--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
+  }
+
+  .content.content--logs {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .content.content--logs .settings-workspace {
+    display: block;
+    height: auto;
+    flex: initial;
+  }
+
+  .content.content--logs .settings-workspace__body {
+    display: block;
+    flex: initial;
   }
 
   .log-row {
@@ -713,22 +900,30 @@
 
 /* nth-child is 1-based and includes the checkbox column (col 1). */
 
-/* ≤1400px: hide Verbose (col 9) and Reasoning (col 10) */
+/* ≤1400px: hide Verbose (col 12) and Reasoning (col 13) */
 @media (max-width: 1400px) {
-  .data-table th:nth-child(9),
-  .data-table td:nth-child(9),
-  .data-table th:nth-child(10),
-  .data-table td:nth-child(10) {
+  .data-table.sessions-table {
+    min-width: 1120px;
+  }
+
+  .sessions-table th:nth-child(12),
+  .sessions-table td:nth-child(12),
+  .sessions-table th:nth-child(13),
+  .sessions-table td:nth-child(13) {
     display: none;
   }
 }
 
-/* ≤1100px: also hide Fast (col 8) and Kind (col 4) */
+/* ≤1100px: also hide Fast (col 11) and Kind (col 4) */
 @media (max-width: 1100px) {
-  .data-table th:nth-child(4),
-  .data-table td:nth-child(4),
-  .data-table th:nth-child(8),
-  .data-table td:nth-child(8) {
+  .data-table.sessions-table {
+    min-width: 930px;
+  }
+
+  .sessions-table th:nth-child(4),
+  .sessions-table td:nth-child(4),
+  .sessions-table th:nth-child(11),
+  .sessions-table td:nth-child(11) {
     display: none;
   }
 
@@ -738,20 +933,28 @@
   }
 }
 
-/* ≤900px: also hide Thinking (col 7) and Label (col 3) */
+/* ≤900px: also hide Thinking (col 10) and Label (col 3) */
 @media (max-width: 900px) {
-  .data-table th:nth-child(3),
-  .data-table td:nth-child(3),
-  .data-table th:nth-child(7),
-  .data-table td:nth-child(7) {
+  .data-table.sessions-table {
+    min-width: 720px;
+  }
+
+  .sessions-table th:nth-child(3),
+  .sessions-table td:nth-child(3),
+  .sessions-table th:nth-child(10),
+  .sessions-table td:nth-child(10) {
     display: none;
   }
 }
 
-/* ≤768px: also hide Tokens (col 6); tighten padding; stack pagination */
+/* ≤768px: also hide Tokens (col 8); tighten padding; stack pagination */
 @media (max-width: 768px) {
-  .data-table th:nth-child(6),
-  .data-table td:nth-child(6) {
+  .data-table.sessions-table {
+    min-width: 560px;
+  }
+
+  .sessions-table th:nth-child(8),
+  .sessions-table td:nth-child(8) {
     display: none;
   }
 
@@ -789,6 +992,32 @@
     max-width: 200px;
   }
 
+  .session-compaction-col {
+    width: 96px;
+    min-width: 86px;
+  }
+
+  .session-compaction-trigger {
+    padding: 6px 7px;
+  }
+
+  .session-details-panel {
+    padding: 12px;
+  }
+
+  .session-details-panel__hero,
+  .session-details-section {
+    padding: 12px;
+  }
+
+  .session-details-panel__title {
+    max-width: 100%;
+  }
+
+  .session-details-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .session-key-cell .session-link,
   .session-key-cell .session-key-display-name {
     overflow: hidden;
@@ -804,8 +1033,53 @@
   }
 }
 
-/* ≤500px: tighten further, truncate key column */
+/* ≤500px: hide Runtime (col 6) and Updated (col 7); keep live status visible */
 @media (max-width: 500px) {
+  .data-table.sessions-table {
+    min-width: 340px;
+  }
+
+  .sessions-table th:nth-child(6),
+  .sessions-table td:nth-child(6),
+  .sessions-table th:nth-child(7),
+  .sessions-table td:nth-child(7) {
+    display: none;
+  }
+
+  .data-table.sessions-table .data-table-key-col {
+    width: 106px;
+    min-width: 106px;
+    max-width: 106px;
+  }
+
+  .sessions-table .session-status-col {
+    width: 76px;
+    min-width: 76px;
+    max-width: 76px;
+  }
+
+  .sessions-table .session-status-badge {
+    max-width: 72px;
+    gap: 5px;
+    padding: 2px 6px;
+  }
+
+  .sessions-table .session-goal-chip {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 72px;
+    gap: 0;
+    padding: 2px 6px;
+  }
+
+  .sessions-table .session-goal-chip__objective {
+    display: none;
+  }
+
+  .sessions-table .session-compaction-col {
+    width: 84px;
+    min-width: 84px;
+  }
+
   .data-table th,
   .data-table td {
     padding: 6px 4px;

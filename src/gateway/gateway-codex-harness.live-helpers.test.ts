@@ -27,6 +27,16 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
   });
 
+  it("accepts current status prose that reports healthy session context without the session id", () => {
+    const text = [
+      "Status: running on `openai/gpt-5.5` with low reasoning/text settings.",
+      "",
+      "Session context is healthy: `22k/272k` tokens used, `0` compactions, `53%` cache hit. Current workspace is `/tmp/openclaw-live-codex-harness/workspace/dev`.",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
   it("accepts current app-server status prose without the OpenClaw prefix", () => {
     const text = [
       "Status: running on `openai/gpt-5.5` in `/tmp/openclaw-live-codex-harness/workspace/dev`.",
@@ -40,6 +50,55 @@ describe("gateway codex harness live helpers", () => {
   it("accepts current app-server status prose with session-is wording", () => {
     const text =
       "Status: running on `openai/gpt-5.5`, context at 22k/272k tokens (8%), no compactions. Session is `agent:dev:live-codex-harness`; execution is direct with elevated mode.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts compact session status prose emitted by current codex", () => {
+    const text =
+      "Session status: running on `openai/gpt-5.5`, context at 24k/272k (9%), no compactions, execution mode `direct`, reasoning `low`, text `low`.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts workspace-only healthy status prose emitted by current codex", () => {
+    const text =
+      "Working normally. Current workspace: `/tmp/openclaw-live-codex-harness/workspace/dev`.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts terse idle-ready status prose emitted by current codex", () => {
+    const text = "Idle and ready.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts terse ready status prose emitted by current codex", () => {
+    const text = "Ready.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts running-session status prose emitted by current codex", () => {
+    const text =
+      "Session is running on `codex/gpt-5.5` with low reasoning, direct execution, and about `24k/272k` context used. Cache hit is `99%`; no compactions so far.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts natural running-session status prose with the session id", () => {
+    const text =
+      "Session is running on `codex/gpt-5.5` with low thinking. Context is about 9% used, no compactions, and the current session is `agent:dev:live-codex-harness`.";
 
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
   });
@@ -59,6 +118,79 @@ describe("gateway codex harness live helpers", () => {
     ].join("\n");
 
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts the OpenAI Codex status card emitted by the GPT-5.5 Docker harness", () => {
+    const text = [
+      "OpenClaw 2026.4.30-beta.1 is running on `openai/gpt-5.5`.",
+      "",
+      "Session is healthy:",
+      "- Context: `21k/272k` used, `8%`",
+      "- Cache: `19%` hit",
+      "- Runtime: `OpenAI Codex`",
+      "- Execution: `direct`",
+      "- Active tasks: `1` (`/codex status`)",
+      "- Queue: `steer`, depth `0`",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts the compact status-card pointer emitted by current codex", () => {
+    const text = "OpenClaw status shown above.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
+  it("accepts the completed-session status emitted by current codex", () => {
+    const text = "No active task is running.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
+  it("accepts the online idle status emitted by current codex", () => {
+    const text =
+      "I'm online in `/tmp/openclaw-live-codex-harness-KiaUQ4/workspace/dev`, with workspace-write access. No active task is running right now.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts the completed-work status emitted by current codex", () => {
+    const text = "No active work is running. Ready for the next task.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
+  it("accepts the normal-work status emitted by current codex", () => {
+    const text =
+      "Working normally. Current cwd is `/tmp/openclaw-live-codex-harness/workspace/dev`, sandbox is workspace-write, network is restricted, and the current date is 2026-05-09 UTC.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
+  it("accepts the ready status emitted by current codex", () => {
+    const text = "Ready.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+  });
+
+  it("accepts the idle-ready status emitted by current codex", () => {
+    const text = "I'm idle and ready.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)) ||
+        isExpectedCodexStatusCommandText(text),
+    ).toBe(true);
   });
 
   it("rejects status prose for a different codex session", () => {
@@ -113,6 +245,39 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts the current Codex agent model list from the live harness", () => {
+    const text = [
+      "Available Codex agent models:",
+      "",
+      "- `dev`: `openai/gpt-5.5`",
+      "  - Runtime: `codex`",
+      "  - Configured: `false`",
+      "",
+      "No other agent models are currently exposed for this session.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts the singular Codex agent model list from the live harness", () => {
+    const text = [
+      "Available Codex agent model:",
+      "",
+      "- `dev`: `openai/gpt-5.5`",
+      "- Runtime: `codex`",
+      "- Fallback: `none`",
+      "- Configured override: `false`",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
   it("accepts sandbox namespace failures with current-session model fallback", () => {
     const text = [
       "I can’t enumerate `/codex models` from this sandbox because the local `codex` CLI fails to start here with a user-namespace restriction (`bwrap: No permissions to create a new namespace`).",
@@ -120,6 +285,23 @@ describe("gateway codex harness live helpers", () => {
       "What I can confirm from the current session is that it’s running on `codex/gpt-5.4`.",
     ].join("\n");
 
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts the GPT-5.5 Docker harness shell fallback", () => {
+    const text = [
+      "I couldn’t get `/codex models` from the shell here.",
+      "",
+      "What happened:",
+      "- In the sandbox, `codex models` failed because the kernel disallows unprivileged user namespaces.",
+      "- Outside the sandbox, `codex` is not on `PATH`.",
+      "",
+      "Current session model from OpenClaw status is `openai/gpt-5.5`.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
@@ -179,6 +361,7 @@ describe("gateway codex harness live helpers", () => {
       ].join("\n"),
       ["Available model overrides here:", "", "- `gpt-5.4`"].join("\n"),
       ["Available model overrides:", "", "- `gpt-5.4`"].join("\n"),
+      ["Available model overrides listed for this session:", "", "- `gpt-5.5`"].join("\n"),
       ["Available models:", "", "- `gpt-5.4`", "- `gpt-5.4-mini`"].join("\n"),
       [
         "Available model overrides exposed in this session are:",

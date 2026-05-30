@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parseFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import {
   normalizeOptionalLowercaseString,
@@ -55,26 +55,13 @@ function stripFrontmatter(content: string): string {
 }
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
-  const manifestPath = path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH);
-  const opened = openBoundaryFileSync({
-    absolutePath: manifestPath,
-    rootPath: rootDir,
+  const result = readRootJsonObjectSync({
+    rootDir,
+    relativePath: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
-  if (!opened.ok) {
-    return {};
-  }
-  try {
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    return raw && typeof raw === "object" && !Array.isArray(raw)
-      ? (raw as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  } finally {
-    fs.closeSync(opened.fd);
-  }
+  return result.ok ? result.value : {};
 }
 
 function resolveClaudeCommandRootDirs(rootDir: string): string[] {
@@ -179,7 +166,6 @@ export function loadEnabledClaudeBundleCommands(params: {
   const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
-    cache: false,
     includeDisabled: true,
   });
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);

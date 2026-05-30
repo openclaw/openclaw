@@ -21,7 +21,7 @@ Each agent in a multi-agent setup can override the global sandbox and tool polic
 </CardGroup>
 
 <Warning>
-Auth is per-agent: each agent reads from its own `agentDir` auth store at `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`. Credentials are **not** shared between agents. Never reuse `agentDir` across agents. If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
+Auth is scoped by agent: each agent has its own `agentDir` auth store at `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`. Never reuse `agentDir` across agents. Agents can read through to the default/main agent's auth profiles when they do not have a local profile, but OAuth refresh tokens are not cloned into secondary agent stores. If you copy credentials manually, copy only portable static `api_key` or `token` profiles.
 </Warning>
 
 ---
@@ -50,8 +50,14 @@ Auth is per-agent: each agent reads from its own `agentDir` auth store at `~/.op
               "scope": "agent"
             },
             "tools": {
-              "allow": ["read"],
-              "deny": ["exec", "write", "edit", "apply_patch", "process", "browser"]
+              "allow": ["read", "message"],
+              "deny": ["exec", "write", "edit", "apply_patch", "process", "browser"],
+              "message": {
+                "crossContext": {
+                  "allowWithinProvider": false,
+                  "allowAcrossProviders": false
+                }
+              }
             }
           }
         ]
@@ -75,7 +81,7 @@ Auth is per-agent: each agent reads from its own `agentDir` auth store at `~/.op
     **Result:**
 
     - `main` agent: runs on host, full tool access.
-    - `family` agent: runs in Docker (one container per agent), only `read` tool.
+    - `family` agent: runs in Docker (one container per agent), only `read` and current-conversation message sends.
 
   </Accordion>
   <Accordion title="Example 2: Work agent with shared sandbox">
@@ -225,6 +231,7 @@ The filtering order is:
     - If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
     - If `agents.list[].tools.profile` is set, it overrides `tools.profile` for that agent.
     - Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
+
   </Accordion>
   <Accordion title="Empty allowlist behavior">
     If any explicit allowlist in that chain leaves the run with no callable tools, OpenClaw stops before submitting the prompt to the model. This is intentional: an agent configured with a missing tool such as `agents.list[].tools.allow: ["query_db"]` should fail loudly until the plugin that registers `query_db` is enabled, not continue as a text-only agent.
@@ -299,7 +306,7 @@ Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defau
     }
     ```
   </Tab>
-  <Tab title="Safe execution (no file modifications)">
+  <Tab title="Shell execution with filesystem tools disabled">
     ```json
     {
       "tools": {
@@ -308,6 +315,11 @@ Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defau
       }
     }
     ```
+
+    <Warning>
+    This policy disables OpenClaw filesystem tools, but `exec` is still a shell and can write files wherever the selected host or sandbox filesystem allows. For a read-only agent, deny `exec` and `process`, or combine shell access with sandbox filesystem controls such as `agents.defaults.sandbox.workspaceAccess: "ro"` or `"none"`.
+    </Warning>
+
   </Tab>
   <Tab title="Communication-only">
     ```json
@@ -353,6 +365,7 @@ After configuring multi-agent sandbox and tools:
   <Step title="Test tool restrictions">
     - Send a message requiring restricted tools.
     - Verify the agent cannot use denied tools.
+
   </Step>
   <Step title="Monitor logs">
     ```bash
@@ -369,15 +382,18 @@ After configuring multi-agent sandbox and tools:
   <Accordion title="Agent not sandboxed despite `mode: 'all'`">
     - Check if there's a global `agents.defaults.sandbox.mode` that overrides it.
     - Agent-specific config takes precedence, so set `agents.list[].sandbox.mode: "all"`.
+
   </Accordion>
   <Accordion title="Tools still available despite deny list">
     - Check tool filtering order: global → agent → sandbox → subagent.
     - Each level can only further restrict, not grant back.
     - Verify with logs: `[tools] filtering tools for agent:${agentId}`.
+
   </Accordion>
   <Accordion title="Container not isolated per agent">
     - Set `scope: "agent"` in agent-specific sandbox config.
     - Default is `"session"` which creates one container per session.
+
   </Accordion>
 </AccordionGroup>
 

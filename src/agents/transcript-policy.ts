@@ -1,14 +1,13 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
 import { normalizeProviderId } from "./model-selection.js";
-import {
-  isGemma4ModelRequiringReasoningStrip,
-  isGoogleModelApi,
-} from "./pi-embedded-helpers/google.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
@@ -33,17 +32,26 @@ export type TranscriptPolicy = {
   allowSyntheticToolResults: boolean;
 };
 
+const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
+
+export function providerRequiresSignedThinking(provider?: string | null): boolean {
+  return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
+}
+
 export function shouldAllowProviderOwnedThinkingReplay(params: {
   modelApi?: string | null;
+  provider?: string | null;
   policy: Pick<
     TranscriptPolicy,
     "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
   >;
 }): boolean {
+  const hasProviderOwnedSignedThinking =
+    params.policy.preserveSignatures || providerRequiresSignedThinking(params.provider);
   return (
     isAnthropicApi(params.modelApi) &&
     params.policy.validateAnthropicTurns &&
-    params.policy.preserveSignatures &&
+    hasProviderOwnedSignedThinking &&
     !params.policy.dropThinkingBlocks
   );
 }
@@ -69,6 +77,24 @@ function isAnthropicApi(modelApi?: string | null): boolean {
   return modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream";
 }
 
+function isOpenAiResponsesCompatibleApi(modelApi?: string | null): boolean {
+  return (
+    modelApi === "openai-responses" ||
+    modelApi === "openai-codex-responses" ||
+    modelApi === "azure-openai-responses"
+  );
+}
+
+function isClaudeFamilyModelId(modelId?: string | null): boolean {
+  const id = normalizeLowercaseStringOrEmpty(modelId);
+  return /(?:^|[./:_-])claude(?:$|[./:_-])/.test(id);
+}
+
+function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
+  const compat = model?.compat as { supportsReasoningEffort?: boolean } | undefined;
+  return compat?.supportsReasoningEffort === false;
+}
+
 /**
  * Provides a narrow replay-policy fallback for providers that do not have an
  * owning runtime plugin.
@@ -79,6 +105,7 @@ function isAnthropicApi(modelApi?: string | null): boolean {
 function buildUnownedProviderTransportReplayFallback(params: {
   modelApi?: string | null;
   modelId?: string | null;
+  model?: ProviderRuntimeModel;
 }): ProviderReplayPolicy | undefined {
   const isGoogle = isGoogleModelApi(params.modelApi);
   const isAnthropic = isAnthropicApi(params.modelApi);
@@ -99,6 +126,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
   }
 
   const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  const isClaudeOpenAiResponses = isOpenAiResponsesCompatibleApi(params.modelApi)
+    ? isClaudeFamilyModelId(modelId)
+    : false;
   return {
     ...(isGoogle || isAnthropic ? { sanitizeMode: "full" as const } : {}),
     ...(isGoogle || isAnthropic || requiresOpenAiCompatibleToolIdSanitization
@@ -119,14 +149,49 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic && modelId.includes("claude")
       ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
       : {}),
-    ...(isStrictOpenAiCompatible && isGemma4ModelRequiringReasoningStrip(modelId)
-      ? { dropReasoningFromHistory: true }
+    ...(isAnthropic && modelDisablesReasoningEffort(params.model)
+      ? { dropThinkingBlocks: true }
+      : {}),
+    ...(isStrictOpenAiCompatible
+      ? { dropReasoningFromHistory: !requiresReasoningContentReplay(params.modelId) }
       : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
-    ...(isAnthropic || isStrictOpenAiCompatible ? { validateAnthropicTurns: true } : {}),
-    ...(isGoogle || isAnthropic ? { allowSyntheticToolResults: true } : {}),
+    ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses
+      ? { validateAnthropicTurns: true }
+      : {}),
+    ...(isGoogle || isAnthropic || isOpenAiResponsesCompatibleApi(params.modelApi)
+      ? { allowSyntheticToolResults: true }
+      : {}),
   };
+}
+
+const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
+  "kimi-for-coding",
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2-thinking",
+  "kimi-k2-thinking-turbo",
+  "mimo-v2-pro",
+  "mimo-v2-omni",
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-pro",
+]);
+
+function requiresReasoningContentReplay(modelId: string | null | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  if (!normalized) {
+    return false;
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  const finalPart = parts[parts.length - 1] ?? normalized;
+  const candidates = [finalPart];
+  const colonParts = finalPart.split(":").filter(Boolean);
+  if (colonParts.length > 1) {
+    candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
+  }
+  return candidates.some((candidate) => REASONING_CONTENT_REPLAY_MODEL_IDS.has(candidate));
 }
 
 function mergeTranscriptPolicy(
@@ -177,6 +242,41 @@ function mergeTranscriptPolicy(
   };
 }
 
+const transcriptPolicyCache = new WeakMap<OpenClawConfig, Map<string, TranscriptPolicy>>();
+
+function canCacheTranscriptPolicy(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): params is { config: OpenClawConfig; env?: NodeJS.ProcessEnv } {
+  if (!params.config) {
+    return false;
+  }
+  return !params.env || params.env === process.env;
+}
+
+function resolveTranscriptPolicyCacheKey(params: {
+  modelApi?: string | null;
+  provider: string;
+  modelId?: string | null;
+  model?: ProviderRuntimeModel;
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  return JSON.stringify({
+    provider: params.provider,
+    modelApi: params.modelApi ?? "",
+    modelId: params.modelId ?? "",
+    dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
+    workspaceDir: params.workspaceDir ?? "",
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }),
+  });
+}
+
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -185,16 +285,30 @@ export function resolveTranscriptPolicy(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   model?: ProviderRuntimeModel;
+  runtimeHandle?: ProviderRuntimePluginHandle;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
-  const runtimePlugin = provider
-    ? resolveProviderRuntimePlugin({
-        provider,
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      })
+  const cacheConfig = canCacheTranscriptPolicy(params) ? params.config : undefined;
+  const cacheKey = cacheConfig
+    ? resolveTranscriptPolicyCacheKey({ ...params, provider, config: cacheConfig })
     : undefined;
+  if (cacheConfig && cacheKey) {
+    const cached = transcriptPolicyCache.get(cacheConfig)?.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
+  const runtimePlugin =
+    params.runtimeHandle?.plugin ??
+    (provider
+      ? resolveProviderRuntimePlugin({
+          provider,
+          modelId: params.modelId,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+        })
+      : undefined);
   const context = {
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -208,15 +322,22 @@ export function resolveTranscriptPolicy(params: {
   // Once a provider adopts the replay-policy hook, replay policy should come
   // from the plugin, not from transport-family defaults in core.
   const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
-  if (buildReplayPolicy) {
-    const pluginPolicy = buildReplayPolicy(context);
-    return mergeTranscriptPolicy(pluginPolicy ?? undefined);
+  const policy = buildReplayPolicy
+    ? mergeTranscriptPolicy(buildReplayPolicy(context) ?? undefined)
+    : mergeTranscriptPolicy(
+        buildUnownedProviderTransportReplayFallback({
+          modelApi: params.modelApi,
+          modelId: params.modelId,
+          model: params.model,
+        }),
+      );
+  if (cacheConfig && cacheKey) {
+    let configCache = transcriptPolicyCache.get(cacheConfig);
+    if (!configCache) {
+      configCache = new Map();
+      transcriptPolicyCache.set(cacheConfig, configCache);
+    }
+    configCache.set(cacheKey, policy);
   }
-
-  return mergeTranscriptPolicy(
-    buildUnownedProviderTransportReplayFallback({
-      modelApi: params.modelApi,
-      modelId: params.modelId,
-    }),
-  );
+  return policy;
 }

@@ -10,7 +10,7 @@ import {
   retireSessionMcpRuntimeMock,
   resolveFastModeStateMock,
   resolveCronSessionMock,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -25,13 +25,21 @@ function mockSuccessfulModelFallback() {
     return {
       result: {
         payloads: [{ text: "ok" }],
-        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+        meta: { agentMeta: {} },
       },
       provider,
       model,
       attempts: [],
     };
   });
+}
+
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 async function runFastModeCase(params: {
@@ -95,28 +103,30 @@ async function runFastModeCase(params: {
   );
 
   expect(result.status).toBe("ok");
-  expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-  expect(runEmbeddedPiAgentMock.mock.calls[0][0]).toMatchObject({
-    provider: "openai",
-    model: EXPECTED_OPENAI_MODEL,
-    fastMode: params.expectedFastMode,
-    cleanupBundleMcpOnRunEnd: params.expectedCleanupBundleMcpOnRunEnd ?? true,
-    allowGatewaySubagentBinding: true,
-  });
+  expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  const [embeddedRunParams] = requireFirstMockCall(runEmbeddedAgentMock, "embedded run");
+  expect(embeddedRunParams.provider).toBe("openai");
+  expect(embeddedRunParams.model).toBe(EXPECTED_OPENAI_MODEL);
+  expect(embeddedRunParams.fastMode).toBe(params.expectedFastMode);
+  expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
+    params.expectedCleanupBundleMcpOnRunEnd ?? true,
+  );
+  expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
   if (params.expectedRetiredSessionId) {
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: params.expectedRetiredSessionId,
-        reason: "cron-session-rollover",
-      }),
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
+    const [retireParams] = requireFirstMockCall(
+      retireSessionMcpRuntimeMock,
+      "retire session mcp runtime",
     );
+    expect(retireParams.sessionId).toBe(params.expectedRetiredSessionId);
+    expect(retireParams.reason).toBe("cron-session-rollover");
     return;
   }
   expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
 }
 
 describe("runCronIsolatedAgentTurn — fast mode", () => {
-  setupRunCronIsolatedAgentTurnSuite();
+  setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
   it("passes config-driven fast mode into embedded cron runs", async () => {
     await runFastModeCase({

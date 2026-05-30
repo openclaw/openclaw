@@ -10,11 +10,13 @@ import {
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
   normalizeClaudeBackendConfig,
+  resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
 export function buildAnthropicCliBackend(): CliBackendPlugin {
   return {
     id: CLAUDE_CLI_BACKEND_ID,
+    modelProvider: "anthropic",
     liveTest: {
       defaultModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       defaultImageProbe: true,
@@ -26,6 +28,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
+    nativeToolMode: "always-on",
     config: {
       command: "claude",
       args: [
@@ -61,10 +64,11 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       imagePathScope: "workspace",
       sessionArg: "--session-id",
       sessionMode: "always",
+      reseedFromRawTranscriptWhenUncompacted: true,
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
-      systemPromptWhen: "first",
+      systemPromptWhen: "always",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       reliability: {
         watchdog: {
@@ -75,5 +79,6 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };
 }

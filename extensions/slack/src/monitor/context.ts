@@ -1,22 +1,25 @@
 import type { App } from "@slack/bolt";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
-} from "openclaw/plugin-sdk/config-types";
-import type { SessionScope } from "openclaw/plugin-sdk/config-types";
-import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-types";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/config-contracts";
+import type { SessionScope } from "openclaw/plugin-sdk/config-contracts";
+import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
+import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 import type { SlackChannelConfigEntries } from "./channel-config.js";
@@ -25,11 +28,67 @@ import { normalizeSlackChannelType } from "./channel-type.js";
 import { resolveSessionKey } from "./config.runtime.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
-export {
-  inferSlackChannelType,
-  normalizeSlackChannelType,
-  resolveSlackChatType,
-} from "./channel-type.js";
+export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
+
+export type SlackAssistantSuggestedPrompt = {
+  title: string;
+  message: string;
+};
+
+export type SlackAssistantThreadContext = {
+  assistantChannelId: string;
+  threadTs: string;
+  userId?: string;
+  channelId?: string;
+  teamId?: string;
+  enterpriseId?: string | null;
+  updatedAt: number;
+};
+
+export const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
+
+export function buildSlackAssistantThreadMetadata(
+  context: Omit<SlackAssistantThreadContext, "updatedAt">,
+) {
+  const eventPayload: Record<string, string> = {};
+  if (context.channelId) {
+    eventPayload.channel_id = context.channelId;
+  }
+  if (context.teamId) {
+    eventPayload.team_id = context.teamId;
+  }
+  if (context.enterpriseId) {
+    eventPayload.enterprise_id = context.enterpriseId;
+  }
+  return {
+    event_type: SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT,
+    event_payload: eventPayload,
+  };
+}
+
+export function parseSlackAssistantThreadMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const metadata = value as Record<string, unknown>;
+  if (metadata.event_type !== SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT) {
+    return undefined;
+  }
+  const payload = metadata.event_payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const stringField = (key: string) => {
+    const raw = record[key];
+    return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  };
+  return {
+    channelId: stringField("channel_id"),
+    teamId: stringField("team_id"),
+    enterpriseId: stringField("enterprise_id"),
+  };
+}
 
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
@@ -44,6 +103,7 @@ export type SlackMonitorContext = {
   apiAppId: string;
 
   historyLimit: number;
+  dmHistoryLimit: number;
   channelHistories: Map<string, HistoryEntry[]>;
   sessionScope: SessionScope;
   mainKey: string;
@@ -65,7 +125,7 @@ export type SlackMonitorContext = {
   threadHistoryScope: "thread" | "channel";
   threadInheritParent: boolean;
   threadRequireExplicitMention: boolean;
-  slashCommand: Required<import("openclaw/plugin-sdk/config-types").SlackSlashCommandConfig>;
+  slashCommand: Required<import("openclaw/plugin-sdk/config-contracts").SlackSlashCommandConfig>;
   textLimit: number;
   ackReactionScope: string;
   typingReaction: string;
@@ -80,6 +140,7 @@ export type SlackMonitorContext = {
     channelId?: string | null;
     channelType?: string | null;
     senderId?: string | null;
+    threadTs?: string | null;
   }) => string;
   isChannelAllowed: (params: {
     channelId?: string;
@@ -98,7 +159,23 @@ export type SlackMonitorContext = {
     threadTs?: string;
     status: string;
   }) => Promise<void>;
+  getSlackAssistantThreadContext: (
+    channelId: string | undefined,
+    threadTs: string | undefined,
+  ) => SlackAssistantThreadContext | undefined;
+  saveSlackAssistantThreadContext: (
+    context: Omit<SlackAssistantThreadContext, "updatedAt">,
+  ) => void;
+  setSlackAssistantSuggestedPrompts: (params: {
+    channelId: string;
+    threadTs: string;
+    title?: string;
+    prompts: SlackAssistantSuggestedPrompt[];
+  }) => Promise<boolean>;
 };
+
+const SLACK_ASSISTANT_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
+const SLACK_ASSISTANT_CONTEXT_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 
 export function createSlackMonitorContext(params: {
   cfg: OpenClawConfig;
@@ -113,6 +190,7 @@ export function createSlackMonitorContext(params: {
   apiAppId: string;
 
   historyLimit: number;
+  dmHistoryLimit?: number;
   sessionScope: SessionScope;
   mainKey: string;
 
@@ -153,6 +231,8 @@ export function createSlackMonitorContext(params: {
   >();
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
+  const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
+  let lastAssistantContextCleanupAt = Date.now();
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
@@ -175,10 +255,56 @@ export function createSlackMonitorContext(params: {
     seenMessages.delete(`${channelId}:${ts}`);
   };
 
+  const assistantContextKey = (channelId: string, threadTs: string) => `${channelId}:${threadTs}`;
+
+  const cleanupAssistantThreadContexts = () => {
+    const now = Date.now();
+    if (now - lastAssistantContextCleanupAt < SLACK_ASSISTANT_CONTEXT_CLEANUP_INTERVAL_MS) {
+      return;
+    }
+    lastAssistantContextCleanupAt = now;
+    const cutoff = now - SLACK_ASSISTANT_CONTEXT_TTL_MS;
+    for (const [key, entry] of assistantThreadContexts) {
+      if (entry.updatedAt < cutoff) {
+        assistantThreadContexts.delete(key);
+      }
+    }
+  };
+
+  const getSlackAssistantThreadContext = (
+    channelId: string | undefined,
+    threadTs: string | undefined,
+  ) => {
+    if (!channelId || !threadTs) {
+      return undefined;
+    }
+    const key = assistantContextKey(channelId, threadTs);
+    const entry = assistantThreadContexts.get(key);
+    if (!entry) {
+      return undefined;
+    }
+    if (Date.now() - entry.updatedAt > SLACK_ASSISTANT_CONTEXT_TTL_MS) {
+      assistantThreadContexts.delete(key);
+      return undefined;
+    }
+    return entry;
+  };
+
+  const saveSlackAssistantThreadContext = (
+    context: Omit<SlackAssistantThreadContext, "updatedAt">,
+  ) => {
+    cleanupAssistantThreadContexts();
+    assistantThreadContexts.set(assistantContextKey(context.assistantChannelId, context.threadTs), {
+      ...context,
+      updatedAt: Date.now(),
+    });
+  };
+
   const resolveSlackSystemEventSessionKey = (p: {
     channelId?: string | null;
     channelType?: string | null;
     senderId?: string | null;
+    threadTs?: string | null;
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
     if (!channelId) {
@@ -208,17 +334,58 @@ export function createSlackMonitorContext(params: {
           teamId: params.teamId,
           peer: { kind: peerKind, id: peerId },
         });
-        return route.sessionKey;
+        const threadTs = normalizeOptionalString(p.threadTs);
+        const baseConversationId = isDirectMessage ? `user:${senderId}` : channelId;
+        const threadBindingRoute = threadTs
+          ? resolveRuntimeConversationBindingRoute({
+              route,
+              conversation: {
+                channel: "slack",
+                accountId: params.accountId,
+                conversationId: threadTs,
+                parentConversationId: baseConversationId,
+              },
+            })
+          : null;
+        const runtimeRoute =
+          threadBindingRoute?.boundSessionKey || threadBindingRoute?.bindingRecord
+            ? threadBindingRoute
+            : resolveRuntimeConversationBindingRoute({
+                route,
+                conversation: {
+                  channel: "slack",
+                  accountId: params.accountId,
+                  conversationId: baseConversationId,
+                },
+              });
+        if (runtimeRoute.boundSessionKey) {
+          return runtimeRoute.route.sessionKey;
+        }
+        return resolveThreadSessionKeys({
+          baseSessionKey: runtimeRoute.route.sessionKey,
+          threadId: threadTs,
+          parentSessionKey:
+            threadTs && params.threadInheritParent ? runtimeRoute.route.sessionKey : undefined,
+        }).sessionKey;
       }
     } catch {
       // Fall through to legacy key derivation.
     }
 
-    return resolveSessionKey(
+    const legacySessionKey = resolveSessionKey(
       params.sessionScope,
       { From: from, ChatType: chatType, Provider: "slack" },
       params.mainKey,
+      resolveDefaultAgentId(params.cfg),
     );
+    return resolveThreadSessionKeys({
+      baseSessionKey: legacySessionKey,
+      threadId: normalizeOptionalString(p.threadTs),
+      parentSessionKey:
+        normalizeOptionalString(p.threadTs) && params.threadInheritParent
+          ? legacySessionKey
+          : undefined,
+    }).sessionKey;
   };
 
   const resolveChannelName = async (channelId: string) => {
@@ -289,9 +456,40 @@ export function createSlackMonitorContext(params: {
         status: p.status,
       });
     } catch (err) {
+      logVerbose(`slack status update failed for channel ${p.channelId}: ${formatSlackError(err)}`);
+    }
+  };
+
+  const setSlackAssistantSuggestedPrompts = async (p: {
+    channelId: string;
+    threadTs: string;
+    title?: string;
+    prompts: SlackAssistantSuggestedPrompt[];
+  }) => {
+    const prompts = p.prompts
+      .map((prompt) => ({
+        title: prompt.title.trim(),
+        message: prompt.message.trim(),
+      }))
+      .filter((prompt) => prompt.title && prompt.message)
+      .slice(0, 4);
+    if (prompts.length === 0) {
+      return false;
+    }
+    try {
+      await params.app.client.assistant.threads.setSuggestedPrompts({
+        token: params.botToken,
+        channel_id: p.channelId,
+        thread_ts: p.threadTs,
+        ...(p.title?.trim() ? { title: p.title.trim() } : {}),
+        prompts,
+      });
+      return true;
+    } catch (err) {
       logVerbose(
-        `slack status update failed for channel ${p.channelId}: ${formatErrorMessage(err)}`,
+        `slack suggested prompts update failed for channel ${p.channelId}: ${formatSlackError(err)}`,
       );
+      return false;
     }
   };
 
@@ -408,6 +606,7 @@ export function createSlackMonitorContext(params: {
     teamId: params.teamId,
     apiAppId: params.apiAppId,
     historyLimit: params.historyLimit,
+    dmHistoryLimit: Math.max(0, params.dmHistoryLimit ?? 0),
     channelHistories,
     sessionScope: params.sessionScope,
     mainKey: params.mainKey,
@@ -443,5 +642,8 @@ export function createSlackMonitorContext(params: {
     resolveChannelName,
     resolveUserName,
     setSlackThreadStatus,
+    getSlackAssistantThreadContext,
+    saveSlackAssistantThreadContext,
+    setSlackAssistantSuggestedPrompts,
   };
 }

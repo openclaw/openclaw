@@ -1,16 +1,23 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  completeSimple,
+  type Api,
+  type AssistantMessage,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
+import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 
 interface TranslationMap {
   [key: string]: string | TranslationMap;
 }
+
+type TranslationValue = string | { [key: string]: TranslationValue };
 
 type LocaleEntry = {
   exportName: string;
@@ -57,31 +64,78 @@ type TranslationBatchItem = {
   textHash: string;
 };
 
+type RawCopyFinding = {
+  kind: "html-attribute" | "html-text" | "object-property";
+  line: number;
+  name: string;
+  path: string;
+  text: string;
+};
+
+type RawCopyBaselineEntry = {
+  count: number;
+  kind: RawCopyFinding["kind"];
+  name: string;
+  path: string;
+  text: string;
+};
+
+type RawCopyBaseline = {
+  version: number;
+  entries: RawCopyBaselineEntry[];
+};
+
 const CONTROL_UI_I18N_WORKFLOW = 1;
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
-const DEFAULT_PI_PACKAGE_VERSION = "0.58.3";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
 const I18N_ASSETS_DIR = path.join(ROOT, "ui", "src", "i18n", ".i18n");
 const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const SOURCE_LOCALE = "en";
+const CONTROL_UI_SOURCE_DIR = path.join(ROOT, "ui", "src", "ui");
+const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
+const RAW_COPY_BASELINE_VERSION = 1;
 const MAX_BATCH_ITEMS = 20;
 const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
 const TRANSLATE_MAX_ATTEMPTS = 2;
 const TRANSLATE_BASE_DELAY_MS = 15_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
+const RUN_PROCESS_OUTPUT_MAX_CHARS = 1024 * 1024;
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
 const ENV_THINKING = "OPENCLAW_CONTROL_UI_I18N_THINKING";
-const ENV_PI_EXECUTABLE = "OPENCLAW_CONTROL_UI_I18N_PI_EXECUTABLE";
-const ENV_PI_ARGS = "OPENCLAW_CONTROL_UI_I18N_PI_ARGS";
-const ENV_PI_PACKAGE_VERSION = "OPENCLAW_CONTROL_UI_I18N_PI_PACKAGE_VERSION";
 const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
+const ENV_AUTH_OPTIONAL = "OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL";
+
+type TranslationProvider = "openai" | "anthropic";
+
+const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id" | "name">> = {
+  openai: {
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 400_000,
+    maxTokens: 32_000,
+  },
+  anthropic: {
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 32_000,
+  },
+};
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
@@ -92,11 +146,16 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "ja-JP", fileName: "ja-JP.ts", exportName: "ja_JP", languageKey: "jaJP" },
   { locale: "ko", fileName: "ko.ts", exportName: "ko", languageKey: "ko" },
   { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
+  { locale: "ar", fileName: "ar.ts", exportName: "ar", languageKey: "ar" },
+  { locale: "it", fileName: "it.ts", exportName: "it", languageKey: "it" },
   { locale: "tr", fileName: "tr.ts", exportName: "tr", languageKey: "tr" },
   { locale: "uk", fileName: "uk.ts", exportName: "uk", languageKey: "uk" },
   { locale: "id", fileName: "id.ts", exportName: "id", languageKey: "id" },
   { locale: "pl", fileName: "pl.ts", exportName: "pl", languageKey: "pl" },
   { locale: "th", fileName: "th.ts", exportName: "th", languageKey: "th" },
+  { locale: "vi", fileName: "vi.ts", exportName: "vi", languageKey: "vi" },
+  { locale: "nl", fileName: "nl.ts", exportName: "nl", languageKey: "nl" },
+  { locale: "fa", fileName: "fa.ts", exportName: "fa", languageKey: "fa" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -179,6 +238,10 @@ function prettyLanguageLabel(locale: string): string {
       return "Korean";
     case "fr":
       return "French";
+    case "ar":
+      return "Arabic";
+    case "it":
+      return "Italian";
     case "tr":
       return "Turkish";
     case "uk":
@@ -189,6 +252,12 @@ function prettyLanguageLabel(locale: string): string {
       return "Polish";
     case "th":
       return "Thai";
+    case "vi":
+      return "Vietnamese";
+    case "nl":
+      return "Dutch";
+    case "fa":
+      return "Persian";
     case "de":
       return "German";
     case "es":
@@ -226,6 +295,14 @@ function hasTranslationProvider(): boolean {
   return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.ANTHROPIC_API_KEY?.trim());
 }
 
+function resolveKnownTranslationProvider(): TranslationProvider {
+  const provider = resolveConfiguredProvider();
+  if (provider === "openai" || provider === "anthropic") {
+    return provider;
+  }
+  throw new Error(`Unsupported translation provider: ${provider}`);
+}
+
 function normalizeText(text: string): string {
   return text.trim().split(/\s+/).join(" ");
 }
@@ -241,7 +318,7 @@ function hashText(text: string): string {
 function cacheNamespace(): string {
   return [
     `wf=${CONTROL_UI_I18N_WORKFLOW}`,
-    "engine=pi",
+    "engine=openclaw-llm",
     `provider=${resolveConfiguredProvider()}`,
     `model=${resolveConfiguredModel()}`,
   ].join("|");
@@ -315,6 +392,68 @@ function compareStringArrays(left: string[], right: string[]) {
     return false;
   }
   return left.every((value, index) => value === right[index]);
+}
+
+export type PlaceholderMismatch = {
+  key: string;
+  locale: string;
+  sourcePlaceholders: string[];
+  translatedPlaceholders: string[];
+};
+
+function extractTranslationPlaceholders(text: string): string[] {
+  return [...new Set([...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1] ?? ""))]
+    .filter(Boolean)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function findPlaceholderMismatches(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+  locale: string,
+): PlaceholderMismatch[] {
+  const mismatches: PlaceholderMismatch[] = [];
+  for (const [key, sourceText] of sourceFlat.entries()) {
+    const sourcePlaceholders = extractTranslationPlaceholders(sourceText);
+    const translatedPlaceholders = extractTranslationPlaceholders(translatedFlat.get(key) ?? "");
+    if (!compareStringArrays(sourcePlaceholders, translatedPlaceholders)) {
+      mismatches.push({
+        key,
+        locale,
+        sourcePlaceholders,
+        translatedPlaceholders,
+      });
+    }
+  }
+  return mismatches;
+}
+
+function assertPlaceholderParity(
+  sourceFlat: ReadonlyMap<string, string>,
+  translatedFlat: ReadonlyMap<string, string>,
+  locale: string,
+) {
+  const mismatches = findPlaceholderMismatches(sourceFlat, translatedFlat, locale);
+  if (mismatches.length === 0) {
+    return;
+  }
+
+  const details = mismatches
+    .slice(0, 20)
+    .map(
+      (mismatch) =>
+        `${mismatch.locale}:${mismatch.key} expected {${mismatch.sourcePlaceholders.join("},{")}} got {${mismatch.translatedPlaceholders.join("},{")}}`,
+    )
+    .join("\n");
+  throw new Error(
+    [
+      `control-ui-i18n placeholder mismatch detected for ${locale}.`,
+      details,
+      mismatches.length > 20 ? `...and ${mismatches.length - 20} more` : "",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
 }
 
 function isIdentifier(value: string): boolean {
@@ -407,6 +546,20 @@ function renderTranslationMemory(entries: Map<string, TranslationMemoryEntry>): 
   return `${ordered.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
 }
 
+function buildTranslationMemoryByTextHash(
+  entries: Map<string, TranslationMemoryEntry>,
+  locale: string,
+): Map<string, TranslationMemoryEntry> {
+  const byTextHash = new Map<string, TranslationMemoryEntry>();
+  for (const entry of entries.values()) {
+    if (entry.tgt_lang !== locale || !entry.text_hash || !entry.translated.trim()) {
+      continue;
+    }
+    byTextHash.set(entry.text_hash, entry);
+  }
+  return byTextHash;
+}
+
 function buildGlossaryPrompt(glossary: readonly GlossaryEntry[]): string {
   if (glossary.length === 0) {
     return "";
@@ -473,8 +626,300 @@ function logProgress(message: string) {
   process.stdout.write(`control-ui-i18n: ${message}\n`);
 }
 
+function toRepoPath(filePath: string): string {
+  return path.relative(ROOT, filePath).split(path.sep).join("/");
+}
+
+function normalizeRawCopyText(raw: string): string {
+  return raw
+    .replace(/\\n/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/&middot;/giu, "·")
+    .trim();
+}
+
+function hasHumanLetters(text: string): boolean {
+  return /\p{L}/u.test(text);
+}
+
+function lineNumberForOffset(source: string, offset: number): number {
+  let line = 1;
+  for (let index = 0; index < offset && index < source.length; index += 1) {
+    if (source.charCodeAt(index) === 10) {
+      line += 1;
+    }
+  }
+  return line;
+}
+
+function parseDoubleQuotedString(raw: string): string {
+  try {
+    return JSON.parse(`"${raw}"`) as string;
+  } catch {
+    return raw;
+  }
+}
+
+function pushRawCopyFinding(
+  findings: RawCopyFinding[],
+  params: Omit<RawCopyFinding, "text"> & { text: string },
+) {
+  const text = normalizeRawCopyText(params.text);
+  if (!text || !hasHumanLetters(text)) {
+    return;
+  }
+  findings.push({
+    ...params,
+    text,
+  });
+}
+
+async function walkControlUiSourceFiles(dir: string): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.name === "test-helpers") {
+      continue;
+    }
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await walkControlUiSourceFiles(fullPath)));
+      continue;
+    }
+    if (!entry.isFile() || !/\.tsx?$/u.test(entry.name)) {
+      continue;
+    }
+    if (/\.(?:test|browser\.test|node\.test)\.tsx?$/u.test(entry.name)) {
+      continue;
+    }
+    files.push(fullPath);
+  }
+  return files;
+}
+
+function collectRawCopyFromSource(params: {
+  filePath: string;
+  source: string;
+  sourceFile: ts.SourceFile;
+}): RawCopyFinding[] {
+  const { filePath, source, sourceFile } = params;
+  const repoPath = toRepoPath(filePath);
+  const findings: RawCopyFinding[] = [];
+  const attrPattern =
+    /\b(aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
+  for (const match of source.matchAll(attrPattern)) {
+    const rawText = match[2];
+    if (!rawText) {
+      continue;
+    }
+    pushRawCopyFinding(findings, {
+      kind: "html-attribute",
+      line: lineNumberForOffset(source, match.index ?? 0),
+      name: match[1] ?? "attribute",
+      path: repoPath,
+      text: parseDoubleQuotedString(rawText),
+    });
+  }
+
+  const propertyPattern =
+    /\b(label|title|subtitle|description|help|placeholder)\s*:\s*"((?:[^"\\]|\\.)*?\p{L}(?:[^"\\]|\\.)*?)"/gu;
+  for (const match of source.matchAll(propertyPattern)) {
+    const rawText = match[2];
+    if (!rawText) {
+      continue;
+    }
+    pushRawCopyFinding(findings, {
+      kind: "object-property",
+      line: lineNumberForOffset(source, match.index ?? 0),
+      name: match[1] ?? "property",
+      path: repoPath,
+      text: parseDoubleQuotedString(rawText),
+    });
+  }
+
+  const textPattern = />\s*([^<>{}]*?\p{L}[^<>{}]*?)\s*</gu;
+  const visit = (node: ts.Node) => {
+    if (ts.isTaggedTemplateExpression(node) && node.tag.getText(sourceFile) === "html") {
+      const template = node.template;
+      const chunks: Array<{ offset: number; text: string }> = [];
+      if (ts.isNoSubstitutionTemplateLiteral(template)) {
+        chunks.push({
+          offset: template.getStart(sourceFile) + 1,
+          text: template.text,
+        });
+      } else {
+        chunks.push({
+          offset: template.head.getStart(sourceFile) + 1,
+          text: template.head.text,
+        });
+        for (const span of template.templateSpans) {
+          chunks.push({
+            offset: span.literal.getStart(sourceFile) + 1,
+            text: span.literal.text,
+          });
+        }
+      }
+      for (const chunk of chunks) {
+        for (const match of chunk.text.matchAll(textPattern)) {
+          const rawText = match[1];
+          if (!rawText) {
+            continue;
+          }
+          pushRawCopyFinding(findings, {
+            kind: "html-text",
+            line: lineNumberForOffset(source, chunk.offset + (match.index ?? 0)),
+            name: "text",
+            path: repoPath,
+            text: rawText,
+          });
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+
+  return findings;
+}
+
+async function collectControlUiRawCopyFindings(): Promise<RawCopyFinding[]> {
+  const files = await walkControlUiSourceFiles(CONTROL_UI_SOURCE_DIR);
+  const findings: RawCopyFinding[] = [];
+  for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
+    const source = await readFile(filePath, "utf8");
+    const sourceFile = ts.createSourceFile(
+      filePath,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    );
+    findings.push(...collectRawCopyFromSource({ filePath, source, sourceFile }));
+  }
+  return findings;
+}
+
+function summarizeRawCopyFindings(findings: RawCopyFinding[]): RawCopyBaselineEntry[] {
+  const counts = new Map<string, RawCopyBaselineEntry>();
+  for (const finding of findings) {
+    const key = [finding.path, finding.kind, finding.name, finding.text].join("\u0000");
+    const existing = counts.get(key);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    counts.set(key, {
+      count: 1,
+      kind: finding.kind,
+      name: finding.name,
+      path: finding.path,
+      text: finding.text,
+    });
+  }
+  return [...counts.values()].toSorted(
+    (left, right) =>
+      left.path.localeCompare(right.path) ||
+      left.kind.localeCompare(right.kind) ||
+      left.name.localeCompare(right.name) ||
+      left.text.localeCompare(right.text),
+  );
+}
+
+function formatRawCopyBaseline(entries: RawCopyBaselineEntry[]): string {
+  return `${JSON.stringify(
+    {
+      version: RAW_COPY_BASELINE_VERSION,
+      entries,
+    } satisfies RawCopyBaseline,
+    null,
+    2,
+  )}\n`;
+}
+
+function formatRawCopyBaselineDiff(
+  current: RawCopyBaselineEntry[],
+  expected: RawCopyBaselineEntry[],
+) {
+  const keyFor = (entry: RawCopyBaselineEntry) =>
+    [entry.path, entry.kind, entry.name, entry.text].join("\u0000");
+  const currentByKey = new Map(current.map((entry) => [keyFor(entry), entry]));
+  const expectedByKey = new Map(expected.map((entry) => [keyFor(entry), entry]));
+  const added = current.filter((entry) => {
+    const expectedEntry = expectedByKey.get(keyFor(entry));
+    return !expectedEntry || expectedEntry.count !== entry.count;
+  });
+  const removed = expected.filter((entry) => {
+    const currentEntry = currentByKey.get(keyFor(entry));
+    return !currentEntry || currentEntry.count !== entry.count;
+  });
+  const lines: string[] = [];
+  for (const entry of added.slice(0, 20)) {
+    lines.push(
+      `+ ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
+    );
+  }
+  for (const entry of removed.slice(0, 20)) {
+    lines.push(
+      `- ${entry.path} ${entry.kind}:${entry.name} x${entry.count} ${JSON.stringify(entry.text)}`,
+    );
+  }
+  const extra = added.length + removed.length - lines.length;
+  if (extra > 0) {
+    lines.push(`... ${extra} more baseline delta(s)`);
+  }
+  return lines.join("\n");
+}
+
+async function syncControlUiRawCopyBaseline(options: { checkOnly: boolean; write: boolean }) {
+  const findings = await collectControlUiRawCopyFindings();
+  const entries = summarizeRawCopyFindings(findings);
+  const expected = formatRawCopyBaseline(entries);
+  const current = existsSync(RAW_COPY_BASELINE_PATH)
+    ? await readFile(RAW_COPY_BASELINE_PATH, "utf8")
+    : "";
+  if (!options.checkOnly && options.write && current !== expected) {
+    await mkdir(I18N_ASSETS_DIR, { recursive: true });
+    await writeFile(RAW_COPY_BASELINE_PATH, expected, "utf8");
+  }
+  if (options.checkOnly && current !== expected) {
+    let currentEntries: RawCopyBaselineEntry[] = [];
+    try {
+      const parsed = JSON.parse(current) as Partial<RawCopyBaseline>;
+      currentEntries = Array.isArray(parsed.entries) ? parsed.entries : [];
+    } catch {
+      currentEntries = [];
+    }
+    const diff = formatRawCopyBaselineDiff(entries, currentEntries);
+    throw new Error(
+      [
+        "control-ui raw-copy baseline drift detected.",
+        diff,
+        "Move user-facing strings into ui/src/i18n/locales/en.ts, or update the baseline with `node --import tsx scripts/control-ui-i18n.ts sync --write` when the raw string is intentional.",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+  logProgress(`raw-copy: baseline entries=${entries.length}`);
+}
+
 function isPromptTimeoutError(error: Error): boolean {
   return error.message.toLowerCase().includes("timed out");
+}
+
+export function isProviderAuthError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("401") ||
+    message.includes("authentication_error") ||
+    message.includes("incorrect api key") ||
+    message.includes("invalid x-api-key")
+  );
+}
+
+function isProviderAuthOptional(): boolean {
+  const raw = process.env[ENV_AUTH_OPTIONAL]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
 }
 
 function resolvePromptTimeoutMs(): number {
@@ -503,79 +948,47 @@ function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
   return items.reduce((total, item) => total + item.key.length + item.text.length + 8, 2);
 }
 
-type PiCommand = {
-  args: string[];
-  executable: string;
-};
-
-function resolvePiPackageVersion(): string {
-  return process.env[ENV_PI_PACKAGE_VERSION]?.trim() || DEFAULT_PI_PACKAGE_VERSION;
-}
-
-function getPiRuntimeDir() {
-  return path.join(
-    homedir(),
-    ".cache",
-    "openclaw",
-    "control-ui-i18n",
-    "pi-runtime",
-    resolvePiPackageVersion(),
-  );
-}
-
-async function resolvePiCommand(): Promise<PiCommand> {
-  const explicitExecutable = process.env[ENV_PI_EXECUTABLE]?.trim();
-  if (explicitExecutable) {
-    return {
-      executable: explicitExecutable,
-      args: process.env[ENV_PI_ARGS]?.trim().split(/\s+/).filter(Boolean) ?? [],
-    };
-  }
-
-  const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-  for (const entry of pathEntries) {
-    const candidate = path.join(entry, process.platform === "win32" ? "pi.cmd" : "pi");
-    if (existsSync(candidate)) {
-      return { executable: candidate, args: [] };
-    }
-  }
-
-  const runtimeDir = getPiRuntimeDir();
-  const cliPath = path.join(
-    runtimeDir,
-    "node_modules",
-    "@mariozechner",
-    "pi-coding-agent",
-    "dist",
-    "cli.js",
-  );
-  if (!existsSync(cliPath)) {
-    await mkdir(runtimeDir, { recursive: true });
-    await runProcess(
-      "npm",
-      [
-        "install",
-        "--silent",
-        "--no-audit",
-        "--no-fund",
-        `@mariozechner/pi-coding-agent@${resolvePiPackageVersion()}`,
-      ],
-      {
-        cwd: runtimeDir,
-        rejectOnFailure: true,
-      },
-    );
-  }
-  return { executable: "node", args: [cliPath] };
-}
-
 type RunProcessOptions = {
   cwd?: string;
   input?: string;
+  maxOutputChars?: number;
   rejectOnFailure?: boolean;
 };
 
-async function runProcess(
+type ProcessOutputCapture = {
+  text: string;
+  truncatedChars: number;
+};
+
+function resolveRunProcessOutputLimit(options: RunProcessOptions): number {
+  const value = options.maxOutputChars;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return RUN_PROCESS_OUTPUT_MAX_CHARS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+export function appendBoundedProcessOutput(
+  capture: ProcessOutputCapture,
+  chunk: unknown,
+  maxChars: number,
+): ProcessOutputCapture {
+  const nextText = capture.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return { text: nextText, truncatedChars: capture.truncatedChars };
+  }
+  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatProcessOutput(capture: ProcessOutputCapture): string {
+  if (capture.truncatedChars === 0) {
+    return capture.text;
+  }
+  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
+}
+
+export async function runProcess(
   executable: string,
   args: string[],
   options: RunProcessOptions = {},
@@ -587,13 +1000,14 @@ async function runProcess(
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    const maxOutputChars = resolveRunProcessOutputLimit(options);
+    let stdout: ProcessOutputCapture = { text: "", truncatedChars: 0 };
+    let stderr: ProcessOutputCapture = { text: "", truncatedChars: 0 };
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedProcessOutput(stdout, chunk, maxOutputChars);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendBoundedProcessOutput(stderr, chunk, maxOutputChars);
     });
     child.once("error", reject);
     if (options.input !== undefined) {
@@ -602,13 +1016,25 @@ async function runProcess(
       child.stdin.end();
     }
     child.once("close", (code) => {
+      const stdoutText = formatProcessOutput(stdout);
+      const stderrText = formatProcessOutput(stderr);
       if ((code ?? 1) !== 0 && options.rejectOnFailure) {
         reject(
-          new Error(`${executable} ${args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`),
+          new Error(
+            `${executable} ${args.join(" ")} failed: ${stderrText.trim() || stdoutText.trim()}`,
+          ),
         );
         return;
       }
-      resolve({ code: code ?? 1, stderr, stdout });
+      if ((code ?? 1) === 0 && stdout.truncatedChars > 0) {
+        reject(
+          new Error(
+            `${executable} ${args.join(" ")} produced more than ${maxOutputChars} stdout chars`,
+          ),
+        );
+        return;
+      }
+      resolve({ code: code ?? 1, stderr: stderrText, stdout: stdout.text });
     });
   });
 }
@@ -622,15 +1048,36 @@ async function formatGeneratedTypeScript(filePath: string, source: string): Prom
       rejectOnFailure: true,
     },
   );
-  return result.stdout;
+  return restoreReplacementCorruptedStringLiterals(source, result.stdout);
 }
 
-type PendingPrompt = {
-  id: string;
-  reject: (reason?: unknown) => void;
-  resolve: (value: string) => void;
-  responseReceived: boolean;
-};
+function restoreReplacementCorruptedStringLiterals(source: string, formatted: string): string {
+  if (!formatted.includes("\uFFFD") || source.includes("\uFFFD")) {
+    return formatted;
+  }
+
+  const stringLiteralPattern = /"(?:\\.|[^"\\])*"/gu;
+  const sourceLiterals = [...source.matchAll(stringLiteralPattern)];
+  const formattedLiterals = [...formatted.matchAll(stringLiteralPattern)];
+  if (sourceLiterals.length !== formattedLiterals.length) {
+    return formatted;
+  }
+
+  let output = "";
+  let cursor = 0;
+  for (const [index, formattedLiteral] of formattedLiterals.entries()) {
+    const replacement = sourceLiterals[index]?.[0];
+    const literal = formattedLiteral[0];
+    const start = formattedLiteral.index;
+    if (replacement === undefined || start === undefined) {
+      return formatted;
+    }
+    output += formatted.slice(cursor, start);
+    output += literal.includes("\uFFFD") && !replacement.includes("\uFFFD") ? replacement : literal;
+    cursor = start + literal.length;
+  }
+  return `${output}${formatted.slice(cursor)}`;
+}
 
 type LocaleRunContext = {
   localeCount: number;
@@ -646,7 +1093,7 @@ type TranslationBatchContext = LocaleRunContext & {
 };
 
 type ClientAccess = {
-  getClient: () => Promise<PiRpcClient>;
+  getClient: () => Promise<TranslationClient>;
   resetClient: () => Promise<void>;
 };
 
@@ -685,199 +1132,79 @@ function buildTranslationBatches(items: readonly TranslationBatchItem[]): Transl
   return batches;
 }
 
-class PiRpcClient {
-  private readonly stderrChunks: string[] = [];
+export function resolveTranslationModel(): Model {
+  const provider = resolveKnownTranslationProvider();
+  const modelId = resolveConfiguredModel();
+  return {
+    ...TRANSLATION_PROVIDER_DEFAULTS[provider],
+    id: modelId,
+    name: modelId,
+  };
+}
+
+class TranslationClient {
   private closed = false;
-  private pending: PendingPrompt | null = null;
-  private readonly process;
-  private readonly stdin;
-  private requestCount = 0;
-  private sequence = Promise.resolve();
+  private sequence: Promise<unknown> = Promise.resolve();
+  private readonly model: Model;
 
-  private constructor(processHandle: ReturnType<typeof spawn>) {
-    this.process = processHandle;
-    this.stdin = processHandle.stdin;
+  private constructor(private readonly systemPrompt: string) {
+    this.model = resolveTranslationModel();
   }
 
-  static async create(systemPrompt: string): Promise<PiRpcClient> {
-    const command = await resolvePiCommand();
-    const args = [
-      ...command.args,
-      "--mode",
-      "rpc",
-      "--provider",
-      resolveConfiguredProvider(),
-      "--model",
-      resolveConfiguredModel(),
-      "--thinking",
-      resolveThinkingLevel(),
-      "--no-session",
-      "--system-prompt",
-      systemPrompt,
-    ];
-    const child = spawn(command.executable, args, {
-      cwd: ROOT,
-      env: process.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const client = new PiRpcClient(child);
-    client.bindProcess();
-    await client.waitForBoot();
-    return client;
-  }
-
-  private bindProcess() {
-    const stderr = createInterface({ input: this.process.stderr });
-    stderr.on("line", (line) => {
-      this.stderrChunks.push(line);
-    });
-
-    const stdout = createInterface({ input: this.process.stdout });
-    stdout.on("line", (line) => {
-      void this.handleStdoutLine(line);
-    });
-
-    this.process.once("error", (error) => {
-      this.rejectPending(error);
-    });
-
-    this.process.once("close", () => {
-      this.closed = true;
-      this.rejectPending(
-        new Error(`pi process closed${this.stderr() ? ` (${this.stderr()})` : ""}`),
-      );
-    });
-  }
-
-  private async waitForBoot() {
-    await sleep(150);
-  }
-
-  private stderr() {
-    return this.stderrChunks.join("\n").trim();
-  }
-
-  private rejectPending(error: Error) {
-    const pending = this.pending;
-    this.pending = null;
-    if (pending) {
-      pending.reject(error);
-    }
-  }
-
-  private async handleStdoutLine(line: string) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    } catch {
-      return;
-    }
-
-    const pending = this.pending;
-    if (!pending) {
-      return;
-    }
-
-    switch (parsed.type) {
-      case "response": {
-        if (parsed.id !== pending.id) {
-          return;
-        }
-        const success = parsed.success === true;
-        if (!success) {
-          const errorText =
-            typeof parsed.error === "string" && parsed.error.trim()
-              ? parsed.error.trim()
-              : "pi prompt failed";
-          this.pending = null;
-          pending.reject(new Error(errorText));
-          return;
-        }
-        pending.responseReceived = true;
-        return;
-      }
-      case "agent_end": {
-        try {
-          const result = extractTranslationResult(parsed);
-          this.pending = null;
-          pending.resolve(result);
-        } catch (error) {
-          this.pending = null;
-          pending.reject(error);
-        }
-      }
-    }
+  static async create(systemPrompt: string): Promise<TranslationClient> {
+    return new TranslationClient(systemPrompt);
   }
 
   async prompt(message: string, label: string): Promise<string> {
-    this.sequence = this.sequence.then(async () => {
+    const result = this.sequence.then(async () => {
       if (this.closed) {
-        throw new Error(`pi process unavailable${this.stderr() ? ` (${this.stderr()})` : ""}`);
+        throw new Error("translation runtime unavailable");
       }
 
-      const id = `req-${++this.requestCount}`;
-      const payload = JSON.stringify({ type: "prompt", id, message });
       const timeoutMs = resolvePromptTimeoutMs();
       const startedAt = Date.now();
+      const controller = new AbortController();
 
       return await new Promise<string>((resolve, reject) => {
         const heartbeat = setInterval(() => {
-          const responseState = this.pending?.responseReceived
-            ? "response=received"
-            : "response=pending";
           logProgress(
-            `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)}, ${responseState})`,
+            `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)})`,
           );
         }, PROGRESS_HEARTBEAT_MS);
         const timer = setTimeout(() => {
-          if (this.pending?.id === id) {
-            this.pending = null;
-            clearInterval(heartbeat);
-            void this.close();
-            const stderr = this.stderr();
-            reject(
-              new Error(
-                `${label}: translation prompt timed out after ${timeoutMs}ms${stderr ? ` (pi stderr: ${stderr})` : ""}`,
-              ),
-            );
-          }
+          clearInterval(heartbeat);
+          controller.abort();
+          reject(new Error(`${label}: translation prompt timed out after ${timeoutMs}ms`));
         }, timeoutMs);
 
-        this.pending = {
-          id,
-          reject: (reason) => {
+        completeSimple(
+          this.model,
+          {
+            systemPrompt: this.systemPrompt,
+            messages: [{ role: "user", content: message, timestamp: Date.now() }],
+          },
+          {
+            maxTokens: 4096,
+            reasoning: resolveThinkingLevel(),
+            signal: controller.signal,
+            timeoutMs,
+          },
+        )
+          .then((assistantMessage) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            reject(reason);
-          },
-          resolve: (value) => {
+            resolve(extractTranslationResult(assistantMessage));
+          })
+          .catch((error) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            resolve(value);
-          },
-          responseReceived: false,
-        };
-
-        this.stdin.write(`${payload}\n`, (error) => {
-          if (!error) {
-            return;
-          }
-          clearTimeout(timer);
-          clearInterval(heartbeat);
-          if (this.pending?.id === id) {
-            this.pending = null;
-          }
-          reject(error);
-        });
+            reject(error);
+          });
       });
     });
 
-    return (await this.sequence) as string;
+    this.sequence = result.catch(() => undefined);
+    return await result;
   }
 
   async close() {
@@ -885,44 +1212,21 @@ class PiRpcClient {
       return;
     }
     this.closed = true;
-    this.stdin.end();
-    this.process.kill("SIGTERM");
-    await sleep(150);
-    if (!this.process.killed) {
-      this.process.kill("SIGKILL");
-    }
   }
 }
 
-function extractTranslationResult(payload: Record<string, unknown>): string {
-  const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    if ((message as { role?: string }).role !== "assistant") {
-      continue;
-    }
-    const errorMessage = (message as { errorMessage?: string }).errorMessage;
-    const stopReason = (message as { stopReason?: string }).stopReason;
-    if (errorMessage || stopReason === "error") {
-      throw new Error(errorMessage?.trim() || "pi error");
-    }
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") {
-      return content;
-    }
-    if (Array.isArray(content)) {
-      return content
-        .filter((block): block is { type?: string; text?: string } =>
-          Boolean(block && typeof block === "object"),
-        )
-        .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
-        .join("");
-    }
+function extractTranslationResult(message: AssistantMessage): string {
+  if (message.errorMessage || message.stopReason === "error") {
+    throw new Error(message.errorMessage?.trim() || "translation provider error");
   }
-  throw new Error("assistant translation not found");
+  const text = message.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("")
+    .trim();
+  if (!text) {
+    throw new Error("assistant translation not found");
+  }
+  return text;
 }
 
 async function translateBatch(
@@ -1015,6 +1319,7 @@ async function syncLocale(
   const glossaryFilePath = glossaryPath(entry);
   const glossary = await loadGlossary(glossaryFilePath);
   const tm = await loadTranslationMemory(tmPath(entry));
+  const tmByTextHash = buildTranslationMemoryByTextHash(tm, entry.locale);
   const allowTranslate = hasTranslationProvider();
 
   const nextFlat = new Map<string, string>();
@@ -1025,6 +1330,7 @@ async function syncLocale(
     const textHash = hashText(text);
     const segmentCacheKey = cacheKey(key, textHash, entry.locale);
     const cached = tm.get(segmentCacheKey);
+    const cachedByText = tmByTextHash.get(textHash);
     const existing = existingFlat.get(key);
     const shouldRefreshFallback = previousFallbackKeys.has(key);
 
@@ -1033,6 +1339,17 @@ async function syncLocale(
       if (shouldRefreshFallback) {
         fallbackKeys.push(key);
       }
+      continue;
+    }
+
+    if (cachedByText && (shouldRefreshFallback || existing === undefined)) {
+      nextFlat.set(key, cachedByText.translated);
+      tm.set(segmentCacheKey, {
+        ...cachedByText,
+        cache_key: segmentCacheKey,
+        segment_id: key,
+        source_path: `ui/src/i18n/locales/${entry.fileName}`,
+      });
       continue;
     }
 
@@ -1058,11 +1375,11 @@ async function syncLocale(
     logProgress(
       `${localeLabel}: start keys=${sourceFlat.size} pending=${pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
     );
-    let client: PiRpcClient | null = null;
+    let client: TranslationClient | null = null;
     const clientAccess: ClientAccess = {
       async getClient() {
         if (!client) {
-          client = await PiRpcClient.create(buildSystemPrompt(entry.locale, glossary));
+          client = await TranslationClient.create(buildSystemPrompt(entry.locale, glossary));
         }
         return client;
       },
@@ -1103,6 +1420,18 @@ async function syncLocale(
           });
         }
       }
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (isProviderAuthOptional() && isProviderAuthError(failure)) {
+        logProgress(`${localeLabel}: translation provider auth failed; skipping refresh`);
+        return {
+          changed: false,
+          fallbackCount: previousMeta?.fallbackKeys.length ?? 0,
+          locale: entry.locale,
+          wrote: false,
+        } satisfies SyncOutcome;
+      }
+      throw failure;
     } finally {
       await clientAccess.resetClient();
     }
@@ -1134,6 +1463,8 @@ async function syncLocale(
   // Product names, config keys, and other intentional carry-through strings may
   // legitimately stay identical to English. Track fallback keys from actual
   // fallback decisions and previous fallback metadata instead.
+
+  assertPlaceholderParity(sourceFlat, nextFlat, entry.locale);
 
   const nextMap: TranslationMap = {};
   for (const [key, value] of sourceFlat.entries()) {
@@ -1266,6 +1597,12 @@ async function verifyRuntimeLocaleConfig() {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   await verifyRuntimeLocaleConfig();
+  if (args.command === "check" || (args.command === "sync" && args.write && !args.localeFilter)) {
+    await syncControlUiRawCopyBaseline({
+      checkOnly: args.command === "check",
+      write: args.write,
+    });
+  }
 
   const entries = args.localeFilter
     ? LOCALE_ENTRIES.filter((entry) => entry.locale === args.localeFilter)
@@ -1320,7 +1657,14 @@ async function main() {
   }
 }
 
-await main().catch((error) => {
-  console.error(formatErrorMessage(error));
-  process.exit(1);
-});
+function isCliEntrypoint() {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
+}
+
+if (isCliEntrypoint()) {
+  await main().catch((error) => {
+    console.error(formatErrorMessage(error));
+    process.exit(1);
+  });
+}

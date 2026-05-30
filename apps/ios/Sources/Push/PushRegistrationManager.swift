@@ -17,6 +17,7 @@ private struct RelayGatewayPushRegistrationPayload: Encodable {
     var topic: String
     var environment: String
     var distribution: String
+    var relayOrigin: String
     var tokenDebugSuffix: String?
 }
 
@@ -84,7 +85,7 @@ actor PushRegistrationManager {
         }
         guard let installationId = GatewaySettingsStore.loadStableInstanceID()?
             .trimmingCharacters(in: .whitespacesAndNewlines),
-              !installationId.isEmpty
+            !installationId.isEmpty
         else {
             throw PushRelayError.relayMisconfigured("Missing stable installation ID for relay registration")
         }
@@ -107,6 +108,7 @@ actor PushRegistrationManager {
                     topic: topic,
                     environment: self.buildConfig.apnsEnvironment.rawValue,
                     distribution: self.buildConfig.distribution.rawValue,
+                    relayOrigin: relayOrigin,
                     tokenDebugSuffix: stored.tokenDebugSuffix))
         }
 
@@ -138,6 +140,7 @@ actor PushRegistrationManager {
                 topic: topic,
                 environment: self.buildConfig.apnsEnvironment.rawValue,
                 distribution: self.buildConfig.distribution.rawValue,
+                relayOrigin: relayOrigin,
                 tokenDebugSuffix: registrationState.tokenDebugSuffix))
     }
 
@@ -145,7 +148,7 @@ actor PushRegistrationManager {
         guard let expiresAtMs else { return true }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
         // Refresh shortly before expiry so reconnect-path republishes a live handle.
-        return expiresAtMs <= nowMs + 60_000
+        return expiresAtMs <= nowMs + 60000
     }
 
     private static func sha256Hex(_ value: String) -> String {

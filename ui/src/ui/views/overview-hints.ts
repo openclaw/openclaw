@@ -1,7 +1,7 @@
 import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,
-} from "../../../../src/gateway/protocol/connect-error-details.js";
+} from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 const AUTH_REQUIRED_CODES = new Set<string>([
@@ -25,7 +25,10 @@ const AUTH_FAILURE_CODES = new Set<string>([
   ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH,
 ]);
 
+const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
+
 const INSECURE_CONTEXT_CODES = new Set<string>([
+  BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
   ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
   ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
 ]);

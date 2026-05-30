@@ -1,7 +1,19 @@
 import { randomUUID } from "node:crypto";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { callGateway } from "../gateway/call.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
+import { addTimerTimeoutGraceMs } from "../shared/number-coercion.js";
 import type { PluginRuntime } from "./runtime/types.js";
+
+export function resolvePluginCliNodeInvokeGatewayTimeoutMs(
+  timeoutMs: number | undefined,
+): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? addTimerTimeoutGraceMs(timeoutMs)
+    : undefined;
+}
 
 export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
   return {
@@ -36,7 +48,7 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
           timeoutMs: params.timeoutMs,
           idempotencyKey: params.idempotencyKey || randomUUID(),
         },
-        timeoutMs: params.timeoutMs ? params.timeoutMs + 5_000 : undefined,
+        timeoutMs: resolvePluginCliNodeInvokeGatewayTimeoutMs(params.timeoutMs),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       });

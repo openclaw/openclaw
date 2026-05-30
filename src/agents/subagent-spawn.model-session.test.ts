@@ -79,16 +79,15 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       },
     );
 
-    expect(result).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-    });
+    expect(result.status).toBe("accepted");
+    expect(result.modelApplied).toBe(true);
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(3);
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: /^agent:main:subagent:/,
       provider: "openai-codex",
       model: "gpt-5.4",
+      overrideSource: "user",
     });
     expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
     expect(operations.indexOf("store:update")).toBeGreaterThan(-1);

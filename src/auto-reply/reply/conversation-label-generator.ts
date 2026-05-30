@@ -1,10 +1,11 @@
-import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
+import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { requireApiKey } from "../../agents/model-auth.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import { resolveModelAsync } from "../../agents/pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "../../agents/simple-completion-transport.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { completeSimple } from "../../llm/stream.js";
+import type { TextContent } from "../../llm/types.js";
 import { getRuntimeAuthForModel } from "../../plugins/runtime/runtime-model-auth.runtime.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;
@@ -21,6 +22,20 @@ export type ConversationLabelParams = {
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
+}
+
+function isCodexSimpleCompletionModel(model: { api?: string; provider?: string }): boolean {
+  return model.provider === "openai-codex" || model.api === "openai-codex-responses";
+}
+
+function extractSimpleCompletionError(result: {
+  stopReason?: string;
+  errorMessage?: string;
+}): string | null {
+  if (result.stopReason !== "error") {
+    return null;
+  }
+  return result.errorMessage?.trim() || "unknown error";
 }
 
 export async function generateConversationLabel(
@@ -58,10 +73,11 @@ export async function generateConversationLabel(
     const result = await completeSimple(
       completionModel,
       {
+        systemPrompt: prompt,
         messages: [
           {
             role: "user",
-            content: `${prompt}\n\n${userMessage}`,
+            content: userMessage,
             timestamp: Date.now(),
           },
         ],
@@ -69,10 +85,15 @@ export async function generateConversationLabel(
       {
         apiKey,
         maxTokens: 100,
-        temperature: 0.3,
+        ...(isCodexSimpleCompletionModel(completionModel) ? {} : { temperature: 0.3 }),
         signal: controller.signal,
       },
     );
+    const errorMessage = extractSimpleCompletionError(result);
+    if (errorMessage) {
+      logVerbose(`conversation-label-generator: completion failed: ${errorMessage}`);
+      return null;
+    }
 
     const text = result.content
       .filter(isTextContentBlock)

@@ -20,10 +20,14 @@ describe("resolveIosVersion", () => {
       changelog: "# OpenClaw iOS Changelog\n\n## 2026.4.6\n\nStable notes.\n",
     });
 
-    expect(resolveIosVersion(rootDir)).toMatchObject({
-      canonicalVersion: "2026.4.6",
-      marketingVersion: "2026.4.6",
+    expect(resolveIosVersion(rootDir)).toEqual({
       buildVersion: "1",
+      canonicalVersion: "2026.4.6",
+      changelogPath: path.join(rootDir, "apps/ios/CHANGELOG.md"),
+      marketingVersion: "2026.4.6",
+      releaseNotesPath: path.join(rootDir, "apps/ios/fastlane/metadata/en-US/release_notes.txt"),
+      versionFilePath: path.join(rootDir, "apps/ios/version.json"),
+      versionXcconfigPath: path.join(rootDir, "apps/ios/Config/Version.xcconfig"),
     });
   });
 
@@ -53,6 +57,10 @@ describe("gateway version normalization", () => {
 
   it("strips beta suffixes when pinning from gateway version", () => {
     expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-beta.2")).toBe("2026.4.6");
+  });
+
+  it("strips alpha suffixes when pinning from gateway version", () => {
+    expect(normalizeGatewayVersionToPinnedIosVersion("2026.4.6-alpha.2")).toBe("2026.4.6");
   });
 
   it("strips fallback correction suffixes when pinning from gateway version", () => {

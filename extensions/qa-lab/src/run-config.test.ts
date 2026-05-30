@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { defaultQaRuntimeModelForMode } = vi.hoisted(() => ({
@@ -102,11 +103,10 @@ describe("qa run config", () => {
     defaultQaRuntimeModelForMode.mockReturnValue("openai/gpt-5.5");
     defaultQaRuntimeModelForMode.mockClear();
 
-    expect(createIdleQaRunnerSnapshot(scenarios).selection).toMatchObject({
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
-    });
+    const selection = createIdleQaRunnerSnapshot(scenarios).selection;
+    expect(selection.providerMode).toBe("live-frontier");
+    expect(selection.primaryModel).toBe("openai/gpt-5.5");
+    expect(selection.alternateModel).toBe("openai/gpt-5.5");
     expect(defaultQaRuntimeModelForMode).not.toHaveBeenCalled();
   });
 
@@ -131,8 +131,9 @@ describe("qa run config", () => {
   });
 
   it("anchors generated run output dirs under the provided repo root", () => {
-    const outputDir = createQaRunOutputDir("/tmp/openclaw-repo");
-    expect(outputDir.startsWith("/tmp/openclaw-repo/.artifacts/qa-e2e/lab-")).toBe(true);
+    const repoRoot = path.resolve("/tmp/openclaw-repo");
+    const outputDir = createQaRunOutputDir(repoRoot);
+    expect(outputDir.startsWith(path.join(repoRoot, ".artifacts", "qa-e2e", "lab-"))).toBe(true);
   });
 
   it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {

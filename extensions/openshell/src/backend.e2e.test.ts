@@ -3,13 +3,13 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { createSandboxTestContext } from "../../../src/agents/sandbox/test-fixtures.js";
+import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createSandboxBrowserConfig,
   createSandboxPruneConfig,
   createSandboxSshConfig,
-} from "../../../test/helpers/sandbox-fixtures.js";
+} from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it } from "vitest";
 import { createOpenShellSandboxBackendFactory } from "./backend.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
 
@@ -88,18 +88,19 @@ async function runCommand(params: {
       }
       const exitCode = code ?? 0;
       if (exitCode !== 0 && !params.allowFailure) {
-        reject(
-          new Error(
-            [
-              `command failed: ${params.command} ${params.args.join(" ")}`,
-              `exit: ${exitCode}`,
-              stdout.trim() ? `stdout:\n${stdout}` : "",
-              stderr.trim() ? `stderr:\n${stderr}` : "",
-            ]
-              .filter(Boolean)
-              .join("\n"),
-          ),
-        );
+        const message = [
+          `command failed: ${params.command} ${params.args.join(" ")}`,
+          `exit: ${exitCode}`,
+        ];
+        const trimmedStdout = stdout.trim();
+        if (trimmedStdout.length > 0) {
+          message.push(`stdout:\n${stdout}`);
+        }
+        const trimmedStderr = stderr.trim();
+        if (trimmedStderr.length > 0) {
+          message.push(`stderr:\n${stderr}`);
+        }
+        reject(new Error(message.join("\n")));
         return;
       }
       resolve({ code: exitCode, stdout, stderr });
@@ -492,9 +493,14 @@ describe("openshell sandbox backend e2e", () => {
         }
 
         await bridge.writeFile({ filePath: "nested/remote-only.txt", data: "hello-remote\n" });
-        await expect(
-          fs.readFile(path.join(workspaceDir, "nested", "remote-only.txt"), "utf8"),
-        ).rejects.toThrow();
+        const hostReadError = await fs
+          .readFile(path.join(workspaceDir, "nested", "remote-only.txt"), "utf8")
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        expect(hostReadError).toBeInstanceOf(Error);
+        expect((hostReadError as NodeJS.ErrnoException).code).toBe("ENOENT");
         await expect(bridge.readFile({ filePath: "nested/remote-only.txt" })).resolves.toEqual(
           Buffer.from("hello-remote\n"),
         );

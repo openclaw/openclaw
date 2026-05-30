@@ -2,9 +2,9 @@ import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import {
-  resolveSingleAccountKeysToMove,
-  resolveSingleAccountPromotionTarget,
-} from "./setup-promotion-helpers.js";
+  collectSingleAccountPromotionEntries,
+  isSetupSingleAccountPromotionKey,
+} from "./setup-promotion-keys.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -12,6 +12,22 @@ type ChannelSectionBase = {
   name?: string;
   defaultAccount?: string;
   accounts?: Record<string, Record<string, unknown>>;
+};
+
+const NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL: Record<string, readonly string[]> = {
+  matrix: [
+    "name",
+    "homeserver",
+    "userId",
+    "accessToken",
+    "password",
+    "deviceId",
+    "deviceName",
+    "avatarUrl",
+    "initialSyncLimit",
+    "encryption",
+  ],
+  telegram: ["botToken", "tokenFile"],
 };
 
 function channelHasAccounts(cfg: OpenClawConfig, channelKey: string): boolean {
@@ -152,8 +168,6 @@ export function prepareScopedSetupConfig(params: {
     alwaysUseAccounts: params.alwaysUseAccounts,
   });
 }
-
-export function clearSetupPromotionRuntimeModuleCache(): void {}
 
 export function applySetupAccountConfigPatch(params: {
   cfg: OpenClawConfig;
@@ -429,6 +443,38 @@ function resolveExistingAccountKey(
   return targetAccountId;
 }
 
+function resolveSingleAccountKeysToMove(params: {
+  channelKey: string;
+  channel: Record<string, unknown>;
+}): string[] {
+  const { entries, hasNamedAccounts } = collectSingleAccountPromotionEntries(params.channel);
+  const keysToMove = entries.filter(isSetupSingleAccountPromotionKey);
+  if (!hasNamedAccounts || keysToMove.length === 0) {
+    return keysToMove;
+  }
+  const namedAccountPromotionKeys = NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL[params.channelKey];
+  return namedAccountPromotionKeys
+    ? keysToMove.filter((key) => namedAccountPromotionKeys.includes(key))
+    : keysToMove;
+}
+
+function resolveSingleAccountPromotionTarget(params: { channel: ChannelSectionBase }): string {
+  const accounts = params.channel.accounts ?? {};
+  const normalizedDefaultAccount =
+    typeof params.channel.defaultAccount === "string" && params.channel.defaultAccount.trim()
+      ? normalizeAccountId(params.channel.defaultAccount)
+      : undefined;
+  if (normalizedDefaultAccount) {
+    return (
+      Object.keys(accounts).find(
+        (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
+      ) ?? DEFAULT_ACCOUNT_ID
+    );
+  }
+  const namedAccounts = Object.keys(accounts).filter(Boolean);
+  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
+}
+
 // When promoting a single-account channel config to multi-account,
 // move top-level account settings into accounts.default so the original
 // account keeps working without duplicate account values at channel root.
@@ -455,7 +501,6 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
     }
 
     const targetAccountId = resolveSingleAccountPromotionTarget({
-      channelKey: params.channelKey,
       channel: base,
     });
     const resolvedTargetAccountKey = resolveExistingAccountKey(accounts, targetAccountId);

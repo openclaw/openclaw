@@ -35,6 +35,7 @@ export const runDryAction = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  agentId?: string;
 }) =>
   runMessageAction({
     cfg: params.cfg,
@@ -44,6 +45,7 @@ export const runDryAction = (params: {
     dryRun: true,
     abortSignal: params.abortSignal,
     sandboxRoot: params.sandboxRoot,
+    agentId: params.agentId,
   });
 
 export const runDrySend = (params: {
@@ -52,6 +54,7 @@ export const runDrySend = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  agentId?: string;
 }) =>
   runDryAction({
     ...params,
@@ -60,7 +63,7 @@ export const runDrySend = (params: {
 
 type ResolvedTestTarget = { to: string; kind: ChannelDirectoryEntryKind };
 
-export function normalizeWorkspaceTarget(raw: string): string {
+function normalizeWorkspaceTarget(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return trimmed;
@@ -81,7 +84,7 @@ export function normalizeWorkspaceTarget(raw: string): string {
   return trimmed;
 }
 
-export function createConfiguredTestPlugin(params: {
+function createConfiguredTestPlugin(params: {
   id: string;
   isConfigured: (cfg: OpenClawConfig) => boolean;
   normalizeTarget: (raw: string) => string | undefined;

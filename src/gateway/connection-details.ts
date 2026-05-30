@@ -1,3 +1,4 @@
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -23,6 +24,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     url?: string;
     configPath?: string;
     urlSource?: "cli" | "env";
+    ignoreEnvUrlOverride?: boolean;
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
@@ -40,15 +42,17 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
   const cliUrlOverride = normalizeOptionalString(options.url);
-  const envUrlOverride = cliUrlOverride
-    ? undefined
-    : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
+  const envUrlOverride =
+    cliUrlOverride || options.ignoreEnvUrlOverride
+      ? undefined
+      : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;
   const remoteUrl = normalizeOptionalString(remote?.url);
   const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
   const urlSourceHint =
     options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
   const url = urlOverride || remoteUrl || localUrl;
+  const displayUrl = redactSensitiveUrlLikeString(url);
   const urlSource = urlOverride
     ? urlSourceHint === "env"
       ? "env OPENCLAW_GATEWAY_URL"
@@ -67,7 +71,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(
       [
-        `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
+        `SECURITY ERROR: Gateway URL "${displayUrl}" uses plaintext ws:// to a non-loopback address.`,
         "Both credentials and chat data would be exposed to network interception.",
         `Source: ${urlSource}`,
         `Config: ${configPath}`,
@@ -85,7 +89,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   }
 
   const message = [
-    `Gateway target: ${url}`,
+    `Gateway target: ${displayUrl}`,
     `Source: ${urlSource}`,
     `Config: ${configPath}`,
     bindDetail,

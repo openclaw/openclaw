@@ -1,16 +1,13 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { listCombinedAccountIds } from "openclaw/plugin-sdk/account-resolution";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { inspectDiscordConfiguredToken } from "./account-token-inspect.js";
 import { resolveDefaultDiscordAccountId } from "./accounts.js";
 import { mergeDiscordAccountConfig, resolveDiscordAccountConfig } from "./accounts.js";
 import type { DiscordAccountConfig } from "./runtime-api.js";
 import { resolveDiscordToken } from "./token.js";
 
-export type InspectedDiscordSetupAccount = {
+type InspectedDiscordSetupAccount = {
   accountId: string;
   enabled: boolean;
   token: string;
@@ -19,29 +16,6 @@ export type InspectedDiscordSetupAccount = {
   configured: boolean;
   config: DiscordAccountConfig;
 };
-
-function inspectConfiguredToken(value: unknown): {
-  token: string;
-  tokenSource: "config";
-  tokenStatus: "available" | "configured_unavailable";
-} | null {
-  const normalized = normalizeSecretInputString(value);
-  if (normalized) {
-    return {
-      token: normalized.replace(/^Bot\s+/i, ""),
-      tokenSource: "config",
-      tokenStatus: "available",
-    };
-  }
-  if (hasConfiguredSecretInput(value)) {
-    return {
-      token: "",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-    };
-  }
-  return null;
-}
 
 export function listDiscordSetupAccountIds(cfg: OpenClawConfig): string[] {
   const accounts = cfg.channels?.discord?.accounts;
@@ -82,7 +56,7 @@ export function inspectDiscordSetupAccount(params: {
     accountConfig &&
     Object.prototype.hasOwnProperty.call(accountConfig as Record<string, unknown>, "token"),
   );
-  const accountToken = inspectConfiguredToken(accountConfig?.token);
+  const accountToken = inspectDiscordConfiguredToken(accountConfig?.token);
   if (accountToken) {
     return {
       accountId,
@@ -106,7 +80,7 @@ export function inspectDiscordSetupAccount(params: {
     };
   }
 
-  const channelToken = inspectConfiguredToken(params.cfg.channels?.discord?.token);
+  const channelToken = inspectDiscordConfiguredToken(params.cfg.channels?.discord?.token);
   if (channelToken) {
     return {
       accountId,

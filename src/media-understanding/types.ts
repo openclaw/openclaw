@@ -1,10 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export type MediaUnderstandingKind =
-  | "audio.transcription"
-  | "video.description"
-  | "image.description";
+type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
@@ -31,7 +28,7 @@ export type MediaUnderstandingOutput = {
   model?: string;
 };
 
-export type MediaUnderstandingDecisionOutcome =
+type MediaUnderstandingDecisionOutcome =
   | "success"
   | "failed"
   | "skipped"
@@ -47,9 +44,7 @@ export type MediaUnderstandingModelDecision = {
   reason?: string;
 };
 
-export type MediaUnderstandingAttemptOutcome = MediaUnderstandingModelDecision["outcome"];
-
-export type MediaUnderstandingAttachmentDecision = {
+type MediaUnderstandingAttachmentDecision = {
   attachmentIndex: number;
   attempts: MediaUnderstandingModelDecision[];
   chosen?: MediaUnderstandingModelDecision;
@@ -61,12 +56,12 @@ export type MediaUnderstandingDecision = {
   attachments: MediaUnderstandingAttachmentDecision[];
 };
 
-export type MediaUnderstandingProviderRequestAuthOverride =
+type MediaUnderstandingProviderRequestAuthOverride =
   | { mode: "provider-default" }
   | { mode: "authorization-bearer"; token: string }
   | { mode: "header"; headerName: string; value: string; prefix?: string };
 
-export type MediaUnderstandingProviderRequestTlsOverride = {
+type MediaUnderstandingProviderRequestTlsOverride = {
   ca?: string;
   cert?: string;
   key?: string;
@@ -75,11 +70,11 @@ export type MediaUnderstandingProviderRequestTlsOverride = {
   insecureSkipVerify?: boolean;
 };
 
-export type MediaUnderstandingProviderRequestProxyOverride =
+type MediaUnderstandingProviderRequestProxyOverride =
   | { mode: "env-proxy"; tls?: MediaUnderstandingProviderRequestTlsOverride }
   | { mode: "explicit-proxy"; url: string; tls?: MediaUnderstandingProviderRequestTlsOverride };
 
-export type MediaUnderstandingProviderRequestTransportOverrides = {
+type MediaUnderstandingProviderRequestTransportOverrides = {
   headers?: Record<string, string>;
   auth?: MediaUnderstandingProviderRequestAuthOverride;
   proxy?: MediaUnderstandingProviderRequestProxyOverride;
@@ -139,6 +134,7 @@ export type ImageDescriptionRequest = {
   preferredProfile?: string;
   authStore?: AuthProfileStore;
   agentDir: string;
+  workspaceDir?: string;
   cfg: OpenClawConfig;
   model: string;
   provider: string;
@@ -161,6 +157,7 @@ export type ImagesDescriptionRequest = {
   preferredProfile?: string;
   authStore?: AuthProfileStore;
   agentDir: string;
+  workspaceDir?: string;
   cfg: OpenClawConfig;
 };
 
@@ -174,14 +171,62 @@ export type ImagesDescriptionResult = {
   model?: string;
 };
 
+export type StructuredExtractionTextInput = {
+  type: "text";
+  text: string;
+};
+
+export type StructuredExtractionImageInput = {
+  type: "image";
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+};
+
+export type StructuredExtractionInput =
+  | StructuredExtractionTextInput
+  | StructuredExtractionImageInput;
+
+export type StructuredExtractionRequest = {
+  /** Image-first extraction input; callers must include at least one image. */
+  input: StructuredExtractionInput[];
+  instructions: string;
+  schemaName?: string;
+  jsonSchema?: unknown;
+  jsonMode?: boolean;
+  timeoutMs: number;
+  profile?: string;
+  preferredProfile?: string;
+  authStore?: AuthProfileStore;
+  agentDir: string;
+  cfg: OpenClawConfig;
+  model: string;
+  provider: string;
+};
+
+export type StructuredExtractionResult = {
+  text: string;
+  parsed?: unknown;
+  model?: string;
+  provider?: string;
+  contentType?: "json" | "text";
+};
+
+export type MediaUnderstandingDocumentModelDefaults = {
+  textExtraction?: string;
+  image?: string | false;
+};
+
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
   defaultModels?: Partial<Record<MediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
+  documentModels?: Partial<Record<"pdf", MediaUnderstandingDocumentModelDefaults>>;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
   describeImages?: (req: ImagesDescriptionRequest) => Promise<ImagesDescriptionResult>;
+  extractStructured?: (req: StructuredExtractionRequest) => Promise<StructuredExtractionResult>;
 };

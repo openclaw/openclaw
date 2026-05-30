@@ -2,14 +2,17 @@
 // unintentionally breaking on newlines. Using [\s\S] keeps newlines inside
 // the chunk so messages are only split when they truly exceed the limit.
 
+import {
+  findFenceSpanAt,
+  isSafeFenceBreak,
+  parseFenceSpans,
+} from "../../packages/markdown-core/src/fences.js";
 import type { ChannelId } from "../channels/plugins/types.core.js";
+import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
-import { resolveChannelStreamingChunkMode } from "../plugin-sdk/channel-streaming.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 
 export type TextChunkProvider = ChannelId;
 
@@ -64,7 +67,7 @@ export function resolveTextChunkLimit(
       ? opts.fallbackLimit
       : DEFAULT_CHUNK_LIMIT;
   const providerOverride = (() => {
-    if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
+    if (!provider) {
       return undefined;
     }
     const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
@@ -102,7 +105,7 @@ export function resolveChunkMode(
   provider?: TextChunkProvider,
   accountId?: string | null,
 ): ChunkMode {
-  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
+  if (!provider) {
     return DEFAULT_CHUNK_MODE;
   }
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;

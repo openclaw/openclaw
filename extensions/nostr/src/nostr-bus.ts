@@ -24,14 +24,6 @@ import {
 } from "./nostr-state-store.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 
-export {
-  validatePrivateKey,
-  getPublicKeyFromPrivate,
-  isValidPubkey,
-  normalizePubkey,
-  pubkeyToNpub,
-} from "./nostr-key-utils.js";
-
 // ============================================================================
 // Constants
 // ============================================================================
@@ -52,7 +44,7 @@ const HEALTH_WINDOW_MS = 60000; // 1 minute window for health stats
 // Types
 // ============================================================================
 
-export interface NostrBusOptions {
+interface NostrBusOptions {
   /** Private key in hex or nsec format */
   privateKey: string;
   /** WebSocket relay URLs (defaults to damus + nos.lol) */
@@ -146,7 +138,7 @@ function createFixedWindowRateLimiter(params: {
 }
 
 export interface NostrBusHandle {
-  /** Stop the bus and close connections */
+  /** Stop the bus and close relay connections */
   close: () => void;
   /** Get the bot's public key */
   publicKey: string;
@@ -622,28 +614,29 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
   }
 
-  const sub = pool.subscribeMany(
-    relays,
-    [{ kinds: [4], "#p": [pk], since }] as unknown as Parameters<typeof pool.subscribeMany>[1],
-    {
-      onevent: handleEvent,
-      oneose: () => {
-        // EOSE handler - called when all stored events have been received
-        for (const relay of relays) {
-          metrics.emit("relay.message.eose", 1, { relay });
-        }
-        onEose?.(relays.join(", "));
-      },
-      onclose: (reason) => {
-        // Handle subscription close
-        for (const relay of relays) {
-          metrics.emit("relay.message.closed", 1, { relay });
-          options.onDisconnect?.(relay);
-        }
-        onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
-      },
+  const dmFilter = { kinds: [4], "#p": [pk], since } satisfies Parameters<
+    typeof pool.subscribeMany
+  >[1];
+  const relayAbort = new AbortController();
+  const sub = pool.subscribeMany(relays, dmFilter, {
+    onevent: handleEvent,
+    oneose: () => {
+      // EOSE handler - called when all stored events have been received
+      for (const relay of relays) {
+        metrics.emit("relay.message.eose", 1, { relay });
+      }
+      onEose?.(relays.join(", "));
     },
-  );
+    onclose: (reason) => {
+      // Handle subscription close
+      for (const relay of relays) {
+        metrics.emit("relay.message.closed", 1, { relay });
+        options.onDisconnect?.(relay);
+      }
+      onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
+    },
+    abort: relayAbort.signal,
+  });
 
   // Public sendDm function
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
@@ -701,7 +694,12 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   return {
     close: () => {
-      sub.close();
+      relayAbort.abort("closed by caller");
+      void Promise.resolve(sub.close("closed by caller"))
+        .catch((err) => onError?.(err as Error, "close subscription"))
+        .finally(() => {
+          pool.close(relays);
+        });
       seen.stop();
       perSenderRateLimiter.clear();
       globalRateLimiter.clear();

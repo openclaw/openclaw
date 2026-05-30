@@ -16,12 +16,15 @@ export type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
-  systemPromptOverride?: AgentEntry["systemPromptOverride"];
   model?: AgentEntry["model"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
+  contextInjection?: AgentEntry["contextInjection"];
+  bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
+  bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
+  experimental?: AgentDefaultsConfig["experimental"];
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
@@ -31,7 +34,8 @@ export type ResolvedAgentConfig = {
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
-  embeddedPi?: AgentEntry["embeddedPi"];
+  runRetries?: AgentEntry["runRetries"];
+  embeddedAgent?: AgentEntry["embeddedAgent"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
@@ -112,7 +116,6 @@ export function resolveAgentConfig(
     name: readStringValue(entry.name),
     workspace: readStringValue(entry.workspace),
     agentDir: readStringValue(entry.agentDir),
-    systemPromptOverride: readStringValue(entry.systemPromptOverride),
     model:
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
         ? entry.model
@@ -121,6 +124,13 @@ export function resolveAgentConfig(
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault,
+    contextInjection: entry.contextInjection,
+    bootstrapMaxChars: entry.bootstrapMaxChars,
+    bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
+    experimental:
+      typeof entry.experimental === "object" && entry.experimental
+        ? { ...agentDefaults?.experimental, ...entry.experimental }
+        : agentDefaults?.experimental,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
@@ -133,8 +143,14 @@ export function resolveAgentConfig(
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
-    embeddedPi:
-      typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
+    runRetries:
+      typeof entry.runRetries === "object" && entry.runRetries
+        ? { ...agentDefaults?.runRetries, ...entry.runRetries }
+        : agentDefaults?.runRetries,
+    embeddedAgent:
+      typeof entry.embeddedAgent === "object" && entry.embeddedAgent
+        ? entry.embeddedAgent
+        : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
@@ -188,4 +204,11 @@ export function resolveAgentDir(
   }
   const root = resolveStateDir(env);
   return path.join(root, "agents", id, "agent");
+}
+
+export function resolveDefaultAgentDir(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return resolveAgentDir(cfg, resolveDefaultAgentId(cfg), env);
 }

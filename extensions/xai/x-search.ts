@@ -8,11 +8,16 @@ import {
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
+import {
+  isXaiToolEnabled,
+  resolveXaiToolApiKeyWithAuth,
+  type XaiToolAuthContext,
+} from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
+  resolveXaiXSearchEndpoint,
   resolveXaiXSearchInlineCitations,
   resolveXaiXSearchMaxTurns,
   resolveXaiXSearchModel,
@@ -59,19 +64,22 @@ function resolveXSearchEnabled(params: {
   cfg?: unknown;
   config?: Record<string, unknown>;
   runtimeConfig?: unknown;
+  auth?: XaiToolAuthContext;
 }): boolean {
   return isXaiToolEnabled({
     enabled: params.config?.enabled as boolean | undefined,
     runtimeConfig: params.runtimeConfig as never,
     sourceConfig: params.cfg as never,
+    auth: params.auth,
   });
 }
 
-function resolveXSearchApiKey(params: {
+async function resolveXSearchApiKey(params: {
   sourceConfig?: unknown;
   runtimeConfig?: unknown;
-}): string | undefined {
-  return resolveXaiToolApiKey(params as never);
+  auth?: XaiToolAuthContext;
+}): Promise<string | undefined> {
+  return await resolveXaiToolApiKeyWithAuth(params as never);
 }
 
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {
@@ -100,6 +108,7 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
 function buildXSearchCacheKey(params: {
   query: string;
   model: string;
+  endpoint: string;
   inlineCitations: boolean;
   maxTurns?: number;
   options: Omit<XaiXSearchOptions, "query">;
@@ -107,6 +116,7 @@ function buildXSearchCacheKey(params: {
   return JSON.stringify([
     "x_search",
     params.model,
+    params.endpoint,
     params.query,
     params.inlineCitations,
     params.maxTurns ?? null,
@@ -122,6 +132,7 @@ function buildXSearchCacheKey(params: {
 export function createXSearchTool(options?: {
   config?: unknown;
   runtimeConfig?: Record<string, unknown> | null;
+  auth?: XaiToolAuthContext;
 }) {
   const xSearchConfig = resolveXSearchConfig(options?.config);
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
@@ -130,15 +141,17 @@ export function createXSearchTool(options?: {
       cfg: options?.config,
       config: xSearchConfig,
       runtimeConfig: runtimeConfig ?? undefined,
+      auth: options?.auth,
     })
   ) {
     return null;
   }
 
   return createXSearchToolDefinition(async (_toolCallId: string, args: Record<string, unknown>) => {
-    const apiKey = resolveXSearchApiKey({
+    const apiKey = await resolveXSearchApiKey({
       sourceConfig: options?.config,
       runtimeConfig: runtimeConfig ?? undefined,
+      auth: options?.auth,
     });
     if (!apiKey) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
@@ -164,11 +177,13 @@ export function createXSearchTool(options?: {
     };
     const xSearchConfigRecord = xSearchConfig;
     const model = resolveXaiXSearchModel(xSearchConfigRecord);
+    const endpoint = resolveXaiXSearchEndpoint(xSearchConfigRecord);
     const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
     const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);
     const cacheKey = buildXSearchCacheKey({
       query,
       model,
+      endpoint,
       inlineCitations,
       maxTurns,
       options: {
@@ -188,6 +203,7 @@ export function createXSearchTool(options?: {
     const startedAt = Date.now();
     const result = await requestXaiXSearch({
       apiKey,
+      endpoint,
       model,
       timeoutSeconds: resolveTimeoutSeconds(xSearchConfig?.timeoutSeconds, 30),
       inlineCitations,

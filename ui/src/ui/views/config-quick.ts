@@ -6,8 +6,9 @@
  */
 
 import { html, nothing, type TemplateResult } from "lit";
+import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
-import type { BorderRadiusStop } from "../storage.ts";
+import type { BorderRadiusStop, TextScaleStop } from "../storage.ts";
 import { normalizeOptionalString } from "../string-coerce.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
@@ -47,6 +48,8 @@ export type QuickSettingsSecurity = {
   gatewayAuth: string;
   execPolicy: string;
   deviceAuth: boolean;
+  browserEnabled: boolean;
+  toolProfile: string;
 };
 
 export type QuickSettingsProps = {
@@ -71,6 +74,8 @@ export type QuickSettingsProps = {
   // Security
   security: QuickSettingsSecurity;
   onSecurityConfigure?: () => void;
+  onBrowserEnabledToggle?: (enabled: boolean) => void;
+  onToolProfileChange?: (profile: string) => void;
 
   // Appearance
   theme: ThemeName;
@@ -78,10 +83,12 @@ export type QuickSettingsProps = {
   hasCustomTheme: boolean;
   customThemeLabel?: string | null;
   borderRadius: number;
+  textScale: number;
   setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
   onOpenCustomThemeImport?: () => void;
   setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
   setBorderRadius: (value: number) => void;
+  setTextScale: (value: number) => void;
   userAvatar?: string | null;
   onUserAvatarChange?: (next: string | null) => void;
 
@@ -135,7 +142,16 @@ const BORDER_RADIUS_STOPS: Array<{ value: BorderRadiusStop; label: string }> = [
   { value: 100, label: "Full" },
 ];
 
+const TEXT_SCALE_OPTIONS: Array<{ value: TextScaleStop; label: string }> = [
+  { value: 90, label: "S" },
+  { value: 100, label: "M" },
+  { value: 110, label: "L" },
+  { value: 125, label: "XL" },
+  { value: 140, label: "XXL" },
+];
+
 const THINKING_LEVELS = ["off", "low", "medium", "high"];
+const TOOL_PROFILES = ["minimal", "coding", "messaging", "full"];
 const LOCAL_USER_LABEL = "You";
 // Keep raw uploads comfortably below the 2 MB persisted data URL limit after
 // base64 expansion and a small MIME/header prefix are added.
@@ -171,6 +187,15 @@ function renderLocalUserAvatarPreview(avatar: string | null | undefined) {
 }
 
 function resolveAssistantPreviewAvatarUrl(props: QuickSettingsProps): string | null {
+  const override = normalizeOptionalString(props.assistantAvatarOverride);
+  if (override) {
+    return resolveChatAvatarRenderUrl(override, {
+      identity: {
+        avatar: override,
+        avatarUrl: override,
+      },
+    });
+  }
   if (props.assistantAvatarStatus === "none" && props.assistantAvatarReason === "missing") {
     return null;
   }
@@ -198,7 +223,11 @@ function formatAssistantAvatarIssue(
   status: QuickSettingsProps["assistantAvatarStatus"],
   reason: string | null | undefined,
   _rendered: boolean,
+  hasOverride = false,
 ): string | null {
+  if (hasOverride) {
+    return null;
+  }
   if (status === "remote") {
     return "Remote URLs are blocked by Control UI image policy";
   }
@@ -219,11 +248,14 @@ function formatAssistantAvatarIssue(
 
 function renderAssistantAvatarPreview(props: QuickSettingsProps) {
   const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
+  const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
   const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
   if (assistantAvatarUrl) {
     return html`<img class="qs-assistant-avatar" src=${assistantAvatarUrl} alt=${assistantName} />`;
   }
-  const assistantAvatarText = resolveAssistantTextAvatar(props.assistantAvatar);
+  const assistantAvatarText = resolveAssistantTextAvatar(
+    assistantAvatarOverride ?? props.assistantAvatar,
+  );
   if (assistantAvatarText) {
     return html`<div
       class="qs-assistant-avatar qs-assistant-avatar--text"
@@ -487,7 +519,11 @@ function renderAutomationsCard(props: QuickSettingsProps) {
 }
 
 function renderSecurityCard(props: QuickSettingsProps) {
-  const { gatewayAuth, execPolicy, deviceAuth } = props.security;
+  const { gatewayAuth, execPolicy, deviceAuth, browserEnabled, toolProfile } = props.security;
+  const normalizedToolProfile = toolProfile.trim() || "full";
+  const toolProfiles = TOOL_PROFILES.includes(normalizedToolProfile)
+    ? TOOL_PROFILES
+    : [...TOOL_PROFILES, normalizedToolProfile];
 
   return html`
     <div class="qs-card qs-card--security">
@@ -508,6 +544,37 @@ function renderSecurityCard(props: QuickSettingsProps) {
         <div class="qs-row">
           <span class="qs-row__label">Exec policy</span>
           <span class="qs-row__value"><span class="qs-badge">${execPolicy}</span></span>
+        </div>
+        <div class="qs-row">
+          <span class="qs-row__label">${t("quickSettings.security.browserEnabled")}</span>
+          <label class="qs-toggle">
+            <input
+              type="checkbox"
+              .checked=${browserEnabled}
+              @change=${(event: Event) =>
+                props.onBrowserEnabledToggle?.((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span class="qs-toggle__track"></span>
+            <span class="qs-toggle__hint muted">${browserEnabled ? "Enabled" : "Disabled"}</span>
+          </label>
+        </div>
+        <div class="qs-row qs-row--tool-profile">
+          <span class="qs-row__label">${t("quickSettings.security.toolProfile")}</span>
+          <div class="qs-segmented">
+            ${toolProfiles.map(
+              (profile) => html`
+                <button
+                  class="qs-segmented__btn qs-segmented__btn--compact ${profile ===
+                  normalizedToolProfile
+                    ? "qs-segmented__btn--active"
+                    : ""}"
+                  @click=${() => props.onToolProfileChange?.(profile)}
+                >
+                  ${profile}
+                </button>
+              `,
+            )}
+          </div>
         </div>
         <div class="qs-row">
           <span class="qs-row__label">Device auth</span>
@@ -602,6 +669,25 @@ function renderAppearanceCard(props: QuickSettingsProps) {
             )}
           </div>
         </div>
+        <div class="qs-row">
+          <span class="qs-row__label">Text size</span>
+          <div class="qs-segmented">
+            ${TEXT_SCALE_OPTIONS.map(
+              (stop) => html`
+                <button
+                  class="qs-segmented__btn qs-segmented__btn--compact ${stop.value ===
+                  props.textScale
+                    ? "qs-segmented__btn--active"
+                    : ""}"
+                  title=${`${stop.value}%`}
+                  @click=${() => props.setTextScale(stop.value)}
+                >
+                  ${stop.label}
+                </button>
+              `,
+            )}
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -616,15 +702,19 @@ function renderPersonalCard(props: QuickSettingsProps) {
   const assistantName = normalizeOptionalString(props.assistantName) ?? "Assistant";
   const assistantAvatarUrl = resolveAssistantPreviewAvatarUrl(props);
   const assistantAvatarRendered = Boolean(
-    assistantAvatarUrl || resolveAssistantTextAvatar(props.assistantAvatar),
+    assistantAvatarUrl ||
+    resolveAssistantTextAvatar(props.assistantAvatarOverride ?? props.assistantAvatar),
   );
-  const assistantAvatarSource = formatAssistantAvatarSource(props.assistantAvatarSource);
+  const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
+  const assistantAvatarSource = formatAssistantAvatarSource(
+    assistantAvatarOverride ?? props.assistantAvatarSource,
+  );
   const assistantAvatarIssue = formatAssistantAvatarIssue(
     props.assistantAvatarStatus ?? null,
     props.assistantAvatarReason,
     assistantAvatarRendered,
+    Boolean(assistantAvatarOverride),
   );
-  const assistantAvatarOverride = normalizeOptionalString(props.assistantAvatarOverride);
   const assistantAvatarSourceLabel = assistantAvatarOverride ? "UI override" : "IDENTITY.md";
   const canOverrideAssistantAvatar = Boolean(props.onAssistantAvatarOverrideChange);
   const assistantAvatarSubtitle = assistantAvatarOverride
@@ -988,7 +1078,7 @@ export function renderQuickSettings(props: QuickSettingsProps) {
   return html`
     <div class="qs-container">
       <div class="qs-header">
-        <h2 class="qs-header__title">${icons.settings} Settings</h2>
+        <h2 class="qs-header__title">${icons.settings} Quick Settings</h2>
         <button class="btn btn--sm" @click=${props.onAdvancedSettings}>
           Advanced ${icons.chevronRight}
         </button>

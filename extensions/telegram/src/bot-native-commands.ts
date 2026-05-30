@@ -1,11 +1,14 @@
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { Bot, Context } from "grammy";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import {
-  resolveCommandAuthorization,
-  resolveCommandAuthorizedFromAuthorizers,
-  resolveNativeCommandSessionTargets,
-} from "openclaw/plugin-sdk/command-auth-native";
+  loadModelCatalog,
+  resolveAgentConfig,
+  resolveDefaultModelForAgent,
+  resolveThinkingDefaultWithRuntimeCatalog,
+} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -17,16 +20,17 @@ import {
   resolveStoredModelOverride,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ReplyToMode,
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -34,16 +38,19 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
+  resolveAndPersistSessionFile,
   resolveSessionStoreEntry,
+  resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
+import { normalizeDmAllowFromWithStore, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
@@ -55,8 +62,9 @@ import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
   syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
+  type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
-import { TelegramUpdateKeyContext } from "./bot-updates.js";
+import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
   buildTelegramRoutingTarget,
@@ -64,9 +72,13 @@ import {
   buildSenderName,
   buildTelegramGroupFrom,
   extractTelegramForumFlag,
+  isTelegramCommandsAllowFromConfigured,
+  resolveTelegramCommandAuthorization,
   resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
+  resolveTelegramBotHasTopicsEnabled,
   resolveTelegramThreadSpec,
+  shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -86,8 +98,10 @@ import {
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { recordSentMessage } from "./sent-message-cache.js";
+import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
@@ -116,6 +130,16 @@ type TelegramCommandAuthResult = {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   commandAuthorized: boolean;
+  senderIsOwner: boolean;
+};
+
+type TelegramNativeCommandThreadContext = {
+  chatId: number;
+  isGroup: boolean;
+  isForum: boolean;
+  messageThreadId: number | undefined;
+  threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
+  threadParams: ReturnType<typeof buildTelegramThreadParams>;
 };
 
 let telegramNativeCommandDeliveryRuntimePromise:
@@ -137,6 +161,8 @@ async function loadTelegramNativeCommandRuntime() {
   return await telegramNativeCommandRuntimePromise;
 }
 
+type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
+
 function resolveTelegramProgressPlaceholder(command: {
   nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
 }): string | null {
@@ -146,11 +172,53 @@ function resolveTelegramProgressPlaceholder(command: {
   return text ? text : null;
 }
 
+async function resolveTelegramCommandSessionFile(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  threadId?: string | number;
+}): Promise<{ sessionId?: string; sessionFile?: string; authProfileId?: string }> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return {};
+  }
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+    const store = loadSessionStore(storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
+    const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
+    const authProfileId = normalizeOptionalString(resolved.existing?.authProfileOverride);
+    const sessionsDir = path.dirname(storePath);
+    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
+      sessionId,
+      sessionsDir,
+      params.threadId,
+    );
+    const persisted = await resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey: resolved.normalizedKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: resolved.existing,
+      agentId: params.agentId,
+      sessionsDir,
+      fallbackSessionFile,
+    });
+    return {
+      sessionId,
+      sessionFile: persisted.sessionFile,
+      ...(authProfileId ? { authProfileId } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
 function resolveTelegramCommandMenuModelContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-}): { provider?: string; model?: string } {
+}): { provider?: string; model?: string; thinkingLevel?: string } {
   if (!params.sessionKey.trim()) {
     return {};
   }
@@ -162,8 +230,13 @@ function resolveTelegramCommandMenuModelContext(params: {
     });
     const store = loadSessionStore(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+    const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      return { provider: defaultModel.provider, model: defaultModel.model };
+      return {
+        provider: defaultModel.provider,
+        model: defaultModel.model,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+      };
     }
     const override = resolveStoredModelOverride({
       sessionEntry: entry,
@@ -175,6 +248,7 @@ function resolveTelegramCommandMenuModelContext(params: {
       return {
         provider: override.provider || defaultModel.provider,
         model: override.model,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
       };
     }
     const provider =
@@ -185,16 +259,80 @@ function resolveTelegramCommandMenuModelContext(params: {
     return {
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
     };
   } catch {
     return {};
   }
 }
 
+async function resolveTelegramDefaultThinkingLevel(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): Promise<string> {
+  return resolveThinkingDefaultWithRuntimeCatalog({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+  });
+}
+
+async function resolveTelegramThinkMenuCurrentLevel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string;
+}): Promise<string> {
+  const explicit = normalizeOptionalString(params.thinkingLevel);
+  if (explicit) {
+    return explicit;
+  }
+  const agentThinkingDefault = normalizeOptionalString(
+    resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault,
+  );
+  if (agentThinkingDefault) {
+    return agentThinkingDefault;
+  }
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  return await resolveTelegramDefaultThinkingLevel({
+    cfg: params.cfg,
+    provider: params.provider ?? defaultModel.provider,
+    model: params.model ?? defaultModel.model,
+  });
+}
+
+function formatTelegramCommandArgMenuTitle(params: {
+  command: NonNullable<ReturnType<typeof findCommandByNativeName>>;
+  menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
+  currentThinkingLevel?: string;
+}): string {
+  const title = formatCommandArgMenuTitle({ command: params.command, menu: params.menu });
+  if (params.command.key !== "think" || !params.currentThinkingLevel) {
+    return title;
+  }
+  return `Current thinking level: ${params.currentThinkingLevel}.\n${title}`;
+}
+
 function resolveTelegramNativeReplyChannelData(
   result: TelegramNativeReplyPayload,
 ): TelegramNativeReplyChannelData | undefined {
   return result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
+}
+
+function normalizeTelegramNativeReplyPayload(
+  result: TelegramNativeReplyPayload | null | undefined,
+): TelegramNativeReplyPayload {
+  return result && typeof result === "object" ? result : {};
+}
+
+function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
+  return resolveSendableOutboundReplyParts(result).hasContent;
 }
 
 function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): boolean {
@@ -204,6 +342,7 @@ function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): b
     result.text.trim() &&
     !result.mediaUrl &&
     (!result.mediaUrls || result.mediaUrls.length === 0) &&
+    !result.presentation &&
     !result.interactive &&
     !result.btw &&
     telegramData?.pin !== true,
@@ -231,6 +370,41 @@ async function cleanupTelegramProgressPlaceholder(params: {
   }
 }
 
+async function resolveTelegramNativeCommandThreadContext(params: {
+  msg: NonNullable<TelegramNativeCommandContext["message"]>;
+  bot: Bot;
+}): Promise<TelegramNativeCommandThreadContext> {
+  const { msg, bot } = params;
+  const chatId = msg.chat.id;
+  const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+  const getChat =
+    typeof bot.api.getChat === "function"
+      ? (bot.api.getChat.bind(bot.api) as TelegramGetChat)
+      : undefined;
+  const isForum = await resolveTelegramForumFlag({
+    chatId,
+    chatType: msg.chat.type,
+    isGroup,
+    isForum: extractTelegramForumFlag(msg.chat),
+    isTopicMessage: msg.is_topic_message,
+    getChat,
+  });
+  const threadSpec = resolveTelegramThreadSpec({
+    isGroup,
+    isForum,
+    messageThreadId,
+  });
+  return {
+    chatId,
+    isGroup,
+    isForum,
+    messageThreadId,
+    threadSpec,
+    threadParams: buildTelegramThreadParams(threadSpec),
+  };
+}
+
 export type RegisterTelegramHandlerParams = {
   cfg: OpenClawConfig;
   accountId: string;
@@ -244,6 +418,13 @@ export type RegisterTelegramHandlerParams = {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
+  resolveGroupActivation: (params: {
+    chatId: string | number;
+    agentId?: string;
+    messageThreadId?: number;
+    sessionKey?: string;
+  }) => boolean | undefined;
+  resolveGroupRequireMention: (chatId: string | number) => boolean;
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
@@ -255,7 +436,10 @@ export type RegisterTelegramHandlerParams = {
     storeAllowFrom: string[],
     options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
-  ) => Promise<void>;
+    replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
+    promptContext?: import("./bot-message-context.types.js").TelegramPromptContextEntry[],
+    lifecycle?: import("./bot-message.js").TelegramMessageProcessorLifecycle,
+  ) => Promise<boolean>;
   logger: ReturnType<typeof getChildLogger>;
 };
 
@@ -292,6 +476,7 @@ export type RegisterTelegramNativeCommandsParams = {
   groupAllowFrom?: Array<string | number>;
   replyToMode: ReplyToMode;
   textLimit: number;
+  mediaMaxBytes?: number;
   useAccessGroups: boolean;
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
@@ -337,33 +522,38 @@ async function resolveTelegramCommandAuth(params: {
     resolveTelegramGroupConfig,
     requireAuth,
   } = params;
-  const chatId = msg.chat.id;
-  const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-  const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-  const getChat =
-    typeof bot.api.getChat === "function"
-      ? (bot.api.getChat.bind(bot.api) as TelegramGetChat)
-      : undefined;
-  const isForum = await resolveTelegramForumFlag({
-    chatId,
-    chatType: msg.chat.type,
-    isGroup,
-    isForum: extractTelegramForumFlag(msg.chat),
-    getChat,
-  });
-  const threadSpec = resolveTelegramThreadSpec({
-    isGroup,
-    isForum,
-    messageThreadId,
-  });
-  const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
+  const { chatId, isGroup, isForum, messageThreadId, threadParams } =
+    await resolveTelegramNativeCommandThreadContext({ msg, bot });
+  const senderId = msg.from?.id ? String(msg.from.id) : "";
+  const senderUsername = msg.from?.username ?? "";
+  // Best-effort pre-context check: if commands.allowFrom already authorizes the
+  // sender at chat level, skip the pairing-store read so a transient store I/O
+  // failure cannot block a command this sender is explicitly allowed to run.
+  // resolvedThreadId is not known yet; the post-context check below is still
+  // the authoritative decision for topic-scoped command auth.
+  const commandsAllowFromConfigured = isTelegramCommandsAllowFromConfigured(cfg);
+  const preContextCommandsAllowFromAccess = commandsAllowFromConfigured
+    ? resolveTelegramCommandAuthorization({
+        cfg,
+        accountId,
+        chatId,
+        isGroup,
+        senderId,
+        senderUsername,
+      })
+    : null;
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
+    cfg,
     chatId,
     accountId,
+    dmPolicy: telegramCfg.dmPolicy,
+    allowFrom,
+    senderId,
     isGroup,
     isForum,
     messageThreadId,
     groupAllowFrom,
+    skipPairingStoreRead: Boolean(preContextCommandsAllowFromAccess?.isAuthorizedSender),
     readChannelAllowFromStore,
     resolveTelegramGroupConfig,
   });
@@ -377,48 +567,43 @@ async function resolveTelegramCommandAuth(params: {
     effectiveGroupAllow,
     hasGroupAllowOverride,
   } = groupAllowContext;
-  // Use direct config dmPolicy override if available for DMs
-  const effectiveDmPolicy =
-    !isGroup && groupConfig && "dmPolicy" in groupConfig
-      ? (groupConfig.dmPolicy ?? telegramCfg.dmPolicy ?? "pairing")
-      : (telegramCfg.dmPolicy ?? "pairing");
+  const effectiveDmPolicy = resolveTelegramEffectiveDmPolicy({
+    isGroup,
+    groupConfig,
+    dmPolicy: telegramCfg.dmPolicy,
+  });
   const requireTopic =
     !isGroup && groupConfig && "requireTopic" in groupConfig ? groupConfig.requireTopic : undefined;
   if (!isGroup && requireTopic === true && dmThreadId == null) {
     logVerbose(`Blocked telegram command in DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }
-  // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
   const dmAllowFrom = groupAllowOverride ?? allowFrom;
-  const senderId = msg.from?.id ? String(msg.from.id) : "";
-  const senderUsername = msg.from?.username ?? "";
-  const commandsAllowFrom = cfg.commands?.allowFrom;
-  const commandsAllowFromConfigured =
-    commandsAllowFrom != null &&
-    typeof commandsAllowFrom === "object" &&
-    (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]));
   const commandsAllowFromAccess = commandsAllowFromConfigured
-    ? resolveCommandAuthorization({
-        ctx: {
-          Provider: "telegram",
-          Surface: "telegram",
-          OriginatingChannel: "telegram",
-          AccountId: accountId,
-          ChatType: isGroup ? "group" : "direct",
-          From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
-          SenderId: senderId || undefined,
-          SenderUsername: senderUsername || undefined,
-        },
+    ? resolveTelegramCommandAuthorization({
         cfg,
-        // commands.allowFrom is the only auth source when configured.
-        commandAuthorized: false,
+        accountId,
+        chatId,
+        isGroup,
+        resolvedThreadId,
+        senderId,
+        senderUsername,
       })
     : null;
+  const ownerAccess = resolveTelegramCommandAuthorization({
+    cfg,
+    accountId,
+    chatId,
+    isGroup,
+    resolvedThreadId,
+    senderId,
+    senderUsername,
+  });
 
   const sendAuthMessage = async (text: string) => {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
-      fn: () => bot.api.sendMessage(chatId, text, threadParams),
+      fn: () => bot.api.sendMessage(chatId, text, threadParams ?? {}),
     });
     return null;
   };
@@ -480,31 +665,34 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const dmAllow = normalizeDmAllowFromWithStore({
+  const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    cfg,
     allowFrom: dmAllowFrom,
+    accountId,
+    senderId,
+  });
+  const dmAllow = normalizeDmAllowFromWithStore({
+    allowFrom: expandedDmAllowFrom,
     storeAllowFrom: isGroup ? [] : storeAllowFrom,
     dmPolicy: effectiveDmPolicy,
   });
-  const senderAllowed = isSenderAllowed({
-    allow: dmAllow,
-    senderId,
-    senderUsername,
-  });
-  const groupSenderAllowed = isGroup
-    ? isSenderAllowed({ allow: effectiveGroupAllow, senderId, senderUsername })
-    : false;
   const commandAuthorized = commandsAllowFromConfigured
     ? Boolean(commandsAllowFromAccess?.isAuthorizedSender)
-    : resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups,
-        authorizers: [
-          { configured: dmAllow.hasEntries, allowed: senderAllowed },
-          ...(isGroup
-            ? [{ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed }]
-            : []),
-        ],
-        modeWhenAccessGroupsOff: "configured",
-      });
+    : (
+        await resolveTelegramCommandIngressAuthorization({
+          accountId,
+          cfg,
+          dmPolicy: effectiveDmPolicy,
+          isGroup,
+          chatId,
+          resolvedThreadId,
+          senderId,
+          effectiveDmAllow: dmAllow,
+          effectiveGroupAllow,
+          ownerAccess,
+          eventKind: "native-command",
+        })
+      ).authorized;
   if (requireAuth && !commandAuthorized) {
     return await rejectNotAuthorized();
   }
@@ -519,6 +707,7 @@ async function resolveTelegramCommandAuth(params: {
     groupConfig,
     topicConfig,
     commandAuthorized,
+    senderIsOwner: ownerAccess.senderIsOwner,
   };
 }
 
@@ -532,6 +721,7 @@ export const registerTelegramNativeCommands = ({
   groupAllowFrom,
   replyToMode,
   textLimit,
+  mediaMaxBytes,
   useAccessGroups,
   nativeEnabled,
   nativeSkillsEnabled,
@@ -551,50 +741,109 @@ export const registerTelegramNativeCommands = ({
       "nativeSkillsEnabled is true but no agent route is bound for this Telegram account; skill commands will not appear in the native menu.",
     );
   }
-  const skillCommands =
+  let skillCommands =
     nativeEnabled && nativeSkillsEnabled && boundRoute
       ? telegramDeps.listSkillCommandsForAgents({
           cfg,
           agentIds: [boundRoute.agentId],
         })
       : [];
-  const nativeCommands = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, {
-        skillCommands,
-        provider: "telegram",
-      })
-    : [];
-  const reservedCommands = new Set(
-    listNativeCommandSpecs().map((command) => normalizeTelegramCommandName(command.name)),
-  );
-  for (const command of skillCommands) {
-    reservedCommands.add(normalizeLowercaseStringOrEmpty(command.name));
-  }
-  const customResolution = resolveTelegramCustomCommands({
-    commands: telegramCfg.customCommands,
-    reservedCommands,
-  });
-  for (const issue of customResolution.issues) {
-    runtime.error?.(danger(issue.message));
-  }
-  const customCommands = customResolution.commands;
   const pluginCommandSpecs =
     (
       telegramDeps.getPluginCommandSpecs ?? defaultTelegramNativeCommandDeps.getPluginCommandSpecs
-    )?.("telegram") ?? [];
-  const existingCommands = new Set(
-    [
-      ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),
-      ...customCommands.map((command) => command.command),
-    ].map((command) => normalizeLowercaseStringOrEmpty(command)),
-  );
-  const pluginCatalog = buildPluginTelegramMenuCommands({
-    specs: pluginCommandSpecs,
-    existingCommands,
-  });
-  for (const issue of pluginCatalog.issues) {
-    runtime.error?.(danger(issue));
+    )?.("telegram", { config: cfg }) ?? [];
+  const resolveTelegramMenuCommandCatalog = (
+    activeSkillCommands: typeof skillCommands,
+    reservedSkillCommands = activeSkillCommands,
+  ) => {
+    const nativeCommands = nativeEnabled
+      ? listNativeCommandSpecsForConfig(cfg, {
+          skillCommands: activeSkillCommands,
+          provider: "telegram",
+        })
+      : [];
+    const reservedCommands = new Set(
+      listNativeCommandSpecs().map((command) => normalizeTelegramCommandName(command.name)),
+    );
+    for (const command of reservedSkillCommands) {
+      reservedCommands.add(normalizeLowercaseStringOrEmpty(command.name));
+    }
+    const customResolution = resolveTelegramCustomCommands({
+      commands: telegramCfg.customCommands,
+      reservedCommands,
+    });
+    for (const issue of customResolution.issues) {
+      runtime.error?.(danger(issue.message));
+    }
+    const customCommands = customResolution.commands;
+    const existingCommands = new Set(
+      [
+        ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),
+        ...customCommands.map((command) => command.command),
+      ].map((command) => normalizeLowercaseStringOrEmpty(command)),
+    );
+    for (const command of reservedSkillCommands) {
+      existingCommands.add(normalizeTelegramCommandName(command.name));
+    }
+    const pluginCatalog = buildPluginTelegramMenuCommands({
+      specs: pluginCommandSpecs,
+      existingCommands,
+    });
+    for (const issue of pluginCatalog.issues) {
+      runtime.error?.(danger(issue));
+    }
+    const allCommandsFull: TelegramMenuCommand[] = [
+      ...nativeCommands
+        .map((command): TelegramMenuCommand | null => {
+          const normalized = normalizeTelegramCommandName(command.name);
+          if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
+            runtime.error?.(
+              danger(
+                `Native command "${command.name}" is invalid for Telegram (resolved to "${normalized}"). Skipping.`,
+              ),
+            );
+            return null;
+          }
+          const menuCommand: TelegramMenuCommand = {
+            command: normalized,
+            description: command.description,
+          };
+          if (command.isAlias) {
+            menuCommand.isAlias = true;
+          }
+          if (command.descriptionLocalizations) {
+            menuCommand.descriptionLocalizations = command.descriptionLocalizations;
+          }
+          return menuCommand;
+        })
+        .filter((cmd) => cmd !== null),
+      ...(nativeEnabled ? pluginCatalog.commands : []),
+      ...customCommands,
+    ];
+    return {
+      nativeCommands,
+      customCommands,
+      pluginCatalog,
+      ...buildCappedTelegramMenuCommands({
+        allCommands: allCommandsFull,
+      }),
+    };
+  };
+  const fullCommandCatalog = resolveTelegramMenuCommandCatalog(skillCommands);
+  let menuCommandCatalog = fullCommandCatalog;
+  if (
+    nativeEnabled &&
+    nativeSkillsEnabled &&
+    skillCommands.length > 0 &&
+    fullCommandCatalog.overflowCount > 0
+  ) {
+    const initialCommandCount = fullCommandCatalog.totalCommands;
+    menuCommandCatalog = resolveTelegramMenuCommandCatalog([], skillCommands);
+    runtime.log?.(
+      `Telegram: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
+    );
   }
+  const { nativeCommands, pluginCatalog } = fullCommandCatalog;
   const loadFreshRuntimeConfig = (): OpenClawConfig => telegramDeps.getRuntimeConfig();
   const resolveFreshTelegramConfig = (runtimeCfg: OpenClawConfig): TelegramAccountConfig => {
     try {
@@ -609,27 +858,6 @@ export const registerTelegramNativeCommands = ({
       return telegramCfg;
     }
   };
-  const allCommandsFull: Array<{ command: string; description: string }> = [
-    ...nativeCommands
-      .map((command) => {
-        const normalized = normalizeTelegramCommandName(command.name);
-        if (!TELEGRAM_COMMAND_NAME_PATTERN.test(normalized)) {
-          runtime.error?.(
-            danger(
-              `Native command "${command.name}" is invalid for Telegram (resolved to "${normalized}"). Skipping.`,
-            ),
-          );
-          return null;
-        }
-        return {
-          command: normalized,
-          description: command.description,
-        };
-      })
-      .filter((cmd): cmd is { command: string; description: string } => cmd !== null),
-    ...(nativeEnabled ? pluginCatalog.commands : []),
-    ...customCommands,
-  ];
   const {
     commandsToRegister,
     totalCommands,
@@ -638,9 +866,7 @@ export const registerTelegramNativeCommands = ({
     maxTotalChars,
     descriptionTrimmed,
     textBudgetDropCount,
-  } = buildCappedTelegramMenuCommands({
-    allCommands: allCommandsFull,
-  });
+  } = menuCommandCatalog;
   if (overflowCount > 0) {
     runtime.log?.(
       `Telegram limits bots to ${maxCommands} commands. ` +
@@ -694,7 +920,7 @@ export const registerTelegramNativeCommands = ({
       isForum,
       messageThreadId: resolvedThreadId ?? messageThreadId,
     });
-    let { route, configuredBinding } = resolveTelegramConversationRoute({
+    let { route, bindingMode } = resolveTelegramConversationRoute({
       cfg: runtimeCfg,
       accountId,
       chatId,
@@ -705,14 +931,14 @@ export const registerTelegramNativeCommands = ({
       topicAgentId,
     });
     const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
-    if (configuredBinding) {
+    if (bindingMode.kind === "configured") {
       const ensured = await nativeCommandRuntime.ensureConfiguredBindingRouteReady({
         cfg: runtimeCfg,
-        bindingResolution: configuredBinding,
+        bindingResolution: bindingMode.binding,
       });
       if (!ensured.ok) {
         logVerbose(
-          `telegram native command: configured ACP binding unavailable for topic ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
+          `telegram native command: configured ACP binding unavailable for topic ${bindingMode.binding.record.conversation.conversationId}: ${ensured.error}`,
         );
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
@@ -768,6 +994,7 @@ export const registerTelegramNativeCommands = ({
     runtime,
     bot,
     mediaLocalRoots: params.mediaLocalRoots,
+    mediaMaxBytes,
     replyToMode,
     textLimit,
     thread: params.threadSpec,
@@ -775,6 +1002,36 @@ export const registerTelegramNativeCommands = ({
     chunkMode: params.chunkMode,
     linkPreview: params.linkPreview,
   });
+  const resolveCommandTargetSessionKey = (params: {
+    runtimeCfg: OpenClawConfig;
+    route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
+    chatId: number;
+    isGroup: boolean;
+    senderId?: string;
+    threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
+    botHasTopicsEnabled?: boolean;
+    resolveThreadSessionKeys: TelegramNativeCommandRuntime["resolveThreadSessionKeys"];
+  }): string => {
+    const baseSessionKey = resolveTelegramConversationBaseSessionKey({
+      cfg: params.runtimeCfg,
+      route: params.route,
+      chatId: params.chatId,
+      isGroup: params.isGroup,
+      senderId: params.senderId,
+    });
+    const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
+    const threadKeys =
+      shouldUseTelegramDmThreadSession({
+        dmThreadId,
+        botHasTopicsEnabled: params.botHasTopicsEnabled,
+      }) && dmThreadId != null
+        ? params.resolveThreadSessionKeys({
+            baseSessionKey,
+            threadId: `${params.chatId}:${dmThreadId}`,
+          })
+        : null;
+    return threadKeys?.sessionKey ?? baseSessionKey;
+  };
 
   if (commandsToRegister.length > 0 || pluginCatalog.commands.length > 0) {
     for (const command of nativeCommands) {
@@ -858,22 +1115,17 @@ export const registerTelegramNativeCommands = ({
           if (cachedTargetSessionKey) {
             return cachedTargetSessionKey;
           }
-          const baseSessionKey = resolveTelegramConversationBaseSessionKey({
-            cfg: runtimeCfg,
+          cachedTargetSessionKey = resolveCommandTargetSessionKey({
+            runtimeCfg,
             route,
             chatId,
             isGroup,
             senderId,
+            threadSpec,
+            botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+            resolveThreadSessionKeys: (await resolveNativeCommandRuntime())
+              .resolveThreadSessionKeys,
           });
-          const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-          const threadKeys =
-            dmThreadId != null
-              ? (await resolveNativeCommandRuntime()).resolveThreadSessionKeys({
-                  baseSessionKey,
-                  threadId: `${chatId}:${dmThreadId}`,
-                })
-              : null;
-          cachedTargetSessionKey = threadKeys?.sessionKey ?? baseSessionKey;
           return cachedTargetSessionKey;
         };
         const menuNeedsModelContext =
@@ -899,7 +1151,18 @@ export const registerTelegramNativeCommands = ({
             })
           : null;
         if (menu && commandDefinition) {
-          const title = formatCommandArgMenuTitle({ command: commandDefinition, menu });
+          const title = formatTelegramCommandArgMenuTitle({
+            command: commandDefinition,
+            menu,
+            currentThinkingLevel:
+              commandDefinition.key === "think"
+                ? await resolveTelegramThinkMenuCurrentLevel({
+                    cfg: runtimeCfg,
+                    agentId: route.agentId,
+                    ...menuModelContext,
+                  })
+                : undefined,
+          });
           const rows: Array<Array<{ text: string; callback_data: string }>> = [];
           for (let i = 0; i < menu.choices.length; i += 2) {
             const slice = menu.choices.slice(i, i + 2);
@@ -956,6 +1219,18 @@ export const registerTelegramNativeCommands = ({
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
         });
+        let topicName: string | undefined;
+        if (isForum && resolvedThreadId != null) {
+          try {
+            const storePath = resolveStorePath(executionCfg.session?.store, {
+              agentId: route.accountId,
+            });
+            const scope = resolveTopicNameCacheScope(storePath);
+            topicName = await getTopicName(chatId, resolvedThreadId, scope);
+          } catch {
+            // best-effort: topic name is supplementary metadata
+          }
+        }
         const conversationLabel = isGroup
           ? msg.chat.title
             ? `${msg.chat.title} id:${chatId}`
@@ -982,21 +1257,27 @@ export const registerTelegramNativeCommands = ({
           Timestamp: msg.date ? msg.date * 1000 : undefined,
           WasMentioned: true,
           CommandAuthorized: commandAuthorized,
+          CommandTurn: {
+            kind: "native" as const,
+            source: "native" as const,
+            authorized: commandAuthorized,
+            body: prompt,
+          },
           CommandSource: "native" as const,
           SessionKey: commandSessionKey,
           AccountId: route.accountId,
           CommandTargetSessionKey: commandTargetSessionKey,
           MessageThreadId: threadSpec.id,
           IsForum: isForum,
+          TopicName: isForum && topicName ? topicName : undefined,
           // Originating context for sub-agent announce routing
           OriginatingChannel: "telegram" as const,
           OriginatingTo: originatingTo,
         });
-
         await nativeCommandRuntime.recordInboundSessionMetaSafe({
           cfg: executionCfg,
           agentId: route.agentId,
-          sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+          sessionKey: commandTargetSessionKey,
           ctx: ctxPayload,
           onError: (err) =>
             runtime.error?.(danger(`telegram slash: failed updating session meta: ${String(err)}`)),
@@ -1009,9 +1290,9 @@ export const registerTelegramNativeCommands = ({
           skippedNonSilent: 0,
         };
 
-        const { createChannelReplyPipeline, deliverReplies } =
+        const { createChannelMessageReplyPipeline, deliverReplies } =
           await loadTelegramNativeCommandDeliveryRuntime();
-        const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+        const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
           cfg: executionCfg,
           agentId: route.agentId,
           channel: "telegram",
@@ -1087,6 +1368,7 @@ export const registerTelegramNativeCommands = ({
         const chatId = msg.chat.id;
         const runtimeCfg = loadFreshRuntimeConfig();
         const runtimeTelegramCfg = resolveFreshTelegramConfig(runtimeCfg);
+        const { threadParams } = await resolveTelegramNativeCommandThreadContext({ msg, bot });
         const rawText = ctx.match?.trim() ?? "";
         const commandBody = `/${pluginCommand.command}${rawText ? ` ${rawText}` : ""}`;
         const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
@@ -1095,7 +1377,7 @@ export const registerTelegramNativeCommands = ({
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
             runtime,
-            fn: () => bot.api.sendMessage(chatId, "Command not found."),
+            fn: () => bot.api.sendMessage(chatId, "Command not found.", threadParams ?? {}),
           });
           return;
         }
@@ -1116,7 +1398,8 @@ export const registerTelegramNativeCommands = ({
         if (!auth) {
           return;
         }
-        const { senderId, commandAuthorized, isGroup, isForum, resolvedThreadId } = auth;
+        const { senderId, commandAuthorized, senderIsOwner, isGroup, isForum, resolvedThreadId } =
+          auth;
         const runtimeContext = await resolveCommandRuntimeContext({
           msg,
           runtimeCfg,
@@ -1130,12 +1413,26 @@ export const registerTelegramNativeCommands = ({
           return;
         }
         const { threadSpec, route, mediaLocalRoots, tableMode, chunkMode } = runtimeContext;
+        const targetSessionKey = resolveCommandTargetSessionKey({
+          runtimeCfg,
+          route,
+          chatId,
+          isGroup,
+          senderId,
+          threadSpec,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+          resolveThreadSessionKeys: nativeCommandRuntime.resolveThreadSessionKeys,
+        });
+        const targetSessionEntry = nativeCommandRuntime.getSessionEntry({
+          agentId: route.agentId,
+          sessionKey: targetSessionKey,
+        });
         const deliveryBaseOptions = buildCommandDeliveryBaseOptions({
           cfg: runtimeCfg,
           chatId,
           accountId: route.accountId,
-          sessionKeyForInternalHooks: route.sessionKey,
-          policySessionKey: route.sessionKey,
+          sessionKeyForInternalHooks: targetSessionKey,
+          policySessionKey: targetSessionKey,
           mirrorIsGroup: isGroup,
           mirrorGroupId: isGroup ? String(chatId) : undefined,
           mediaLocalRoots,
@@ -1172,20 +1469,35 @@ export const registerTelegramNativeCommands = ({
           }
         }
 
-        const result = await nativeCommandRuntime.executePluginCommand({
-          command: match.command,
-          args: match.args,
-          senderId,
-          channel: "telegram",
-          isAuthorizedSender: commandAuthorized,
-          sessionKey: route.sessionKey,
-          commandBody,
-          config: runtimeCfg,
-          from,
-          to,
-          accountId,
-          messageThreadId: threadSpec.id,
+        const sessionFileContext = await resolveTelegramCommandSessionFile({
+          cfg: runtimeCfg,
+          agentId: route.agentId,
+          sessionKey: targetSessionKey,
+          threadId: threadSpec.id,
         });
+
+        const result = normalizeTelegramNativeReplyPayload(
+          await nativeCommandRuntime.executePluginCommand({
+            command: match.command,
+            args: match.args,
+            senderId,
+            channel: "telegram",
+            isAuthorizedSender: commandAuthorized,
+            senderIsOwner,
+            agentId: route.agentId,
+            sessionKey: targetSessionKey,
+            sessionId: sessionFileContext.sessionId,
+            sessionFile: sessionFileContext.sessionFile,
+            authProfileId:
+              sessionFileContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
+            commandBody,
+            config: runtimeCfg,
+            from,
+            to,
+            accountId,
+            messageThreadId: threadSpec.id,
+          }),
+        );
 
         if (
           shouldSuppressLocalTelegramExecApprovalPrompt({
@@ -1203,14 +1515,19 @@ export const registerTelegramNativeCommands = ({
           return;
         }
 
+        const deliverableResult = hasRenderableTelegramNativeReplyPayload(result)
+          ? result
+          : { text: EMPTY_RESPONSE_FALLBACK };
         const progressResultText =
-          typeof result.text === "string" && result.text.trim().length > 0 ? result.text : null;
-        const telegramResultData = resolveTelegramNativeReplyChannelData(result);
+          typeof deliverableResult.text === "string" && deliverableResult.text.trim().length > 0
+            ? deliverableResult.text
+            : null;
+        const telegramResultData = resolveTelegramNativeReplyChannelData(deliverableResult);
         if (
           progressMessageId != null &&
           telegramDeps.editMessageTelegram &&
           progressResultText &&
-          isEditableTelegramProgressResult(result)
+          isEditableTelegramProgressResult(deliverableResult)
         ) {
           try {
             await telegramDeps.editMessageTelegram(chatId, progressMessageId, progressResultText, {
@@ -1222,7 +1539,7 @@ export const registerTelegramNativeCommands = ({
             });
             recordSentMessage(chatId, progressMessageId, runtimeCfg);
             emitTelegramMessageSentHooks({
-              sessionKeyForInternalHooks: route.sessionKey,
+              sessionKeyForInternalHooks: targetSessionKey,
               chatId: String(chatId),
               accountId: route.accountId,
               content: progressResultText,
@@ -1243,9 +1560,10 @@ export const registerTelegramNativeCommands = ({
           runtime,
         });
         await deliverReplies({
-          replies: [result],
+          replies: [deliverableResult],
           ...deliveryBaseOptions,
-          silent: runtimeTelegramCfg.silentErrorReplies === true && result.isError === true,
+          silent:
+            runtimeTelegramCfg.silentErrorReplies === true && deliverableResult.isError === true,
         });
       });
     }
@@ -1254,6 +1572,11 @@ export const registerTelegramNativeCommands = ({
       operation: "setMyCommands",
       runtime,
       fn: () => bot.api.setMyCommands([]),
+    }).catch(() => {});
+    withTelegramApiErrorLogging({
+      operation: "setMyCommands(all_group_chats)",
+      runtime,
+      fn: () => bot.api.setMyCommands([], { scope: { type: "all_group_chats" } }),
     }).catch(() => {});
   }
 };

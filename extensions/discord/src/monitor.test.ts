@@ -1,6 +1,7 @@
-import { ChannelType, type Guild } from "@buape/carbon";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { typedCases } from "../../../test/helpers/plugins/typed-cases.js";
+import { ChannelType, type Guild } from "./internal/discord.js";
 import {
   allowListMatches,
   type DiscordGuildEntryResolved,
@@ -10,6 +11,7 @@ import {
   resolveDiscordChannelConfig,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
+  resolveDiscordOwnerAccess,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
@@ -25,11 +27,28 @@ type DiscordReactionClient = Parameters<
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
+  return {
+    ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  };
+});
 
 const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
+
+function expectNormalizedAllowList(
+  entries: string[],
+  prefixes: string[],
+): NonNullable<ReturnType<typeof normalizeDiscordAllowList>> {
+  const allow = normalizeDiscordAllowList(entries, prefixes);
+  if (allow === null) {
+    throw new Error("Expected allow list to be normalized");
+  }
+  return allow;
+}
 
 const makeEntries = (
   entries: Record<string, Partial<DiscordGuildEntryResolved>>,
@@ -115,7 +134,7 @@ describe("DiscordMessageListener", () => {
 
     const handlePromise = listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-      {} as unknown as import("@buape/carbon").Client,
+      {} as unknown as import("./internal/discord.js").Client,
     );
 
     // handle() returns immediately while the background queue starts on the next tick.
@@ -147,13 +166,13 @@ describe("DiscordMessageListener", () => {
     await expect(
       listener.handle(
         {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-        {} as unknown as import("@buape/carbon").Client,
+        {} as unknown as import("./internal/discord.js").Client,
       ),
     ).resolves.toBeUndefined();
     await expect(
       listener.handle(
         {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-        {} as unknown as import("@buape/carbon").Client,
+        {} as unknown as import("./internal/discord.js").Client,
       ),
     ).resolves.toBeUndefined();
 
@@ -180,13 +199,13 @@ describe("DiscordMessageListener", () => {
 
     await listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-      {} as unknown as import("@buape/carbon").Client,
+      {} as unknown as import("./internal/discord.js").Client,
     );
     await flushAsyncWork();
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
+    expect(logger.error).toHaveBeenCalledWith(danger("discord handler failed: Error: boom"));
   });
 
-  it("does not apply its own slow-listener logging (owned by inbound worker)", async () => {
+  it("does not apply its own slow-listener logging", async () => {
     const deferred = createDeferred();
     const handler = vi.fn(() => deferred.promise);
     const logger = {
@@ -199,15 +218,14 @@ describe("DiscordMessageListener", () => {
 
     const handlePromise = listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-      {} as unknown as import("@buape/carbon").Client,
+      {} as unknown as import("./internal/discord.js").Client,
     );
     await expect(handlePromise).resolves.toBeUndefined();
 
     deferred.resolve();
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledOnce();
-    // The listener no longer wraps handlers with slow-listener logging;
-    // that responsibility moved to the inbound worker.
+    // The listener no longer wraps message handlers with slow-listener logging.
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });
@@ -220,14 +238,10 @@ describe("discord allowlist helpers", () => {
   });
 
   it("matches ids by default and names only when enabled", () => {
-    const allow = normalizeDiscordAllowList(
+    const allow = expectNormalizedAllowList(
       ["123", "steipete", "Friends of OpenClaw"],
       ["discord:", "user:", "guild:", "channel:"],
     );
-    expect(allow).not.toBeNull();
-    if (!allow) {
-      throw new Error("Expected allow list to be normalized");
-    }
     expect(allowListMatches(allow, { id: "123" })).toBe(true);
     expect(allowListMatches(allow, { name: "steipete" })).toBe(false);
     expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(false);
@@ -239,13 +253,29 @@ describe("discord allowlist helpers", () => {
   });
 
   it("matches pk-prefixed allowlist entries", () => {
-    const allow = normalizeDiscordAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
-    expect(allow).not.toBeNull();
-    if (!allow) {
-      throw new Error("Expected allow list to be normalized");
-    }
+    const allow = expectNormalizedAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
     expect(allowListMatches(allow, { id: "member-123" })).toBe(true);
     expect(allowListMatches(allow, { id: "member-999" })).toBe(false);
+  });
+
+  it("does not treat DM wildcard access as owner access", () => {
+    const wildcardOnly = resolveDiscordOwnerAccess({
+      allowFrom: ["*"],
+      sender: { id: "123" },
+    });
+    expect(wildcardOnly.ownerAllowList).toBeNull();
+    expect(wildcardOnly.ownerAllowed).toBe(false);
+
+    const explicitOwner = resolveDiscordOwnerAccess({
+      allowFrom: ["*", "user:123"],
+      sender: { id: "123" },
+    });
+    if (explicitOwner.ownerAllowList === null) {
+      throw new Error("Expected explicit owner allowlist");
+    }
+    expect(explicitOwner.ownerAllowList.allowAll).toBe(false);
+    expect(explicitOwner.ownerAllowList.ids).toEqual(new Set(["123"]));
+    expect(explicitOwner.ownerAllowed).toBe(true);
   });
 });
 
@@ -905,7 +935,7 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   })),
 }));
 
-const channelRuntimeModule = await import("openclaw/plugin-sdk/infra-runtime");
+const channelRuntimeModule = await import("openclaw/plugin-sdk/system-event-runtime");
 vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");
@@ -913,6 +943,27 @@ vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRout
 
 const { DiscordMessageListener, DiscordReactionListener, registerDiscordListener } =
   await import("./monitor/listeners.js");
+
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  return firstMockCall(mock, label)[0];
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
 
 function makeReactionEvent(overrides?: {
   guildId?: string;
@@ -954,7 +1005,7 @@ function makeReactionEvent(overrides?: {
     message: {
       fetch: messageFetch,
     },
-  } as DiscordReactionEvent;
+  } as unknown as DiscordReactionEvent;
 }
 
 function makeReactionClient(options?: {
@@ -979,6 +1030,10 @@ function makeReactionClient(options?: {
   } as unknown as DiscordReactionClient;
 }
 
+function getReactionClientFetchChannelMock(client: DiscordReactionClient) {
+  return (client as unknown as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel;
+}
+
 function makeReactionListenerParams(overrides?: {
   botUserId?: string;
   dmEnabled?: boolean;
@@ -991,7 +1046,7 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+    cfg: {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
     accountId: "acc-1",
     runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
@@ -999,7 +1054,7 @@ function makeReactionListenerParams(overrides?: {
     groupDmEnabled: overrides?.groupDmEnabled ?? true,
     groupDmChannels: overrides?.groupDmChannels ?? [],
     dmPolicy: overrides?.dmPolicy ?? "open",
-    allowFrom: overrides?.allowFrom ?? [],
+    allowFrom: overrides?.allowFrom ?? ["*"],
     groupPolicy: overrides?.groupPolicy ?? "open",
     allowNameMatching: overrides?.allowNameMatching ?? false,
     guildEntries: overrides?.guildEntries,
@@ -1045,12 +1100,14 @@ describe("discord DM reaction handling", () => {
       await listener.handle(data, client);
 
       expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledOnce();
-      const [text, opts] = enqueueSystemEventSpy.mock.calls[0];
+      const [text, opts] = firstMockCall(enqueueSystemEventSpy, "enqueueSystemEvent");
       expect(text, testCase.name).toContain("Discord reaction added");
       expect(text, testCase.name).toContain("👍");
       expect(text, testCase.name).toContain("dm");
       expect(text, testCase.name).not.toContain("undefined");
-      expect(opts.sessionKey, testCase.name).toBe("discord:acc-1:dm:user-1");
+      expect(requireRecord(opts, "system event options").sessionKey, testCase.name).toBe(
+        "discord:acc-1:dm:user-1",
+      );
     }
   });
 
@@ -1121,6 +1178,7 @@ describe("discord DM reaction handling", () => {
 
     await listener.handle(data, client);
 
+    expect(getReactionClientFetchChannelMock(client)).not.toHaveBeenCalled();
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 
@@ -1185,8 +1243,9 @@ describe("discord DM reaction handling", () => {
 
     await listener.handle(data, client);
 
+    expect(getReactionClientFetchChannelMock(client)).toHaveBeenCalled();
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
-    const [text] = enqueueSystemEventSpy.mock.calls[0];
+    const text = firstMockArg(enqueueSystemEventSpy, "enqueueSystemEvent");
     expect(text).toContain("Discord reaction added");
   });
 
@@ -1201,12 +1260,9 @@ describe("discord DM reaction handling", () => {
     await listener.handle(data, client);
 
     expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
-    const routeArgs = (resolveAgentRouteMock.mock.calls[0]?.[0] ?? {}) as {
+    const routeArgs = firstMockArg(resolveAgentRouteMock, "resolveAgentRoute") as {
       peer?: unknown;
     };
-    if (!routeArgs) {
-      throw new Error("expected route arguments");
-    }
     expect(routeArgs.peer).toEqual({ kind: "direct", id: "user-42" });
   });
 
@@ -1221,12 +1277,9 @@ describe("discord DM reaction handling", () => {
     await listener.handle(data, client);
 
     expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
-    const routeArgs = (resolveAgentRouteMock.mock.calls[0]?.[0] ?? {}) as {
+    const routeArgs = firstMockArg(resolveAgentRouteMock, "resolveAgentRoute") as {
       peer?: unknown;
     };
-    if (!routeArgs) {
-      throw new Error("expected route arguments");
-    }
     expect(routeArgs.peer).toEqual({ kind: "group", id: "channel-1" });
   });
 });
@@ -1245,6 +1298,7 @@ describe("discord reaction notification modes", () => {
       channelId: string | undefined;
       parentId: string | undefined;
       messageAuthorId: string;
+      expectedFetchChannelCalls: number;
       expectedMessageFetchCalls: number;
       expectedEnqueueCalls: number;
     }>([
@@ -1257,6 +1311,7 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 0,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 0,
       },
@@ -1269,6 +1324,7 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 1,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
       },
@@ -1281,8 +1337,22 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 1,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
+      },
+      {
+        name: "allowlist mode denied without channel overrides",
+        reactionNotifications: "allowlist" as const,
+        users: ["trusted-user"] as string[],
+        userId: "untrusted-user",
+        channelType: ChannelType.GuildText,
+        channelId: undefined,
+        parentId: undefined,
+        messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 0,
+        expectedMessageFetchCalls: 0,
+        expectedEnqueueCalls: 0,
       },
       {
         name: "own mode",
@@ -1293,6 +1363,7 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "bot-1",
+        expectedFetchChannelCalls: 1,
         expectedMessageFetchCalls: 1,
         expectedEnqueueCalls: 1,
       },
@@ -1305,6 +1376,7 @@ describe("discord reaction notification modes", () => {
         channelId: "thread-1",
         parentId: "parent-1",
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 2,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
       },
@@ -1338,6 +1410,9 @@ describe("discord reaction notification modes", () => {
 
       await listener.handle(data, client);
 
+      expect(getReactionClientFetchChannelMock(client), testCase.name).toHaveBeenCalledTimes(
+        testCase.expectedFetchChannelCalls,
+      );
       expect(messageFetch, testCase.name).toHaveBeenCalledTimes(testCase.expectedMessageFetchCalls);
       expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledTimes(
         testCase.expectedEnqueueCalls,

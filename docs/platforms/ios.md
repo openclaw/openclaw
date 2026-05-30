@@ -75,7 +75,9 @@ openclaw gateway call node.list --params "{}"
 Official distributed iOS builds use the external push relay instead of publishing the raw APNs
 token to the gateway.
 
-Gateway-side requirement:
+By default, official/TestFlight builds and gateways use the hosted relay at `https://ios-push-relay.openclaw.ai`.
+
+Custom relay deployments can override the gateway relay URL:
 
 ```json5
 {
@@ -93,12 +95,12 @@ Gateway-side requirement:
 
 How the flow works:
 
-- The iOS app registers with the relay using App Attest and the app receipt.
+- The iOS app registers with the relay using App Attest and a StoreKit app transaction JWS.
 - The relay returns an opaque relay handle plus a registration-scoped send grant.
 - The iOS app fetches the paired gateway identity and includes it in relay registration, so the relay-backed registration is delegated to that specific gateway.
 - The app forwards that relay-backed registration to the paired gateway with `push.apns.register`.
 - The gateway uses that stored relay handle for `push.test`, background wakes, and wake nudges.
-- The gateway relay base URL must match the relay URL baked into the official/TestFlight iOS build.
+- Custom gateway relay URLs must match the relay URL baked into the official/TestFlight iOS build.
 - If the app later connects to a different gateway or a build with a different relay base URL, it refreshes the relay registration instead of reusing the old binding.
 
 What the gateway does **not** need for this path:
@@ -109,14 +111,26 @@ What the gateway does **not** need for this path:
 Expected operator flow:
 
 1. Install the official/TestFlight iOS build.
-2. Set `gateway.push.apns.relay.baseUrl` on the gateway.
+2. Optional: set `gateway.push.apns.relay.baseUrl` on the gateway only when using a custom relay deployment.
 3. Pair the app to the gateway and let it finish connecting.
 4. The app publishes `push.apns.register` automatically after it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
 
+## Background alive beacons
+
+When iOS wakes the app for a silent push, background refresh, or significant-location event, the app
+attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`.
+The gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only
+after the authenticated node device identity is known.
+
+The app treats a background wake as successfully recorded only when the gateway response includes
+`handled: true`. Older gateways may acknowledge `node.event` with `{ "ok": true }`; that response is
+compatible but does not count as a durable last-seen update.
+
 Compatibility note:
 
 - `OPENCLAW_APNS_RELAY_BASE_URL` still works as a temporary env override for the gateway.
+- `OPENCLAW_PUSH_RELAY_BASE_URL` still works as a temporary env override for official/TestFlight iOS builds.
 
 ## Authentication and trust flow
 
@@ -136,8 +150,8 @@ Hop by hop:
 
 2. `iOS app -> relay`
    - The app calls the relay registration endpoints over HTTPS.
-   - Registration includes App Attest proof plus the app receipt.
-   - The relay validates the bundle ID, App Attest proof, and Apple receipt, and requires the
+   - Registration includes App Attest proof plus a StoreKit app transaction JWS.
+   - The relay validates the bundle ID, App Attest proof, and Apple distribution proof, and requires the
      official/production distribution path.
    - This is what blocks local Xcode/dev builds from using the hosted relay. A local build may be
      signed, but it does not satisfy the official Apple distribution proof the relay expects.
@@ -227,6 +241,18 @@ Notes:
 - The iOS node auto-navigates to A2UI on connect when a canvas host URL is advertised.
 - Return to the built-in scaffold with `canvas.navigate` and `{"url":""}`.
 
+## Computer Use relationship
+
+The iOS app is a mobile node surface, not a Codex Computer Use backend. Codex
+Computer Use and `cua-driver mcp` control a local macOS desktop through MCP
+tools; the iOS app exposes iPhone capabilities through OpenClaw node commands
+such as `canvas.*`, `camera.*`, `screen.*`, `location.*`, and `talk.*`.
+
+Agents can still operate the iOS app through OpenClaw by invoking node
+commands, but those calls go through the gateway node protocol and follow iOS
+foreground/background limits. Use [Codex Computer Use](/plugins/codex-computer-use)
+for local desktop control and this page for iOS node capabilities.
+
 ### Canvas eval / snapshot
 
 ```bash
@@ -240,12 +266,16 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## Voice wake + talk mode
 
 - Voice wake and talk mode are available in Settings.
+- Talk-capable iOS nodes advertise the `talk` capability and can declare
+  `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`;
+  the Gateway allows those push-to-talk commands by default for trusted
+  Talk-capable nodes.
 - iOS may suspend background audio; treat voice features as best-effort when the app is not active.
 
 ## Common errors
 
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
-- `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise a canvas host URL; check `canvasHost` in [Gateway configuration](/gateway/configuration).
+- `A2UI_HOST_NOT_CONFIGURED`: the Gateway did not advertise the Canvas plugin surface URL; check `plugins.entries.canvas.config.host` in [Gateway configuration](/gateway/configuration).
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
 - Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
 

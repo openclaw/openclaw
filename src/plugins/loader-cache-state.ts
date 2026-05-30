@@ -1,4 +1,4 @@
-import { PluginLruCache } from "./plugin-lru-cache.js";
+import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 export class PluginLoadReentryError extends Error {
   readonly cacheKey: string;
@@ -30,6 +30,11 @@ export class PluginLoaderCacheState<T> {
   clear(): void {
     this.#registryCache.clear();
     this.#inFlightLoads.clear();
+    this.#openAllowlistWarningCache.clear();
+  }
+
+  clearCachedRegistries(): void {
+    this.#registryCache.clear();
     this.#openAllowlistWarningCache.clear();
   }
 

@@ -1,4 +1,7 @@
-// Manual facade. Keep loader boundary explicit.
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Prefer vendor-neutral memory-host SDK subpaths for new plugin code.
+ */
 import type { OpenClawConfig } from "../config/types.js";
 import {
   createLazyFacadeObjectValue,
@@ -52,6 +55,7 @@ export type ShortTermAuditIssue = {
     | "recall-store-unreadable"
     | "recall-store-empty"
     | "recall-store-invalid"
+    | "recall-store-over-limit"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
     | "qmd-index-missing"
@@ -85,6 +89,7 @@ export type ShortTermAuditSummary = {
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
+  removedOverflowEntries?: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };

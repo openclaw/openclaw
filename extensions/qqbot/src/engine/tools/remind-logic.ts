@@ -28,7 +28,7 @@ export interface RemindParams {
  * `fallbackAccountId` are consulted only when the corresponding AI-supplied
  * parameter is missing.
  */
-export interface RemindExecuteContext {
+interface RemindExecuteContext {
   fallbackTo?: string;
   fallbackAccountId?: string;
 }
@@ -41,9 +41,9 @@ export type RemindCronAction =
       job: ReturnType<typeof buildOnceJob>["job"] | ReturnType<typeof buildCronJob>["job"];
     };
 
-export type RemindCronScheduler = (params: RemindCronAction) => Promise<unknown>;
+type RemindCronScheduler = (params: RemindCronAction) => Promise<unknown>;
 
-export type RemindCronPlan =
+type RemindCronPlan =
   | {
       ok: true;
       action: RemindParams["action"];
@@ -117,17 +117,22 @@ export const RemindSchema = {
  * @returns Milliseconds or null if unparseable.
  */
 export function parseRelativeTime(timeStr: string): number | null {
-  const s = timeStr.toLowerCase();
+  const s = timeStr.trim().toLowerCase();
   if (/^\d+$/.test(s)) {
     return Number.parseInt(s, 10) * 60_000;
   }
 
   let totalMs = 0;
   let matched = false;
-  const regex = /(\d+(?:\.\d+)?)\s*(d|h|m|s)/g;
+  let consumed = 0;
+  const regex = /(\d+(?:\.\d+)?)\s*(d|h|m|s)\s*/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(s)) !== null) {
+    if (match.index !== consumed) {
+      return null;
+    }
     matched = true;
+    consumed = regex.lastIndex;
     const value = Number.parseFloat(match[1]);
     const unit = match[2];
     switch (unit) {
@@ -145,7 +150,7 @@ export function parseRelativeTime(timeStr: string): number | null {
         break;
     }
   }
-  return matched ? Math.round(totalMs) : null;
+  return matched && consumed === s.length ? Math.round(totalMs) : null;
 }
 
 /**
@@ -181,7 +186,7 @@ export function buildReminderPrompt(content: string): string {
 }
 
 /** Build cron job params for a one-shot delayed reminder. */
-export function buildOnceJob(params: RemindParams, delayMs: number, to: string, accountId: string) {
+function buildOnceJob(params: RemindParams, delayMs: number, to: string, accountId: string) {
   const atMs = Date.now() + delayMs;
   const content = params.content!;
   const name = params.name || generateJobName(content);
@@ -208,7 +213,7 @@ export function buildOnceJob(params: RemindParams, delayMs: number, to: string, 
 }
 
 /** Build cron job params for a recurring cron reminder. */
-export function buildCronJob(params: RemindParams, to: string, accountId: string) {
+function buildCronJob(params: RemindParams, to: string, accountId: string) {
   const content = params.content!;
   const name = params.name || generateJobName(content);
   const tz = params.timezone || "Asia/Shanghai";

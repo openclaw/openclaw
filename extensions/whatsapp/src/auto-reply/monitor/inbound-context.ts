@@ -1,7 +1,5 @@
-import {
-  evaluateSupplementalContextVisibility,
-  filterSupplementalContextItems,
-} from "openclaw/plugin-sdk/security-runtime";
+import { filterChannelInboundQuoteContext } from "openclaw/plugin-sdk/channel-inbound";
+import { filterSupplementalContextItems } from "openclaw/plugin-sdk/security-runtime";
 import {
   getComparableIdentityValues,
   getReplyContext,
@@ -21,7 +19,7 @@ export type GroupHistoryEntry = {
 
 type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
 
-export function isWhatsAppSupplementalSenderAllowed(params: {
+function isWhatsAppSupplementalSenderAllowed(params: {
   allowFrom: string[];
   sender?: WhatsAppIdentity | null;
 }): boolean {
@@ -77,16 +75,18 @@ export function resolveVisibleWhatsAppReplyContext(params: {
   if (!replyTo) {
     return null;
   }
-  const include = evaluateSupplementalContextVisibility({
-    mode: params.mode,
-    kind: "quote",
-    senderAllowed:
-      params.msg.chatType !== "group" || params.groupPolicy !== "allowlist"
-        ? true
-        : isWhatsAppSupplementalSenderAllowed({
-            allowFrom: params.groupAllowFrom,
-            sender: replyTo.sender,
-          }),
-  }).include;
-  return include ? replyTo : null;
+  const senderAllowed =
+    params.msg.chatType !== "group" || params.groupPolicy !== "allowlist"
+      ? true
+      : isWhatsAppSupplementalSenderAllowed({
+          allowFrom: params.groupAllowFrom,
+          sender: replyTo.sender,
+        });
+  const visible = filterChannelInboundQuoteContext(params.mode, {
+    id: replyTo.id,
+    body: replyTo.body,
+    sender: replyTo.sender?.label ?? undefined,
+    senderAllowed,
+  });
+  return visible ? replyTo : null;
 }

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginHttpRouteRegistration } from "./registry.js";
 import {
@@ -68,6 +69,22 @@ function expectRouteRegistryState(params: { setup: () => void; assert: () => voi
   params.assert();
 }
 
+async function waitForCleanupSignal(signal: Promise<void>, label: string): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      signal,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${label}`)), 500);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 describe("plugin runtime route registry", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -115,16 +132,32 @@ describe("plugin runtime route registry", () => {
     });
   });
 
+  it("keeps pinned route registries live until they are released", () => {
+    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+
+    setActivePluginRegistry(startupRegistry);
+    pinActivePluginHttpRouteRegistry(startupRegistry);
+    setActivePluginRegistry(laterRegistry);
+
+    expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(false);
+
+    releasePinnedPluginHttpRouteRegistry(startupRegistry);
+
+    expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(laterRegistry);
+    expect(isPluginRegistryRetired(startupRegistry)).toBe(true);
+  });
+
   it.each([
     {
-      name: "falls back to the provided registry when the pinned route registry has no routes",
+      name: "keeps an explicitly pinned empty route registry authoritative",
       pinnedRegistry: createEmptyPluginRegistry(),
       explicitRegistry: createRegistryWithRoute("/demo"),
-      expected: "explicit",
+      expected: "pinned",
     },
     {
       name: "prefers the pinned route registry when it already owns routes",
-      pinnedRegistry: createRegistryWithRoute("/bluebubbles-webhook"),
+      pinnedRegistry: createRegistryWithRoute("/imessage-webhook"),
       explicitRegistry: createRegistryWithRoute("/plugins/diffs"),
       expected: "pinned",
     },
@@ -207,6 +240,86 @@ describe("setActivePluginRegistry", () => {
     setActivePluginRegistry(registry);
 
     expect(listImportedRuntimePluginIds()).toEqual(["runtime-plugin"]);
+  });
+
+  it.each([
+    {
+      name: "same active registry is refreshed",
+      refresh(nextRegistry: ReturnType<typeof createEmptyPluginRegistry>) {
+        setActivePluginRegistry(nextRegistry);
+      },
+    },
+    {
+      name: "active registry advances again",
+      refresh() {
+        setActivePluginRegistry(createEmptyPluginRegistry());
+      },
+    },
+  ] as const)("continues cleanup when the $name", async ({ refresh }) => {
+    let releaseFirstCleanup: (() => void) | undefined;
+    let markFirstCleanupStarted: (() => void) | undefined;
+    let markSecondCleanupCalled: (() => void) | undefined;
+    const firstCleanupStarted = new Promise<void>((resolve) => {
+      markFirstCleanupStarted = resolve;
+    });
+    const secondCleanupCalled = new Promise<void>((resolve) => {
+      markSecondCleanupCalled = resolve;
+    });
+    if (!markFirstCleanupStarted || !markSecondCleanupCalled) {
+      throw new Error("Expected cleanup signal callbacks to be initialized");
+    }
+    const notifyFirstCleanupStarted = markFirstCleanupStarted;
+    const notifySecondCleanupCalled = markSecondCleanupCalled;
+    const previous = createEmptyPluginRegistry();
+    previous.plugins.push(
+      createPluginRecord({
+        id: "cleanup-refresh-race",
+        name: "Cleanup Refresh Race",
+        status: "loaded",
+      }),
+    );
+    previous.runtimeLifecycles = [
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "first-cleanup",
+          async cleanup() {
+            notifyFirstCleanupStarted();
+            await new Promise<void>((resolve) => {
+              releaseFirstCleanup = resolve;
+            });
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+      {
+        pluginId: "cleanup-refresh-race",
+        pluginName: "Cleanup Refresh Race",
+        lifecycle: {
+          id: "second-cleanup",
+          cleanup() {
+            notifySecondCleanupCalled();
+          },
+        },
+        source: "/virtual/cleanup-refresh-race/index.ts",
+        rootDir: "/virtual/cleanup-refresh-race",
+      },
+    ];
+    const next = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(previous);
+    setActivePluginRegistry(next);
+    await waitForCleanupSignal(firstCleanupStarted, "first cleanup start");
+
+    refresh(next);
+    if (!releaseFirstCleanup) {
+      throw new Error("Expected first cleanup release callback to be initialized");
+    }
+    releaseFirstCleanup();
+
+    await waitForCleanupSignal(secondCleanupCalled, "second cleanup");
   });
 
   it("includes plugin ids imported before registration failed", () => {

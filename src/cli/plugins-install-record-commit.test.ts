@@ -26,13 +26,23 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
 import {
   commitConfigWithPendingPluginInstalls,
   commitConfigWriteWithPendingPluginInstalls,
+  stripPendingPluginInstallRecords,
+  unchangedPendingPluginInstallRecordIds,
 } from "./plugins-install-record-commit.js";
 
 describe("commitConfigWithPendingPluginInstalls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    mocks.replaceConfigFile.mockImplementation(async (params: { nextConfig: OpenClawConfig }) => ({
+      path: "/tmp/openclaw.json",
+      previousHash: null,
+      snapshot: {} as never,
+      nextConfig: params.nextConfig,
+      persistedHash: "test-config-hash",
+      afterWrite: { mode: "auto" },
+      followUp: { mode: "auto", requiresRestart: false },
+    }));
     mocks.writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
   });
 
@@ -78,6 +88,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       },
       baseHash: "config-1",
       writeOptions: {
+        afterWrite: { mode: "restart", reason: "plugin source changed" },
         unsetPaths: [["plugins", "installs"]],
       },
     });
@@ -94,6 +105,75 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         ...pendingRecords,
       },
       movedInstallRecords: true,
+      persistedHash: "test-config-hash",
+    });
+  });
+
+  it("strips only selected pending plugin install records", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        installs: {
+          legacy: { source: "npm", spec: "legacy@1.0.0" },
+          fresh: { source: "npm", spec: "fresh@1.0.0" },
+        },
+      },
+    };
+
+    expect(stripPendingPluginInstallRecords(config, ["legacy"])).toEqual({
+      plugins: {
+        installs: {
+          fresh: { source: "npm", spec: "fresh@1.0.0" },
+        },
+      },
+    });
+  });
+
+  it("selects only unchanged pending plugin install records for migration stripping", () => {
+    const baseConfig: OpenClawConfig = {
+      plugins: {
+        installs: {
+          legacy: { source: "npm", spec: "legacy@1.0.0" },
+          repaired: { source: "npm", spec: "repaired@1.0.0" },
+        },
+      },
+    };
+    const nextConfig: OpenClawConfig = {
+      plugins: {
+        installs: {
+          legacy: { source: "npm", spec: "legacy@1.0.0" },
+          repaired: { source: "npm", spec: "repaired@2.0.0" },
+          fresh: { source: "npm", spec: "fresh@1.0.0" },
+        },
+      },
+    };
+
+    expect(unchangedPendingPluginInstallRecordIds(nextConfig, baseConfig)).toEqual(["legacy"]);
+  });
+
+  it("does not add restart intent when pending records match the plugin index", async () => {
+    const existingRecords: Record<string, PluginInstallRecord> = {
+      demo: {
+        source: "npm",
+        spec: "demo@1.0.0",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(existingRecords);
+
+    await commitConfigWithPendingPluginInstalls({
+      nextConfig: {
+        plugins: {
+          installs: existingRecords,
+        },
+      },
+      baseHash: "config-1",
+    });
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {},
+      baseHash: "config-1",
+      writeOptions: {
+        unsetPaths: [["plugins", "installs"]],
+      },
     });
   });
 
@@ -156,6 +236,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       config: nextConfig,
       installRecords: {},
       movedInstallRecords: false,
+      persistedHash: "test-config-hash",
     });
   });
 
@@ -177,6 +258,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       config: nextConfig,
       installRecords: {},
       movedInstallRecords: false,
+      persistedHash: null,
     });
   });
 });

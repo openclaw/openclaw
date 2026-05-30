@@ -1,6 +1,7 @@
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
+import { getSystemdCgroupHygieneSummary } from "./service-runtime.js";
 
-export type ServiceRuntimeLike = {
+type ServiceRuntimeLike = {
   status?: string;
   state?: string;
   subState?: string;
@@ -10,6 +11,7 @@ export type ServiceRuntimeLike = {
   lastRunResult?: string;
   lastRunTime?: string;
   detail?: string;
+  systemd?: { killMode?: string; tasksCurrent?: number; memoryCurrent?: number };
 };
 
 const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
@@ -45,6 +47,10 @@ export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): st
   }
   if (runtime.lastRunTime) {
     details.push(`last run time ${runtime.lastRunTime}`);
+  }
+  const cgroupSummary = getSystemdCgroupHygieneSummary(runtime.systemd);
+  if (cgroupSummary) {
+    details.push(cgroupSummary);
   }
   if (runtime.detail) {
     details.push(runtime.detail);

@@ -30,22 +30,21 @@ vi.mock("../../plugins/public-surface-loader.js", () => ({
 }));
 
 import {
-  __testing,
   describeBundledChannelMessageTool,
   resolveBundledChannelMessageToolDiscoveryAdapter,
 } from "./message-tool-api.js";
 
 describe("bundled channel message tool fast path", () => {
   beforeEach(() => {
-    __testing.clearMessageToolApiCache();
     loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
   });
 
   it("loads message tool discovery from the narrow artifact", () => {
     const adapter = resolveBundledChannelMessageToolDiscoveryAdapter("slack");
-    expect(adapter?.describeMessageTool?.({ cfg: {} })).toMatchObject({
+    expect(adapter?.describeMessageTool?.({ cfg: {} })).toStrictEqual({
       actions: ["send", "upload-file"],
       capabilities: ["presentation"],
+      schema: null,
     });
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "slack",
@@ -59,9 +58,10 @@ describe("bundled channel message tool fast path", () => {
         channelId: "slack",
         context: { cfg: {} },
       }),
-    ).toMatchObject({
+    ).toStrictEqual({
       actions: ["send", "upload-file"],
       capabilities: ["presentation"],
+      schema: null,
     });
   });
 

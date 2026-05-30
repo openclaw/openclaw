@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -8,6 +9,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import {
@@ -15,25 +17,105 @@ import {
   resolveCronRunLogPath,
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
+import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
-import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type {
+  PluginHookCronChangedEvent,
+  PluginHookGatewayCronJob,
+  PluginHookGatewayCronService,
+  PluginHookGatewayContext,
+} from "../plugins/hook-types.js";
+import {
+  normalizeAgentId,
+  resolveEventSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
 
 export type GatewayCronState = {
-  cron: CronService;
+  cron: CronServiceContract;
   storePath: string;
   cronEnabled: boolean;
 };
+
+/** Pick only the keys whose values are not `undefined` from an object. */
+function pickDefined<T extends Record<string, unknown>>(
+  obj: T,
+  keys: (keyof T)[],
+): Partial<Pick<T, (typeof keys)[number]>> {
+  const result: Partial<Pick<T, (typeof keys)[number]>> = {};
+  for (const k of keys) {
+    if (obj[k] !== undefined) {
+      (result as Record<string, unknown>)[k as string] = obj[k];
+    }
+  }
+  return result;
+}
+
+function omitExplicitHeartbeatDestination(
+  heartbeat: AgentDefaultsConfig["heartbeat"] | undefined,
+): AgentDefaultsConfig["heartbeat"] | undefined {
+  if (!heartbeat) {
+    return undefined;
+  }
+  return {
+    ...heartbeat,
+    to: undefined,
+    accountId: undefined,
+  };
+}
+
+function sanitizeCronHeartbeatOverride(
+  heartbeat: AgentDefaultsConfig["heartbeat"] | undefined,
+): AgentDefaultsConfig["heartbeat"] | undefined {
+  return heartbeat?.target === "last" ? omitExplicitHeartbeatDestination(heartbeat) : heartbeat;
+}
+
+/** Map internal CronJob to the public plugin SDK shape. */
+function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
+  return {
+    id: job.id,
+    agentId: job.agentId,
+    name: job.name,
+    description: job.description,
+    enabled: job.enabled,
+    schedule: job.schedule ? structuredClone(job.schedule) : undefined,
+    sessionTarget: job.sessionTarget,
+    wakeMode: job.wakeMode,
+    payload: job.payload ? structuredClone(job.payload) : undefined,
+    state: {
+      nextRunAtMs: job.state.nextRunAtMs,
+      runningAtMs: job.state.runningAtMs,
+      lastRunAtMs: job.state.lastRunAtMs,
+      lastRunStatus: job.state.lastRunStatus,
+      lastError: job.state.lastError,
+      lastDurationMs: job.state.lastDurationMs,
+      lastDelivered: job.state.lastDelivered,
+      lastDeliveryStatus: job.state.lastDeliveryStatus,
+      lastDeliveryError: job.state.lastDeliveryError,
+      lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
+      lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
+      lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
+    },
+    createdAtMs: job.createdAtMs,
+    updatedAtMs: job.updatedAtMs,
+  };
+}
 
 export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
@@ -123,34 +205,78 @@ export function buildGatewayCronService(params: {
         });
       }
     }
-    return canonical;
+    return (
+      resolveMainScopedEventSessionKey({
+        cfg: params.runtimeConfig,
+        sessionKey: canonical,
+        agentId: params.agentId,
+      }) ?? canonical
+    );
   };
 
-  const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
+  const resolveCronTarget = (opts?: {
+    agentId?: string | null;
+    sessionKey?: string | null;
+    preserveUntargeted?: boolean;
+  }) => {
     const requestedAgentId =
       typeof opts?.agentId === "string" && opts.agentId.trim()
         ? normalizeAgentId(opts.agentId)
         : undefined;
+    const requestedSessionKey =
+      typeof opts?.sessionKey === "string" && opts.sessionKey.trim() ? opts.sessionKey : undefined;
+    if (opts?.preserveUntargeted && !requestedAgentId && !requestedSessionKey) {
+      return { runtimeConfig: getRuntimeConfig(), agentId: undefined, sessionKey: undefined };
+    }
+
+    // Derive from canonical agent-prefixed keys only. Relative keys intentionally
+    // fall through to the configured default instead of hardcoding "main".
     const derivedAgentId =
-      requestedAgentId ??
-      (opts?.sessionKey
-        ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
-        : undefined);
-    const runtimeConfigBase = getRuntimeConfig();
-    const runtimeConfig =
-      derivedAgentId !== undefined
-        ? mergeRuntimeAgentConfig(runtimeConfigBase, derivedAgentId)
-        : runtimeConfigBase;
-    const agentId = derivedAgentId || undefined;
-    const sessionKey =
-      opts?.sessionKey && agentId
-        ? resolveCronSessionKey({
-            runtimeConfig,
-            agentId,
-            requestedSessionKey: opts.sessionKey,
-          })
+      requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
+        ? resolveAgentIdFromSessionKey(requestedSessionKey)
         : undefined;
+    const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(
+      requestedAgentId ?? derivedAgentId,
+    );
+    const agentId = resolvedAgentId || undefined;
+    const resolvedSessionKey = agentId
+      ? resolveCronSessionKey({
+          runtimeConfig,
+          agentId,
+          requestedSessionKey,
+        })
+      : undefined;
+    const sessionKey =
+      resolvedSessionKey && runtimeConfig.session?.scope === "global"
+        ? resolveEventSessionKey(
+            resolvedSessionKey,
+            runtimeConfig.session?.mainKey,
+            runtimeConfig.session?.scope,
+          )
+        : resolvedSessionKey;
     return { runtimeConfig, agentId, sessionKey };
+  };
+
+  const resolveCronHeartbeatOverride = (params: {
+    runtimeConfig: OpenClawConfig;
+    agentId?: string;
+    heartbeat?: AgentDefaultsConfig["heartbeat"];
+  }) => {
+    if (!params.heartbeat) {
+      return undefined;
+    }
+    const agentEntry =
+      params.agentId !== undefined
+        ? findAgentEntry(params.runtimeConfig, params.agentId)
+        : undefined;
+    const agentHeartbeat =
+      agentEntry && typeof agentEntry === "object" ? agentEntry.heartbeat : undefined;
+    const baseHeartbeat = {
+      ...params.runtimeConfig.agents?.defaults?.heartbeat,
+      ...agentHeartbeat,
+    };
+    const heartbeatOverride = { ...baseHeartbeat, ...params.heartbeat };
+    return sanitizeCronHeartbeatOverride(heartbeatOverride);
   };
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
@@ -162,6 +288,23 @@ export function buildGatewayCronService(params: {
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
   const warnedLegacyWebhookJobs = new Set<string>();
 
+  const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {
+    const hookRunner = getGlobalHookRunner();
+    if (!hookRunner?.hasHooks("cron_changed")) {
+      return;
+    }
+    const hookCtx: PluginHookGatewayContext = {
+      config: getRuntimeConfig(),
+      getCron: () => cron as PluginHookGatewayCronService,
+    };
+    void hookRunner.runCronChanged(evt, hookCtx).catch((err) => {
+      cronLogger.warn(
+        { err: formatErrorMessage(err), jobId: evt.jobId },
+        "cron_changed hook failed",
+      );
+    });
+  };
+
   const cron = new CronService({
     storePath,
     cronEnabled,
@@ -170,58 +313,54 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
-      const sessionKey = resolveCronSessionKey({
-        runtimeConfig,
-        agentId,
-        requestedSessionKey: opts?.sessionKey,
-      });
+      const { sessionKey } = resolveCronTarget(opts);
+      if (!sessionKey) {
+        throw new Error("Cron system event target did not resolve a session key.");
+      }
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
-        trusted: opts?.trusted,
+        deliveryContext: opts?.deliveryContext,
       });
     },
-    requestHeartbeatNow: (opts) => {
-      const { agentId, sessionKey } = resolveCronWakeTarget(opts);
-      requestHeartbeatNow({
+    requestHeartbeat: (opts) => {
+      const { agentId, sessionKey } = resolveCronTarget({ ...opts, preserveUntargeted: true });
+      requestHeartbeat({
+        source: opts?.source ?? "cron",
+        intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
         sessionKey,
-        heartbeat: opts?.heartbeat,
+        heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
       });
     },
     runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
-      // Merge cron-supplied heartbeat overrides (e.g. target: "last") with the
-      // fully resolved agent heartbeat config so cron-triggered heartbeats
-      // respect agent-specific overrides (agents.list[].heartbeat) before
-      // falling back to agents.defaults.heartbeat.
-      const agentEntry =
-        Array.isArray(runtimeConfig.agents?.list) &&
-        runtimeConfig.agents.list.find(
-          (entry) =>
-            entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === agentId,
-        );
-      const agentHeartbeat =
-        agentEntry && typeof agentEntry === "object" ? agentEntry.heartbeat : undefined;
-      const baseHeartbeat = {
-        ...runtimeConfig.agents?.defaults?.heartbeat,
-        ...agentHeartbeat,
-      };
-      const heartbeatOverride = opts?.heartbeat
-        ? { ...baseHeartbeat, ...opts.heartbeat }
-        : undefined;
+      const { runtimeConfig, agentId, sessionKey } = resolveCronTarget({
+        ...opts,
+        preserveUntargeted: true,
+      });
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
+        source: opts?.source ?? "cron",
+        intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
         sessionKey,
-        heartbeat: heartbeatOverride,
+        heartbeat: resolveCronHeartbeatOverride({
+          runtimeConfig,
+          agentId,
+          heartbeat: opts?.heartbeat,
+        }),
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message, abortSignal, onExecutionStarted }) => {
+    runIsolatedAgentJob: async ({
+      job,
+      message,
+      abortSignal,
+      onExecutionStarted,
+      onExecutionPhase,
+    }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
       try {
@@ -232,6 +371,7 @@ export function buildGatewayCronService(params: {
           message,
           abortSignal,
           onExecutionStarted,
+          onExecutionPhase,
           agentId,
           sessionKey,
           lane: "cron",
@@ -242,6 +382,29 @@ export function buildGatewayCronService(params: {
           onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
         });
       }
+    },
+    cleanupTimedOutAgentRun: async ({ job, execution }) => {
+      if (!execution?.sessionId) {
+        return;
+      }
+      const result = await abortAndDrainEmbeddedAgentRun({
+        sessionId: execution.sessionId,
+        sessionKey: execution.sessionKey,
+        settleMs: 15_000,
+        forceClear: true,
+        reason: "cron_timeout",
+      });
+      cronLogger.warn(
+        {
+          jobId: job.id,
+          sessionId: execution.sessionId,
+          sessionKey: execution.sessionKey,
+          aborted: result.aborted,
+          drained: result.drained,
+          forceCleared: result.forceCleared,
+        },
+        "cron: cleaned up timed-out agent run",
+      );
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
       await sendGatewayCronFailureAlert({
@@ -259,8 +422,43 @@ export function buildGatewayCronService(params: {
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
+      // Build hook event from CronEvent. The job snapshot is carried on the
+      // internal event so it's available even for "removed" actions where
+      // getJob() would return undefined. `delivery` and `usage` are
+      // intentionally omitted — they contain internal channel/token detail
+      // that is not part of the public plugin SDK surface.
+      // Resolve job snapshot from the event or live service so top-level
+      // convenience fields (sessionTarget, agentId) are always populated
+      // when the job is known.
+      const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
+      const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
+      const hookEvt: PluginHookCronChangedEvent = {
+        action: evt.action,
+        jobId: evt.jobId,
+        ...(pluginJob ? { job: pluginJob } : {}),
+        // Top-level routing fields so plugins don't have to dig into job.
+        sessionTarget: jobSnapshot?.sessionTarget,
+        agentId: jobSnapshot?.agentId,
+        ...pickDefined(evt, [
+          "runAtMs",
+          "durationMs",
+          "status",
+          "error",
+          "summary",
+          "delivered",
+          "deliveryStatus",
+          "deliveryError",
+          "sessionId",
+          "sessionKey",
+          "runId",
+          "nextRunAtMs",
+          "model",
+          "provider",
+        ]),
+      };
+      runCronChangedHook(hookEvt);
       if (evt.action === "finished") {
-        const job = cron.getJob(evt.jobId);
+        const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
           evt,
           job,
@@ -286,12 +484,15 @@ export function buildGatewayCronService(params: {
             status: evt.status,
             error: evt.error,
             summary: evt.summary,
+            diagnostics: evt.diagnostics,
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
             deliveryError: evt.deliveryError,
+            failureNotificationDelivery: evt.failureNotificationDelivery,
             delivery: evt.delivery,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,
+            runId: evt.runId,
             runAtMs: evt.runAtMs,
             durationMs: evt.durationMs,
             nextRunAtMs: evt.nextRunAtMs,

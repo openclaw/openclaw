@@ -5,11 +5,16 @@ import type {
 } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  formatUnsafeGatewayTailscaleNoAuthMessage,
+  isUnsafeGatewayTailscaleNoAuth,
+} from "../shared/gateway-tailscale-auth-policy.js";
+import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
   resolveGatewayAuth,
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
+import { warnLegacyOpenClawEnvVars } from "./env-deprecation.js";
 import { resolveHooksConfig } from "./hooks.js";
 import {
   defaultGatewayBindMode,
@@ -19,7 +24,7 @@ import {
 } from "./net.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
-export type GatewayRuntimeConfig = {
+type GatewayRuntimeConfig = {
   bindHost: string;
   controlUiEnabled: boolean;
   openAiChatCompletionsEnabled: boolean;
@@ -34,7 +39,6 @@ export type GatewayRuntimeConfig = {
   tailscaleConfig: GatewayTailscaleConfig;
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
-  canvasHostEnabled: boolean;
 };
 
 export async function resolveGatewayRuntimeConfig(params: {
@@ -48,6 +52,8 @@ export async function resolveGatewayRuntimeConfig(params: {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 }): Promise<GatewayRuntimeConfig> {
+  warnLegacyOpenClawEnvVars();
+
   // Tailscale serve/funnel hard-requires loopback.  When bind is not
   // explicitly set, we must resolve Tailscale mode *before* choosing the
   // bind default so that container auto-detection does not override the
@@ -119,9 +125,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   const hasSharedSecret =
     (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
   const hooksConfig = resolveHooksConfig(params.cfg);
-  const canvasHostEnabled =
-    process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
-
   const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
   const controlUiAllowedOrigins = (params.cfg.gateway?.controlUi?.allowedOrigins ?? [])
     .map((value) => value.trim())
@@ -135,12 +138,15 @@ export async function resolveGatewayRuntimeConfig(params: {
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
   }
+  if (isUnsafeGatewayTailscaleNoAuth({ authMode, tailscaleMode })) {
+    throw new Error(formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode));
+  }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
   }
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
     throw new Error(
-      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
+      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
     );
   }
   if (
@@ -181,6 +187,5 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleConfig,
     tailscaleMode,
     hooksConfig,
-    canvasHostEnabled,
   };
 }

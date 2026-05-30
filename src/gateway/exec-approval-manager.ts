@@ -8,7 +8,19 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;
 
-export type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  const unref = (timer as { unref?: () => void }).unref;
+  if (typeof unref === "function") {
+    unref.call(timer);
+  }
+}
+
+function scheduleResolvedEntryCleanup(cleanup: () => void): void {
+  const timer = setTimeout(cleanup, RESOLVED_ENTRY_GRACE_MS);
+  unrefTimer(timer);
+}
+
+type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
 export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   id: string;
@@ -19,8 +31,10 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   requestedByConnId?: string | null;
   requestedByDeviceId?: string | null;
   requestedByClientId?: string | null;
+  requestedByDeviceTokenAuth?: boolean;
   resolvedAtMs?: number;
   decision?: ExecApprovalDecision;
+  consumedDecision?: ExecApprovalDecision;
   resolvedBy?: string | null;
 };
 
@@ -117,12 +131,12 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     // Resolve the promise first, then delete after a grace period.
     // This allows in-flight awaitDecision calls to find the resolved entry.
     pending.resolve(decision);
-    setTimeout(() => {
+    scheduleResolvedEntryCleanup(() => {
       // Only delete if the entry hasn't been replaced
       if (this.pending.get(recordId) === pending) {
         this.pending.delete(recordId);
       }
-    }, RESOLVED_ENTRY_GRACE_MS);
+    });
     return true;
   }
 
@@ -139,11 +153,11 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     pending.record.decision = undefined;
     pending.record.resolvedBy = resolvedBy ?? null;
     pending.resolve(null);
-    setTimeout(() => {
+    scheduleResolvedEntryCleanup(() => {
       if (this.pending.get(recordId) === pending) {
         this.pending.delete(recordId);
       }
-    }, RESOLVED_ENTRY_GRACE_MS);
+    });
     return true;
   }
 
@@ -169,6 +183,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     }
     // One-time approvals must be consumed atomically so the same runId
     // cannot be replayed during the resolved-entry grace window.
+    record.consumedDecision = record.decision;
     record.decision = undefined;
     return true;
   }
@@ -182,7 +197,13 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     return entry?.promise ?? null;
   }
 
-  lookupPendingId(input: string): ExecApprovalIdLookupResult {
+  lookupApprovalId(
+    input: string,
+    opts: {
+      includeResolved?: boolean;
+      filter?: (record: ExecApprovalRecord<TPayload>) => boolean;
+    } = {},
+  ): ExecApprovalIdLookupResult {
     const normalized = input.trim();
     if (!normalized) {
       return { kind: "none" };
@@ -190,7 +211,8 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
 
     const exact = this.pending.get(normalized);
     if (exact) {
-      return exact.record.resolvedAtMs === undefined
+      return (opts.includeResolved || exact.record.resolvedAtMs === undefined) &&
+        (opts.filter?.(exact.record) ?? true)
         ? { kind: "exact", id: normalized }
         : { kind: "none" };
     }
@@ -198,7 +220,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const lowerPrefix = normalizeLowercaseStringOrEmpty(normalized);
     const matches: string[] = [];
     for (const [id, entry] of this.pending.entries()) {
-      if (entry.record.resolvedAtMs !== undefined) {
+      if (!opts.includeResolved && entry.record.resolvedAtMs !== undefined) {
+        continue;
+      }
+      if (opts.filter && !opts.filter(entry.record)) {
         continue;
       }
       if (normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix)) {
@@ -213,5 +238,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { kind: "ambiguous", ids: matches };
     }
     return { kind: "none" };
+  }
+
+  lookupPendingId(input: string): ExecApprovalIdLookupResult {
+    return this.lookupApprovalId(input);
   }
 }

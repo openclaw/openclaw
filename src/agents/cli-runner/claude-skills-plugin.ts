@@ -1,8 +1,9 @@
+import { accessSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import type { SkillSnapshot } from "../skills.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { cliBackendLog } from "./log.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
@@ -30,6 +31,15 @@ function sanitizeSkillDirName(name: string, used: Set<string>): string {
   return candidate;
 }
 
+export function isClaudeCliSkillFileAccessible(skillFilePath: string): boolean {
+  try {
+    accessSync(skillFilePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function collectClaudePluginSkills(snapshot?: SkillSnapshot): Promise<MaterializedSkill[]> {
   const skills = snapshot?.resolvedSkills ?? [];
   if (skills.length === 0) {
@@ -44,9 +54,7 @@ async function collectClaudePluginSkills(snapshot?: SkillSnapshot): Promise<Mate
     if (!name || !skillFilePath) {
       continue;
     }
-    try {
-      await fs.access(skillFilePath);
-    } catch {
+    if (!isClaudeCliSkillFileAccessible(skillFilePath)) {
       cliBackendLog.warn(`claude skill plugin skipped missing skill file: ${skillFilePath}`);
       continue;
     }

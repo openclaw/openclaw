@@ -8,11 +8,10 @@ import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
-  createMcpLoopbackServerConfig,
-  getActiveMcpLoopbackRuntime,
   setActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
@@ -49,10 +48,6 @@ function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): 
     return;
   }
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
@@ -111,7 +106,12 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           cfg,
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
+          currentChannelId: requestContext.currentChannelId,
+          currentThreadTs: requestContext.currentThreadTs,
+          currentMessageId: requestContext.currentMessageId,
           accountId: requestContext.accountId,
+          inboundEventKind: requestContext.inboundEventKind,
+          sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           senderIsOwner: requestContext.senderIsOwner,
         });
 
@@ -120,7 +120,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           batchSize: messages.length,
           methods: messages.map((message) => message.method),
           sessionKey: requestContext.sessionKey,
-          senderIsOwner: requestContext.senderIsOwner,
+          inboundEventKind: requestContext.inboundEventKind,
+          senderIsOwner: requestContext.senderIsOwner === true,
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
         });
@@ -132,6 +133,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             toolSchema: scopedTools.toolSchema,
             hookContext: {
               agentId: scopedTools.agentId,
+              config: cfg,
               sessionKey: requestContext.sessionKey,
             },
             signal: requestAbort.signal,

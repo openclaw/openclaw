@@ -7,9 +7,7 @@ read_when:
 title: "Transcript hygiene"
 ---
 
-OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate session-file repair pass may also rewrite stored JSONL before the session is loaded, either by dropping malformed JSONL lines or by repairing persisted turns that are syntactically valid but known to be rejected by a
-provider during replay. When a repair occurs, the original file is backed up alongside
-the session file.
+OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate session-file repair pass may also rewrite stored JSONL before the session is loaded, but only for malformed lines or persisted turns that are invalid durable records. Delivered assistant replies are preserved on disk; provider-specific assistant-prefill stripping happens only while constructing outbound payloads. When a repair occurs, the original file is written to a transient `*.bak-<pid>-<ts>` sibling before the atomic replace and removed once the replace succeeds; the backup is only retained if cleanup itself fails (in which case the path is reported back).
 
 Scope includes:
 
@@ -21,6 +19,7 @@ Scope includes:
 - Thought signature cleanup
 - Thinking signature cleanup
 - Image payload sanitization
+- Blank text-block cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
 - Empty assistant error-turn repair for Bedrock Converse replay
 
@@ -34,7 +33,7 @@ If you need transcript storage details, see:
 
 Runtime/system context can be added to the model prompt for a turn, but it is
 not end-user-authored content. OpenClaw keeps a separate transcript-facing
-prompt body for Gateway replies, queued followups, ACP, CLI, and embedded Pi
+prompt body for Gateway replies, queued followups, ACP, CLI, and embedded OpenClaw
 runs. Stored visible user turns use that transcript body instead of the
 runtime-enriched prompt.
 
@@ -49,7 +48,7 @@ TUI, REST, or SSE clients.
 All transcript hygiene is centralized in the embedded runner:
 
 - Policy selection: `src/agents/transcript-policy.ts`
-- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
+- Sanitization/repair application: `sanitizeSessionHistory` in `src/agents/embedded-agent-runner/replay-history.ts`
 
 The policy uses `provider`, `modelApi`, and `modelId` to decide what to apply.
 
@@ -70,9 +69,12 @@ Lower max dimensions generally reduce token usage; higher dimensions preserve de
 
 Implementation:
 
-- `sanitizeSessionMessagesImages` in `src/agents/pi-embedded-helpers/images.ts`
+- `sanitizeSessionMessagesImages` in `src/agents/embedded-agent-helpers/images.ts`
 - `sanitizeContentBlocksImages` in `src/agents/tool-images.ts`
 - Max image side is configurable via `agents.defaults.imageMaxDimensionPx` (default: `1200`).
+- Blank text blocks are removed while this pass walks replay content. Assistant
+  turns that become empty are dropped from the replay copy; user and tool-result
+  turns that become empty receive a non-empty omitted-content placeholder.
 
 ---
 
@@ -85,7 +87,7 @@ persisted tool calls (for example, after a rate limit failure).
 Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
-- Applied in `sanitizeSessionHistory` in `src/agents/pi-embedded-runner/replay-history.ts`
+- Applied in `sanitizeSessionHistory` in `src/agents/embedded-agent-runner/replay-history.ts`
 
 ---
 
@@ -96,13 +98,15 @@ agent-to-agent reply/announce steps), OpenClaw persists the created user turn wi
 
 - `message.provenance.kind = "inter_session"`
 
-This metadata is written at transcript append time and does not change role
-(`role: "user"` remains for provider compatibility). Transcript readers can use
-this to avoid treating routed internal prompts as end-user-authored instructions.
+OpenClaw also prepends a same-turn `[Inter-session message ... isUser=false]`
+marker before the routed prompt text so the active model call can distinguish
+foreign session output from external end-user instructions. This marker includes
+the source session, channel, and tool when available. The transcript still uses
+`role: "user"` for provider compatibility, but the visible text and provenance
+metadata both mark the turn as inter-session data.
 
-During context rebuild, OpenClaw also prepends a short `[Inter-session message]`
-marker to those user turns in-memory so the model can distinguish them from
-external end-user instructions.
+During context rebuild, OpenClaw applies the same marker to older persisted
+inter-session user turns that only have provenance metadata.
 
 ---
 
@@ -112,18 +116,23 @@ external end-user instructions.
 
 - Image sanitization only.
 - Drop orphaned reasoning signatures (standalone reasoning items without a following content block) for OpenAI Responses/Codex transcripts, and drop replayable OpenAI reasoning after a model route switch.
-- No tool call id sanitization.
+- Preserve replayable OpenAI Responses reasoning item payloads, including encrypted empty-summary items, so manual/WebSocket replay keeps required `rs_*` state paired with assistant output items.
+- Native ChatGPT Codex Responses follows Codex wire parity by replaying prior Responses reasoning/message/function payloads without prior item IDs while preserving session `prompt_cache_key`.
+- OpenAI Responses-family replay preserves canonical `call_*|fc_*` same-model reasoning pairs, but deterministically normalizes malformed or overlong `call_id` / function-call item ids before pi-ai payload conversion.
 - Tool result pairing repair may move real matched outputs and synthesize Codex-style `aborted` outputs for missing tool calls.
 - No turn validation or reordering.
 - Missing OpenAI Responses-family tool outputs are synthesized as `aborted` to match Codex replay normalization.
 - No thought signature stripping.
 
-**OpenAI-compatible Gemma 4**
+**OpenAI-compatible Chat Completions**
 
-- Historical assistant thinking/reasoning blocks are stripped before replay so local
-  OpenAI-compatible Gemma 4 servers do not receive prior-turn reasoning content.
+- Historical assistant thinking/reasoning blocks are stripped before replay so
+  local and proxy-style OpenAI-compatible servers do not receive prior-turn
+  reasoning fields such as `reasoning` or `reasoning_content`.
 - Current same-turn tool-call continuations keep the assistant reasoning block
   attached to the tool call until the tool result has been replayed.
+- Provider-owned exceptions can opt out when their wire protocol requires
+  replayed reasoning metadata.
 
 **Google (Generative AI / Gemini CLI / Antigravity)**
 
@@ -137,6 +146,8 @@ external end-user instructions.
 
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
+- Trailing assistant prefill turns are stripped from outgoing Anthropic Messages
+  payloads when thinking is enabled, including Cloudflare AI Gateway routes.
 - Thinking blocks with missing, empty, or blank replay signatures are stripped
   before provider conversion. If that empties an assistant turn, OpenClaw keeps
   turn shape with non-empty omitted-reasoning text.
@@ -150,6 +161,8 @@ external end-user instructions.
   before replay. Bedrock Converse rejects assistant messages with `content: []`, so
   persisted assistant turns with `stopReason: "error"` and empty content are also
   repaired on disk before load.
+- Assistant stream-error turns that contain only blank text blocks are dropped
+  from the in-memory replay copy instead of replaying an invalid blank block.
 - Claude thinking blocks with missing, empty, or blank replay signatures are
   stripped before Converse replay. If that empties an assistant turn, OpenClaw
   keeps turn shape with non-empty omitted-reasoning text.
@@ -165,6 +178,12 @@ external end-user instructions.
 **OpenRouter Gemini**
 
 - Thought signature cleanup: strip non-base64 `thought_signature` values (keep base64).
+
+**OpenRouter Anthropic**
+
+- Trailing assistant prefill turns are stripped from verified OpenRouter
+  OpenAI-compatible Anthropic model payloads when reasoning is enabled, matching
+  direct Anthropic and Cloudflare Anthropic replay behavior.
 
 **Everything else**
 

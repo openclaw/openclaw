@@ -1,7 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import path from "node:path";
+import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
+import { tempWorkspaceSync, withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
+import { basenameFromAnyPath } from "./file-name.js";
 
 const DEFAULT_OPUS_SAMPLE_RATE_HZ = 48_000;
 const DEFAULT_OPUS_BITRATE = "64k";
@@ -32,7 +35,7 @@ function normalizeTempPrefix(value?: string): string {
 }
 
 function normalizeOutputFileName(value?: string): string {
-  const baseName = path.basename(value?.trim() || DEFAULT_OUTPUT_FILE_NAME);
+  const baseName = basenameFromAnyPath(value?.trim() || DEFAULT_OUTPUT_FILE_NAME);
   if (/^[a-zA-Z0-9._-]{1,80}$/.test(baseName) && baseName !== "." && baseName !== "..") {
     return baseName;
   }
@@ -50,38 +53,140 @@ export async function transcodeAudioBufferToOpus(params: {
   bitrate?: string;
   channels?: number;
 }): Promise<Buffer> {
-  const tempRoot = resolvePreferredOpenClawTmpDir();
-  await mkdir(tempRoot, { recursive: true, mode: 0o700 });
-  const tempDir = await mkdtemp(path.join(tempRoot, normalizeTempPrefix(params.tempPrefix)));
-  try {
-    const inputPath = path.join(tempDir, `input${normalizeAudioExtension(params)}`);
-    const outputPath = path.join(tempDir, normalizeOutputFileName(params.outputFileName));
-    await writeFile(inputPath, params.audioBuffer, { mode: 0o600 });
-    await runFfmpeg(
-      [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        inputPath,
-        "-vn",
-        "-sn",
-        "-dn",
-        "-c:a",
-        "libopus",
-        "-b:a",
-        params.bitrate ?? DEFAULT_OPUS_BITRATE,
-        "-ar",
-        String(params.sampleRateHz ?? DEFAULT_OPUS_SAMPLE_RATE_HZ),
-        "-ac",
-        String(params.channels ?? DEFAULT_OPUS_CHANNELS),
-        outputPath,
-      ],
-      { timeoutMs: params.timeoutMs },
-    );
-    return await readFile(outputPath);
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
+  return await withTempWorkspace(
+    {
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: normalizeTempPrefix(params.tempPrefix),
+    },
+    async (workspace) => {
+      const inputPath = await workspace.write(
+        `input${normalizeAudioExtension(params)}`,
+        params.audioBuffer,
+      );
+      const outputFileName = normalizeOutputFileName(params.outputFileName);
+      await writeExternalFileWithinRoot({
+        rootDir: workspace.dir,
+        path: outputFileName,
+        write: async (outputPath) => {
+          await runFfmpeg(
+            [
+              "-hide_banner",
+              "-loglevel",
+              "error",
+              "-y",
+              "-i",
+              inputPath,
+              "-vn",
+              "-sn",
+              "-dn",
+              "-c:a",
+              "libopus",
+              "-b:a",
+              params.bitrate ?? DEFAULT_OPUS_BITRATE,
+              "-ar",
+              String(params.sampleRateHz ?? DEFAULT_OPUS_SAMPLE_RATE_HZ),
+              "-ac",
+              String(params.channels ?? DEFAULT_OPUS_CHANNELS),
+              "-f",
+              "opus",
+              outputPath,
+            ],
+            { timeoutMs: params.timeoutMs },
+          );
+        },
+      });
+      return await workspace.read(outputFileName);
+    },
+  );
+}
+
+export type AudioContainerTranscodeOutcome =
+  | { ok: true; buffer: Buffer }
+  | {
+      ok: false;
+      reason:
+        | "platform-unsupported"
+        | "invalid-extension"
+        | "noop-same-container"
+        | "no-recipe"
+        | "transcoder-failed";
+      detail?: string;
+    };
+
+export async function transcodeAudioBuffer(params: {
+  audioBuffer: Buffer;
+  sourceExtension: string;
+  targetExtension: string;
+  timeoutMs?: number;
+}): Promise<AudioContainerTranscodeOutcome> {
+  const source = normalizeContainerExt(params.sourceExtension);
+  const target = normalizeContainerExt(params.targetExtension);
+  if (!source || !target) {
+    return { ok: false, reason: "invalid-extension" };
   }
+  if (source === target) {
+    return { ok: false, reason: "noop-same-container" };
+  }
+  const recipe = pickAfconvertRecipe(source, target);
+  if (!recipe) {
+    return { ok: false, reason: "no-recipe" };
+  }
+  if (process.platform !== "darwin") {
+    return { ok: false, reason: "platform-unsupported" };
+  }
+
+  const tmp = tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "tts-transcode-",
+  });
+  const inPath = tmp.write(`in.${source}`, params.audioBuffer);
+  const outPath = tmp.path(`out.${target}`);
+  try {
+    const result = await runAfconvert({
+      args: [...recipe, inPath, outPath],
+      timeoutMs: params.timeoutMs ?? 5000,
+    });
+    if (!result.ok) {
+      return { ok: false, reason: "transcoder-failed", detail: result.detail };
+    }
+    return { ok: true, buffer: tmp.read(`out.${target}`) };
+  } catch (err) {
+    return { ok: false, reason: "transcoder-failed", detail: (err as Error).message };
+  } finally {
+    tmp.cleanup();
+  }
+}
+
+function normalizeContainerExt(ext: string): string | undefined {
+  const trimmed = ext.trim().toLowerCase().replace(/^\./, "");
+  return /^[a-z0-9]{1,12}$/.test(trimmed) ? trimmed : undefined;
+}
+
+function pickAfconvertRecipe(_source: string, target: string): string[] | undefined {
+  if (target === "caf") {
+    // Opus-in-CAF matches native Messages voice memo attachments.
+    return ["-f", "caff", "-d", "opus@24000", "-c", "1"];
+  }
+  return undefined;
+}
+
+function runAfconvert(params: {
+  args: string[];
+  timeoutMs: number;
+}): Promise<{ ok: true } | { ok: false; detail: string }> {
+  return new Promise((resolve) => {
+    const child = spawn("/usr/bin/afconvert", params.args, { stdio: "ignore" });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ ok: false, detail: `timeout-${params.timeoutMs}ms` });
+    }, params.timeoutMs);
+    child.once("error", (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, detail: err.message });
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timer);
+      resolve(code === 0 ? { ok: true } : { ok: false, detail: `exit-${code ?? "unknown"}` });
+    });
+  });
 }

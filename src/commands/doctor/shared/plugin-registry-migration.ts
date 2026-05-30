@@ -201,7 +201,7 @@ function listConfiguredModelProviderIds(config: OpenClawConfig): Set<string> {
   );
 }
 
-export function listMigrationRelevantPluginRecords(params: {
+function listMigrationRelevantPluginRecords(params: {
   index: InstalledPluginIndex;
   config: OpenClawConfig;
   installRecords: Record<string, unknown>;
@@ -255,6 +255,12 @@ export function listMigrationRelevantPluginRecords(params: {
     if (plugin.enabledByDefault && (manifest?.providers.length ?? 0) > 0) {
       return true;
     }
+    if (plugin.startup.memory) {
+      return true;
+    }
+    if ((manifest?.commandAliases ?? []).some((alias) => alias.cliCommand)) {
+      return true;
+    }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {
       return true;
     }
@@ -287,9 +293,11 @@ export async function migratePluginRegistryForInstall(
 
   const rawConfig = await readMigrationConfig(params);
   const config = stripShippedPluginInstallConfigRecords(rawConfig) as OpenClawConfig;
+  const durableInstallRecords =
+    params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params));
   const installRecords = {
     ...extractShippedPluginInstallConfigRecords(rawConfig),
-    ...(await loadInstalledPluginIndexInstallRecords(params)),
+    ...durableInstallRecords,
   };
   const migrationParams = {
     ...params,
@@ -299,7 +307,6 @@ export async function migratePluginRegistryForInstall(
   const inspection = await inspectPersistedInstalledPluginIndex(migrationParams);
   const candidateIndex = loadInstalledPluginIndex({
     ...migrationParams,
-    cache: false,
   });
   const current: InstalledPluginIndex = {
     ...candidateIndex,

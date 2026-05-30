@@ -73,9 +73,10 @@ Release behavior:
 - Changing the root gateway version does not change the iOS app version until you explicitly pin from the gateway.
 - See `apps/ios/VERSIONING.md` for the full workflow.
 
-Required env for beta builds:
+Relay behavior for beta builds:
 
-- `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
+- Beta builds default to `https://ios-push-relay.openclaw.ai`.
+- Optional custom relay override: `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
   This must be a plain `https://host[:port][/path]` base URL without whitespace, query params, fragments, or xcconfig metacharacters.
 
 Archive without upload:
@@ -118,7 +119,7 @@ scripts/ios-asc-keychain-setup.sh \
 
 This should create `apps/ios/fastlane/.env` with the non-secret ASC variables while the private key stays in Keychain.
 
-3. Set the official/TestFlight relay URL for the build:
+3. Optional: set a custom official/TestFlight relay URL for the build. If unset, the beta flow uses `https://ios-push-relay.openclaw.ai`.
 
 ```bash
 export OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com
@@ -213,7 +214,7 @@ See `apps/ios/VERSIONING.md` for the detailed spec.
 - The relay registration is bound to the gateway identity fetched from `gateway.identity.get`, so another gateway cannot reuse that stored registration.
 - The app persists the relay handle metadata locally so reconnects can republish the gateway registration without re-registering on every connect.
 - If the relay base URL changes in a later build, the app refreshes the relay registration instead of reusing the old relay origin.
-- Relay mode requires a reachable relay base URL and uses App Attest plus the app receipt during registration.
+- Relay mode requires a reachable relay base URL and uses App Attest plus a StoreKit app transaction JWS during registration.
 - Gateway-side relay sending is configured through `gateway.push.apns.relay.baseUrl` in `openclaw.json`. `OPENCLAW_APNS_RELAY_BASE_URL` remains a temporary env override only.
 
 ## Official Build Relay Trust Model
@@ -222,7 +223,7 @@ See `apps/ios/VERSIONING.md` for the detailed spec.
   - The app must pair with the gateway and establish both node and operator sessions.
   - The operator session is used to fetch `gateway.identity.get`.
 - `iOS -> relay`
-  - The app registers with the relay over HTTPS using App Attest plus the app receipt.
+  - The app registers with the relay over HTTPS using App Attest plus a StoreKit app transaction JWS.
   - The relay requires the official production/TestFlight distribution path, which is why local
     Xcode/dev installs cannot use the hosted relay.
 - `gateway delegation`
@@ -241,11 +242,16 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 
 ## What Works Now (Concrete)
 
-- Pairing via setup code flow (`/pair` then `/pair approve` in Telegram).
+- Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
 - Chat + Talk surfaces through the operator gateway session.
 - iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
+- Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
 - Share extension deep-link forwarding into the connected gateway session.
+
+## Computer Use Relationship
+
+The iOS app is not a Codex Computer Use backend. Computer Use and `cua-driver mcp` are macOS desktop-control paths; iOS exposes device capabilities as OpenClaw node commands through the gateway. Agents can drive the iPhone canvas, camera, screen, location, voice, and other node capabilities with `node.invoke`, subject to iOS foreground/background limits.
 
 ## Location Automation Use Case (Testing)
 

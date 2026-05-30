@@ -2,6 +2,14 @@
 
 Read-only diff viewer plugin for **OpenClaw** agents.
 
+## Install
+
+```bash
+openclaw plugins install @openclaw/diffs
+```
+
+Restart the Gateway after installing or updating the plugin.
+
 It gives agents one tool, `diffs`, that can:
 
 - render a gateway-hosted diff viewer for canvas use
@@ -61,6 +69,7 @@ Useful options:
 - `expandUnchanged`: expand unchanged sections (per-call option only, not a plugin default key)
 - `path`: display name for before and after input
 - `lang`: language hint for before/after input; unknown values fall back to plain text
+- Default syntax highlighting covers common source, config, and documentation languages. Install `diffs-language-pack` for the extended language catalog.
 - `title`: explicit viewer title
 - `ttlSeconds`: artifact lifetime for viewer and standalone file outputs
 - `baseUrl`: override the gateway base URL used in the returned viewer link (origin or origin+base path only; no query/hash)
@@ -106,6 +115,7 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
             fileScale: 2,
             fileMaxWidth: 960,
             mode: "both",
+            ttlSeconds: 21600,
           },
         },
       },
@@ -116,10 +126,21 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
 
 Explicit tool parameters still win over these defaults.
 
+## Docs
+
+- https://docs.openclaw.ai/tools/diffs
+
+## Package
+
+- Plugin id: `diffs`
+- Package: `@openclaw/diffs`
+- Minimum OpenClaw host: `2026.4.30`
+
 Security options:
 
 - `security.allowRemoteViewer` (default `false`): allows non-loopback access to `/plugins/diffs/view/...` token URLs
 - `viewerBaseUrl` (optional): persistent viewer-link origin/path fallback for shareable URLs
+- `defaults.ttlSeconds` (default `1800`, max `21600`): default artifact lifetime for viewer and standalone file outputs
 
 Example:
 

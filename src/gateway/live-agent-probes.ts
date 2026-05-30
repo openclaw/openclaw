@@ -5,7 +5,7 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 const execFileAsync = promisify(execFile);
 
-export type CronListCliResult = {
+type CronListCliResult = {
   jobs?: Array<{
     id?: string;
     name?: string;
@@ -18,7 +18,7 @@ export type CronListCliResult = {
 
 export type CronListJob = NonNullable<CronListCliResult["jobs"]>[number];
 
-export type LiveCronProbeSpec = {
+type LiveCronProbeSpec = {
   nonce: string;
   name: string;
   message: string;
@@ -36,6 +36,22 @@ export function assertLiveImageProbeReply(text: string): void {
   if (normalized !== "cat" && !/(^|[^a-z])cat[.!?`'")\]]*$/.test(normalized ?? "")) {
     throw new Error(`image probe expected 'cat', got: ${normalized}`);
   }
+}
+
+export function shouldRunLiveImageProbe(params: { agent: string; override?: string }): boolean {
+  const override = params.override?.trim();
+  if (override) {
+    switch (normalizeOptionalLowercaseString(override)) {
+      case "1":
+      case "on":
+      case "true":
+      case "yes":
+        return true;
+      default:
+        return false;
+    }
+  }
+  return normalizeOptionalLowercaseString(params.agent) !== "opencode";
 }
 
 export function createLiveCronProbeSpec(

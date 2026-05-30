@@ -24,7 +24,7 @@ For a normal text run, OpenClaw evaluates candidates in this order:
     Resolve the active session model and auth-profile preference.
   </Step>
   <Step title="Build candidate chain">
-    Build the model candidate chain from the currently selected session model, then `agents.defaults.model.fallbacks` in order, ending with the configured primary when the run started from an override.
+    Build the model candidate chain from the current model selection and the fallback policy for that selection source. Configured defaults, cron job primaries, and auto-selected fallback models can use configured fallbacks; explicit user session selections are strict.
   </Step>
   <Step title="Try the current provider">
     Try the current provider with auth-profile rotation/cooldown rules.
@@ -53,6 +53,35 @@ This is intentionally narrower than "save and restore the whole session". The re
 - `authProfileOverrideCompactionCount`
 
 That prevents a failed fallback retry from overwriting newer unrelated session mutations such as manual `/model` changes or session rotation updates that happened while the attempt was running.
+
+## Selection source policy
+
+OpenClaw separates the selected provider/model from why it was selected. That source controls whether the fallback chain is allowed:
+
+- **Configured default**: `agents.defaults.model.primary` uses `agents.defaults.model.fallbacks`.
+- **Agent primary**: `agents.list[].model` is strict unless that agent model object includes its own `fallbacks`. Use `fallbacks: []` to make the strict behavior explicit, or provide a non-empty list to opt that agent into model fallback.
+- **Auto fallback override**: a runtime fallback writes `providerOverride`, `modelOverride`, `modelOverrideSource: "auto"`, and the selected origin model before retrying. That auto override can keep walking the configured fallback chain without probing the primary on every message, but OpenClaw periodically probes the configured origin again and clears the auto override when it recovers. `/new`, `/reset`, and `sessions.reset` also clear auto-sourced overrides. Heartbeat runs without an explicit `heartbeat.model` clear direct auto overrides when their origin no longer matches the current configured default.
+- **User session override**: `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` write `modelOverrideSource: "user"`. That is an exact session selection. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback.
+- **Legacy session override**: older session entries may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
+- **Cron payload model**: a cron job `payload.model` / `--model` is a job primary, not a user session override. It uses configured fallbacks unless the job provides `payload.fallbacks`; `payload.fallbacks: []` makes the cron run strict.
+
+The auto fallback primary-probe interval is five minutes and is not configurable. OpenClaw remembers recent probes per session and primary model so a failing primary is not retried on every turn. OpenClaw sends a visible notice when a session moves onto fallback and another notice when it returns to the selected primary; it does not repeat the notice on every sticky fallback turn.
+
+## User-visible fallback notices
+
+When a session moves onto an auto-selected fallback, OpenClaw sends a status notice in the same reply surface:
+
+```text
+↪️ Model Fallback: <fallback> (selected <primary>; <reason>)
+```
+
+When a later probe succeeds and the session returns to the selected primary, OpenClaw sends:
+
+```text
+↪️ Model Fallback cleared: <primary> (was <fallback>)
+```
+
+These notices are operational messages, not assistant content. They are delivered once per state change, including side-effect-only turns when feasible, but sticky fallback turns do not repeat them. Delivery bypasses normal source-reply suppression, the notice does not consume the first assistant reply slot for threaded channels, and it is excluded from text-to-speech and commitment extraction.
 
 ## Auth storage (keys + OAuth)
 
@@ -95,7 +124,7 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
   </Step>
 </Steps>
 
-If no explicit order is configured, OpenClaw uses a round‑robin order:
+If no explicit order is configured, OpenClaw uses a round-robin order:
 
 - **Primary key:** profile type (**OAuth before API keys**).
 - **Secondary key:** `usageStats.lastUsed` (oldest first, within each type).
@@ -112,15 +141,37 @@ OpenClaw **pins the chosen auth profile per session** to keep provider caches wa
 Manual selection via `/model …@<profileId>` sets a **user override** for that session and is not auto-rotated until a new session starts.
 
 <Note>
-Auto-pinned profiles (selected by the session router) are treated as a **preference**: they are tried first, but OpenClaw may rotate to another profile on rate limits/timeouts. User-pinned profiles stay locked to that profile; if it fails and model fallbacks are configured, OpenClaw moves to the next model instead of switching profiles.
+Auto-pinned profiles (selected by the session router) are treated as a **preference**: they are tried first, but OpenClaw may rotate to another profile on rate limits/timeouts. When the original profile becomes available again, new runs can prefer it again without changing the selected model or runtime. User-pinned profiles stay locked to that profile; if it fails and model fallbacks are configured, OpenClaw moves to the next model instead of switching profiles.
 </Note>
 
-### Why OAuth can "look lost"
+### OpenAI Codex subscription plus API-key backup
 
-If you have both an OAuth profile and an API key profile for the same provider, round‑robin can switch between them across messages unless pinned. To force a single profile:
+For OpenAI agent models, auth and runtime are separate. `openai/gpt-*` stays on
+the Codex harness while auth can rotate between a Codex subscription profile and
+an OpenAI API-key backup.
 
-- Pin with `auth.order[provider] = ["provider:profileId"]`, or
-- Use a per-session override via `/model …` with a profile override (when supported by your UI/chat surface).
+Use `auth.order.openai` for the user-facing order:
+
+```json5
+{
+  auth: {
+    order: {
+      openai: ["openai:user@example.com", "openai:api-key-backup"],
+    },
+  },
+}
+```
+
+Use `openai:*` for both ChatGPT/Codex OAuth profiles and OpenAI API-key
+profiles. When the subscription hits a Codex usage limit,
+OpenClaw records the exact reset time when Codex provides one, tries the next
+ordered auth profile, and keeps the run inside the Codex harness. Once the reset
+time passes, the subscription profile is eligible again and the next automatic
+selection can return to it.
+
+Use a user-pinned profile only when you want to force one account/key for that
+session. User-pinned profiles are intentionally strict and do not silently jump
+to another profile.
 
 ## Cooldowns
 
@@ -130,9 +181,9 @@ When a profile fails due to auth/rate-limit errors (or a timeout that looks like
   <Accordion title="What lands in the rate-limit / timeout bucket">
     That rate-limit bucket is broader than plain `429`: it also includes provider messages such as `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, `throttled`, `resource exhausted`, and periodic usage-window limits such as `weekly/monthly limit reached`.
 
-    Format/invalid-request errors (for example Cloud Code Assist tool call ID validation failures) are treated as failover-worthy and use the same cooldowns. OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`, `stop reason: error`, and `reason: error` are classified as timeout/failover signals.
+    Format/invalid-request errors are usually terminal because retrying the same payload would fail the same way, so OpenClaw surfaces them instead of rotating auth profiles. Known retry-repair paths can opt in explicitly: for example Cloud Code Assist tool call ID validation failures are sanitized and retried once through the `allowFormatRetry` policy. OpenAI-compatible stop-reason errors such as `Unhandled stop reason: error`, `stop reason: error`, and `reason: error` are classified as timeout/failover signals.
 
-    Generic server text can also land in that timeout bucket when the source matches a known transient pattern. For example, the bare pi-ai stream-wrapper message `An unknown error occurred` is treated as failover-worthy for every provider because pi-ai emits it when provider streams end with `stopReason: "aborted"` or `stopReason: "error"` without specific details. JSON `api_error` payloads with transient server text such as `internal server error`, `unknown error, 520`, `upstream error`, or `backend error` are also treated as failover-worthy timeouts.
+    Generic server text can also land in that timeout bucket when the source matches a known transient pattern. For example, the bare model runtime stream-wrapper message `An unknown error occurred` is treated as failover-worthy for every provider because the shared model runtime emits it when provider streams end with `stopReason: "aborted"` or `stopReason: "error"` without specific details. JSON `api_error` payloads with transient server text such as `internal server error`, `unknown error, 520`, `upstream error`, or `backend error` are also treated as failover-worthy timeouts.
 
     OpenRouter-specific generic upstream text such as bare `Provider returned error` is treated as timeout only when the provider context is actually OpenRouter. Generic internal fallback text such as `LLM request failed with an unknown error.` stays conservative and does not trigger failover by itself.
 
@@ -207,7 +258,7 @@ If all profiles for a provider fail, OpenClaw moves to the next model in `agents
 
 Overloaded and rate-limit errors are handled more aggressively than billing cooldowns. By default, OpenClaw allows one same-provider auth-profile retry, then switches to the next configured model fallback without waiting. Provider-busy signals such as `ModelNotReadyException` land in that overloaded bucket. Tune this with `auth.cooldowns.overloadedProfileRotations`, `auth.cooldowns.overloadedBackoffMs`, and `auth.cooldowns.rateLimitedProfileRotations`.
 
-When a run starts with a model override (hooks or CLI), fallbacks still end at `agents.defaults.model.primary` after trying any configured fallbacks.
+When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks and explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 
 ### Candidate chain rules
 
@@ -218,8 +269,10 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - The requested model is always first.
     - Explicit configured fallbacks are deduplicated but not filtered by the model allowlist. They are treated as explicit operator intent.
     - If the current run is already on a configured fallback in the same provider family, OpenClaw keeps using the full configured chain.
-    - If the current run is on a different provider than config and that current model is not already part of the configured fallback chain, OpenClaw does not append unrelated configured fallbacks from another provider.
-    - When the run started from an override, the configured primary is appended at the end so the chain can settle back onto the normal default once earlier candidates are exhausted.
+    - When no explicit fallback override is supplied, configured fallbacks are tried before the configured primary even if the requested model uses a different provider.
+    - When no explicit fallback override is supplied to the fallback runner, the configured primary is appended at the end so the chain can settle back onto the normal default once earlier candidates are exhausted.
+    - When a caller supplies `fallbacksOverride`, the runner uses exactly the requested model plus that override list. An empty list disables model fallback and prevents the configured primary from being appended as a hidden retry target.
+
   </Accordion>
 </AccordionGroup>
 
@@ -234,11 +287,13 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - billing disables
     - `LiveSessionModelSwitchError`, which is normalized into a failover path so a stale persisted model does not create an outer retry loop
     - other unrecognized errors when there are still remaining candidates
+
   </Tab>
   <Tab title="Does not continue on">
     - explicit aborts that are not timeout/failover-shaped
     - context overflow errors that should stay inside compaction/retry logic (for example `request_too_large`, `INVALID_ARGUMENT: input exceeds the maximum number of tokens`, `input token count exceeds the maximum number of input tokens`, `The input is too long for the model`, or `ollama error: context length exceeded`)
     - a final unknown error when there are no candidates left
+
   </Tab>
 </Tabs>
 
@@ -253,6 +308,7 @@ When every auth profile for a provider is already in cooldown, OpenClaw does not
     - The primary candidate may be probed near cooldown expiry, with a per-provider throttle.
     - Same-provider fallback siblings can be attempted despite cooldown when the failure looks transient (`rate_limit`, `overloaded`, or unknown). This is especially relevant when a rate limit is model-scoped and a sibling model may still recover immediately.
     - Transient cooldown probes are limited to one per provider per fallback run so a single provider does not stall cross-provider fallback.
+
   </Accordion>
 </AccordionGroup>
 
@@ -264,8 +320,10 @@ That means fallback retries have to coordinate with live model switching:
 
 - Only explicit user-driven model changes mark a pending live switch. That includes `/model`, `session_status(model=...)`, and `sessions.patch`.
 - System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
+- User-driven model overrides are treated as exact selections for fallback policy, so an unreachable selected provider surfaces as a failure instead of being masked by `agents.defaults.model.fallbacks`.
 - Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry.
-- Auto fallback overrides remain selected on subsequent turns so OpenClaw does not probe a known-bad primary on every message. `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides and return the session to the configured default.
+- Auto fallback overrides remain selected on subsequent turns so OpenClaw does not probe a known-bad primary on every message. OpenClaw periodically probes the configured origin again and clears the auto override when it recovers; `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides immediately.
+- User replies announce fallback transitions and fallback-cleared recovery once per state change. Sticky fallback turns do not repeat the notice.
 - `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
 - If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.

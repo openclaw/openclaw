@@ -1,3 +1,7 @@
+import {
+  markDiagnosticEmbeddedRunEnded,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
@@ -54,6 +58,11 @@ export type ReplyOperation = {
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
   complete(): void;
+  /**
+   * Complete the operation, clear active-run state, then run follow-up work.
+   * Use when the follow-up can create another ReplyOperation for this session.
+   */
+  completeThen(afterClear: () => void): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
   abortByUser(): void;
   abortForRestart(): void;
@@ -70,13 +79,17 @@ export type ReplyRunRegistry = {
   isActive(sessionKey: string): boolean;
   isStreaming(sessionKey: string): boolean;
   abort(sessionKey: string): boolean;
-  waitForIdle(sessionKey: string, timeoutMs?: number): Promise<boolean>;
+  waitForIdle(
+    sessionKey: string,
+    timeoutMs?: number,
+    opts?: { signal?: AbortSignal },
+  ): Promise<boolean>;
   resolveSessionId(sessionKey: string): string | undefined;
 };
 
 type ReplyRunWaiter = {
-  resolve: (ended: boolean) => void;
-  timer: NodeJS.Timeout;
+  finish: (ended: boolean) => void;
+  timer?: NodeJS.Timeout;
 };
 
 type ReplyRunState = {
@@ -96,6 +109,8 @@ const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STATE_KEY,
   waitKeysBySessionId: new Map<string, string>(),
   waitersByKey: new Map<string, Set<ReplyRunWaiter>>(),
 }));
+
+export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 
 export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {
@@ -129,8 +144,7 @@ function notifyReplyRunEnded(sessionKey: string): void {
   }
   replyRunState.waitersByKey.delete(sessionKey);
   for (const waiter of waiters) {
-    clearTimeout(waiter.timer);
-    waiter.resolve(true);
+    waiter.finish(true);
   }
 }
 
@@ -176,16 +190,36 @@ function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | und
 
 function clearReplyRunState(params: { sessionKey: string; sessionId: string }): void {
   replyRunState.activeRunsByKey.delete(params.sessionKey);
-  if (replyRunState.activeSessionIdsByKey.get(params.sessionKey) === params.sessionId) {
-    replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
-  } else {
-    replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
-  }
+  replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
   if (replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey) {
     replyRunState.activeKeysBySessionId.delete(params.sessionId);
   }
   clearWaitSessionIds(params.sessionKey);
   notifyReplyRunEnded(params.sessionKey);
+}
+
+function replyRunDiagnosticWorkKey(sessionKey: string): string {
+  return `reply:${sessionKey}`;
+}
+
+function markReplyRunDiagnosticWorkStarted(params: {
+  sessionKey: string;
+  sessionId: string;
+}): void {
+  markDiagnosticEmbeddedRunStarted({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    workKey: replyRunDiagnosticWorkKey(params.sessionKey),
+  });
+}
+
+function markReplyRunDiagnosticWorkEnded(params: { sessionKey: string; sessionId: string }): void {
+  markDiagnosticEmbeddedRunEnded({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    workKey: replyRunDiagnosticWorkKey(params.sessionKey),
+    clearRunActivity: false,
+  });
 }
 
 export function createReplyOperation(params: {
@@ -217,6 +251,7 @@ export function createReplyOperation(params: {
       return;
     }
     stateCleared = true;
+    markReplyRunDiagnosticWorkEnded({ sessionKey, sessionId: currentSessionId });
     clearReplyRunState({
       sessionKey,
       sessionId: currentSessionId,
@@ -303,6 +338,7 @@ export function createReplyOperation(params: {
       replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
       replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
       registerWaitSessionId(sessionKey, currentSessionId);
+      markReplyRunDiagnosticWorkStarted({ sessionKey, sessionId: currentSessionId });
     },
     attachBackend(handle) {
       if (result) {
@@ -331,6 +367,10 @@ export function createReplyOperation(params: {
         phase = "completed";
       }
       clearState();
+    },
+    completeThen(afterClear) {
+      operation.complete();
+      afterClear();
     },
     fail(code, cause) {
       if (!result) {
@@ -363,6 +403,7 @@ export function createReplyOperation(params: {
   replyRunState.activeSessionIdsByKey.set(sessionKey, currentSessionId);
   replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
   registerWaitSessionId(sessionKey, currentSessionId);
+  markReplyRunDiagnosticWorkStarted({ sessionKey, sessionId: currentSessionId });
 
   return operation;
 }
@@ -400,35 +441,48 @@ export const replyRunRegistry: ReplyRunRegistry = {
     operation.abortByUser();
     return true;
   },
-  waitForIdle(sessionKey, timeoutMs = 15_000) {
+  waitForIdle(sessionKey, timeoutMs, opts) {
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey || !replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
       return Promise.resolve(true);
     }
+    if (opts?.signal?.aborted) {
+      return Promise.resolve(false);
+    }
     return new Promise((resolve) => {
       const waiters = replyRunState.waitersByKey.get(normalizedSessionKey) ?? new Set();
+      let abortHandler: (() => void) | undefined;
+      let settled = false;
       const waiter: ReplyRunWaiter = {
-        resolve,
-        timer: setTimeout(
-          () => {
-            waiters.delete(waiter);
-            if (waiters.size === 0) {
-              replyRunState.waitersByKey.delete(normalizedSessionKey);
-            }
-            resolve(false);
-          },
-          Math.max(100, timeoutMs),
-        ),
+        finish: (ended) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          waiters.delete(waiter);
+          if (waiters.size === 0) {
+            replyRunState.waitersByKey.delete(normalizedSessionKey);
+          }
+          if (waiter.timer) {
+            clearTimeout(waiter.timer);
+          }
+          if (abortHandler) {
+            opts?.signal?.removeEventListener("abort", abortHandler);
+          }
+          resolve(ended);
+        },
       };
+      if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+        waiter.timer = setTimeout(() => waiter.finish(false), Math.max(100, timeoutMs));
+      }
+      if (opts?.signal) {
+        abortHandler = () => waiter.finish(false);
+        opts.signal.addEventListener("abort", abortHandler, { once: true });
+      }
       waiters.add(waiter);
       replyRunState.waitersByKey.set(normalizedSessionKey, waiters);
       if (!replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
-        waiters.delete(waiter);
-        if (waiters.size === 0) {
-          replyRunState.waitersByKey.delete(normalizedSessionKey);
-        }
-        clearTimeout(waiter.timer);
-        resolve(true);
+        waiter.finish(true);
       }
     });
   },
@@ -479,9 +533,18 @@ export function abortReplyRunBySessionId(sessionId: string): boolean {
   return true;
 }
 
+export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  if (!operation) {
+    return false;
+  }
+  operation.fail("run_failed", cause);
+  return true;
+}
+
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
-  timeoutMs = 15_000,
+  timeoutMs: number,
 ): Promise<boolean> {
   const waitKey = resolveReplyRunWaitKey(sessionId);
   if (!waitKey) {
@@ -510,18 +573,25 @@ export function listActiveReplyRunSessionIds(): string[] {
   return [...replyRunState.activeSessionIdsByKey.values()];
 }
 
-export const __testing = {
+export function listActiveReplyRunSessionKeys(): string[] {
+  return [...replyRunState.activeSessionIdsByKey.keys()];
+}
+
+export const testing = {
   resetReplyRunRegistry(): void {
+    for (const [sessionKey, sessionId] of replyRunState.activeSessionIdsByKey) {
+      markReplyRunDiagnosticWorkEnded({ sessionKey, sessionId });
+    }
     replyRunState.activeRunsByKey.clear();
     replyRunState.activeSessionIdsByKey.clear();
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {
-        clearTimeout(waiter.timer);
-        waiter.resolve(false);
+        waiter.finish(false);
       }
     }
     replyRunState.waitersByKey.clear();
   },
 };
+export { testing as __testing };

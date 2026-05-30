@@ -19,6 +19,11 @@ Cloudflare AI Gateway sits in front of provider APIs and lets you add analytics,
 For Anthropic models routed through Cloudflare AI Gateway, use your **Anthropic API key** as the provider key.
 </Note>
 
+When thinking is enabled for Anthropic Messages models, OpenClaw strips trailing
+assistant prefill turns before sending the payload through Cloudflare AI Gateway.
+Anthropic rejects response prefilling with extended thinking, while ordinary
+non-thinking prefill remains available.
+
 ## Getting started
 
 <Steps>
@@ -96,7 +101,7 @@ openclaw onboard --non-interactive \
     If the Gateway runs as a daemon (launchd/systemd), make sure `CLOUDFLARE_AI_GATEWAY_API_KEY` is available to that process.
 
     <Warning>
-    A key sitting only in `~/.profile` will not help a launchd/systemd daemon unless that environment is imported there as well. Set the key in `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway process can read it.
+    A key exported only in an interactive shell will not help a launchd/systemd daemon unless that environment is imported there as well. Set the key in `~/.openclaw/.env` or via `env.shellEnv` to ensure the gateway process can read it.
     </Warning>
 
   </Accordion>

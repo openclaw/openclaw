@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
+import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ErrorCodes,
   applyBrowserProxyPaths,
@@ -139,10 +140,7 @@ export async function handleBrowserGatewayRequest({
   const path = normalizeOptionalString(typed.path) ?? "";
   const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
   const body = typed.body;
-  const timeoutMs =
-    typeof typed.timeoutMs === "number" && Number.isFinite(typed.timeoutMs)
-      ? Math.max(1, Math.floor(typed.timeoutMs))
-      : undefined;
+  const timeoutMs = clampTimerTimeoutMs(typed.timeoutMs);
 
   if (!methodRaw || !path) {
     respond(

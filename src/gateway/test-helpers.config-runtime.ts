@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
+import type {
+  ReadConfigFileSnapshotForWriteResult,
+  ReadConfigFileSnapshotWithPluginMetadataResult,
+} from "../config/io.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
@@ -110,17 +113,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     }
     const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
 
-    const fileCanvasHost =
-      baseConfig.canvasHost &&
-      typeof baseConfig.canvasHost === "object" &&
-      !Array.isArray(baseConfig.canvasHost)
-        ? ({ ...(baseConfig.canvasHost as Record<string, unknown>) } as Record<string, unknown>)
-        : {};
-    if (typeof testState.canvasHostPort === "number") {
-      fileCanvasHost.port = testState.canvasHostPort;
-    }
-    const canvasHost = Object.keys(fileCanvasHost).length > 0 ? fileCanvasHost : undefined;
-
     const hooks = testState.hooksConfig ?? baseConfig.hooks;
 
     const fileCron =
@@ -142,7 +134,6 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       channels,
       session,
       gateway,
-      canvasHost,
       hooks,
       cron,
     } as OpenClawConfig;
@@ -213,6 +204,10 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
     const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
     await fs.writeFile(configPath, raw, "utf-8");
     actual.resetConfigRuntimeState();
+    return {
+      persistedHash: "test-config-hash",
+      persistedConfig: composeTestConfig(cfg),
+    };
   });
 
   const readConfigFileSnapshotForWrite =
@@ -222,6 +217,22 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
         expectedConfigPath: resolveConfigPath(),
       },
     });
+  const readConfigFileSnapshotWithPluginMetadata =
+    async (): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> => {
+      const snapshot = await readConfigFileSnapshot();
+      const validation = actual.validateConfigObjectWithPlugins(snapshot.config, {
+        env: process.env,
+        pluginValidation: "skip",
+      });
+      return {
+        snapshot: {
+          ...snapshot,
+          valid: validation.ok,
+          issues: validation.ok ? [] : validation.issues,
+          warnings: validation.warnings,
+        },
+      };
+    };
 
   const loadTestConfig = () => {
     const configPath = resolveConfigPath();
@@ -277,6 +288,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       issues: [],
     }),
     readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite,
     writeConfigFile,
   };

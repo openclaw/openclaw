@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
-  type EmbeddingBatchExecutionParams,
   buildBatchHeaders,
   debugEmbeddingsLog,
   normalizeBatchBaseUrl,
@@ -10,14 +9,23 @@ import {
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
 
-export type GeminiBatchRequest = {
+type EmbeddingBatchExecutionParams = {
+  wait: boolean;
+  pollIntervalMs: number;
+  timeoutMs: number;
+  concurrency: number;
+  debug?: (message: string, data?: Record<string, unknown>) => void;
+};
+
+type GeminiBatchRequest = {
   custom_id: string;
   request: GeminiTextEmbeddingRequest;
 };
 
-export type GeminiBatchStatus = {
+type GeminiBatchStatus = {
   name?: string;
   state?: string;
   outputConfig?: { file?: string; fileId?: string };
@@ -29,7 +37,7 @@ export type GeminiBatchStatus = {
   error?: { message?: string };
 };
 
-export type GeminiBatchOutputLine = {
+type GeminiBatchOutputLine = {
   key?: string;
   custom_id?: string;
   request_id?: string;
@@ -214,11 +222,9 @@ function parseGeminiBatchOutput(text: string): GeminiBatchOutputLine[] {
   if (!text.trim()) {
     return [];
   }
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as GeminiBatchOutputLine);
+  return normalizeStringEntries(text.split("\n")).map(
+    (line) => JSON.parse(line) as GeminiBatchOutputLine,
+  );
 }
 
 async function waitForGeminiBatch(params: {

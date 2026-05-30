@@ -1,16 +1,11 @@
 import type { RequestListener } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { withServer } from "../../../test/helpers/http-test-server.js";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
-  createImageLifecycleCore,
-  createImageUpdate,
-  createTextUpdate,
-  expectImageLifecycleDelivery,
-  postWebhookReplay,
-} from "../test-support/lifecycle-test-support.js";
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { handleZaloWebhookRequest } from "./monitor.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
@@ -22,6 +17,13 @@ import {
   type ZaloWebhookProcessUpdate,
   ZaloRetryableWebhookError,
 } from "./monitor.webhook.js";
+import {
+  createImageLifecycleCore,
+  createImageUpdate,
+  createTextUpdate,
+  expectImageLifecycleDelivery,
+  postWebhookReplay,
+} from "./test-support/lifecycle-test-support.js";
 import type { ResolvedZaloAccount } from "./types.js";
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",
@@ -424,7 +426,7 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("does not throw when replay metadata is partially missing", async () => {
+  it("accepts replay metadata when optional fields are missing", async () => {
     const sink = vi.fn();
     const unregister = registerTarget({ path: "/hook-replay-partial", statusSink: sink });
     const payload = {
@@ -547,7 +549,8 @@ describe("handleZaloWebhookRequest", () => {
       core,
       finalizeInboundContextMock,
       recordInboundSessionMock,
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
     } = createImageLifecycleCore();
     const unregister = registerTarget({
@@ -557,6 +560,7 @@ describe("handleZaloWebhookRequest", () => {
         ...DEFAULT_ACCOUNT,
         config: {
           dmPolicy: "open",
+          allowFrom: ["*"],
         },
       },
     });
@@ -579,9 +583,11 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
 
-    await vi.waitFor(() => expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1));
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expectImageLifecycleDelivery({
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
       finalizeInboundContextMock,
       recordInboundSessionMock,
@@ -786,18 +792,17 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
 
-    expect(readAllowFromStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        accountId: "work",
-      }),
-    );
-    expect(upsertPairingRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        id: "123",
-        accountId: "work",
-      }),
-    );
+    expect(readAllowFromStore).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStore).toHaveBeenCalledWith({
+      channel: "zalo",
+      accountId: "work",
+    });
+    expect(upsertPairingRequest).toHaveBeenCalledTimes(1);
+    expect(upsertPairingRequest).toHaveBeenCalledWith({
+      channel: "zalo",
+      accountId: "work",
+      id: "123",
+      meta: { name: "Attacker" },
+    });
   });
 });

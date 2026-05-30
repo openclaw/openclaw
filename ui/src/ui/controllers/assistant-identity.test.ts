@@ -5,10 +5,13 @@ import { loadLocalAssistantIdentity } from "../storage.ts";
 import { loadAssistantIdentity, setAssistantAvatarOverride } from "./assistant-identity.ts";
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
+  let resolve: ((value: T) => void) | undefined;
   const promise = new Promise<T>((next) => {
     resolve = next;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -87,6 +90,7 @@ describe("setAssistantAvatarOverride", () => {
 
     setAssistantAvatarOverride(state, null);
 
+    expect(state.assistantAvatar).toBeNull();
     expect(state.assistantAvatarSource).toBeNull();
     expect(state.assistantAvatarStatus).toBeNull();
     expect(state.assistantAvatarReason).toBeNull();

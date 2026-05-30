@@ -1,4 +1,5 @@
 import { spinner } from "@clack/prompts";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import type {
   UpdateRunResult,
@@ -7,7 +8,6 @@ import type {
 } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 const STEP_LABELS: Record<string, string> = {
@@ -85,7 +85,13 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
     hints.push(
       "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
     );
+    hints.push(
+      "If you recover with sudo/manual package install on a managed Gateway, stop the Gateway first so it does not load files while the package tree is being replaced.",
+    );
     hints.push("Example: npm config set prefix ~/.local && npm i -g openclaw@latest");
+    hints.push(
+      "System install outline: openclaw gateway stop -> sudo <system-npm> i -g openclaw@latest -> openclaw gateway install --force -> openclaw gateway restart.",
+    );
   }
 
   if (

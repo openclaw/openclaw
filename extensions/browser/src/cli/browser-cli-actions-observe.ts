@@ -1,7 +1,11 @@
 import type { Command } from "commander";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runCommandWithRuntime } from "../core-api.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
 
 function runBrowserObserve(action: () => Promise<void>) {
@@ -79,10 +83,10 @@ export function registerBrowserActionObserveCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the response (default: 20000)",
-      (v: string) => Number(v),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .option("--max-chars <n>", "Max body chars to return (default: 200000)", (v: string) =>
-      Number(v),
+      parseBrowserPositiveIntegerOption(v, "--max-chars"),
     )
     .action(async (url: string, opts, cmd) => {
       const parent = parentOpts(cmd);

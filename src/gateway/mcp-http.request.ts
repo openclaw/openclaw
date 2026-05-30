@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -25,16 +27,33 @@ function logMcpLoopbackHttp(step: string, details: Record<string, unknown>): voi
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
 }
 
-export type McpRequestContext = {
+type McpRequestContext = {
   sessionKey: string;
   messageProvider: string | undefined;
+  currentChannelId: string | undefined;
+  currentThreadTs: string | undefined;
+  currentMessageId: string | undefined;
   accountId: string | undefined;
-  senderIsOwner: boolean;
+  inboundEventKind: InboundEventKind | undefined;
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  senderIsOwner: boolean | undefined;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {
   const trimmed = normalizeOptionalString(rawSessionKey);
   return !trimmed || trimmed === "main" ? resolveMainSessionKey(cfg) : trimmed;
+}
+
+function normalizeMcpInboundEventKind(value: string | undefined): InboundEventKind | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed === "room_event" || trimmed === "user_request" ? trimmed : undefined;
+}
+
+function normalizeMcpSourceReplyDeliveryMode(
+  value: string | undefined,
+): SourceReplyDeliveryMode | undefined {
+  const trimmed = normalizeOptionalString(value);
+  return trimmed === "automatic" || trimmed === "message_tool_only" ? trimmed : undefined;
 }
 
 function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
@@ -172,7 +191,14 @@ export function resolveMcpRequestContext(
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
     messageProvider:
       normalizeMessageChannel(getHeader(req, "x-openclaw-message-channel")) ?? undefined,
+    currentChannelId: normalizeOptionalString(getHeader(req, "x-openclaw-current-channel-id")),
+    currentThreadTs: normalizeOptionalString(getHeader(req, "x-openclaw-current-thread-ts")),
+    currentMessageId: normalizeOptionalString(getHeader(req, "x-openclaw-current-message-id")),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
+    inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
+    sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
+      getHeader(req, "x-openclaw-source-reply-delivery-mode"),
+    ),
     senderIsOwner: auth.senderIsOwner,
   };
 }

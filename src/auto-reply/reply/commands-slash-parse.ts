@@ -10,10 +10,20 @@ export type ParsedSlashCommand =
   | { ok: true; action: string; args: string }
   | { ok: false; message: string };
 
-export function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
+function parseSlashCommandActionArgs(raw: string, slash: string): SlashCommandParseResult {
   const trimmed = raw.trim();
   const slashLower = normalizeLowercaseStringOrEmpty(slash);
   if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
+    return { kind: "no-match" };
+  }
+  // Fix #84572: enforce a boundary after the prefix so `/config-check` does
+  // not match the `/config` handler. The character immediately after the
+  // matched prefix must be whitespace, a colon, or end-of-string. Otherwise
+  // the prefix collided with a longer command name (e.g. a skill named
+  // `config-check`) and should be treated as a non-match so the longer
+  // handler — or the skill router — gets a chance to claim it.
+  const charAfter = trimmed.charAt(slash.length);
+  if (charAfter && !/[\s:]/.test(charAfter)) {
     return { kind: "no-match" };
   }
   const rest = trimmed.slice(slash.length).trim();

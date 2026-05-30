@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   DEFAULT_SECRET_FILE_MAX_BYTES,
-  loadSecretFileSync,
   PRIVATE_SECRET_DIR_MODE,
   PRIVATE_SECRET_FILE_MODE,
   readSecretFileSync,
@@ -53,36 +52,18 @@ describe("readSecretFileSync", () => {
     expect(tryReadSecretFileSync(file, "Gateway password")).toBe("top-secret");
   });
 
-  it.each([
-    {
-      name: "surfaces resolvedPath and error details for missing files",
-      assert: (file: string) => {
-        expect(loadSecretFileSync(file, "Gateway password")).toMatchObject({
-          ok: false,
-          resolvedPath: file,
-          message: expect.stringContaining(`Failed to inspect Gateway password file at ${file}:`),
-          error: expect.any(Error),
-        });
-      },
-    },
-    {
-      name: "preserves the underlying cause when throwing for missing files",
-      assert: (file: string) => {
-        let thrown: Error | undefined;
-        try {
-          readSecretFileSync(file, "Gateway password");
-        } catch (error) {
-          thrown = error as Error;
-        }
-
-        expect(thrown).toBeInstanceOf(Error);
-        expect(thrown?.message).toContain(`Failed to inspect Gateway password file at ${file}:`);
-        expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
-      },
-    },
-  ])("$name", async ({ assert }) => {
+  it("preserves the underlying cause when throwing for missing files", async () => {
     const file = await createSecretPath(async (dir) => path.join(dir, "missing-secret.txt"));
-    assert(file);
+    let thrown: Error | undefined;
+    try {
+      readSecretFileSync(file, "Gateway password");
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown?.message).toContain(`Failed to inspect Gateway password file at ${file}:`);
+    expect((thrown as Error & { cause?: unknown }).cause).toBeInstanceOf(Error);
   });
 
   it.each([
@@ -130,64 +111,38 @@ describe("readSecretFileSync", () => {
     await expectSecretFileError({ setup, expectedMessage, options });
   });
 
+  it("throws from the try helper for rejected files", async () => {
+    const file = await createSecretPath(async (dir) => {
+      const target = path.join(dir, "target.txt");
+      const link = path.join(dir, "secret-link.txt");
+      await fsPromises.writeFile(target, "top-secret\n", "utf8");
+      await fsPromises.symlink(target, link);
+      return link;
+    });
+
+    expect(() =>
+      tryReadSecretFileSync(file, "Telegram bot token", { rejectSymlink: true }),
+    ).toThrow(`Telegram bot token file at ${file} must not be a symlink.`);
+  });
+
   it.each([
-    {
-      name: "exposes resolvedPath on non-throwing read failures",
-      pathValue: async () =>
-        createSecretPath(async (dir) => {
-          const file = path.join(dir, "secret.txt");
-          await fsPromises.writeFile(file, " \n\t ", "utf8");
-          return file;
-        }),
-      label: "Gateway password",
-      options: undefined,
-      helper: "load" as const,
-      expected: (file: string | undefined) => ({
-        ok: false,
-        resolvedPath: file,
-        message: `Gateway password file at ${file} is empty.`,
-      }),
-    },
-    {
-      name: "returns undefined from the non-throwing helper for rejected files",
-      pathValue: async () =>
-        createSecretPath(async (dir) => {
-          const target = path.join(dir, "target.txt");
-          const link = path.join(dir, "secret-link.txt");
-          await fsPromises.writeFile(target, "top-secret\n", "utf8");
-          await fsPromises.symlink(target, link);
-          return link;
-        }),
-      label: "Telegram bot token",
-      options: { rejectSymlink: true },
-      helper: "try" as const,
-      expected: () => undefined,
-    },
     {
       name: "returns undefined from the non-throwing helper for blank file paths",
       pathValue: async () => "   ",
       label: "Telegram bot token",
       options: undefined,
-      helper: "try" as const,
-      expected: () => undefined,
+      expected: undefined,
     },
     {
       name: "returns undefined from the non-throwing helper for missing path values",
       pathValue: async () => undefined,
       label: "Telegram bot token",
       options: undefined,
-      helper: "try" as const,
-      expected: () => undefined,
+      expected: undefined,
     },
-  ])("$name", async ({ pathValue, label, options, helper, expected }) => {
+  ])("$name", async ({ pathValue, label, options, expected }) => {
     const file = await pathValue();
-    if (helper === "load") {
-      expect(loadSecretFileSync(file as string, label, options)).toMatchObject(
-        (expected as (file: string | undefined) => Record<string, unknown>)(file),
-      );
-      return;
-    }
-    expect(tryReadSecretFileSync(file, label, options)).toBe((expected as () => undefined)());
+    expect(tryReadSecretFileSync(file, label, options)).toBe(expected);
   });
 });
 
@@ -202,10 +157,7 @@ describe("writePrivateSecretFileAtomic", () => {
       content: '{"ok":true}\n',
     });
 
-    expect(loadSecretFileSync(file, "Gateway password")).toMatchObject({
-      ok: true,
-      secret: '{"ok":true}',
-    });
+    expect(readSecretFileSync(file, "Gateway password")).toBe('{"ok":true}');
     if (process.platform !== "win32") {
       const dirStat = await fsPromises.stat(path.dirname(file));
       const fileStat = await fsPromises.stat(file);

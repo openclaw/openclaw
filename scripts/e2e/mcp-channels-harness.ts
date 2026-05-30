@@ -13,6 +13,8 @@ import { PROTOCOL_VERSION } from "../../dist/gateway/protocol/index.js";
 import { formatErrorMessage } from "../../dist/infra/errors.js";
 import { rawDataToString } from "../../dist/infra/ws.js";
 import { readStringValue } from "../../dist/shared/string-coerce.js";
+import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
+import { waitForWebSocketOpen } from "./mcp-websocket-open.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
@@ -33,7 +35,7 @@ export const ClaudePermissionNotificationSchema = z.object({
 export type ClaudeChannelNotification = z.infer<typeof ClaudeChannelNotificationSchema>["params"];
 
 export type GatewayRpcClient = {
-  request<T>(method: string, params?: unknown): Promise<T>;
+  request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T>;
   events: Array<{ event: string; payload: Record<string, unknown> }>;
   close(): Promise<void>;
 };
@@ -48,10 +50,34 @@ const GATEWAY_WS_OPEN_TIMEOUT_MS = 45_000;
 const GATEWAY_RPC_TIMEOUT_MS = 60_000;
 const GATEWAY_REQUEST_TIMEOUT_MS = 45_000;
 const GATEWAY_CONNECT_RETRY_WINDOW_MS = 420_000;
+const MCP_CONNECT_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_MCP_CHANNELS_CONNECT_TIMEOUT_MS,
+  60_000,
+);
+const GATEWAY_EVENT_RETAIN_LIMIT = readPositiveInt(
+  process.env.OPENCLAW_MCP_CHANNELS_GATEWAY_EVENT_RETAIN_LIMIT,
+  2_000,
+);
+const MCP_RAW_MESSAGE_RETAIN_LIMIT = readPositiveInt(
+  process.env.OPENCLAW_MCP_CHANNELS_RAW_MESSAGE_RETAIN_LIMIT,
+  2_000,
+);
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
+  }
+}
+
+function readPositiveInt(raw: string | undefined, fallback: number) {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function pushBounded<T>(items: T[], item: T, limit: number): void {
+  items.push(item);
+  if (items.length > limit) {
+    items.splice(0, items.length - limit);
   }
 }
 
@@ -121,21 +147,7 @@ async function connectGatewayOnce(params: {
   token: string;
 }): Promise<GatewayRpcClient> {
   const ws = new WebSocket(params.url);
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      ws.close();
-      reject(new Error("gateway ws open timeout"));
-    }, GATEWAY_WS_OPEN_TIMEOUT_MS);
-    timeout.unref?.();
-    ws.once("open", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
+  await waitForWebSocketOpen(ws, GATEWAY_WS_OPEN_TIMEOUT_MS, "gateway ws open timeout");
 
   const pending = new Map<
     string,
@@ -167,13 +179,17 @@ async function connectGatewayOnce(params: {
       error?: { message?: unknown } | null;
     };
     if (typed.type === "event" && typeof typed.event === "string") {
-      events.push({
-        event: typed.event,
-        payload:
-          typed.payload && typeof typed.payload === "object"
-            ? (typed.payload as Record<string, unknown>)
-            : {},
-      });
+      pushBounded(
+        events,
+        {
+          event: typed.event,
+          payload:
+            typed.payload && typeof typed.payload === "object"
+              ? (typed.payload as Record<string, unknown>)
+              : {},
+        },
+        GATEWAY_EVENT_RETAIN_LIMIT,
+      );
       return;
     }
     if (typed.type !== "res" || typeof typed.id !== "string") {
@@ -205,103 +221,73 @@ async function connectGatewayOnce(params: {
     pending.clear();
   });
 
-  const connectId = randomUUID();
-  ws.send(
-    JSON.stringify({
+  const sendGatewayRequest = <T = unknown>(
+    method: string,
+    requestParams: unknown,
+    timeoutMs: number,
+  ): Promise<T> => {
+    const id = randomUUID();
+    const frame = JSON.stringify({
       type: "req",
-      id: connectId,
-      method: "connect",
-      params: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: {
-          id: "openclaw-tui",
-          displayName: "docker-mcp-channels",
-          version: "1.0.0",
-          platform: process.platform,
-          mode: "ui",
+      id,
+      method,
+      params: requestParams ?? {},
+    });
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`gateway request timeout: ${method}`));
+      }, timeoutMs);
+      timeout.unref?.();
+      pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timeout);
+          resolve(value as T);
         },
-        role: "operator",
-        scopes: requestedScopes,
-        caps: [],
-        auth: { token: params.token },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      });
+      try {
+        ws.send(frame);
+      } catch (error) {
+        clearTimeout(timeout);
+        pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  };
+
+  await sendGatewayRequest(
+    "connect",
+    {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "openclaw-tui",
+        displayName: "docker-mcp-channels",
+        version: "1.0.0",
+        platform: process.platform,
+        mode: "ui",
       },
-    }),
+      role: "operator",
+      scopes: requestedScopes,
+      caps: [],
+      auth: { token: params.token },
+    },
+    GATEWAY_RPC_TIMEOUT_MS,
   );
 
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      pending.delete(connectId);
-      reject(new Error("gateway connect timeout"));
-    }, GATEWAY_RPC_TIMEOUT_MS);
-    timeout.unref?.();
-    pending.set(connectId, {
-      resolve: () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      reject: (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      },
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    const id = randomUUID();
-    const timeout = setTimeout(() => {
-      pending.delete(id);
-      reject(new Error("gateway sessions.subscribe timeout"));
-    }, GATEWAY_RPC_TIMEOUT_MS);
-    timeout.unref?.();
-    pending.set(id, {
-      resolve: () => {
-        clearTimeout(timeout);
-        resolve();
-      },
-      reject: (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      },
-    });
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id,
-        method: "sessions.subscribe",
-        params: {},
-      }),
-    );
-  });
+  await sendGatewayRequest("sessions.subscribe", {}, GATEWAY_RPC_TIMEOUT_MS);
 
   return {
-    request(method, requestParams) {
-      const id = randomUUID();
-      ws.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method,
-          params: requestParams ?? {},
-        }),
+    request(method, requestParams, opts) {
+      return sendGatewayRequest(
+        method,
+        requestParams,
+        opts?.timeoutMs ?? GATEWAY_REQUEST_TIMEOUT_MS,
       );
-      return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          pending.delete(id);
-          reject(new Error(`gateway request timeout: ${method}`));
-        }, GATEWAY_REQUEST_TIMEOUT_MS);
-        timeout.unref?.();
-        pending.set(id, {
-          resolve: (value) => {
-            clearTimeout(timeout);
-            resolve(value as T);
-          },
-          reject: (error) => {
-            clearTimeout(timeout);
-            reject(error);
-          },
-        });
-      });
     },
     events,
     async close() {
@@ -369,11 +355,11 @@ export async function connectMcpClient(params: {
   // runtime, not an EventTarget-style addEventListener API.
   // oxlint-disable-next-line unicorn/prefer-add-event-listener
   transport.onmessage = (message) => {
-    rawMessages.push(message);
+    pushBounded(rawMessages, message, MCP_RAW_MESSAGE_RETAIN_LIMIT);
   };
 
   const client = new Client({ name: "docker-mcp-channels", version: "1.0.0" });
-  await client.connect(transport);
+  await connectMcpWithTimeout(client, transport, MCP_CONNECT_TIMEOUT_MS);
   return { client, transport, rawMessages };
 }
 

@@ -22,7 +22,7 @@ For credential eligibility/reason-code rules used by `models status --probe`, se
 
 ## Recommended setup (API key, any provider)
 
-If you’re running a long-lived gateway, start with an API key for your chosen
+If you're running a long-lived gateway, start with an API key for your chosen
 provider.
 For Anthropic specifically, API key auth is still the most predictable server
 setup, but OpenClaw also supports reusing a local Claude CLI login.
@@ -51,7 +51,7 @@ openclaw models status
 openclaw doctor
 ```
 
-If you’d rather not manage env vars yourself, onboarding can store
+If you'd rather not manage env vars yourself, onboarding can store
 API keys for daemon use: `openclaw onboard`.
 
 See [Help](/help) for details on env inheritance (`env.shellEnv`,
@@ -92,6 +92,25 @@ Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 ```bash
 openclaw models auth paste-token --provider openrouter
 ```
+
+`auth-profiles.json` stores credentials only. The canonical shape is:
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "openrouter:default": {
+      "type": "api_key",
+      "provider": "openrouter",
+      "key": "OPENROUTER_API_KEY"
+    }
+  }
+}
+```
+
+OpenClaw expects the canonical `version` + `profiles` shape at runtime. If an older install still has a flat file such as `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to rewrite it as an `openrouter:default` API-key profile; doctor keeps a `.legacy-flat.*.bak` copy beside the original. Endpoint details such as `baseUrl`, `api`, model ids, headers, and timeouts belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in `auth-profiles.json`.
+
+External auth routes such as Bedrock `auth: "aws-sdk"` are also not credentials. If you want a named Bedrock route, put `auth.profiles.<id>.mode: "aws-sdk"` in `openclaw.json`; do not write `type: "aws-sdk"` into `auth-profiles.json`. `openclaw doctor --fix` moves legacy AWS SDK markers from the credential store into config metadata.
 
 Auth profile refs are also supported for static credentials:
 
@@ -160,7 +179,32 @@ requests`, `ThrottlingException`, `concurrency limit reached`, or
 - Non-rate-limit errors are not retried with alternate keys.
 - If all keys fail, the final error from the last attempt is returned.
 
+## Removing provider auth while the gateway is running
+
+When provider auth is removed through the Gateway control plane, OpenClaw deletes
+the saved auth profiles for that provider and aborts active chat or agent runs
+whose selected model provider matches the removed provider. The aborted runs emit
+the normal chat cancellation and lifecycle events with
+`stopReason: "auth-revoked"`, so connected clients can show that the run was
+stopped because credentials were removed.
+
+Removing saved auth does not revoke keys at the provider. Rotate or revoke the
+key in the provider dashboard when you need provider-side invalidation.
+
 ## Controlling which credential is used
+
+### During login (CLI)
+
+Use `openclaw models auth login --provider <id> --profile-id <profileId>` for
+providers that support named auth profiles during login.
+
+```bash
+openclaw models auth login --provider openai --profile-id openai:ritsuko
+openclaw models auth login --provider openai --profile-id openai:lain
+```
+
+This is the easiest way to keep multiple OAuth logins for the same provider
+separate inside one agent.
 
 ### Per-session (chat command)
 
@@ -170,7 +214,7 @@ Use `/model` (or `/model list`) for a compact picker; use `/model status` for th
 
 ### Per-agent (CLI override)
 
-Set an explicit auth profile order override for an agent (stored in that agent’s `auth-state.json`):
+Set an explicit auth profile order override for an agent (stored in that agent's `auth-state.json`):
 
 ```bash
 openclaw models auth order get --provider anthropic
@@ -183,6 +227,10 @@ When you debug order issues, `openclaw models status --probe` shows omitted
 stored profiles as `excluded_by_auth_order` instead of silently skipping them.
 When you debug cooldown issues, remember that rate-limit cooldowns can be tied
 to one model id rather than the whole provider profile.
+
+If you change auth order or profile pinning for a chat that is already running,
+send `/new` or `/reset` in that chat to start a fresh session. Existing
+sessions can keep their current model/profile selection until reset.
 
 ## Troubleshooting
 

@@ -1,4 +1,15 @@
-import { replaceConfigFile } from "../config/config.js";
+import { isDeepStrictEqual } from "node:util";
+import {
+  replaceConfigFile,
+  resolveConfigWriteAfterWrite,
+  transformConfigFileWithRetry,
+  type ConfigMutationCommit,
+  type ConfigReplaceResult,
+  type ConfigMutationResult,
+  type ConfigMutationContext,
+  type ConfigTransformResult,
+  type TransformConfigFileWithRetryParams,
+} from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -17,7 +28,64 @@ function mergeUnsetPaths(
   return merged.length > 0 ? merged : undefined;
 }
 
-type ConfigCommit = (config: OpenClawConfig, writeOptions?: ConfigWriteOptions) => Promise<void>;
+export function hasPendingPluginInstallRecords(config: OpenClawConfig): boolean {
+  return Object.keys(config.plugins?.installs ?? {}).length > 0;
+}
+
+export function unchangedPendingPluginInstallRecordIds(
+  config: OpenClawConfig,
+  baseConfig: OpenClawConfig,
+): string[] {
+  const pendingInstalls = config.plugins?.installs ?? {};
+  return Object.entries(baseConfig.plugins?.installs ?? {})
+    .filter(([pluginId, baseInstall]) => isDeepStrictEqual(pendingInstalls[pluginId], baseInstall))
+    .map(([pluginId]) => pluginId);
+}
+
+export function stripPendingPluginInstallRecords(
+  config: OpenClawConfig,
+  pluginIds?: Iterable<string>,
+): OpenClawConfig {
+  if (!pluginIds) {
+    return withoutPluginInstallRecords(config);
+  }
+  const removeIds = new Set(pluginIds);
+  if (removeIds.size === 0 || !config.plugins?.installs) {
+    return config;
+  }
+  const remainingInstalls = Object.fromEntries(
+    Object.entries(config.plugins.installs).filter(([pluginId]) => !removeIds.has(pluginId)),
+  );
+  if (Object.keys(remainingInstalls).length === 0) {
+    return withoutPluginInstallRecords(config);
+  }
+  return {
+    ...config,
+    plugins: {
+      ...config.plugins,
+      installs: remainingInstalls,
+    },
+  };
+}
+
+type ConfigCommit = (
+  config: OpenClawConfig,
+  writeOptions?: ConfigWriteOptions,
+) => Promise<ConfigReplaceResult | void>;
+const PLUGIN_SOURCE_CHANGED_RESTART_REASON = "plugin source changed";
+
+function mergeAfterWrite(
+  writeOptions: ConfigWriteOptions | undefined,
+  afterWrite: ConfigWriteOptions["afterWrite"],
+): ConfigWriteOptions | undefined {
+  if (afterWrite === undefined) {
+    return writeOptions;
+  }
+  return {
+    ...writeOptions,
+    afterWrite,
+  };
+}
 
 async function commitPluginInstallRecordsWithWriter(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
@@ -25,13 +93,20 @@ async function commitPluginInstallRecordsWithWriter(params: {
   nextConfig: OpenClawConfig;
   writeOptions?: ConfigWriteOptions;
   commit: ConfigCommit;
-}): Promise<void> {
+}): Promise<ConfigReplaceResult | void> {
   const previousInstallRecords =
     params.previousInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
   await writePersistedInstalledPluginIndexInstallRecords(params.nextInstallRecords);
   try {
-    await params.commit(params.nextConfig, {
+    const installRecordsChanged = !isDeepStrictEqual(
+      previousInstallRecords,
+      params.nextInstallRecords,
+    );
+    return await params.commit(params.nextConfig, {
       ...params.writeOptions,
+      ...(installRecordsChanged && params.writeOptions?.afterWrite === undefined
+        ? { afterWrite: { mode: "restart", reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON } }
+        : {}),
       unsetPaths: mergeUnsetPaths(params.writeOptions?.unsetPaths, [
         Array.from(PLUGIN_INSTALLS_CONFIG_PATH),
       ]),
@@ -59,7 +134,7 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   await commitPluginInstallRecordsWithWriter({
     ...params,
     commit: async (nextConfig, writeOptions) => {
-      await replaceConfigFile({
+      return await replaceConfigFile({
         nextConfig,
         ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
         ...(writeOptions ? { writeOptions } : {}),
@@ -76,28 +151,28 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   config: OpenClawConfig;
   installRecords: Record<string, PluginInstallRecord>;
   movedInstallRecords: boolean;
+  persistedHash: string | null;
 }> {
-  const pendingInstallRecords = params.nextConfig.plugins?.installs ?? {};
-  if (Object.keys(pendingInstallRecords).length === 0) {
-    if (params.writeOptions) {
-      await params.commit(params.nextConfig, params.writeOptions);
-    } else {
-      await params.commit(params.nextConfig);
-    }
+  if (!hasPendingPluginInstallRecords(params.nextConfig)) {
+    const committed = params.writeOptions
+      ? await params.commit(params.nextConfig, params.writeOptions)
+      : await params.commit(params.nextConfig);
     return {
       config: params.nextConfig,
       installRecords: {},
       movedInstallRecords: false,
+      persistedHash: committed?.persistedHash ?? null,
     };
   }
 
+  const pendingInstallRecords = params.nextConfig.plugins?.installs ?? {};
   const previousInstallRecords = await loadInstalledPluginIndexInstallRecords();
   const nextInstallRecords = {
     ...previousInstallRecords,
     ...pendingInstallRecords,
   };
   const strippedConfig = withoutPluginInstallRecords(params.nextConfig);
-  await commitPluginInstallRecordsWithWriter({
+  const committed = await commitPluginInstallRecordsWithWriter({
     previousInstallRecords,
     nextInstallRecords,
     nextConfig: strippedConfig,
@@ -108,6 +183,7 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
     config: strippedConfig,
     installRecords: nextInstallRecords,
     movedInstallRecords: true,
+    persistedHash: committed?.persistedHash ?? null,
   };
 }
 
@@ -119,16 +195,68 @@ export async function commitConfigWithPendingPluginInstalls(params: {
   config: OpenClawConfig;
   installRecords: Record<string, PluginInstallRecord>;
   movedInstallRecords: boolean;
+  persistedHash: string | null;
 }> {
   return await commitConfigWriteWithPendingPluginInstalls({
     nextConfig: params.nextConfig,
     ...(params.writeOptions ? { writeOptions: params.writeOptions } : {}),
     commit: async (nextConfig, writeOptions) => {
-      await replaceConfigFile({
+      return await replaceConfigFile({
         nextConfig,
         ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
         ...(writeOptions ? { writeOptions } : {}),
       });
+    },
+  });
+}
+
+export async function transformConfigWithPendingPluginInstalls<T = void>(
+  params: Omit<TransformConfigFileWithRetryParams<T>, "commit">,
+): Promise<ConfigMutationResult<T>> {
+  const commit: ConfigMutationCommit = async ({ nextConfig, snapshot, baseHash, writeOptions }) => {
+    const requestedAfterWrite = params.afterWrite ?? params.writeOptions?.afterWrite;
+    const committed = await commitConfigWriteWithPendingPluginInstalls({
+      nextConfig,
+      ...(writeOptions ? { writeOptions: mergeAfterWrite(writeOptions, params.afterWrite) } : {}),
+      commit: async (config, commitWriteOptions) => {
+        return await replaceConfigFile({
+          nextConfig: config,
+          snapshot,
+          writeOptions: commitWriteOptions ?? {},
+          ...(baseHash !== undefined ? { baseHash } : {}),
+        });
+      },
+    });
+    const afterWrite = resolveConfigWriteAfterWrite(
+      requestedAfterWrite ??
+        (committed.movedInstallRecords
+          ? { mode: "restart", reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON }
+          : undefined),
+    );
+    return {
+      config: committed.config,
+      persistedHash: committed.persistedHash,
+      afterWrite,
+    };
+  };
+
+  return await transformConfigFileWithRetry<T>({
+    ...params,
+    commit,
+  });
+}
+
+export async function mutateConfigWithPendingPluginInstalls<T = void>(
+  params: Omit<TransformConfigFileWithRetryParams<T>, "commit" | "transform"> & {
+    mutate: (draft: OpenClawConfig, context: ConfigMutationContext) => Promise<T | void> | T | void;
+  },
+): Promise<ConfigMutationResult<T>> {
+  return await transformConfigWithPendingPluginInstalls<T>({
+    ...params,
+    transform: async (currentConfig, context): Promise<ConfigTransformResult<T>> => {
+      const draft = structuredClone(currentConfig);
+      const result = (await params.mutate(draft, context)) as T | undefined;
+      return { nextConfig: draft, result };
     },
   });
 }

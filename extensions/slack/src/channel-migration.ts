@@ -1,13 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { SlackChannelConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { SlackChannelConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type SlackChannels = Record<string, SlackChannelConfig>;
 
 type MigrationScope = "account" | "global";
 
-export type SlackChannelMigrationResult = {
+type SlackChannelMigrationResult = {
   migrated: boolean;
   skippedExisting: boolean;
   scopes: MigrationScope[];

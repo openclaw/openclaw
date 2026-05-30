@@ -8,5 +8,6 @@ export {
 export {
   filterMessagingToolDuplicates,
   filterMessagingToolMediaDuplicates,
-  shouldSuppressMessagingToolReplies,
+  resolveMessagingToolPayloadDedupe,
+  shouldDedupeMessagingToolRepliesForRoute,
 } from "./reply-payloads-dedupe.js";

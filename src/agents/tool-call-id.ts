@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import {
-  hasUnredactedSessionsSpawnAttachments,
-  isAllowedToolCallName,
-  normalizeAllowedToolNames,
-} from "./tool-call-shared.js";
+import type { AgentMessage } from "./runtime/index.js";
+import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
@@ -13,7 +9,7 @@ const NATIVE_KIMI_TOOL_CALL_ID_RE = /^functions\.[A-Za-z0-9_-]+:\d+$/;
 const STRICT9_LEN = 9;
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 
-export type ToolCallLike = {
+type ToolCallLike = {
   id: string;
   name?: string;
 };
@@ -90,15 +86,36 @@ export function extractToolCallsFromAssistant(
 export function extractToolResultId(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
 ): string | null {
-  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
-  if (typeof toolCallId === "string" && toolCallId) {
-    return toolCallId;
+  return extractToolResultIds(msg)[0] ?? null;
+}
+
+export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolResult" }>): string[] {
+  const ids: string[] = [];
+  const record = msg as {
+    toolCallId?: unknown;
+    toolUseId?: unknown;
+    tool_call_id?: unknown;
+    tool_use_id?: unknown;
+    callId?: unknown;
+    call_id?: unknown;
+  };
+  for (const value of [
+    record.toolCallId,
+    record.toolUseId,
+    record.tool_call_id,
+    record.tool_use_id,
+    record.callId,
+    record.call_id,
+  ]) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const id = value.trim();
+    if (id && !ids.includes(id)) {
+      ids.push(id);
+    }
   }
-  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
-  if (typeof toolUseId === "string" && toolUseId) {
-    return toolUseId;
-  }
-  return null;
+  return ids;
 }
 
 function isThinkingLikeBlock(block: unknown): boolean {
@@ -119,10 +136,7 @@ function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
 function toolCallNeedsReplayMutation(block: ReplaySafeToolCallBlock): boolean {
   const rawName = typeof block.name === "string" ? block.name : undefined;
   const trimmedName = rawName?.trim();
-  if (rawName && rawName !== trimmedName) {
-    return true;
-  }
-  return hasUnredactedSessionsSpawnAttachments(block);
+  return !!rawName && rawName !== trimmedName;
 }
 
 function isReplaySafeThinkingAssistantMessage(

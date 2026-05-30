@@ -39,6 +39,7 @@ export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
+export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS = 160;
 
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED = true;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_TRIGGER_BELOW_HEALTH = 0.35;
@@ -108,6 +109,7 @@ export type MemoryDeepDreamingConfig = {
   minUniqueQueries: number;
   recencyHalfLifeDays: number;
   maxAgeDays?: number;
+  maxPromotedSnippetTokens?: number;
   sources: MemoryDeepDreamingSource[];
   recovery: MemoryDeepDreamingRecoveryConfig;
   execution: MemoryDreamingExecutionConfig;
@@ -144,6 +146,11 @@ export type MemoryDreamingConfig = {
 export type MemoryDreamingWorkspace = {
   workspaceDir: string;
   agentIds: string[];
+};
+
+export type MemoryDreamingWorkspaceOptions = {
+  primaryWorkspaceDir?: string | null;
+  primaryAgentId?: string | null;
 };
 
 const DEFAULT_MEMORY_LIGHT_DREAMING_SOURCES: MemoryLightDreamingSource[] = [
@@ -351,7 +358,7 @@ export function resolveMemoryDreamingPluginConfig(
   return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }
 
-// Keep the legacy helper name exported until downstream memory plugins migrate.
+/** @deprecated Use resolveMemoryDreamingPluginConfig. */
 export const resolveMemoryCorePluginConfig = resolveMemoryDreamingPluginConfig;
 
 export function resolveMemoryDreamingConfig(params: {
@@ -382,6 +389,7 @@ export function resolveMemoryDreamingConfig(params: {
   const rem = asNullableRecord(phases?.rem);
   const deepRecovery = asNullableRecord(deep?.recovery);
   const maxAgeDays = normalizeOptionalPositiveInt(deep?.maxAgeDays);
+  const maxPromotedSnippetTokens = normalizeOptionalPositiveInt(deep?.maxPromotedSnippetTokens);
 
   return {
     enabled: normalizeBoolean(dreaming?.enabled, DEFAULT_MEMORY_DREAMING_ENABLED),
@@ -448,6 +456,8 @@ export function resolveMemoryDreamingConfig(params: {
           : typeof DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS === "number"
             ? { maxAgeDays: DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS }
             : {}),
+        maxPromotedSnippetTokens:
+          maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
         sources: normalizeStringArray(
           deep?.sources,
           ["daily", "memory", "sessions", "logs", "recall"] as const,
@@ -603,7 +613,10 @@ export function isSameMemoryDreamingDay(
   );
 }
 
-export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDreamingWorkspace[] {
+export function resolveMemoryDreamingWorkspaces(
+  cfg: OpenClawConfig,
+  options: MemoryDreamingWorkspaceOptions = {},
+): MemoryDreamingWorkspace[] {
   const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const agentIds: string[] = [];
   const seenAgents = new Set<string>();
@@ -623,18 +636,29 @@ export function resolveMemoryDreamingWorkspaces(cfg: OpenClawConfig): MemoryDrea
   }
 
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
-  for (const agentId of agentIds) {
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId)?.trim();
+  const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
+    const workspaceDir = workspaceDirRaw?.trim();
     if (!workspaceDir) {
-      continue;
+      return;
     }
+    const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
     const key = normalizePathForComparison(workspaceDir);
     const existing = byWorkspace.get(key);
     if (existing) {
-      existing.agentIds.push(agentId);
-      continue;
+      if (!existing.agentIds.includes(agentId)) {
+        existing.agentIds.push(agentId);
+      }
+      return;
     }
     byWorkspace.set(key, { workspaceDir, agentIds: [agentId] });
+  };
+
+  for (const agentId of agentIds) {
+    addWorkspace(resolveAgentWorkspaceDir(cfg, agentId), agentId);
   }
+  addWorkspace(
+    options.primaryWorkspaceDir ?? undefined,
+    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
+  );
   return [...byWorkspace.values()];
 }

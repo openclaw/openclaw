@@ -8,16 +8,21 @@ import {
   multiselect,
   type Option,
   outro,
+  password,
   select,
   spinner,
   text,
 } from "@clack/prompts";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { note as emitNote } from "../../packages/terminal-core/src/note.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../packages/terminal-core/src/prompt-style.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createCliProgress } from "../cli/progress.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { stripAnsi } from "../terminal/ansi.js";
-import { note as emitNote } from "../terminal/note.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
-import { theme } from "../terminal/theme.js";
 import type { WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
 
@@ -62,6 +67,9 @@ export function createClackPrompter(): WizardPrompter {
     },
     note: async (message, title) => {
       emitNote(message, title);
+    },
+    plain: async (message) => {
+      process.stdout.write(message.endsWith("\n") ? message : `${message}\n`);
     },
     select: async (params) => {
       const options = params.options.map((opt) => {
@@ -115,6 +123,14 @@ export function createClackPrompter(): WizardPrompter {
     },
     text: async (params) => {
       const validate = params.validate;
+      if (params.sensitive) {
+        return guardCancel(
+          await password({
+            message: stylePromptMessage(params.message),
+            validate: validate ? (value) => validate(value ?? "") : undefined,
+          }),
+        );
+      }
       return guardCancel(
         await text({
           message: stylePromptMessage(params.message),

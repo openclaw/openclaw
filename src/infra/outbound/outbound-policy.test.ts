@@ -2,11 +2,21 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { CrossContextDecoration } from "./outbound-policy.js";
 
 let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
 let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCrossContextDecoration;
 let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
 let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
+
+function expectCrossContextDecoration(
+  decoration: CrossContextDecoration | null,
+): CrossContextDecoration {
+  if (decoration === null) {
+    throw new Error("Expected cross-context decoration");
+  }
+  return decoration;
+}
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn((channel: string) =>
@@ -85,6 +95,7 @@ function expectCrossContextPolicyResult(params: {
   to: string;
   currentChannelId: string;
   currentChannelProvider: string;
+  agentId?: string;
   expected: "allow" | RegExp;
 }) {
   const run = () =>
@@ -97,9 +108,10 @@ function expectCrossContextPolicyResult(params: {
         currentChannelId: params.currentChannelId,
         currentChannelProvider: params.currentChannelProvider,
       },
+      agentId: params.agentId,
     });
   if (params.expected === "allow") {
-    expect(run).not.toThrow();
+    expect(run()).toBeUndefined();
     return;
   }
   expect(run).toThrow(params.expected);
@@ -171,6 +183,32 @@ describe("outbound policy helpers", () => {
       currentChannelProvider: "workspace",
       expected: /target="C999" while bound to "C123"/,
     },
+    {
+      cfg: {
+        ...workspaceConfig,
+        agents: {
+          list: [
+            {
+              id: "sandbox",
+              tools: {
+                message: {
+                  crossContext: {
+                    allowWithinProvider: false,
+                  },
+                },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      channel: "workspace",
+      action: "send" as const,
+      to: "C999",
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      agentId: "sandbox",
+      expected: /target="C999" while bound to "C123"/,
+    },
   ])("enforces cross-context policy for %j", (params) => {
     expectCrossContextPolicyResult(params);
   });
@@ -183,10 +221,10 @@ describe("outbound policy helpers", () => {
       toolContext: { currentChannelId: "C12345678", currentChannelProvider: "richchat" },
     });
 
-    expect(decoration).not.toBeNull();
+    const requiredDecoration = expectCrossContextDecoration(decoration);
     const applied = applyCrossContextDecoration({
       message: "hello",
-      decoration: decoration!,
+      decoration: requiredDecoration,
       preferPresentation: true,
     });
 

@@ -1,5 +1,8 @@
 {
   "id": "vllm",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["vllm"],
   "providerRequest": {
@@ -19,8 +22,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "vllm": ["VLLM_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "vllm",
+        "envVars": ["VLLM_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -8,7 +8,7 @@
  * Each account gets its own isolated resource stack:
  *
  * ```
- * _accountRegistry: Map<appId, AccountContext>
+ * accountRegistry: Map<appId, AccountContext>
  *
  * AccountContext {
  *   logger      — per-account prefixed logger
@@ -27,7 +27,7 @@
 import os from "node:os";
 import { ApiClient } from "../api/api-client.js";
 import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
-import { MediaApi as MediaApiClass } from "../api/media.js";
+import { downloadDirectUploadUrl, MediaApi as MediaApiClass } from "../api/media.js";
 import type { Credentials } from "../api/messages.js";
 import { MessageApi as MessageApiClass } from "../api/messages.js";
 import { getNextMsgSeq } from "../api/routes.js";
@@ -41,7 +41,7 @@ import {
   type OutboundMeta,
   type UploadMediaResponse,
 } from "../types.js";
-import { LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
+import { getMaxUploadSize, LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError, debugWarn } from "../utils/log.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
@@ -50,19 +50,16 @@ import { normalizeSource, type MediaSource, type RawMediaSource } from "./media-
 
 // ============ Re-exported types ============
 
-export { ApiError } from "../types.js";
-export type { OutboundMeta, MessageResponse, UploadMediaResponse } from "../types.js";
-export { MediaFileType } from "../types.js";
 export { UploadDailyLimitExceededError } from "../api/media-chunked.js";
 
 // ============ Plugin User-Agent ============
 
-let _pluginVersion = "unknown";
-let _openclawVersion = "unknown";
+let pluginVersion = "unknown";
+let openclawVersion = "unknown";
 
 /** Build the User-Agent string from the current plugin and framework versions. */
 function buildUserAgent(): string {
-  return `QQBotPlugin/${_pluginVersion} (Node/${process.versions.node}; ${os.platform()}; OpenClaw/${_openclawVersion})`;
+  return `QQBotPlugin/${pluginVersion} (Node/${process.versions.node}; ${os.platform()}; OpenClaw/${openclawVersion})`;
 }
 
 /** Return the current User-Agent string. */
@@ -76,17 +73,17 @@ export function getPluginUserAgent(): string {
  */
 export function initSender(options: { pluginVersion?: string; openclawVersion?: string }): void {
   if (options.pluginVersion) {
-    _pluginVersion = options.pluginVersion;
+    pluginVersion = options.pluginVersion;
   }
   if (options.openclawVersion) {
-    _openclawVersion = options.openclawVersion;
+    openclawVersion = options.openclawVersion;
   }
 }
 
 /** Update the OpenClaw framework version in the User-Agent (called after runtime injection). */
 export function setOpenClawVersion(version: string): void {
   if (version) {
-    _openclawVersion = version;
+    openclawVersion = version;
   }
 }
 
@@ -104,10 +101,10 @@ interface AccountContext {
 }
 
 /** Per-appId account registry — each account owns all its resources. */
-const _accountRegistry = new Map<string, AccountContext>();
+const accountRegistry = new Map<string, AccountContext>();
 
 /** Fallback logger for unregistered accounts (CLI / test scenarios). */
-const _fallbackLogger: EngineLogger = {
+const fallbackLogger: EngineLogger = {
   info: (msg: string) => debugLog(msg),
   error: (msg: string) => debugError(msg),
   warn: (msg: string) => debugWarn(msg),
@@ -174,7 +171,7 @@ export function registerAccount(
 ): void {
   const key = appId.trim();
   const md = options.markdownSupport === true;
-  _accountRegistry.set(key, buildAccountContext(options.logger, md));
+  accountRegistry.set(key, buildAccountContext(options.logger, md));
 }
 
 /**
@@ -187,7 +184,7 @@ export function registerAccount(
 export function initApiConfig(appId: string, options: { markdownSupport?: boolean }): void {
   const key = appId.trim();
   const md = options.markdownSupport === true;
-  const existing = _accountRegistry.get(key);
+  const existing = accountRegistry.get(key);
   if (existing) {
     // Re-create only MessageApi with updated config, reuse existing stack.
     existing.messageApi = new MessageApiClass(existing.client, existing.tokenMgr, {
@@ -196,7 +193,7 @@ export function initApiConfig(appId: string, options: { markdownSupport?: boolea
     });
     existing.markdownSupport = md;
   } else {
-    _accountRegistry.set(key, buildAccountContext(_fallbackLogger, md));
+    accountRegistry.set(key, buildAccountContext(fallbackLogger, md));
   }
 }
 
@@ -208,10 +205,10 @@ export function initApiConfig(appId: string, options: { markdownSupport?: boolea
  */
 function resolveAccount(appId: string): AccountContext {
   const key = appId.trim();
-  let ctx = _accountRegistry.get(key);
+  let ctx = accountRegistry.get(key);
   if (!ctx) {
-    ctx = buildAccountContext(_fallbackLogger, false);
-    _accountRegistry.set(key, ctx);
+    ctx = buildAccountContext(fallbackLogger, false);
+    accountRegistry.set(key, ctx);
   }
   return ctx;
 }
@@ -223,26 +220,6 @@ export function getMessageApi(appId: string): MessageApiClass {
   return resolveAccount(appId).messageApi;
 }
 
-/** Get the MediaApi instance for the given appId. */
-export function getMediaApi(appId: string): MediaApiClass {
-  return resolveAccount(appId).mediaApi;
-}
-
-/** Get the ChunkedMediaApi instance for the given appId. */
-export function getChunkedMediaApi(appId: string): ChunkedMediaApiClass {
-  return resolveAccount(appId).chunkedMediaApi;
-}
-
-/** Get the TokenManager instance for the given appId. */
-export function getTokenManager(appId: string): TokenManager {
-  return resolveAccount(appId).tokenMgr;
-}
-
-/** Get the ApiClient instance for the given appId. */
-export function getApiClient(appId: string): ApiClient {
-  return resolveAccount(appId).client;
-}
-
 // ============ Per-appId config ============
 
 type OnMessageSentCallback = (refIdx: string, meta: OutboundMeta) => void;
@@ -250,11 +227,6 @@ type OnMessageSentCallback = (refIdx: string, meta: OutboundMeta) => void;
 /** Register an outbound-message hook scoped to one appId. */
 export function onMessageSent(appId: string, callback: OnMessageSentCallback): void {
   resolveAccount(appId).messageApi.onMessageSent(callback);
-}
-
-/** Return whether markdown is enabled for the given appId. */
-export function isMarkdownSupport(appId: string): boolean {
-  return _accountRegistry.get(appId.trim())?.markdownSupport ?? false;
 }
 
 // ============ Token management ============
@@ -267,17 +239,10 @@ export function clearTokenCache(appId?: string): void {
   if (appId) {
     resolveAccount(appId).tokenMgr.clearCache(appId);
   } else {
-    for (const ctx of _accountRegistry.values()) {
+    for (const ctx of accountRegistry.values()) {
       ctx.tokenMgr.clearCache();
     }
   }
-}
-
-export function getTokenStatus(appId: string): {
-  status: "valid" | "expired" | "refreshing" | "none";
-  expiresAt: number | null;
-} {
-  return resolveAccount(appId).tokenMgr.getStatus(appId);
 }
 
 export function startBackgroundTokenRefresh(
@@ -302,22 +267,10 @@ export function stopBackgroundTokenRefresh(appId?: string): void {
   if (appId) {
     resolveAccount(appId).tokenMgr.stopBackgroundRefresh(appId);
   } else {
-    for (const ctx of _accountRegistry.values()) {
+    for (const ctx of accountRegistry.values()) {
       ctx.tokenMgr.stopBackgroundRefresh();
     }
   }
-}
-
-export function isBackgroundTokenRefreshRunning(appId?: string): boolean {
-  if (appId) {
-    return resolveAccount(appId).tokenMgr.isBackgroundRefreshRunning(appId);
-  }
-  for (const ctx of _accountRegistry.values()) {
-    if (ctx.tokenMgr.isBackgroundRefreshRunning()) {
-      return true;
-    }
-  }
-  return false;
 }
 
 // ============ Gateway URL ============
@@ -357,7 +310,7 @@ export interface DeliveryTarget {
 }
 
 /** Account credentials for API authentication. */
-export interface AccountCreds {
+interface AccountCreds {
   appId: string;
   clientSecret: string;
 }
@@ -453,35 +406,6 @@ export async function sendText(
   return api.sendChannelMessage({ channelId: target.id, content, creds: c, msgId: opts?.msgId });
 }
 
-/**
- * Send text with automatic token-retry.
- */
-export async function sendTextWithRetry(
-  target: DeliveryTarget,
-  content: string,
-  creds: AccountCreds,
-  opts?: { msgId?: string; messageReference?: string },
-  log?: EngineLogger,
-): Promise<MessageResponse> {
-  return withTokenRetry(
-    creds,
-    async () => sendText(target, content, creds, opts),
-    log,
-    creds.appId,
-  );
-}
-
-/**
- * Send a proactive text message (no msgId).
- */
-export async function sendProactiveText(
-  target: DeliveryTarget,
-  content: string,
-  creds: AccountCreds,
-): Promise<MessageResponse> {
-  return sendText(target, content, creds);
-}
-
 // ============ Input notify ============
 
 /**
@@ -528,7 +452,7 @@ export function createRawInputNotifyFn(
 // ============ Media sending (unified) ============
 
 /** Rich-media kind accepted by {@link sendMedia}. */
-export type MediaKind = "image" | "voice" | "video" | "file";
+type MediaKind = "image" | "voice" | "video" | "file";
 
 /** Map a {@link MediaKind} to the wire-level {@link MediaFileType} code. */
 const KIND_TO_FILE_TYPE: Record<MediaKind, MediaFileType> = {
@@ -538,16 +462,13 @@ const KIND_TO_FILE_TYPE: Record<MediaKind, MediaFileType> = {
   file: MediaFileType.FILE,
 };
 
-/** Re-export source types so callers can construct them without importing media-source. */
-export type { MediaSource, RawMediaSource } from "./media-source.js";
-
 /**
  * Options for the unified {@link sendMedia} API.
  *
  * This replaces the legacy four-method surface
  * (`sendImage / sendVoiceMessage / sendVideoMessage / sendFileMessage`).
  */
-export interface SendMediaOptions {
+interface SendMediaOptions {
   /** Delivery target. Only `c2c` and `group` support rich media. */
   target: DeliveryTarget;
   /** Account credentials. */
@@ -675,33 +596,39 @@ async function sendMediaInternal(
     maxSize: Number.MAX_SAFE_INTEGER,
   });
 
-  const uploadResult = await dispatchUpload(
-    ctx,
-    scope,
-    opts.target.id,
-    KIND_TO_FILE_TYPE[opts.kind],
-    source,
-    c,
-    opts.fileName,
-  );
+  try {
+    const uploadResult = await dispatchUpload(
+      ctx,
+      scope,
+      opts.target.id,
+      KIND_TO_FILE_TYPE[opts.kind],
+      source,
+      c,
+      opts.fileName,
+    );
 
-  // Content is semantically meaningful only for image / video — the voice
-  // and file APIs ignore it.
-  const msgContent = opts.kind === "image" || opts.kind === "video" ? opts.content : undefined;
+    // Content is semantically meaningful only for image / video — the voice
+    // and file APIs ignore it.
+    const msgContent = opts.kind === "image" || opts.kind === "video" ? opts.content : undefined;
 
-  const result = await ctx.mediaApi.sendMediaMessage(
-    scope,
-    opts.target.id,
-    uploadResult.file_info,
-    c,
-    {
-      msgId: opts.msgId,
-      content: msgContent,
-    },
-  );
+    const result = await ctx.mediaApi.sendMediaMessage(
+      scope,
+      opts.target.id,
+      uploadResult.file_info,
+      c,
+      {
+        msgId: opts.msgId,
+        content: msgContent,
+      },
+    );
 
-  notifyMediaHook(opts.creds.appId, result, buildOutboundMeta(opts, source));
-  return result;
+    notifyMediaHook(opts.creds.appId, result, buildOutboundMeta(opts, source));
+    return result;
+  } finally {
+    if (source.kind === "localPath") {
+      await source.opened?.close().catch(() => undefined);
+    }
+  }
 }
 
 /**
@@ -726,11 +653,25 @@ async function dispatchUpload(
   fileName?: string,
 ): Promise<UploadMediaResponse> {
   switch (source.kind) {
-    case "url":
+    case "url": {
+      const buffer = await downloadDirectUploadUrl(source.url, {
+        maxBytes: getMaxUploadSize(fileType),
+      });
+      if (buffer.length >= LARGE_FILE_THRESHOLD) {
+        return ctx.chunkedMediaApi.uploadChunked({
+          scope,
+          targetId,
+          fileType,
+          source: { kind: "buffer", buffer, fileName },
+          creds,
+          fileName,
+        });
+      }
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
-        url: source.url,
+        buffer,
         fileName,
       });
+    }
     case "base64":
       return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
         fileData: source.data,
@@ -744,6 +685,12 @@ async function dispatchUpload(
           fileType,
           source,
           creds,
+          fileName,
+        });
+      }
+      if (source.opened) {
+        return ctx.mediaApi.uploadMedia(scope, targetId, fileType, creds, {
+          buffer: await source.opened.handle.readFile(),
           fileName,
         });
       }
@@ -767,9 +714,9 @@ async function dispatchUpload(
         fileName: fileName ?? source.fileName,
       });
     default: {
-      const _exhaustive: never = source;
+      const exhaustive: never = source;
       throw new Error(
-        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(_exhaustive)}`,
+        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(exhaustive)}`,
       );
     }
   }
@@ -803,6 +750,6 @@ export function accountToCreds(account: { appId: string; clientSecret: string })
 }
 
 /** Check whether a target type supports rich media (C2C and Group only). */
-export function supportsRichMedia(targetType: string): boolean {
+function supportsRichMedia(targetType: string): boolean {
   return targetType === "c2c" || targetType === "group";
 }

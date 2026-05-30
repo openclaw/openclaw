@@ -3,6 +3,7 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
+import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
@@ -14,11 +15,12 @@ type CardState = {
   messageId: string;
   sequence: number;
   currentText: string;
+  sentText: string;
   hasNote: boolean;
 };
 
 /** Options for customising the initial streaming card appearance. */
-export type StreamingCardOptions = {
+type StreamingCardOptions = {
   /** Optional header with title and color template. */
   header?: CardHeaderConfig;
   /** Optional grey note footer text. */
@@ -26,7 +28,7 @@ export type StreamingCardOptions = {
 };
 
 /** Optional header for streaming cards (title bar with color template) */
-export type StreamingCardHeader = {
+type StreamingCardHeader = {
   title: string;
   /** Color template: blue, green, red, orange, purple, indigo, wathet, turquoise, yellow, grey, carmine, violet, lime */
   template?: string;
@@ -41,9 +43,20 @@ type StreamingStartOptions = {
 
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
+const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+function resolveStreamingTokenExpiresAt(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
+    return Date.now();
+  }
+  return (
+    resolveExpiresAtMsFromDurationSeconds(value) ??
+    Date.now() + FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS * 1000
+  );
+}
 
 function resolveApiBase(domain?: FeishuDomain): string {
   if (domain === "lark") {
@@ -102,7 +115,7 @@ async function getToken(creds: Credentials): Promise<string> {
   }
   tokenCache.set(key, {
     token: data.tenant_access_token,
-    expiresAt: Date.now() + (data.expire ?? 7200) * 1000,
+    expiresAt: resolveStreamingTokenExpiresAt(data.expire),
   });
   return data.tenant_access_token;
 }
@@ -127,6 +140,16 @@ function shouldPushStreamingUpdate(previousText: string, nextText: string): bool
     return true;
   }
   return nextText.length - previousText.length >= STREAMING_SIGNIFICANT_DELTA_CHARS;
+}
+
+function resolveStreamingCardAppendContent(previousText: string, nextText: string): string {
+  if (!nextText || nextText === previousText) {
+    return "";
+  }
+  if (!previousText) {
+    return nextText;
+  }
+  return nextText.startsWith(previousText) ? nextText.slice(previousText.length) : nextText;
 }
 
 export function mergeStreamingText(
@@ -205,7 +228,7 @@ export class FeishuStreamingSession {
 
     const apiBase = resolveApiBase(this.creds.domain);
     const elements: Record<string, unknown>[] = [
-      { tag: "markdown", content: "⏳ Thinking...", element_id: "content" },
+      { tag: "markdown", content: "", element_id: "content" },
     ];
     if (options?.note) {
       elements.push({ tag: "hr" });
@@ -306,39 +329,90 @@ export class FeishuStreamingSession {
       messageId: sendRes.data.message_id,
       sequence: 1,
       currentText: "",
+      sentText: "",
       hasNote: !!options?.note,
     };
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
 
-  private async updateCardContent(text: string, onError?: (error: unknown) => void): Promise<void> {
+  private async updateCardContent(
+    text: string,
+    onError?: (error: unknown) => void,
+  ): Promise<boolean> {
     if (!this.state) {
-      return;
+      return false;
     }
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
-    await fetchWithSsrFGuard({
-      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
-      init: {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-          "User-Agent": getFeishuUserAgent(),
+    try {
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
+        init: {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json",
+            "User-Agent": getFeishuUserAgent(),
+          },
+          body: JSON.stringify({
+            content: text,
+            sequence: this.state.sequence,
+            uuid: `s_${this.state.cardId}_${this.state.sequence}`,
+          }),
         },
-        body: JSON.stringify({
-          content: text,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
-      auditContext: "feishu.streaming-card.update",
-    })
-      .then(async ({ release }) => {
-        await release();
-      })
-      .catch((error) => onError?.(error));
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.update",
+      });
+      await release();
+      if (!response.ok) {
+        onError?.(new Error(`Update card content failed with HTTP ${response.status}`));
+        return false;
+      }
+      return true;
+    } catch (error) {
+      onError?.(error);
+      return false;
+    }
+  }
+
+  private async replaceCardContent(
+    text: string,
+    onError?: (error: unknown) => void,
+  ): Promise<boolean> {
+    if (!this.state) {
+      return false;
+    }
+    const apiBase = resolveApiBase(this.creds.domain);
+    this.state.sequence += 1;
+    try {
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content`,
+        init: {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${await getToken(this.creds)}`,
+            "Content-Type": "application/json",
+            "User-Agent": getFeishuUserAgent(),
+          },
+          body: JSON.stringify({
+            element: JSON.stringify({ tag: "markdown", content: text, element_id: "content" }),
+            sequence: this.state.sequence,
+            uuid: `r_${this.state.cardId}_${this.state.sequence}`,
+          }),
+        },
+        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
+        auditContext: "feishu.streaming-card.replace",
+      });
+      await release();
+      if (!response.ok) {
+        onError?.(new Error(`Replace card content failed with HTTP ${response.status}`));
+        return false;
+      }
+      return true;
+    } catch (error) {
+      onError?.(error);
+      return false;
+    }
   }
 
   private clearFlushTimer(): void {
@@ -391,9 +465,18 @@ export class FeishuStreamingSession {
       if (!mergedText || mergedText === this.state.currentText) {
         return;
       }
+      const appendContent = resolveStreamingCardAppendContent(this.state.sentText, mergedText);
+      if (!appendContent) {
+        return;
+      }
       this.pendingText = null;
       this.state.currentText = mergedText;
-      await this.updateCardContent(mergedText, (e) => this.log?.(`Update failed: ${String(e)}`));
+      const sent = await this.updateCardContent(appendContent, (e) =>
+        this.log?.(`Update failed: ${String(e)}`),
+      );
+      if (sent && this.state) {
+        this.state.sentText = mergedText;
+      }
     });
     await this.queue;
   }
@@ -437,13 +520,23 @@ export class FeishuStreamingSession {
     await this.queue;
 
     const pendingMerged = mergeStreamingText(this.state.currentText, this.pendingText ?? undefined);
-    const text = finalText ? mergeStreamingText(pendingMerged, finalText) : pendingMerged;
+    const text = finalText ?? pendingMerged;
     const apiBase = resolveApiBase(this.creds.domain);
 
     // Only send final update if content differs from what's already displayed
-    if (text && text !== this.state.currentText) {
-      await this.updateCardContent(text);
+    if (text && text !== this.state.sentText) {
+      const sent = text.startsWith(this.state.sentText)
+        ? await this.updateCardContent(
+            resolveStreamingCardAppendContent(this.state.sentText, text),
+            (e) => this.log?.(`Final update failed: ${String(e)}`),
+          )
+        : await this.replaceCardContent(text, (e) =>
+            this.log?.(`Final replace failed: ${String(e)}`),
+          );
       this.state.currentText = text;
+      if (sent) {
+        this.state.sentText = text;
+      }
     }
 
     // Update note with final model/provider info

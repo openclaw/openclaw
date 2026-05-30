@@ -4,14 +4,18 @@ import {
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { buildExecApprovalFollowupIdempotencyKey } from "./bash-tools.exec-approval-followup-state.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   formatExecDeniedUserMessage,
   isExecDeniedResultText,
   parseExecApprovalResultText,
 } from "./exec-approval-result.js";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -22,6 +26,9 @@ type ExecApprovalFollowupParams = {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
   resultText: string;
+  direct?: boolean;
+  internalRuntimeHandoffId?: string;
+  idempotencyKey?: string;
 };
 
 function buildExecDeniedFollowupPrompt(resultText: string): string {
@@ -120,6 +127,65 @@ function buildSessionResumeFallbackPrefix(): string {
   return "Automatic session resume failed, so sending the status directly.\n\n";
 }
 
+function readGatewayStatus(value: unknown): string | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? normalizeOptionalString((value as { status?: unknown }).status)
+    : undefined;
+}
+
+function readGatewayRunId(value: unknown): string | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? normalizeOptionalString((value as { runId?: unknown }).runId)
+    : undefined;
+}
+
+function buildFollowupWaitError(params: { status?: string; error?: unknown }): Error {
+  const suffix =
+    typeof params.error === "string" && params.error.trim()
+      ? `: ${params.error.trim()}`
+      : params.status
+        ? `: ${params.status}`
+        : "";
+  return new Error(`exec approval followup session resume failed${suffix}`);
+}
+
+function isSuccessfulFollowupStatus(status: string | undefined): boolean {
+  return status === "ok";
+}
+
+async function waitForAgentFollowupRun(params: {
+  runId: string;
+  timeoutMs: number;
+}): Promise<void> {
+  const wait = await callGatewayTool(
+    "agent.wait",
+    { timeoutMs: params.timeoutMs + 2_000 },
+    {
+      runId: params.runId,
+      timeoutMs: params.timeoutMs,
+    },
+  );
+  const status = readGatewayStatus(wait);
+  if (isSuccessfulFollowupStatus(status)) {
+    return;
+  }
+  throw buildFollowupWaitError({ status, error: wait.error });
+}
+
+function shouldPrefixDirectFollowupWithSessionResumeFailure(params: {
+  resultText: string;
+  sessionError: unknown;
+}): boolean {
+  if (!params.sessionError) {
+    return false;
+  }
+  const parsed = parseExecApprovalResultText(params.resultText);
+  if (parsed.kind !== "finished") {
+    return true;
+  }
+  return !normalizeLowercaseStringOrEmpty(parsed.metadata).includes("code 0");
+}
+
 function canDirectSendDeniedFollowup(sessionError: unknown): boolean {
   return sessionError !== null;
 }
@@ -130,17 +196,24 @@ function buildAgentFollowupArgs(params: {
   resultText: string;
   deliveryTarget: ExternalBestEffortDeliveryTarget;
   sessionOnlyOriginChannel?: string;
+  turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  internalRuntimeHandoffId?: string;
+  idempotencyKey?: string;
 }) {
   const { deliveryTarget, sessionOnlyOriginChannel } = params;
+  // When the followup run has no deliverable route and no gateway-internal channel,
+  // preserve the raw turnSourceChannel so the spawned agent inherits messageProvider.
+  // Without this, tools.elevated.allowFrom.<provider> checks fail with provider=null.
+  const fallbackChannel = sessionOnlyOriginChannel ?? params.turnSourceChannel;
   return {
     sessionKey: params.sessionKey,
     message: buildExecApprovalFollowupPrompt(params.resultText),
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
-    channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
+    channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
     to: deliveryTarget.deliver
       ? deliveryTarget.to
       : sessionOnlyOriginChannel
@@ -156,7 +229,14 @@ function buildAgentFollowupArgs(params: {
       : sessionOnlyOriginChannel
         ? params.turnSourceThreadId
         : undefined,
-    idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+    idempotencyKey:
+      params.idempotencyKey ??
+      buildExecApprovalFollowupIdempotencyKey({
+        approvalId: params.approvalId,
+      }),
+    ...(params.internalRuntimeHandoffId
+      ? { internalRuntimeHandoffId: params.internalRuntimeHandoffId }
+      : {}),
   };
 }
 
@@ -165,15 +245,19 @@ async function sendDirectFollowupFallback(params: {
   deliveryTarget: ExternalBestEffortDeliveryTarget;
   resultText: string;
   sessionError: unknown;
+  allowDenied?: boolean;
 }): Promise<boolean> {
   const directText = formatDirectExecApprovalFollowupText(params.resultText, {
-    allowDenied: canDirectSendDeniedFollowup(params.sessionError),
+    allowDenied: params.allowDenied ?? canDirectSendDeniedFollowup(params.sessionError),
   });
   if (!params.deliveryTarget.deliver || !directText) {
     return false;
   }
 
-  const prefix = params.sessionError ? buildSessionResumeFallbackPrefix() : "";
+  const prefix =
+    !params.allowDenied && shouldPrefixDirectFollowupWithSessionResumeFailure(params)
+      ? buildSessionResumeFallbackPrefix()
+      : "";
   await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
@@ -195,9 +279,6 @@ export async function sendExecApprovalFollowup(
     return false;
   }
   const isDenied = isExecDeniedResultText(resultText);
-  if (isDenied && shouldSuppressExecDeniedFollowup(sessionKey)) {
-    return false;
-  }
 
   const deliveryTarget = resolveExternalBestEffortDeliveryTarget({
     channel: params.turnSourceChannel,
@@ -211,26 +292,51 @@ export async function sendExecApprovalFollowup(
       ? normalizedTurnSourceChannel
       : undefined;
 
+  if (isDenied) {
+    if (!sessionKey || shouldSuppressExecDeniedFollowup(sessionKey)) {
+      return false;
+    }
+    return await sendDirectFollowupFallback({
+      approvalId: params.approvalId,
+      deliveryTarget,
+      resultText,
+      sessionError: null,
+      allowDenied: true,
+    });
+  }
+
   let sessionError: unknown = null;
 
-  if (sessionKey) {
+  if (sessionKey && params.direct !== true) {
     try {
-      await callGatewayTool(
-        "agent",
-        { timeoutMs: 60_000 },
-        buildAgentFollowupArgs({
-          approvalId: params.approvalId,
-          sessionKey,
-          resultText,
-          deliveryTarget,
-          sessionOnlyOriginChannel,
-          turnSourceTo: params.turnSourceTo,
-          turnSourceAccountId: params.turnSourceAccountId,
-          turnSourceThreadId: params.turnSourceThreadId,
-        }),
-        { expectFinal: true },
-      );
-      return true;
+      const agentArgs = buildAgentFollowupArgs({
+        approvalId: params.approvalId,
+        sessionKey,
+        resultText,
+        deliveryTarget,
+        sessionOnlyOriginChannel,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceTo: params.turnSourceTo,
+        turnSourceAccountId: params.turnSourceAccountId,
+        turnSourceThreadId: params.turnSourceThreadId,
+        internalRuntimeHandoffId: params.internalRuntimeHandoffId,
+        idempotencyKey: params.idempotencyKey,
+      });
+      const accepted = await callGatewayTool("agent", { timeoutMs: 60_000 }, agentArgs);
+      const status = readGatewayStatus(accepted);
+      if (isSuccessfulFollowupStatus(status)) {
+        return true;
+      }
+      if (status === "accepted" || status === "in_flight" || status === "pending") {
+        const runId =
+          readGatewayRunId(accepted) ?? normalizeOptionalString(agentArgs.idempotencyKey);
+        if (!runId) {
+          throw buildFollowupWaitError({ status: "missing-run-id" });
+        }
+        await waitForAgentFollowupRun({ runId, timeoutMs: 60_000 });
+        return true;
+      }
+      throw buildFollowupWaitError({ status, error: accepted.error });
     } catch (err) {
       sessionError = err;
     }

@@ -47,14 +47,14 @@ Notes:
 - `openclaw chat` and `openclaw terminal` are aliases for `openclaw tui --local`.
 - `--local` cannot be combined with `--url`, `--token`, or `--password`.
 - Local mode uses the embedded agent runtime directly. Most local tools work, but Gateway-only features are unavailable.
-- `openclaw` and `openclaw crestodian` also use this TUI shell, with Crestodian as the local setup and repair chat backend.
+- After a config file has authored settings, `openclaw` and `openclaw crestodian` also use this TUI shell, with Crestodian as the local setup and repair chat backend.
 
 ## What you see
 
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
-- Footer: connection state + agent + session + model + think/fast/verbose/trace/reasoning + token counts + deliver.
+- Footer: connection state + agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
 
 ## Mental model: agents + sessions
@@ -68,10 +68,15 @@ Notes:
   - `per-sender` (default): each agent has many sessions.
   - `global`: the TUI always uses the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
+- If the session has a [goal](/tools/goal), the footer shows its compact state
+  such as `Pursuing goal`, `Goal paused (/goal resume)`, or
+  `Goal achieved`.
+- When started without `--session`, gateway-mode TUI resumes the last selected session for the same gateway, agent, and session scope if that session still exists. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
 
 ## Sending + delivery
 
 - Messages are sent to the Gateway; delivery to providers is off by default.
+- The TUI is an internal source surface like WebChat, not a generic outbound channel. Harnesses that require `tools.message` for visible replies can satisfy the active TUI turn with a targetless `message.send`; explicit provider delivery still uses normal configured channels and never falls back to `lastChannel`.
 - Turn delivery on:
   - `/deliver on`
   - or the Settings panel
@@ -81,7 +86,7 @@ Notes:
 
 - Model picker: list available models and set the session override.
 - Agent picker: choose a different agent.
-- Session picker: shows only sessions for the current agent.
+- Session picker: shows up to 50 sessions for the current agent updated in the last 7 days. Use `/session <key>` to jump to an older known session.
 - Settings: toggle deliver, tool output expansion, and thinking visibility.
 
 ## Keyboard shortcuts
@@ -114,6 +119,7 @@ Session controls:
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
 - `/usage <off|tokens|full>`
+- `/goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear`
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
 - `/deliver <on|off>`

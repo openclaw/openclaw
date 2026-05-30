@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
 import type { ConnectionOptions } from "node:tls";
+import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 type ProxyRule = RegExp | URL | string;
@@ -20,6 +21,12 @@ type GoogleAuthRuntime = {
   OAuth2Client: GoogleAuthModule["OAuth2Client"];
 };
 type GoogleAuthTransport = InstanceType<GaxiosModule["Gaxios"]>;
+type GoogleAuthRequestWithUnknownHeaders = RequestInit & {
+  headers?: unknown;
+};
+type GoogleAuthResponseWithUnknownHeaders = {
+  headers?: unknown;
+};
 type GuardedGoogleAuthRequestInit = RequestInit & {
   agent?: unknown;
   cert?: unknown;
@@ -65,7 +72,36 @@ const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
 const MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES = 64 * 1024;
 
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
-let googleAuthTransportPromise: Promise<GoogleAuthTransport> | null = null;
+
+function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWithUnknownHeaders>(
+  config: T,
+): T & { headers: Headers } {
+  if (!(config.headers instanceof Headers)) {
+    config.headers = new Headers(config.headers as HeadersInit | undefined);
+  }
+  return config as T & { headers: Headers };
+}
+
+function normalizeGoogleAuthResponseHeaders<T extends GoogleAuthResponseWithUnknownHeaders>(
+  response: T,
+): T & { headers: Headers } {
+  if (!(response.headers instanceof Headers)) {
+    response.headers = new Headers(response.headers as HeadersInit | undefined);
+  }
+  return response as T & { headers: Headers };
+}
+
+function installGoogleAuthHeaderCompatibilityInterceptor(
+  transport: GoogleAuthTransport,
+): GoogleAuthTransport {
+  transport.interceptors.request.add({
+    resolved: async (config) => normalizeGoogleAuthPreparedRequestHeaders(config),
+  });
+  transport.interceptors.response.add({
+    resolved: async (response) => normalizeGoogleAuthResponseHeaders(response),
+  });
+  return transport;
+}
 
 function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -428,8 +464,8 @@ export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
 async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Array> {
   const contentLengthHeader = response.headers.get("content-length");
   if (contentLengthHeader) {
-    const contentLength = Number(contentLengthHeader);
-    if (Number.isFinite(contentLength) && contentLength > MAX_GOOGLE_AUTH_RESPONSE_BYTES) {
+    const contentLength = parseMediaContentLength(contentLengthHeader);
+    if (contentLength !== null && contentLength > MAX_GOOGLE_AUTH_RESPONSE_BYTES) {
       throw new Error(`Google auth response exceeds ${MAX_GOOGLE_AUTH_RESPONSE_BYTES} bytes.`);
     }
   }
@@ -500,20 +536,12 @@ export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
 }
 
 export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
-  if (!googleAuthTransportPromise) {
-    googleAuthTransportPromise = (async () => {
-      try {
-        const { Gaxios } = await loadGoogleAuthRuntime();
-        return new Gaxios({
-          fetchImplementation: createGoogleAuthFetch(),
-        });
-      } catch (error) {
-        googleAuthTransportPromise = null;
-        throw error;
-      }
-    })();
-  }
-  return await googleAuthTransportPromise;
+  const { Gaxios } = await loadGoogleAuthRuntime();
+  return installGoogleAuthHeaderCompatibilityInterceptor(
+    new Gaxios({
+      fetchImplementation: createGoogleAuthFetch(),
+    }),
+  );
 }
 
 export async function resolveValidatedGoogleChatCredentials(
@@ -529,11 +557,13 @@ export async function resolveValidatedGoogleChatCredentials(
   return null;
 }
 
-export const __testing = {
+export const testing = {
   resetGoogleAuthRuntimeForTests(): void {
     googleAuthRuntimePromise = null;
-    googleAuthTransportPromise = null;
   },
+  normalizeGoogleAuthPreparedRequestHeaders,
+  normalizeGoogleAuthResponseHeaders,
   resolveGoogleAuthEnvProxyUrl,
   validateGoogleChatServiceAccountCredentials,
 };
+export { testing as __testing };

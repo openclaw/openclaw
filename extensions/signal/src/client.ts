@@ -3,10 +3,12 @@ import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 export type SignalRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
+  maxResponseBytes?: number;
 };
 
 export type SignalRpcError = {
@@ -29,7 +31,7 @@ export type SignalSseEvent = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const MAX_SIGNAL_HTTP_RESPONSE_BYTES = 1_048_576;
+const DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES = 1_048_576;
 const MAX_SIGNAL_SSE_BUFFER_BYTES = 1_048_576;
 const MAX_SIGNAL_SSE_EVENT_DATA_BYTES = 1_048_576;
 
@@ -94,6 +96,20 @@ function assertSignalHttpProtocol(url: URL, label: string): void {
   }
 }
 
+function normalizeSignalHttpResponseMaxBytes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES;
+  }
+  return Math.floor(value);
+}
+
+function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return null;
+  }
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+}
+
 function requestSignalHttpText(
   url: URL,
   options: {
@@ -101,16 +117,18 @@ function requestSignalHttpText(
     headers?: Record<string, string>;
     body?: string;
     timeoutMs: number;
+    maxResponseBytes?: number;
   },
 ): Promise<SignalHttpResponse> {
   assertSignalHttpProtocol(url, "HTTP");
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const client = url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
     let settled = false;
     let request: ClientRequest | undefined;
     const deadline = setTimeout(() => {
-      request?.destroy(new Error(`Signal HTTP exceeded deadline after ${options.timeoutMs}ms`));
-    }, options.timeoutMs);
+      request?.destroy(new Error(`Signal HTTP exceeded deadline after ${timeoutMs}ms`));
+    }, timeoutMs);
     deadline.unref?.();
     const cleanup = () => {
       clearTimeout(deadline);
@@ -132,6 +150,7 @@ function requestSignalHttpText(
       cleanup();
       resolve(response);
     };
+    const maxResponseBytes = normalizeSignalHttpResponseMaxBytes(options.maxResponseBytes);
     request = client.request(
       url,
       {
@@ -144,7 +163,7 @@ function requestSignalHttpText(
         res.on("data", (chunk: Buffer | string) => {
           const next = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
           totalBytes += next.byteLength;
-          if (totalBytes > MAX_SIGNAL_HTTP_RESPONSE_BYTES) {
+          if (totalBytes > maxResponseBytes) {
             const error = new Error("Signal HTTP response exceeded size limit");
             request?.destroy(error);
             res.destroy(error);
@@ -163,8 +182,8 @@ function requestSignalHttpText(
         });
       },
     );
-    request.setTimeout(options.timeoutMs, () => {
-      request?.destroy(new Error(`Signal HTTP timed out after ${options.timeoutMs}ms`));
+    request.setTimeout(timeoutMs, () => {
+      request?.destroy(new Error(`Signal HTTP timed out after ${timeoutMs}ms`));
     });
     request.on("error", rejectOnce);
     if (options.body !== undefined) {
@@ -194,6 +213,7 @@ export async function signalRpcRequest<T = unknown>(
     },
     body,
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    maxResponseBytes: opts.maxResponseBytes,
   });
   if (res.status === 201) {
     return undefined as T;
@@ -248,15 +268,23 @@ function openSignalEventStream(
     let response: IncomingMessage | undefined;
     let onAbort: () => void = () => {};
     let request: ClientRequest;
-    const headerDeadline = setTimeout(() => {
-      const error = new Error(`Signal SSE connection timed out after ${timeoutMs}ms`);
-      response?.destroy(error);
-      request.destroy(error);
-      rejectOnce(error);
-    }, timeoutMs);
-    headerDeadline.unref?.();
+    const effectiveTimeoutMs = normalizeSignalSseTimeoutMs(timeoutMs);
+    const headerDeadline =
+      effectiveTimeoutMs === null
+        ? undefined
+        : setTimeout(() => {
+            const error = new Error(
+              `Signal SSE connection timed out after ${effectiveTimeoutMs}ms`,
+            );
+            response?.destroy(error);
+            request.destroy(error);
+            rejectOnce(error);
+          }, effectiveTimeoutMs);
+    headerDeadline?.unref?.();
     const cleanup = () => {
-      clearTimeout(headerDeadline);
+      if (headerDeadline) {
+        clearTimeout(headerDeadline);
+      }
       abortSignal?.removeEventListener("abort", onAbort);
     };
     const rejectOnce = (error: unknown) => {
@@ -284,7 +312,9 @@ function openSignalEventStream(
           res.destroy();
           return;
         }
-        clearTimeout(headerDeadline);
+        if (headerDeadline) {
+          clearTimeout(headerDeadline);
+        }
         settled = true;
         response = res;
         resolve({ response: res, cleanup });

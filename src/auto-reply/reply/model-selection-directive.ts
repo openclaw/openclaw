@@ -1,9 +1,18 @@
-import { modelKey, normalizeProviderId } from "../../agents/model-selection-normalize.js";
-import {
-  resolveModelRefFromString,
-  type ModelAliasIndex,
-} from "../../agents/model-selection-shared.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
+import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
+import { normalizeProviderId } from "../../agents/provider-id.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+
+export type ModelAliasIndex = {
+  byAlias: Map<
+    string,
+    {
+      alias: string;
+      ref: { provider: string; model: string };
+    }
+  >;
+  byKey: Map<string, string[]>;
+};
 
 export type ModelDirectiveSelection = {
   provider: string;
@@ -11,6 +20,29 @@ export type ModelDirectiveSelection = {
   isDefault: boolean;
   alias?: string;
 };
+
+function formatAddModelCommand(modelRef: string): string {
+  return `openclaw config set agents.defaults.models '${JSON.stringify({ [modelRef]: {} })}' --strict-json --merge`;
+}
+
+function formatNotAllowedError(params: {
+  modelRef: string;
+  rawRuntime?: string | undefined;
+}): string {
+  const rawRuntime = params.rawRuntime?.trim();
+  const retryCommand = rawRuntime
+    ? `/model ${params.modelRef} --runtime ${rawRuntime}`
+    : `/model ${params.modelRef}`;
+  const lines = [
+    `Model "${params.modelRef}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
+    `Add it with: ${formatAddModelCommand(params.modelRef)}`,
+    `Then retry: ${retryCommand}`,
+  ];
+  if (rawRuntime && normalizeProviderId(rawRuntime) === "codex") {
+    lines.push("If the Codex runtime is missing, run: openclaw plugins enable codex");
+  }
+  return lines.join("\n");
+}
 
 const FUZZY_VARIANT_TOKENS = [
   "lightning",
@@ -23,6 +55,53 @@ const FUZZY_VARIANT_TOKENS = [
   "small",
   "nano",
 ];
+
+export function modelKey(provider: string, model: string): string {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
+
+export function resolveModelRefFromDirectiveString(params: {
+  raw: string;
+  defaultProvider: string;
+  aliasIndex: ModelAliasIndex;
+}): { ref: { provider: string; model: string }; alias?: string } | null {
+  const { model } = splitTrailingAuthProfile(params.raw);
+  if (!model) {
+    return null;
+  }
+  if (!model.includes("/")) {
+    const aliasKey = normalizeLowercaseStringOrEmpty(model);
+    const aliasMatch = params.aliasIndex.byAlias.get(aliasKey);
+    if (aliasMatch) {
+      return { ref: aliasMatch.ref, alias: aliasMatch.alias };
+    }
+  }
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf("/");
+  const providerRaw = slash === -1 ? params.defaultProvider : trimmed.slice(0, slash).trim();
+  const modelRaw = slash === -1 ? trimmed : trimmed.slice(slash + 1).trim();
+  if (!providerRaw || !modelRaw) {
+    return null;
+  }
+  return {
+    ref: {
+      provider: normalizeProviderId(providerRaw),
+      model: modelRaw,
+    },
+  };
+}
 
 function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): number | null {
   if (a === b) {
@@ -37,9 +116,13 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
     return null;
   }
 
-  // Standard DP with early exit. O(maxDistance * minLen) in common cases.
-  const prev = Array.from({ length: bLen + 1 }, (_, idx) => idx);
-  const curr = Array.from({ length: bLen + 1 }, () => 0);
+  // Standard DP with early exit. Reuse fixed-size numeric buffers so fuzzy
+  // matching large model catalogs does not allocate a row per candidate.
+  const prev = new Uint32Array(bLen + 1);
+  const curr = new Uint32Array(bLen + 1);
+  for (let index = 0; index <= bLen; index += 1) {
+    prev[index] = index;
+  }
 
   for (let i = 1; i <= aLen; i++) {
     curr[0] = i;
@@ -59,12 +142,12 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
     }
 
     for (let j = 0; j <= bLen; j++) {
-      prev[j] = curr[j] ?? 0;
+      prev[j] = curr[j];
     }
   }
 
-  const dist = prev[bLen] ?? null;
-  if (dist == null || dist > maxDistance) {
+  const dist = prev[bLen];
+  if (dist > maxDistance) {
     return null;
   }
   return dist;
@@ -183,6 +266,7 @@ export function resolveModelDirectiveSelection(params: {
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
+  rawRuntime?: string | undefined;
 }): { selection?: ModelDirectiveSelection; error?: string } {
   const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
 
@@ -221,6 +305,9 @@ export function resolveModelDirectiveSelection(params: {
       }
       const provider = normalizeProviderId(key.slice(0, slash));
       const model = key.slice(slash + 1);
+      if (model === "*") {
+        continue;
+      }
       if (providerFilter && provider !== providerFilter) {
         continue;
       }
@@ -241,7 +328,7 @@ export function resolveModelDirectiveSelection(params: {
       }
       for (const match of aliasMatches) {
         const key = modelKey(match.provider, match.model);
-        if (!allowedModelKeys.has(key)) {
+        if (!isModelKeyAllowedBySet(allowedModelKeys, key)) {
           continue;
         }
         if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
@@ -299,7 +386,7 @@ export function resolveModelDirectiveSelection(params: {
     return { selection: buildSelection(best.provider, best.model) };
   };
 
-  const resolved = resolveModelRefFromString({
+  const resolved = resolveModelRefFromDirectiveString({
     raw: rawTrimmed,
     defaultProvider,
     aliasIndex,
@@ -316,7 +403,7 @@ export function resolveModelDirectiveSelection(params: {
   }
 
   const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowedModelKeys.size === 0 || allowedModelKeys.has(resolvedKey)) {
+  if (allowedModelKeys.size === 0 || isModelKeyAllowedBySet(allowedModelKeys, resolvedKey)) {
     return {
       selection: {
         provider: resolved.ref.provider,
@@ -346,6 +433,9 @@ export function resolveModelDirectiveSelection(params: {
   }
 
   return {
-    error: `Model "${resolved.ref.provider}/${resolved.ref.model}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
+    error: formatNotAllowedError({
+      modelRef: `${resolved.ref.provider}/${resolved.ref.model}`,
+      rawRuntime: params.rawRuntime,
+    }),
   };
 }

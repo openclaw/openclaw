@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { z } from "zod";
 import {
   isQaCredentialTruthyOptIn,
@@ -17,6 +18,7 @@ const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000, 5_000] as const;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
+const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 
 const convexAcquireSuccessSchema = z.object({
   status: z.literal("ok"),
@@ -38,6 +40,11 @@ const convexOkSchema = z.object({
   status: z.literal("ok"),
 });
 
+const convexPayloadChunkSuccessSchema = z.object({
+  status: z.literal("ok"),
+  data: z.string(),
+});
+
 type ConvexCredentialBrokerConfig = {
   acquireTimeoutMs: number;
   acquireUrl: string;
@@ -47,11 +54,12 @@ type ConvexCredentialBrokerConfig = {
   httpTimeoutMs: number;
   leaseTtlMs: number;
   ownerId: string;
+  payloadChunkUrl: string;
   releaseUrl: string;
   role: QaCredentialRole;
 };
 
-export type QaCredentialLeaseHeartbeat = {
+type QaCredentialLeaseHeartbeat = {
   getFailure(): Error | null;
   stop(): Promise<void>;
   throwIfFailed(): void;
@@ -59,9 +67,9 @@ export type QaCredentialLeaseHeartbeat = {
 
 export type QaCredentialRole = "ci" | "maintainer";
 
-export type QaCredentialLeaseSource = "convex" | "env";
+type QaCredentialLeaseSource = "convex" | "env";
 
-export type QaCredentialLease<TPayload> = {
+type QaCredentialLease<TPayload> = {
   credentialId?: string;
   heartbeat(): Promise<void>;
   heartbeatIntervalMs: number;
@@ -75,7 +83,7 @@ export type QaCredentialLease<TPayload> = {
   source: QaCredentialLeaseSource;
 };
 
-export type AcquireQaCredentialLeaseOptions<TPayload> = {
+type AcquireQaCredentialLeaseOptions<TPayload> = {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   kind: string;
@@ -196,7 +204,36 @@ function resolveConvexCredentialBrokerConfig(params: {
     ),
     acquireUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "acquire"),
     heartbeatUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "heartbeat"),
+    payloadChunkUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "payload-chunk"),
     releaseUrl: joinQaCredentialEndpoint(baseUrl, endpointPrefix, "release"),
+  };
+}
+
+function parseChunkedPayloadMarker(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record[CHUNKED_PAYLOAD_MARKER] !== true) {
+    return null;
+  }
+  if (
+    typeof record.chunkCount !== "number" ||
+    !Number.isInteger(record.chunkCount) ||
+    record.chunkCount < 1
+  ) {
+    throw new Error("Chunked credential payload marker has an invalid chunkCount.");
+  }
+  if (
+    typeof record.byteLength !== "number" ||
+    !Number.isInteger(record.byteLength) ||
+    record.byteLength < 0
+  ) {
+    throw new Error("Chunked credential payload marker has an invalid byteLength.");
+  }
+  return {
+    chunkCount: record.chunkCount,
+    byteLength: record.byteLength,
   };
 }
 
@@ -222,6 +259,7 @@ async function postConvexBroker(params: {
   timeoutMs: number;
   url: string;
 }): Promise<unknown> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   const response = await params.fetchImpl(params.url, {
     method: "POST",
     headers: {
@@ -229,7 +267,7 @@ async function postConvexBroker(params: {
       "content-type": "application/json",
     },
     body: JSON.stringify(params.body),
-    signal: AbortSignal.timeout(params.timeoutMs),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   const text = await response.text();
@@ -257,6 +295,42 @@ async function postConvexBroker(params: {
     );
   }
   return payload;
+}
+
+async function resolveConvexCredentialPayload(params: {
+  acquired: z.infer<typeof convexAcquireSuccessSchema>;
+  config: ConvexCredentialBrokerConfig;
+  fetchImpl: typeof fetch;
+  kind: string;
+}) {
+  const marker = parseChunkedPayloadMarker(params.acquired.payload);
+  if (!marker) {
+    return params.acquired.payload;
+  }
+  const chunks: string[] = [];
+  for (let index = 0; index < marker.chunkCount; index += 1) {
+    const payload = await postConvexBroker({
+      fetchImpl: params.fetchImpl,
+      timeoutMs: params.config.httpTimeoutMs,
+      authToken: params.config.authToken,
+      url: params.config.payloadChunkUrl,
+      body: {
+        kind: params.kind,
+        ownerId: params.config.ownerId,
+        actorRole: params.config.role,
+        credentialId: params.acquired.credentialId,
+        leaseToken: params.acquired.leaseToken,
+        index,
+      },
+    });
+    const parsed = convexPayloadChunkSuccessSchema.parse(payload);
+    chunks.push(parsed.data);
+  }
+  const serialized = chunks.join("");
+  if (serialized.length !== marker.byteLength) {
+    throw new Error("Chunked credential payload length mismatch.");
+  }
+  return JSON.parse(serialized) as unknown;
 }
 
 function computeAcquireBackoffMs(params: {
@@ -355,7 +429,13 @@ export async function acquireQaCredentialLease<TPayload>(
       };
       let parsedPayload: TPayload;
       try {
-        parsedPayload = opts.parsePayload(acquired.payload);
+        const resolvedPayload = await resolveConvexCredentialPayload({
+          acquired,
+          config,
+          fetchImpl,
+          kind: opts.kind,
+        });
+        parsedPayload = opts.parsePayload(resolvedPayload);
       } catch (error) {
         try {
           await releaseLease();
@@ -518,15 +598,3 @@ export function startQaCredentialLeaseHeartbeat(
     },
   };
 }
-
-export const __testing = {
-  DEFAULT_ACQUIRE_TIMEOUT_MS,
-  DEFAULT_ENDPOINT_PREFIX,
-  DEFAULT_HEARTBEAT_INTERVAL_MS,
-  DEFAULT_LEASE_TTL_MS,
-  computeAcquireBackoffMs,
-  normalizeQaCredentialRole,
-  normalizeQaCredentialSource,
-  parsePositiveIntegerEnv,
-  resolveConvexCredentialBrokerConfig,
-};

@@ -4,7 +4,8 @@ import { isAbsolute, resolve } from "node:path";
 import { basename } from "node:path";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
@@ -120,7 +121,6 @@ function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
 // ============ Core Functions ============
 
 /** Max blocks per documentBlockChildren.create request */
-const MAX_BLOCKS_PER_INSERT = 50;
 const MAX_CONVERT_RETRY_DEPTH = 8;
 
 async function convertMarkdown(client: Lark.Client, markdown: string) {
@@ -235,7 +235,8 @@ function normalizeConvertedBlockTree(
 
   const rootIds = (
     firstLevelIds && firstLevelIds.length > 0 ? firstLevelIds : inferredTopLevelIds
-  ).filter((id, index, arr) => typeof id === "string" && byId.has(id) && arr.indexOf(id) === index);
+  ).filter((id): id is string => typeof id === "string" && byId.has(id));
+  const uniqueRootIds = uniqueStrings(rootIds);
 
   const orderedBlocks: FeishuDocxBlock[] = [];
   const visited = new Set<string>();
@@ -255,7 +256,7 @@ function normalizeConvertedBlockTree(
     }
   };
 
-  for (const rootId of rootIds) {
+  for (const rootId of uniqueRootIds) {
     visit(rootId);
   }
 
@@ -268,7 +269,7 @@ function normalizeConvertedBlockTree(
     }
   }
 
-  return { orderedBlocks, rootIds: rootIds.filter((id): id is string => typeof id === "string") };
+  return { orderedBlocks, rootIds: uniqueRootIds };
 }
 
 async function insertBlocks(
@@ -415,26 +416,6 @@ async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
   return { blocks: allBlocks, firstLevelBlockIds: allRootIds };
 }
 
-/** Insert blocks in batches of MAX_BLOCKS_PER_INSERT to avoid API 400 errors */
-async function _chunkedInsertBlocks(
-  client: Lark.Client,
-  docToken: string,
-  blocks: FeishuDocxBlock[],
-  parentBlockId?: string,
-): Promise<{ children: FeishuDocxBlockChild[]; skipped: string[] }> {
-  const allChildren: FeishuDocxBlockChild[] = [];
-  const allSkipped: string[] = [];
-
-  for (let i = 0; i < blocks.length; i += MAX_BLOCKS_PER_INSERT) {
-    const batch = blocks.slice(i, i + MAX_BLOCKS_PER_INSERT);
-    const { children, skipped } = await insertBlocks(client, docToken, batch, parentBlockId);
-    allChildren.push(...children);
-    allSkipped.push(...skipped);
-  }
-
-  return { children: allChildren, skipped: allSkipped };
-}
-
 type Logger = { info?: (msg: string) => void };
 
 /**
@@ -530,7 +511,7 @@ async function uploadImageToDocx(
 }
 
 async function downloadImage(url: string, maxBytes: number): Promise<Buffer> {
-  const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
+  const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({ url, maxBytes });
   return fetched.buffer;
 }
 
@@ -577,7 +558,7 @@ async function resolveUploadInput(
       );
     }
     const mimeMatch = header.match(/data:([^;]+)/);
-    const ext = mimeMatch?.[1]?.split("/")[1] ?? "png";
+    const ext = extensionForMime(mimeMatch?.[1])?.slice(1) ?? "png";
     // Estimate decoded byte count from base64 length BEFORE allocating the
     // full buffer to avoid spiking memory on oversized payloads.
     const estimatedBytes = Math.ceil((trimmedData.length * 3) / 4);
@@ -655,7 +636,7 @@ async function resolveUploadInput(
   }
 
   if (url) {
-    const fetched = await getFeishuRuntime().channel.media.fetchRemoteMedia({ url, maxBytes });
+    const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({ url, maxBytes });
     const urlPath = new URL(url).pathname;
     const guessed = urlPath.split("/").pop() || "upload.bin";
     return {
@@ -1386,14 +1367,12 @@ async function listAppScopes(client: Lark.Client) {
 
 export function registerFeishuDocTools(api: OpenClawPluginApi) {
   if (!api.config) {
-    api.logger.debug?.("feishu_doc: No config available, skipping doc tools");
     return;
   }
 
   // Check if any account is configured
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
-    api.logger.debug?.("feishu_doc: No Feishu accounts configured, skipping doc tools");
     return;
   }
 
@@ -1614,9 +1593,5 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
       { name: "feishu_app_scopes" },
     );
     registered.push("feishu_app_scopes");
-  }
-
-  if (registered.length > 0) {
-    api.logger.debug?.(`feishu_doc: Registered ${registered.join(", ")}`);
   }
 }

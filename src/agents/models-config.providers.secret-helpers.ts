@@ -3,7 +3,7 @@ import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { resolveEnvApiKey } from "./model-auth-env.js";
+import { resolveEnvApiKey, type EnvApiKeyLookupOptions } from "./model-auth-env.js";
 import {
   isNonSecretApiKeyMarker,
   resolveEnvSecretRefHeaderValueMarker,
@@ -39,7 +39,7 @@ export type ProviderAuthResolver = (
 ) => {
   apiKey: string | undefined;
   discoveryApiKey?: string;
-  mode: "api_key" | "oauth" | "token" | "none";
+  mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
   source: "env" | "profile" | "none";
   profileId?: string;
 };
@@ -63,8 +63,9 @@ export function toDiscoveryApiKey(value: string | undefined): string | undefined
 export function resolveEnvApiKeyVarName(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,
+  options: EnvApiKeyLookupOptions = {},
 ): string | undefined {
-  const resolved = resolveEnvApiKey(provider, env);
+  const resolved = resolveEnvApiKey(provider, env, options);
   if (!resolved) {
     return undefined;
   }
@@ -286,13 +287,12 @@ export function resolveMissingProviderApiKey(params: {
   const authMode = params.provider.auth;
   if (params.providerApiKeyResolver && (!authMode || authMode === "aws-sdk")) {
     const resolvedApiKey = params.providerApiKeyResolver(params.env);
-    if (!resolvedApiKey) {
-      return params.provider;
+    if (resolvedApiKey) {
+      return {
+        ...params.provider,
+        apiKey: resolvedApiKey,
+      };
     }
-    return {
-      ...params.provider,
-      apiKey: resolvedApiKey,
-    };
   }
   if (authMode === "aws-sdk") {
     const awsEnvVar = resolveAwsSdkApiKeyVarName(params.env);

@@ -1,17 +1,17 @@
 import {
   completeSimple,
   streamSimple,
-  Type,
   type AssistantMessage,
   type Context,
   type Model,
-} from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+} from "openclaw/plugin-sdk/llm";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
-} from "../../src/agents/live-test-helpers.js";
+} from "openclaw/plugin-sdk/test-env";
+import { Type } from "typebox";
+import { describe, expect, it } from "vitest";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 
@@ -142,38 +142,91 @@ describeLive("deepseek plugin live", () => {
     };
     let capturedPayload: Record<string, unknown> | undefined;
     const streamFn = createDeepSeekV4ThinkingWrapper(streamSimple, "high");
-    expect(streamFn).toBeDefined();
+    if (!streamFn) {
+      throw new Error("expected DeepSeek V4 thinking stream wrapper");
+    }
 
-    const stream = streamFn?.(resolveDeepSeekV4LiveModel(), context, {
+    const stream = streamFn(resolveDeepSeekV4LiveModel(), context, {
       apiKey: DEEPSEEK_KEY,
       maxTokens: 64,
       onPayload: (payload) => {
         capturedPayload = payload as Record<string, unknown>;
       },
     });
-    expect(stream).toBeDefined();
 
-    const result = await (await stream!).result();
+    const result = await (await stream).result();
     if (result.stopReason === "error") {
       throw new Error(result.errorMessage || "DeepSeek V4 replay returned error with no message");
     }
 
     const messages = capturedPayload?.messages;
     expect(Array.isArray(messages)).toBe(true);
-    expect((messages as Array<Record<string, unknown>>)[1]).toMatchObject({
-      role: "assistant",
-      reasoning_content: "",
-      tool_calls: [
+    const assistantMessage = (messages as Array<Record<string, unknown>>)[1];
+    expect(assistantMessage?.role).toBe("assistant");
+    expect(assistantMessage?.reasoning_content).toBe("");
+    const toolCalls = assistantMessage?.tool_calls;
+    expect(Array.isArray(toolCalls)).toBe(true);
+    const toolCall = (toolCalls as Array<Record<string, unknown>>)[0];
+    expect(toolCall?.id).toBe(toolCallId);
+    expect(toolCall?.type).toBe("function");
+    const toolFunction = toolCall?.function as Record<string, unknown> | undefined;
+    expect(toolFunction?.name).toBe("noop");
+    expect(toolFunction?.arguments).toBe("{}");
+    expect(extractNonEmptyAssistantText(result.content).length).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("accepts V4 thinking replay after a prior plain assistant message", async () => {
+    const context: Context = {
+      messages: [
         {
-          id: toolCallId,
-          type: "function",
-          function: {
-            name: "noop",
-            arguments: "{}",
-          },
+          role: "user",
+          content: "Say hello.",
+          timestamp: Date.now() - 2,
+        },
+        {
+          role: "assistant",
+          api: "openai-completions",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [{ type: "text", text: "Hello." }],
+          usage: ZERO_USAGE,
+          stopReason: "stop",
+          timestamp: Date.now() - 1,
+        },
+        {
+          role: "user",
+          content: "Reply with exactly: ok",
+          timestamp: Date.now(),
         },
       ],
+    };
+    let capturedPayload: Record<string, unknown> | undefined;
+    const streamFn = createDeepSeekV4ThinkingWrapper(streamSimple, "high");
+    if (!streamFn) {
+      throw new Error("expected DeepSeek V4 thinking stream wrapper");
+    }
+
+    const stream = streamFn(resolveDeepSeekV4LiveModel(), context, {
+      apiKey: DEEPSEEK_KEY,
+      maxTokens: 64,
+      onPayload: (payload) => {
+        capturedPayload = payload as Record<string, unknown>;
+      },
     });
+
+    const result = await (await stream).result();
+    if (result.stopReason === "error") {
+      throw new Error(
+        result.errorMessage || "DeepSeek V4 plain replay returned error with no message",
+      );
+    }
+
+    const messages = capturedPayload?.messages;
+    expect(Array.isArray(messages)).toBe(true);
+    const assistantMessage = (messages as Array<Record<string, unknown>>)[1];
+    expect(assistantMessage?.role).toBe("assistant");
+    expect(assistantMessage?.content).toBe("Hello.");
+    expect(assistantMessage?.reasoning_content).toBe("");
     expect(extractNonEmptyAssistantText(result.content).length).toBeGreaterThan(0);
   }, 60_000);
 });

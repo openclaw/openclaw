@@ -1,4 +1,5 @@
 import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -13,14 +14,14 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export const DEFAULT_XIAOMI_TTS_BASE_URL = "https://api.xiaomimimo.com/v1";
-export const DEFAULT_XIAOMI_TTS_MODEL = "mimo-v2.5-tts";
-export const DEFAULT_XIAOMI_TTS_VOICE = "mimo_default";
-export const DEFAULT_XIAOMI_TTS_FORMAT = "mp3";
+const DEFAULT_XIAOMI_TTS_BASE_URL = "https://api.xiaomimimo.com/v1";
+const DEFAULT_XIAOMI_TTS_MODEL = "mimo-v2.5-tts";
+const DEFAULT_XIAOMI_TTS_VOICE = "mimo_default";
+const DEFAULT_XIAOMI_TTS_FORMAT = "mp3";
 
-export const XIAOMI_TTS_MODELS = ["mimo-v2.5-tts", "mimo-v2-tts"] as const;
+const XIAOMI_TTS_MODELS = ["mimo-v2.5-tts", "mimo-v2-tts"] as const;
 
-export const XIAOMI_TTS_VOICES = [
+const XIAOMI_TTS_VOICES = [
   "mimo_default",
   "default_zh",
   "default_en",
@@ -194,7 +195,7 @@ function decodeXiaomiAudioData(body: unknown): Buffer {
   return Buffer.from(audioData, "base64");
 }
 
-export async function xiaomiTTS(params: {
+async function xiaomiTTS(params: {
   text: string;
   apiKey: string;
   baseUrl: string;
@@ -205,8 +206,9 @@ export async function xiaomiTTS(params: {
   timeoutMs: number;
 }): Promise<Buffer> {
   const { text, apiKey, baseUrl, model, voice, format, style, timeoutMs } = params;
+  const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
 
   try {
     const { response, release } = await fetchWithSsrFGuard({
@@ -224,7 +226,7 @@ export async function xiaomiTTS(params: {
         }),
         signal: controller.signal,
       },
-      timeoutMs,
+      timeoutMs: requestTimeoutMs,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
       auditContext: "xiaomi.tts",
     });
@@ -245,6 +247,7 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
     label: "Xiaomi MiMo",
     aliases: ["mimo"],
     autoSelectOrder: 45,
+    defaultModel: DEFAULT_XIAOMI_TTS_MODEL,
     models: XIAOMI_TTS_MODELS,
     voices: XIAOMI_TTS_VOICES,
     resolveConfig: ({ rawConfig }) => normalizeXiaomiTtsProviderConfig(rawConfig),

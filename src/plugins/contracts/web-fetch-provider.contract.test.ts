@@ -1,4 +1,4 @@
-import { describeWebFetchProviderContracts } from "../../../test/helpers/plugins/web-fetch-provider-contract.js";
+import { describeWebFetchProviderContracts } from "../../plugin-sdk/test-helpers/web-fetch-provider-contract.js";
 import { pluginRegistrationContractRegistry } from "./registry.js";
 
 const webFetchProviderContractTests = pluginRegistrationContractRegistry.filter(

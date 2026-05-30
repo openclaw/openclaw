@@ -1,4 +1,9 @@
-import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
+import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
+import {
+  modelKey,
+  normalizeModelRef,
+  resolvePersistedOverrideModelRef,
+} from "../../agents/model-selection.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -56,4 +61,79 @@ export function resolveStoredModelOverride(params: {
     return null;
   }
   return { ...parentOverride, source: "parent" };
+}
+
+function resolveModelRefKey(params: {
+  defaultProvider: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): string | null {
+  const ref = resolvePersistedOverrideModelRef(params);
+  if (!ref) {
+    return null;
+  }
+  const normalized = normalizeModelRef(ref.provider, ref.model);
+  return modelKey(normalized.provider, normalized.model);
+}
+
+export function isStaleHeartbeatAutoFallbackOverride(params: {
+  isHeartbeat?: boolean;
+  hasResolvedHeartbeatModelOverride?: boolean;
+  sessionEntry?: SessionEntry;
+  storedOverride?: StoredModelOverride | null;
+  defaultProvider: string;
+  defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
+}): boolean {
+  if (params.isHeartbeat !== true || params.hasResolvedHeartbeatModelOverride === true) {
+    return false;
+  }
+  if (params.storedOverride?.source !== "session") {
+    return false;
+  }
+  const entry = params.sessionEntry;
+  const recoveredAutoFallbackOverride =
+    entry !== undefined &&
+    entry.modelOverrideSource === undefined &&
+    hasSessionAutoModelFallbackProvenance(entry);
+  if (entry?.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    return false;
+  }
+  if (!entry) {
+    return false;
+  }
+
+  const primaryKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.primaryProvider ?? params.defaultProvider,
+    overrideModel: params.primaryModel ?? params.defaultModel,
+  });
+  if (!primaryKey) {
+    return false;
+  }
+
+  const originKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: entry.modelOverrideFallbackOriginProvider,
+    overrideModel: entry.modelOverrideFallbackOriginModel,
+  });
+  if (originKey) {
+    return originKey !== primaryKey;
+  }
+
+  const noticeSelectedKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideModel: normalizeOptionalString(entry.fallbackNoticeSelectedModel),
+  });
+  if (noticeSelectedKey) {
+    return noticeSelectedKey !== primaryKey;
+  }
+
+  const storedOverrideKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.storedOverride.provider,
+    overrideModel: params.storedOverride.model,
+  });
+  return storedOverrideKey !== null && storedOverrideKey !== primaryKey;
 }

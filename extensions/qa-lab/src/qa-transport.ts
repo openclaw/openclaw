@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaProviderMode } from "./model-selection.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
@@ -30,6 +30,7 @@ export type QaTransportReportParams = {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  isolatedWorkers?: boolean;
 };
 
 export type QaTransportGatewayConfig = Pick<OpenClawConfig, "channels" | "messages">;
@@ -46,14 +47,14 @@ export type QaTransportState = {
   waitFor: (input: QaBusWaitForInput) => Promise<unknown>;
 };
 
-export type QaTransportFailureCursorSpace = "all" | "outbound";
+type QaTransportFailureCursorSpace = "all" | "outbound";
 
-export type QaTransportFailureAssertionOptions = {
+type QaTransportFailureAssertionOptions = {
   sinceIndex?: number;
   cursorSpace?: QaTransportFailureCursorSpace;
 };
 
-export type QaTransportCommonCapabilities = {
+type QaTransportCommonCapabilities = {
   sendInboundMessage: QaTransportState["addInboundMessage"];
   injectOutboundMessage: QaTransportState["addOutboundMessage"];
   waitForOutboundMessage: (input: QaBusWaitForInput) => Promise<unknown>;
@@ -113,7 +114,7 @@ export function findFailureOutboundMessage(
   );
 }
 
-export function assertNoFailureReplies(
+function assertNoFailureReplies(
   state: QaTransportState,
   options?: QaTransportFailureAssertionOptions,
 ) {
@@ -136,7 +137,12 @@ export function createFailureAwareTransportWaitForCondition(state: QaTransportSt
           sinceIndex,
           cursorSpace: "all",
         });
-        return await check();
+        const value = await check();
+        assertNoFailureReplies(state, {
+          sinceIndex,
+          cursorSpace: "all",
+        });
+        return value;
       },
       timeoutMs,
       intervalMs,

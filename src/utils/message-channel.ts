@@ -1,5 +1,3 @@
-import { getChatChannelMeta } from "../channels/chat-meta.js";
-import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -7,33 +5,31 @@ import {
   type GatewayClientName,
   normalizeGatewayClientMode,
   normalizeGatewayClientName,
-} from "../gateway/protocol/client-info.js";
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
+import { getChatChannelMeta } from "../channels/chat-meta.js";
+import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
 export {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   listDeliverableMessageChannels,
-  listGatewayAgentChannelAliases,
-  listGatewayAgentChannelValues,
-  listGatewayMessageChannels,
   normalizeMessageChannel,
   resolveGatewayMessageChannel,
   resolveMessageChannel,
   type DeliverableMessageChannel,
-  type GatewayAgentChannelHint,
   type GatewayMessageChannel,
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
+  INTERNAL_NON_DELIVERY_CHANNELS,
+  isInternalNonDeliveryChannel,
   type InternalMessageChannel,
 } from "./message-channel-constants.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   type InternalMessageChannel,
 } from "./message-channel-constants.js";
-import {
-  normalizeMessageChannel,
-  type DeliverableMessageChannel,
-} from "./message-channel-normalize.js";
+import { normalizeMessageChannel } from "./message-channel-normalize.js";
 
 export { GATEWAY_CLIENT_NAMES, GATEWAY_CLIENT_MODES };
 export type { GatewayClientName, GatewayClientMode };
@@ -80,7 +76,16 @@ export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   }
   const builtInChannel = normalizeChatChannelId(channel);
   if (builtInChannel) {
-    return getChatChannelMeta(builtInChannel).markdownCapable === true;
+    const builtInMeta = getChatChannelMeta(builtInChannel);
+    if (builtInMeta) {
+      return builtInMeta.markdownCapable === true;
+    }
+    const catalogMeta = listBundledChannelCatalogEntries().find(
+      (entry) => entry.id === builtInChannel,
+    );
+    if (catalogMeta) {
+      return catalogMeta.channel.markdownCapable === true;
+    }
   }
   return getRegisteredChannelPluginMeta(channel)?.markdownCapable === true;
 }

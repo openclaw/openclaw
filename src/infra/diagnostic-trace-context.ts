@@ -21,7 +21,7 @@ export type DiagnosticTraceContext = {
   readonly traceFlags?: string;
 };
 
-export type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
+type DiagnosticTraceContextInput = Partial<DiagnosticTraceContext> & {
   traceparent?: string;
 };
 
@@ -228,13 +228,6 @@ export function runWithDiagnosticTraceContext<T>(
   callback: () => T,
 ): T {
   return getDiagnosticTraceScopeState().storage.run(freezeDiagnosticTraceContext(trace), callback);
-}
-
-export function runWithNewDiagnosticTraceContext<T>(
-  input: DiagnosticTraceContextInput,
-  callback: () => T,
-): T {
-  return runWithDiagnosticTraceContext(createDiagnosticTraceContext(input), callback);
 }
 
 export function resetDiagnosticTraceContextForTest(): void {

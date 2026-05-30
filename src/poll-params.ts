@@ -1,16 +1,17 @@
 import { readSnakeCaseParamRaw } from "./param-key.js";
+import { parseStrictFiniteNumber } from "./shared/number-coercion.js";
 import { normalizeLowercaseStringOrEmpty } from "./shared/string-coerce.js";
 
-export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
+type PollCreationParamKind = "string" | "stringArray" | "positiveInteger" | "boolean";
 
-export type PollCreationParamDef = {
+type PollCreationParamDef = {
   kind: PollCreationParamKind;
 };
 
 const SHARED_POLL_CREATION_PARAM_DEFS = {
   pollQuestion: { kind: "string" },
   pollOption: { kind: "stringArray" },
-  pollDurationHours: { kind: "number" },
+  pollDurationHours: { kind: "positiveInteger" },
   pollMulti: { kind: "boolean" },
 } satisfies Record<string, PollCreationParamDef>;
 
@@ -61,7 +62,7 @@ function hasExplicitUnknownPollValue(key: string, value: unknown): boolean {
       return false;
     }
     if (normalizePollParamKey(key).includes("duration")) {
-      const parsed = Number(trimmed);
+      const parsed = parseStrictFiniteNumber(trimmed);
       return Number.isFinite(parsed) && parsed !== 0;
     }
     const normalized = normalizeLowercaseStringOrEmpty(trimmed);
@@ -91,7 +92,7 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
         return true;
       }
     }
-    if (def.kind === "number") {
+    if (def.kind === "positiveInteger") {
       // Treat zero-valued numeric defaults as unset, but preserve any non-zero
       // numeric value as explicit poll intent so invalid durations still hit
       // the poll-only validation path.
@@ -100,8 +101,8 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        const parsed = Number(trimmed);
-        if (trimmed.length > 0 && Number.isFinite(parsed) && parsed !== 0) {
+        const parsed = parseStrictFiniteNumber(trimmed);
+        if (parsed !== undefined && parsed !== 0) {
           return true;
         }
       }

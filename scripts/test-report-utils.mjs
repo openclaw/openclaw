@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const normalizeRepoPath = (value) => value.split(path.sep).join("/");
+const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 const repoRoot = path.resolve(process.cwd());
 
 export function normalizeTrackedRepoPath(value) {
@@ -27,10 +27,6 @@ export function tryReadJsonFile(filePath, fallback) {
   } catch {
     return fallback;
   }
-}
-
-export function writeJsonFile(filePath, value) {
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export function runVitestJsonReport({
@@ -81,4 +77,27 @@ export function collectVitestFileDurations(report, normalizeFile = (value) => va
       };
     })
     .filter((entry) => entry.file.length > 0 && entry.durationMs > 0);
+}
+
+export function collectVitestAssertionDurations(report, normalizeFile = (value) => value) {
+  return (report.testResults ?? []).flatMap((result) => {
+    const file = typeof result.name === "string" ? normalizeFile(result.name) : "";
+    if (!file) {
+      return [];
+    }
+    return (result.assertionResults ?? [])
+      .map((assertion) => {
+        const durationMs =
+          typeof assertion?.duration === "number" && Number.isFinite(assertion.duration)
+            ? assertion.duration
+            : 0;
+        return {
+          file,
+          durationMs,
+          fullName: typeof assertion?.fullName === "string" ? assertion.fullName : "",
+          status: typeof assertion?.status === "string" ? assertion.status : "unknown",
+        };
+      })
+      .filter((entry) => entry.durationMs > 0);
+  });
 }

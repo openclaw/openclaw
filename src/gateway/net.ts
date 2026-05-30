@@ -1,19 +1,24 @@
-import fs from "node:fs";
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import type { GatewayBindMode } from "../config/types.gateway.js";
-import {
-  pickMatchingExternalInterfaceAddress,
-  readNetworkInterfaces,
-} from "../infra/network-interfaces.js";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
   normalizeIpAddress,
-} from "../shared/net/ip.js";
+} from "@openclaw/net-policy/ip";
+import type { GatewayBindMode } from "../config/types.gateway.js";
+import {
+  resetContainerEnvironmentCacheForTest,
+  isContainerEnvironment,
+} from "../infra/container-environment.js";
+import {
+  pickMatchingExternalInterfaceAddress,
+  readNetworkInterfaces,
+  safeNetworkInterfaces,
+  type NetworkInterfacesSnapshot,
+} from "../infra/network-interfaces.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**
@@ -52,6 +57,40 @@ export function resolveHostName(hostHeader?: string): string {
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
+}
+
+export function isLocalInterfaceAddress(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean {
+  return (
+    (arguments.length >= 2
+      ? resolveLocalInterfaceAddressMatch(ip, snapshot)
+      : resolveLocalInterfaceAddressMatch(ip)) === true
+  );
+}
+
+export function resolveLocalInterfaceAddressMatch(
+  ip: string | undefined,
+  snapshot?: NetworkInterfacesSnapshot,
+): boolean | undefined {
+  const normalized = normalizeIp(ip);
+  if (!normalized) {
+    return false;
+  }
+  const effectiveSnapshot = arguments.length >= 2 ? snapshot : safeNetworkInterfaces();
+  if (!effectiveSnapshot) {
+    return undefined;
+  }
+
+  for (const entries of Object.values(effectiveSnapshot)) {
+    for (const entry of entries ?? []) {
+      if (normalizeIp(entry.address) === normalized) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -203,85 +242,10 @@ export function resolveRequestClientIp(
   });
 }
 
-export function isLocalGatewayAddress(ip: string | undefined): boolean {
-  if (isLoopbackAddress(ip)) {
-    return true;
-  }
-  if (!ip) {
-    return false;
-  }
-  const normalized = normalizeIp(ip);
-  if (!normalized) {
-    return false;
-  }
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  if (tailnetIPv4 && normalized === normalizeLowercaseStringOrEmpty(tailnetIPv4)) {
-    return true;
-  }
-  const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (
-    tailnetIPv6 &&
-    normalizeLowercaseStringOrEmpty(ip) === normalizeLowercaseStringOrEmpty(tailnetIPv6)
-  ) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Detect whether the current process is running inside a container
- * (Docker, Podman, or Kubernetes).
- *
- * Uses two reliable heuristics:
- * 1. Presence of well-known container sentinel files such as `/.dockerenv`
- *    (Docker) or `/run/.containerenv` (Podman).
- * 2. Presence of container-related cgroup entries in `/proc/1/cgroup`
- *    (covers Docker, containerd, and Kubernetes pods).
- *
- * The result is cached after the first call so filesystem access
- * happens at most once per process lifetime.
- */
-let _containerCacheResult: boolean | undefined;
-export function isContainerEnvironment(): boolean {
-  if (_containerCacheResult !== undefined) {
-    return _containerCacheResult;
-  }
-  _containerCacheResult = detectContainerEnvironment();
-  return _containerCacheResult;
-}
-
-function detectContainerEnvironment(): boolean {
-  // 1. Check common Docker/Podman container sentinel files.
-  for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
-    try {
-      fs.accessSync(sentinelPath, fs.constants.F_OK);
-      return true;
-    } catch {
-      // not present — continue
-    }
-  }
-  // 2. /proc/1/cgroup contains docker, containerd, kubepods, or lxc markers.
-  //    Covers both cgroup v1 (/docker/<id>, /kubepods/...) and cgroup v2
-  //    (kubepods.slice, cri-containerd-<id>.scope) path formats.
-  try {
-    const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
-    if (
-      /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/kubepods[/.]|\blxc\b/.test(
-        cgroup,
-      )
-    ) {
-      return true;
-    }
-  } catch {
-    // /proc may not exist (macOS, Windows) — not a container
-  }
-  return false;
-}
-
-/** @internal — test-only helper to reset the cached container detection result. */
-export function __resetContainerCacheForTest(): void {
-  _containerCacheResult = undefined;
-}
+export {
+  isContainerEnvironment,
+  resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
+};
 
 /**
  * Resolves gateway bind host with fallback strategy.
@@ -380,7 +344,7 @@ export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode 
  * @param host - The host address to test
  * @returns True if we can successfully bind to this address
  */
-export async function canBindToHost(host: string): Promise<boolean> {
+async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {
@@ -400,6 +364,12 @@ export async function resolveGatewayListenHosts(
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
   if (bindHost !== "127.0.0.1") {
+    return [bindHost];
+  }
+  // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
+  // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
+  // the same port causes non-deterministic TCP routing → HTTP requests hang silently.
+  if (process.platform === "win32") {
     return [bindHost];
   }
   const canBind = opts?.canBindToHost ?? canBindToHost;
@@ -506,8 +476,8 @@ function parseHostForAddressChecks(
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is secure only for loopback addresses by default
- * - optional break-glass: private ws:// can be enabled for trusted networks
+ * - ws:// is secure for loopback, private IP literals, .local, and Tailnet hosts
+ * - optional break-glass: other private-DNS ws:// hostnames can be enabled for trusted networks
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
@@ -539,11 +509,15 @@ export function isSecureWebSocketUrl(
     return false;
   }
 
-  // Default policy stays strict: loopback-only plaintext ws://.
+  // Default policy allows local/Tailnet endpoints that cannot be given public TLS
+  // without extra operator setup. Public DNS hostnames still require wss://.
   if (isLoopbackHost(parsed.hostname)) {
     return true;
   }
-  // Optional break-glass for trusted private-network overlays.
+  if (isTrustedPlaintextWebSocketHost(parsed.hostname)) {
+    return true;
+  }
+  // Optional break-glass for trusted private-DNS overlays.
   if (opts?.allowPrivateWs) {
     if (isPrivateOrLoopbackHost(parsed.hostname)) {
       return true;
@@ -557,4 +531,12 @@ export function isSecureWebSocketUrl(
     return net.isIP(hostForIpCheck) === 0;
   }
   return false;
+}
+
+function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
+  if (isPrivateOrLoopbackHost(hostname)) {
+    return true;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.+$/, "");
+  return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
 }

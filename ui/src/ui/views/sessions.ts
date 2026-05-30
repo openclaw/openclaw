@@ -4,15 +4,23 @@ import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
-import { normalizeThinkLevel } from "../thinking.ts";
+import {
+  formatInheritedThinkingLabel,
+  formatThinkingOverrideLabel,
+  normalizeThinkingOptionValue,
+} from "../thinking-labels.ts";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
+  SessionRunStatus,
   GatewayThinkingLevelOption,
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../types.ts";
+import { resolveAgentRuntimeLabel } from "./agents-utils.ts";
 
 export type SessionsProps = {
   loading: boolean;
@@ -22,6 +30,8 @@ export type SessionsProps = {
   limit: string;
   includeGlobal: boolean;
   includeUnknown: boolean;
+  showArchived: boolean;
+  filtersCollapsed: boolean;
   basePath: string;
   searchQuery: string;
   agentIdentityById: Record<string, AgentIdentityResult>;
@@ -40,7 +50,10 @@ export type SessionsProps = {
     limit: string;
     includeGlobal: boolean;
     includeUnknown: boolean;
+    showArchived: boolean;
   }) => void;
+  onToggleFiltersCollapsed: () => void;
+  onClearFilters: () => void;
   onSearchChange: (query: string) => void;
   onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
   onPageChange: (page: number) => void;
@@ -62,23 +75,17 @@ export type SessionsProps = {
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
   onNavigateToChat?: (sessionKey: string) => void;
+  workboardSessionKeys?: Set<string>;
+  workboardBusySessionKey?: string | null;
+  onAddToWorkboard?: (session: GatewaySessionRow) => void | Promise<void>;
   onToggleCheckpointDetails: (sessionKey: string) => void;
   onBranchFromCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
 };
 
 const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
-const VERBOSE_LEVELS = [
-  { value: "", label: "inherit" },
-  { value: "off", label: "off (explicit)" },
-  { value: "on", label: "on" },
-  { value: "full", label: "full" },
-] as const;
-const FAST_LEVELS = [
-  { value: "", label: "inherit" },
-  { value: "on", label: "on" },
-  { value: "off", label: "off" },
-] as const;
+const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
+const FAST_LEVEL_VALUES = ["", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
@@ -91,25 +98,42 @@ function getAgentIdentity(
     : null;
 }
 
-function normalizeThinkingOptionValue(raw: string): string {
-  return normalizeThinkLevel(raw) ?? normalizeLowercaseStringOrEmpty(raw);
+function rowMatchesSessionDefaults(
+  row: GatewaySessionRow,
+  defaults: SessionsListResult["defaults"] | undefined,
+): boolean {
+  return (
+    (!row.modelProvider || row.modelProvider === defaults?.modelProvider) &&
+    (!row.model || row.model === defaults?.model)
+  );
 }
 
 function resolveThinkLevelOptions(
   row: GatewaySessionRow,
+  defaults?: SessionsListResult["defaults"],
 ): readonly { value: string; label: string }[] {
-  const defaultLabel = row.thinkingDefault ? `Default (${row.thinkingDefault})` : "inherit";
+  const sessionModelMatchesDefaults = rowMatchesSessionDefaults(row, defaults);
+  const defaultLabel = formatInheritedThinkingLabel(
+    row.thinkingDefault ?? (sessionModelMatchesDefaults ? defaults?.thinkingDefault : undefined),
+  );
   const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
     ? row.thinkingLevels
-    : (row.thinkingOptions?.length ? row.thinkingOptions : DEFAULT_THINK_LEVELS).map((label) => ({
-        id: normalizeThinkingOptionValue(label),
-        label,
-      }));
+    : sessionModelMatchesDefaults && defaults?.thinkingLevels?.length
+      ? defaults.thinkingLevels
+      : (row.thinkingOptions?.length
+          ? row.thinkingOptions
+          : sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+            ? defaults.thinkingOptions
+            : DEFAULT_THINK_LEVELS
+        ).map((label) => ({
+          id: normalizeThinkingOptionValue(label),
+          label,
+        }));
   return [
     { value: "", label: defaultLabel },
     ...options.map((option) => ({
       value: normalizeThinkingOptionValue(option.id),
-      label: option.label,
+      label: formatThinkingOverrideLabel(option.id, option.label),
     })),
   ];
 }
@@ -134,7 +158,78 @@ function withCurrentLabeledOption(
   if (options.some((option) => option.value === current)) {
     return [...options];
   }
-  return [...options, { value: current, label: `${current} (custom)` }];
+  return [...options, { value: current, label: formatThinkingOverrideLabel(current) }];
+}
+
+function buildVerboseLevelOptions(): Array<{ value: string; label: string }> {
+  return VERBOSE_LEVEL_VALUES.map((value) => ({
+    value,
+    label:
+      value === ""
+        ? t("sessionsView.inherit")
+        : value === "off"
+          ? t("sessionsView.offExplicit")
+          : t(`sessionsView.${value}`),
+  }));
+}
+
+function buildFastLevelOptions(): Array<{ value: string; label: string }> {
+  return FAST_LEVEL_VALUES.map((value) => ({
+    value,
+    label: value === "" ? t("sessionsView.inherit") : t(`sessionsView.${value}`),
+  }));
+}
+
+function formatSessionRunStatus(status: SessionRunStatus): string {
+  switch (status) {
+    case "running":
+      return t("sessionsView.statusRunning");
+    case "done":
+      return t("sessionsView.statusDone");
+    case "failed":
+      return t("sessionsView.statusFailed");
+    case "killed":
+      return t("sessionsView.statusKilled");
+    case "timeout":
+      return t("sessionsView.statusTimeout");
+    default:
+      return t("sessionsView.statusUnknown");
+  }
+}
+
+function resolveSessionStatusBadge(row: GatewaySessionRow): {
+  label: string;
+  tone: "live" | "idle" | "done" | "failed" | "muted";
+} {
+  if (isSessionRunActive(row)) {
+    return { label: t("sessionsView.statusLive"), tone: "live" };
+  }
+  if (row.status === "running" && row.hasActiveRun === false) {
+    return { label: t("sessionsView.statusIdle"), tone: "idle" };
+  }
+  if (row.status) {
+    const tone = row.status === "done" ? "done" : ("failed" as const);
+    return { label: formatSessionRunStatus(row.status), tone };
+  }
+  if (row.hasActiveRun === false) {
+    return { label: t("sessionsView.statusIdle"), tone: "idle" };
+  }
+  return { label: t("sessionsView.statusUnknown"), tone: "muted" };
+}
+
+function renderSessionStatusBadge(row: GatewaySessionRow) {
+  const badge = resolveSessionStatusBadge(row);
+  const title = `${t("sessionsView.status")}: ${badge.label}`;
+  return html`
+    <span
+      class="session-status-badge session-status-badge--${badge.tone}"
+      title=${title}
+      aria-label=${title}
+    >
+      <span class="session-status-badge__dot" aria-hidden="true"></span>
+      <span class="session-status-badge__label">${badge.label}</span>
+    </span>
+  `;
 }
 
 function resolveThinkLevelPatchValue(value: string): string | null {
@@ -158,7 +253,30 @@ function filterRows(
     const label = normalizeLowercaseStringOrEmpty(row.label);
     const kind = normalizeLowercaseStringOrEmpty(row.kind);
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
-    if (key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q)) {
+    const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
+    const status = normalizeLowercaseStringOrEmpty(row.status);
+    const goal = row.goal
+      ? normalizeLowercaseStringOrEmpty(
+          `${row.goal.objective} ${row.goal.status} ${formatGoalSummary(row.goal)} ${
+            row.goal.lastStatusNote ?? ""
+          }`,
+        )
+      : "";
+    const liveState = isSessionRunActive(row)
+      ? "live running"
+      : row.hasActiveRun === false
+        ? "idle"
+        : "";
+    if (
+      key.includes(q) ||
+      label.includes(q) ||
+      kind.includes(q) ||
+      displayName.includes(q) ||
+      runtime.includes(q) ||
+      status.includes(q) ||
+      goal.includes(q) ||
+      liveState.includes(q)
+    ) {
       return true;
     }
     const keyParts = parseSessionKeyParts(row.key);
@@ -206,19 +324,41 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
   return rows.slice(start, start + pageSize);
 }
 
+function hasPositiveNumberFilter(value: string): boolean {
+  const parsed = Number(value.trim());
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+function hasActiveFilters(props: SessionsProps): boolean {
+  return (
+    normalizeLowercaseStringOrEmpty(props.searchQuery).length > 0 ||
+    hasPositiveNumberFilter(props.activeMinutes) ||
+    hasPositiveNumberFilter(props.limit) ||
+    !props.includeGlobal ||
+    !props.includeUnknown ||
+    !props.showArchived
+  );
+}
+
 function formatCheckpointReason(reason: SessionCompactionCheckpoint["reason"]): string {
   switch (reason) {
     case "manual":
-      return "manual";
+      return t("sessionsView.manual");
     case "auto-threshold":
-      return "auto-threshold";
+      return t("sessionsView.autoThreshold");
     case "overflow-retry":
-      return "overflow retry";
+      return t("sessionsView.overflowRetry");
     case "timeout-retry":
-      return "timeout retry";
+      return t("sessionsView.timeoutRetry");
     default:
       return reason;
   }
+}
+
+function formatCheckpointCount(count: number): string {
+  return count === 1
+    ? t("sessionsView.checkpoint", { count: String(count) })
+    : t("sessionsView.checkpoints", { count: String(count) });
 }
 
 function formatCheckpointDelta(checkpoint: SessionCompactionCheckpoint): string {
@@ -228,12 +368,134 @@ function formatCheckpointDelta(checkpoint: SessionCompactionCheckpoint): string 
     Number.isFinite(checkpoint.tokensBefore) &&
     Number.isFinite(checkpoint.tokensAfter)
   ) {
-    return `${checkpoint.tokensBefore.toLocaleString()} → ${checkpoint.tokensAfter.toLocaleString()} tokens`;
+    return t("sessionsView.tokenRange", {
+      before: checkpoint.tokensBefore.toLocaleString(),
+      after: checkpoint.tokensAfter.toLocaleString(),
+    });
   }
   if (typeof checkpoint.tokensBefore === "number" && Number.isFinite(checkpoint.tokensBefore)) {
-    return `${checkpoint.tokensBefore.toLocaleString()} tokens before`;
+    return t("sessionsView.tokensBefore", { count: checkpoint.tokensBefore.toLocaleString() });
   }
-  return "token delta unavailable";
+  return t("sessionsView.tokenDeltaUnavailable");
+}
+
+function formatRuntimeMs(runtimeMs: number | undefined): string | null {
+  if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs) || runtimeMs < 0) {
+    return null;
+  }
+  const totalSeconds = Math.round(runtimeMs / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function renderSessionGoalChip(goal: GatewaySessionRow["goal"]) {
+  if (!goal) {
+    return nothing;
+  }
+  return html`
+    <span
+      class="session-goal-chip session-goal-chip--${goal.status}"
+      title=${formatGoalDetail(goal)}
+      aria-label=${formatGoalDetail(goal)}
+    >
+      <span class="session-goal-chip__label">${formatGoalSummary(goal)}</span>
+      <span class="session-goal-chip__objective">${goal.objective}</span>
+    </span>
+  `;
+}
+
+function sessionDetailItems(params: {
+  row: GatewaySessionRow;
+  updated: string;
+  checkpointCount: number;
+}): Array<{ label: string; value: string }> {
+  const { row, updated, checkpointCount } = params;
+  const details: Array<{ label: string; value: string }> = [
+    { label: t("sessionsView.key"), value: row.key },
+    { label: t("sessionsView.kind"), value: row.kind },
+    { label: t("sessionsView.updated"), value: updated },
+    { label: t("sessionsView.tokens"), value: formatSessionTokens(row) },
+    { label: t("sessionsView.compaction"), value: formatCheckpointCount(checkpointCount) },
+  ];
+  const add = (label: string, value: string | null | undefined) => {
+    const normalized = normalizeOptionalString(value);
+    if (normalized) {
+      details.push({ label, value: normalized });
+    }
+  };
+  add(t("sessionsView.status"), row.status);
+  if (row.goal) {
+    details.push({ label: t("sessionsView.goal"), value: formatGoalDetail(row.goal) });
+  }
+  add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
+  add(t("sessionsView.model"), row.model);
+  add(t("sessionsView.provider"), row.modelProvider);
+  add(t("sessionsView.runtime"), formatRuntimeMs(row.runtimeMs));
+  add(t("sessionsView.surface"), row.surface);
+  add(t("sessionsView.subject"), row.subject);
+  add(t("sessionsView.room"), row.room);
+  add(t("sessionsView.space"), row.space);
+  add(t("sessionsView.sessionId"), row.sessionId);
+  if (typeof row.hasActiveRun === "boolean") {
+    details.push({
+      label: t("sessionsView.activeRun"),
+      value: row.hasActiveRun ? t("common.yes") : t("common.no"),
+    });
+  }
+  if (typeof row.archived === "boolean") {
+    details.push({
+      label: t("sessionsView.archived"),
+      value: row.archived ? t("common.yes") : t("common.no"),
+    });
+  }
+  return details;
+}
+
+function isRowControlTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest("a, button, input, label, select, textarea"))
+  );
+}
+
+function renderFilterToggle(params: {
+  name: string;
+  checked: boolean;
+  label: string;
+  title: string;
+  extraClass?: string;
+  onChange: (checked: boolean) => void;
+}) {
+  const className = [
+    "session-filter-check",
+    "session-filter-toggle",
+    params.extraClass ?? "",
+    params.checked ? "session-filter-check--active" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return html`
+    <label class=${className} data-tooltip=${params.title}>
+      <input
+        name=${params.name}
+        class="session-filter-check__input"
+        type="checkbox"
+        .checked=${params.checked}
+        @change=${(e: Event) => params.onChange((e.target as HTMLInputElement).checked)}
+      />
+      <span class="session-filter-check__mark" aria-hidden="true">${icons.check}</span>
+      <span class="session-filter-check__label">${params.label}</span>
+    </label>
+  `;
 }
 
 export function renderSessions(props: SessionsProps) {
@@ -244,6 +506,18 @@ export function renderSessions(props: SessionsProps) {
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
   const paginated = paginateRows(sorted, page, props.pageSize);
+  const emptyBecauseFiltered =
+    rawRows.length === 0 ? hasActiveFilters(props) : filtered.length === 0;
+  const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
+  const limitTooltip = t("sessionsView.limitTooltip");
+  const globalTooltip = t("sessionsView.globalTooltip");
+  const unknownTooltip = t("sessionsView.unknownTooltip");
+  const showArchivedTooltip = t("sessionsView.showArchivedTooltip");
+  const filtersExpanded = !props.filtersCollapsed;
+  const filterPanelTitle = t("sessionsView.filters");
+  const filterToggleLabel = filtersExpanded
+    ? t("sessionsView.hideFilters")
+    : t("sessionsView.showFilters");
 
   const sortHeader = (
     col: "key" | "kind" | "updated" | "tokens",
@@ -269,11 +543,11 @@ export function renderSessions(props: SessionsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
         <div>
-          <div class="card-title">Sessions</div>
+          <div class="card-title">${t("sessionsView.title")}</div>
           <div class="card-sub">
             ${props.result
-              ? `Store: ${props.result.path}`
-              : "Active session keys and per-session overrides."}
+              ? t("sessionsView.store", { path: props.result.path })
+              : t("sessionsView.subtitle")}
           </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -281,64 +555,114 @@ export function renderSessions(props: SessionsProps) {
         </button>
       </div>
 
-      <div class="filters" style="margin-bottom: 12px;">
-        <label class="field-inline">
-          <span>Active</span>
-          <input
-            style="width: 72px;"
-            placeholder="min"
-            .value=${props.activeMinutes}
-            @input=${(e: Event) =>
-              props.onFiltersChange({
-                activeMinutes: (e.target as HTMLInputElement).value,
-                limit: props.limit,
-                includeGlobal: props.includeGlobal,
-                includeUnknown: props.includeUnknown,
-              })}
-          />
-        </label>
-        <label class="field-inline">
-          <span>Limit</span>
-          <input
-            style="width: 64px;"
-            .value=${props.limit}
-            @input=${(e: Event) =>
-              props.onFiltersChange({
-                activeMinutes: props.activeMinutes,
-                limit: (e.target as HTMLInputElement).value,
-                includeGlobal: props.includeGlobal,
-                includeUnknown: props.includeUnknown,
-              })}
-          />
-        </label>
-        <label class="field-inline checkbox">
-          <input
-            type="checkbox"
-            .checked=${props.includeGlobal}
-            @change=${(e: Event) =>
-              props.onFiltersChange({
-                activeMinutes: props.activeMinutes,
-                limit: props.limit,
-                includeGlobal: (e.target as HTMLInputElement).checked,
-                includeUnknown: props.includeUnknown,
-              })}
-          />
-          <span>Global</span>
-        </label>
-        <label class="field-inline checkbox">
-          <input
-            type="checkbox"
-            .checked=${props.includeUnknown}
-            @change=${(e: Event) =>
-              props.onFiltersChange({
-                activeMinutes: props.activeMinutes,
-                limit: props.limit,
-                includeGlobal: props.includeGlobal,
-                includeUnknown: (e.target as HTMLInputElement).checked,
-              })}
-          />
-          <span>Unknown</span>
-        </label>
+      <div class="sessions-filter-panel">
+        <div class="sessions-filter-panel__header">
+          <div class="sessions-filter-panel__title">${filterPanelTitle}</div>
+          <button
+            class="sessions-filter-panel__toggle"
+            type="button"
+            aria-expanded=${String(filtersExpanded)}
+            aria-controls="sessions-filter-bar"
+            @click=${props.onToggleFiltersCollapsed}
+          >
+            ${filtersExpanded ? icons.chevronDown : icons.chevronRight}
+            <span>${filterToggleLabel}</span>
+          </button>
+        </div>
+
+        ${filtersExpanded
+          ? html`
+              <div
+                id="sessions-filter-bar"
+                class="sessions-filter-bar"
+                aria-label="Session filters"
+              >
+                <div class="session-filter-primary-row">
+                  <label class="session-filter-field" data-tooltip=${activeTooltip}>
+                    <span class="session-filter-label">${t("sessionsView.active")}</span>
+                    <input
+                      class="session-filter-input session-filter-input--minutes"
+                      placeholder=${t("sessionsView.minutesPlaceholder")}
+                      .value=${props.activeMinutes}
+                      ?disabled=${props.showArchived}
+                      @input=${(e: Event) =>
+                        props.onFiltersChange({
+                          activeMinutes: (e.target as HTMLInputElement).value,
+                          limit: props.limit,
+                          includeGlobal: props.includeGlobal,
+                          includeUnknown: props.includeUnknown,
+                          showArchived: props.showArchived,
+                        })}
+                    />
+                  </label>
+                  <label class="session-filter-field" data-tooltip=${limitTooltip}>
+                    <span class="session-filter-label">${t("sessionsView.limit")}</span>
+                    <input
+                      class="session-filter-input session-filter-input--limit"
+                      .value=${props.limit}
+                      @input=${(e: Event) =>
+                        props.onFiltersChange({
+                          activeMinutes: props.activeMinutes,
+                          limit: (e.target as HTMLInputElement).value,
+                          includeGlobal: props.includeGlobal,
+                          includeUnknown: props.includeUnknown,
+                          showArchived: props.showArchived,
+                        })}
+                    />
+                  </label>
+                </div>
+                <div
+                  class="session-filter-toggle-group"
+                  role="group"
+                  aria-label=${t("sessionsView.sourceFilters")}
+                >
+                  ${renderFilterToggle({
+                    name: "includeGlobal",
+                    checked: props.includeGlobal,
+                    label: t("sessionsView.global"),
+                    title: globalTooltip,
+                    onChange: (checked) =>
+                      props.onFiltersChange({
+                        activeMinutes: props.activeMinutes,
+                        limit: props.limit,
+                        includeGlobal: checked,
+                        includeUnknown: props.includeUnknown,
+                        showArchived: props.showArchived,
+                      }),
+                  })}
+                  ${renderFilterToggle({
+                    name: "includeUnknown",
+                    checked: props.includeUnknown,
+                    label: t("sessionsView.unknown"),
+                    title: unknownTooltip,
+                    onChange: (checked) =>
+                      props.onFiltersChange({
+                        activeMinutes: props.activeMinutes,
+                        limit: props.limit,
+                        includeGlobal: props.includeGlobal,
+                        includeUnknown: checked,
+                        showArchived: props.showArchived,
+                      }),
+                  })}
+                  ${renderFilterToggle({
+                    name: "showArchived",
+                    checked: props.showArchived,
+                    label: t("sessionsView.showArchived"),
+                    title: showArchivedTooltip,
+                    extraClass: "session-archive-toggle",
+                    onChange: (checked) =>
+                      props.onFiltersChange({
+                        activeMinutes: props.activeMinutes,
+                        limit: props.limit,
+                        includeGlobal: props.includeGlobal,
+                        includeUnknown: props.includeUnknown,
+                        showArchived: checked,
+                      }),
+                  })}
+                </div>
+              </div>
+            `
+          : nothing}
       </div>
 
       ${props.error
@@ -350,7 +674,7 @@ export function renderSessions(props: SessionsProps) {
           <div class="data-table-search">
             <input
               type="text"
-              placeholder="Filter by key, agent, label, kind…"
+              placeholder=${t("sessionsView.searchPlaceholder")}
               .value=${props.searchQuery}
               @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
             />
@@ -360,7 +684,9 @@ export function renderSessions(props: SessionsProps) {
         ${props.selectedKeys.size > 0
           ? html`
               <div class="data-table-bulk-bar">
-                <span>${props.selectedKeys.size} selected</span>
+                <span
+                  >${t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span
+                >
                 <button class="btn btn--sm" @click=${props.onDeselectAll}>
                   ${t("common.unselect")}
                 </button>
@@ -369,14 +695,14 @@ export function renderSessions(props: SessionsProps) {
                   ?disabled=${props.loading}
                   @click=${props.onDeleteSelected}
                 >
-                  ${icons.trash} Delete
+                  ${icons.trash} ${t("sessionsView.deleteSelected")}
                 </button>
               </div>
             `
           : nothing}
 
         <div class="data-table-container">
-          <table class="data-table">
+          <table class="data-table sessions-table">
             <thead>
               <tr>
                 <th class="data-table-checkbox-col">
@@ -395,30 +721,40 @@ export function renderSessions(props: SessionsProps) {
                             props.onSelectPage(paginated.map((r) => r.key));
                           }
                         }}
-                        aria-label="Select all on page"
+                        aria-label=${t("sessionsView.selectAllOnPage")}
                       />`
                     : nothing}
                 </th>
-                ${sortHeader("key", "Key", "data-table-key-col")}
-                <th>Label</th>
-                ${sortHeader("kind", "Kind")} ${sortHeader("updated", "Updated")}
-                ${sortHeader("tokens", "Tokens")}
-                <th>Compaction</th>
-                <th>Thinking</th>
-                <th>Fast</th>
-                <th>Verbose</th>
-                <th>Reasoning</th>
+                ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
+                <th>${t("sessionsView.label")}</th>
+                ${sortHeader("kind", t("sessionsView.kind"))}
+                <th class="session-status-col">${t("sessionsView.status")}</th>
+                <th>${t("agents.context.runtime")}</th>
+                ${sortHeader("updated", t("sessionsView.updated"))}
+                ${sortHeader("tokens", t("sessionsView.tokens"))}
+                <th class="session-compaction-col">${t("sessionsView.compaction")}</th>
+                <th>${t("sessionsView.thinking")}</th>
+                <th>${t("sessionsView.fast")}</th>
+                <th>${t("sessionsView.verbose")}</th>
+                <th>${t("sessionsView.reasoning")}</th>
+                <th>${t("sessionsView.actions")}</th>
               </tr>
             </thead>
             <tbody>
               ${paginated.length === 0
                 ? html`
                     <tr>
-                      <td
-                        colspan="11"
-                        style="text-align: center; padding: 48px 16px; color: var(--muted)"
-                      >
-                        No sessions found.
+                      <td colspan="14" class="data-table-empty-cell">
+                        ${emptyBecauseFiltered
+                          ? html`
+                              <div class="data-table-empty-state" role="status" aria-live="polite">
+                                <div>${t("sessionsView.noSessionsMatchFilters")}</div>
+                                <button class="btn btn--sm" @click=${props.onClearFilters}>
+                                  ${t("sessionsView.showAll")}
+                                </button>
+                              </div>
+                            `
+                          : t("sessionsView.noSessions")}
                       </td>
                     </tr>
                   `
@@ -450,7 +786,7 @@ export function renderSessions(props: SessionsProps) {
                     ?disabled=${page >= totalPages - 1}
                     @click=${() => props.onPageChange(page + 1)}
                   >
-                    Next
+                    ${t("common.next")}
                   </button>
                 </div>
               </div>
@@ -465,18 +801,30 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
   const rawThinking = row.thinkingLevel ?? "";
   const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
-  const thinkLevels = withCurrentLabeledOption(resolveThinkLevelOptions(row), thinking);
+  const thinkLevels = withCurrentLabeledOption(
+    resolveThinkLevelOptions(row, props.result?.defaults),
+    thinking,
+  );
   const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
-  const fastLevels = withCurrentLabeledOption(FAST_LEVELS, fastMode);
+  const fastLevels = withCurrentLabeledOption(buildFastLevelOptions(), fastMode);
   const verbose = row.verboseLevel ?? "";
-  const verboseLevels = withCurrentLabeledOption(VERBOSE_LEVELS, verbose);
+  const verboseLevels = withCurrentLabeledOption(buildVerboseLevelOptions(), verbose);
   const reasoning = row.reasoningLevel ?? "";
   const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
   const latestCheckpoint = row.latestCompactionCheckpoint;
   const checkpointCount = row.compactionCheckpointCount ?? 0;
+  const visibleCheckpointCount = Math.max(checkpointCount, latestCheckpoint ? 1 : 0);
+  const hasCheckpoints = checkpointCount > 0 || Boolean(latestCheckpoint);
   const isExpanded = props.expandedCheckpointKey === row.key;
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
+  const detailsId = `session-checkpoints-${encodeURIComponent(row.key)}`;
+  const checkpointLabel = formatCheckpointCount(visibleCheckpointCount);
+  const sessionDetails = sessionDetailItems({
+    row,
+    updated,
+    checkpointCount: visibleCheckpointCount,
+  });
   const displayName = normalizeOptionalString(row.displayName) ?? null;
   const trimmedLabel = normalizeOptionalString(row.label) ?? "";
   const showDisplayName = Boolean(
@@ -494,26 +842,62 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       : null;
   const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
+  const captured = props.workboardSessionKeys?.has(row.key) === true;
+  const captureBusy = props.workboardBusySessionKey === row.key;
   const chatUrl = canLink
     ? `${pathForTab("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
     : null;
   const badgeClass =
-    row.kind === "direct"
-      ? "data-table-badge--direct"
-      : row.kind === "group"
-        ? "data-table-badge--group"
-        : row.kind === "global"
-          ? "data-table-badge--global"
-          : "data-table-badge--unknown";
+    row.kind === "cron"
+      ? "data-table-badge--cron"
+      : row.kind === "direct"
+        ? "data-table-badge--direct"
+        : row.kind === "group"
+          ? "data-table-badge--group"
+          : row.kind === "global"
+            ? "data-table-badge--global"
+            : "data-table-badge--unknown";
+  const rowClass = [
+    "session-data-row",
+    hasCheckpoints ? "session-data-row--expandable" : "",
+    isExpanded ? "session-data-row--expanded" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const activateCheckpointDetails = () => {
+    if (hasCheckpoints) {
+      props.onToggleCheckpointDetails(row.key);
+    }
+  };
 
   return [
-    html`<tr>
+    html`<tr
+      class=${rowClass}
+      tabindex=${hasCheckpoints ? "0" : nothing}
+      aria-expanded=${hasCheckpoints ? String(isExpanded) : nothing}
+      aria-controls=${hasCheckpoints ? detailsId : nothing}
+      @click=${(e: MouseEvent) => {
+        if (!hasCheckpoints || isRowControlTarget(e.target)) {
+          return;
+        }
+        activateCheckpointDetails();
+      }}
+      @keydown=${(e: KeyboardEvent) => {
+        if (!hasCheckpoints || isRowControlTarget(e.target)) {
+          return;
+        }
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          activateCheckpointDetails();
+        }
+      }}
+    >
       <td class="data-table-checkbox-col">
         <input
           type="checkbox"
           .checked=${props.selectedKeys.has(row.key)}
           @change=${() => props.onToggleSelect(row.key)}
-          aria-label="Select session"
+          aria-label=${t("sessionsView.selectSession")}
         />
       </td>
       <td class="data-table-key-col">
@@ -553,7 +937,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         <input
           .value=${row.label ?? ""}
           ?disabled=${props.loading}
-          placeholder="(optional)"
+          placeholder=${t("sessionsView.optionalPlaceholder")}
           style="width: 100%; max-width: 140px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);"
           @change=${(e: Event) => {
             const value = normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
@@ -564,30 +948,37 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td>
         <span class="data-table-badge ${badgeClass}">${row.kind}</span>
       </td>
+      <td class="session-status-col">
+        <div class="session-status-stack">
+          ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
+        </div>
+      </td>
+      <td class="session-runtime-cell">
+        <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
+      </td>
       <td>${updated}</td>
-      <td>${formatSessionTokens(row)}</td>
-      <td>
-        <div style="display: grid; gap: 6px;">
-          <span class="muted" style="font-size: 12px;">
-            ${checkpointCount > 0
-              ? `${checkpointCount} checkpoint${checkpointCount === 1 ? "" : "s"}`
-              : "none"}
-          </span>
-          ${latestCheckpoint
+      <td class="session-token-cell">${formatSessionTokens(row)}</td>
+      <td class="session-compaction-col">
+        <div class="session-compaction-cell">
+          ${hasCheckpoints
             ? html`
-                <span style="font-size: 12px;">
-                  ${formatCheckpointReason(latestCheckpoint.reason)} ·
-                  ${formatRelativeTimestamp(latestCheckpoint.createdAt)}
-                </span>
+                <button
+                  class="session-compaction-trigger"
+                  type="button"
+                  aria-expanded=${String(isExpanded)}
+                  aria-controls=${detailsId}
+                  aria-label=${isExpanded
+                    ? t("sessionsView.hideSessionDetails", { count: checkpointLabel })
+                    : t("sessionsView.showSessionDetails", { count: checkpointLabel })}
+                  @click=${(e: MouseEvent) => {
+                    e.stopPropagation();
+                    activateCheckpointDetails();
+                  }}
+                >
+                  <span class="session-compaction-count">${checkpointLabel}</span>
+                </button>
               `
-            : nothing}
-          <button
-            class="btn btn--sm"
-            ?disabled=${props.checkpointLoadingKey === row.key}
-            @click=${() => props.onToggleCheckpointDetails(row.key)}
-          >
-            ${isExpanded ? "Hide checkpoints" : "Show checkpoints"}
-          </button>
+            : html`<span class="muted session-compaction-count">${t("common.none")}</span>`}
         </div>
       </td>
       <td>
@@ -655,78 +1046,139 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           ${reasoningLevels.map(
             (level) =>
               html`<option value=${level} ?selected=${reasoning === level}>
-                ${level || "inherit"}
+                ${level || t("sessionsView.inherit")}
               </option>`,
           )}
         </select>
       </td>
-    </tr>`,
-    ...(isExpanded
-      ? [
-          html`<tr>
-            <td colspan="11" style="padding: 0;">
-              <div
-                style="padding: 14px 16px; border-top: 1px solid var(--border); background: var(--surface-2, rgba(127, 127, 127, 0.05));"
+      <td>
+        ${props.onAddToWorkboard && canLink
+          ? html`
+              <button
+                class="icon-btn"
+                title=${captured
+                  ? t("sessionsView.openWorkboardCard")
+                  : t("sessionsView.addToWorkboard")}
+                ?disabled=${props.loading || captureBusy}
+                @click=${(event: MouseEvent) => {
+                  event.stopPropagation();
+                  void props.onAddToWorkboard?.(row);
+                }}
               >
-                ${props.checkpointLoadingKey === row.key
-                  ? html`<div class="muted">Loading checkpoints…</div>`
-                  : checkpointError
-                    ? html`<div class="callout danger">${checkpointError}</div>`
-                    : checkpointItems.length === 0
-                      ? html`<div class="muted">
-                          No compaction checkpoints recorded for this session.
-                        </div>`
-                      : html`
-                          <div style="display: grid; gap: 10px;">
-                            ${checkpointItems.map(
-                              (checkpoint) => html`
-                                <div
-                                  style="border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; display: grid; gap: 8px;"
-                                >
-                                  <div
-                                    style="display: flex; gap: 8px; justify-content: space-between; align-items: center; flex-wrap: wrap;"
-                                  >
-                                    <strong>
-                                      ${formatCheckpointReason(checkpoint.reason)} ·
-                                      ${formatRelativeTimestamp(checkpoint.createdAt)}
-                                    </strong>
-                                    <span class="muted" style="font-size: 12px;">
-                                      ${formatCheckpointDelta(checkpoint)}
-                                    </span>
+                ${captured ? icons.check : icons.plus}
+              </button>
+            `
+          : nothing}
+      </td>
+    </tr>`,
+    ...(isExpanded && hasCheckpoints
+      ? [
+          html`<tr id=${detailsId} class="session-checkpoint-details-row">
+            <td colspan="14">
+              <div class="session-details-panel">
+                <div class="session-details-panel__hero">
+                  <div>
+                    <div class="session-details-panel__eyebrow">
+                      ${t("sessionsView.sessionDetails")}
+                    </div>
+                    <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
+                    ${showDisplayName
+                      ? html`
+                          <div class="muted session-details-panel__subtitle">${displayName}</div>
+                        `
+                      : nothing}
+                  </div>
+                  <div class="session-details-panel__badges">
+                    ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
+                    <span class="data-table-badge ${badgeClass}">${row.kind}</span>
+                  </div>
+                </div>
+
+                <div class="session-details-grid">
+                  ${sessionDetails.map(
+                    (item) => html`
+                      <div class="session-detail-stat">
+                        <div class="session-detail-stat__label">${item.label}</div>
+                        <div class="session-detail-stat__value" title=${item.value}>
+                          ${item.value}
+                        </div>
+                      </div>
+                    `,
+                  )}
+                </div>
+
+                <div class="session-details-section">
+                  <div class="session-details-section__header">
+                    <div>
+                      <div class="session-details-panel__eyebrow">
+                        ${t("sessionsView.compactionHistory")}
+                      </div>
+                      <div class="session-details-section__title">${checkpointLabel}</div>
+                    </div>
+                  </div>
+                  ${props.checkpointLoadingKey === row.key
+                    ? html`<div class="muted session-details-empty">
+                        ${t("sessionsView.loadingCheckpoints")}
+                      </div>`
+                    : checkpointError
+                      ? html`<div class="callout danger">${checkpointError}</div>`
+                      : checkpointItems.length === 0
+                        ? html`<div class="muted session-details-empty">
+                            ${t("sessionsView.noCheckpoints")}
+                          </div>`
+                        : html`
+                            <div class="session-checkpoint-list">
+                              ${checkpointItems.map(
+                                (checkpoint) => html`
+                                  <div class="session-checkpoint-card">
+                                    <div class="session-checkpoint-card__header">
+                                      <strong>
+                                        ${formatCheckpointReason(checkpoint.reason)} ·
+                                        ${formatRelativeTimestamp(checkpoint.createdAt)}
+                                      </strong>
+                                      <span class="muted session-checkpoint-card__delta">
+                                        ${formatCheckpointDelta(checkpoint)}
+                                      </span>
+                                    </div>
+                                    ${checkpoint.summary
+                                      ? html`<div class="session-checkpoint-card__summary">
+                                          ${checkpoint.summary}
+                                        </div>`
+                                      : html`
+                                          <div class="muted">${t("sessionsView.noSummary")}</div>
+                                        `}
+                                    <div class="session-checkpoint-card__actions">
+                                      <button
+                                        class="btn btn--sm"
+                                        ?disabled=${props.checkpointBusyKey ===
+                                        checkpoint.checkpointId}
+                                        @click=${() =>
+                                          props.onBranchFromCheckpoint(
+                                            row.key,
+                                            checkpoint.checkpointId,
+                                          )}
+                                      >
+                                        ${t("sessionsView.branchFromCheckpoint")}
+                                      </button>
+                                      <button
+                                        class="btn btn--sm"
+                                        ?disabled=${props.checkpointBusyKey ===
+                                        checkpoint.checkpointId}
+                                        @click=${() =>
+                                          props.onRestoreCheckpoint(
+                                            row.key,
+                                            checkpoint.checkpointId,
+                                          )}
+                                      >
+                                        ${t("sessionsView.restoreCheckpoint")}
+                                      </button>
+                                    </div>
                                   </div>
-                                  ${checkpoint.summary
-                                    ? html`<div style="white-space: pre-wrap;">
-                                        ${checkpoint.summary}
-                                      </div>`
-                                    : html`<div class="muted">No summary captured.</div>`}
-                                  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                                    <button
-                                      class="btn btn--sm"
-                                      ?disabled=${props.checkpointBusyKey ===
-                                      checkpoint.checkpointId}
-                                      @click=${() =>
-                                        props.onBranchFromCheckpoint(
-                                          row.key,
-                                          checkpoint.checkpointId,
-                                        )}
-                                    >
-                                      Branch from checkpoint
-                                    </button>
-                                    <button
-                                      class="btn btn--sm"
-                                      ?disabled=${props.checkpointBusyKey ===
-                                      checkpoint.checkpointId}
-                                      @click=${() =>
-                                        props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
-                                    >
-                                      Restore
-                                    </button>
-                                  </div>
-                                </div>
-                              `,
-                            )}
-                          </div>
-                        `}
+                                `,
+                              )}
+                            </div>
+                          `}
+                </div>
               </div>
             </td>
           </tr>`,

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runConfigSet } from "./config-cli.js";
@@ -110,6 +110,30 @@ async function withExecDryRunConfigHarness(
 }
 
 describe("config cli integration", () => {
+  beforeAll(async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-warmup-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+    try {
+      fs.writeFileSync(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      await runConfigSet({
+        path: "gateway.port",
+        value: "18790",
+        cliOptions: {},
+        runtime: createTestRuntime().runtime,
+      });
+    } finally {
+      envSnapshot.restore();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("accepts plugin hook conversation-access policy via config set", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-plugin-hooks-"));
     const configPath = path.join(tempDir, "openclaw.json");
@@ -140,7 +164,7 @@ describe("config cli integration", () => {
         runtime: runtime.runtime,
       });
 
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       const afterWrite = JSON5.parse(fs.readFileSync(configPath, "utf8"));
       expect(afterWrite.plugins?.entries?.["openclaw-mem0"]?.hooks).toEqual({
         allowConversationAccess: true,
@@ -214,7 +238,7 @@ describe("config cli integration", () => {
       });
       const afterDryRun = fs.readFileSync(configPath, "utf8");
       expect(afterDryRun).toBe(before);
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       expect(runtime.logs.some((line) => line.includes("Dry run successful: 2 update(s)"))).toBe(
         true,
       );
@@ -291,10 +315,12 @@ describe("config cli integration", () => {
       ).rejects.toThrow("__exit__:1");
       const after = fs.readFileSync(configPath, "utf8");
       expect(after).toBe(before);
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.errors).toStrictEqual([]);
       const raw = runtime.logs.at(-1);
-      expect(raw).toBeTruthy();
-      const payload = JSON.parse(raw ?? "{}") as {
+      if (raw === undefined) {
+        throw new Error("expected config check JSON log");
+      }
+      const payload = JSON.parse(raw) as {
         ok?: boolean;
         checks?: { schema?: boolean; resolvability?: boolean };
         errors?: Array<{ kind?: string; ref?: string }>;
@@ -302,9 +328,9 @@ describe("config cli integration", () => {
       expect(payload.ok).toBe(false);
       expect(payload.checks?.resolvability).toBe(true);
       expect(payload.errors?.some((entry) => entry.kind === "resolvability")).toBe(true);
-      expect(payload.errors?.some((entry) => entry.ref?.includes("MISSING_TEST_SECRET"))).toBe(
-        true,
-      );
+      expect(
+        payload.errors?.some((entry) => (entry.ref ?? "").includes("MISSING_TEST_SECRET")),
+      ).toBe(true);
     } finally {
       envSnapshot.restore();
       clearConfigCache();

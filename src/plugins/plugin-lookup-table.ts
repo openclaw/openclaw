@@ -1,13 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  resolveChannelPluginIdsFromRegistry,
-  resolveConfiguredDeferredChannelPluginIdsFromRegistry,
-  resolveGatewayStartupPluginIdsFromRegistry,
+  resolveGatewayStartupPluginPlanFromRegistry,
+  type GatewayStartupPluginPlan,
 } from "./channel-plugin-ids.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import {
   isPluginMetadataSnapshotCompatible,
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
   type PluginMetadataSnapshotOwnerMaps,
 } from "./plugin-metadata-snapshot.js";
@@ -15,11 +14,7 @@ import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 
 export type PluginLookUpTableOwnerMaps = PluginMetadataSnapshotOwnerMaps;
 
-export type PluginLookUpTableStartupPlan = {
-  channelPluginIds: readonly string[];
-  configuredDeferredChannelPluginIds: readonly string[];
-  pluginIds: readonly string[];
-};
+export type PluginLookUpTableStartupPlan = GatewayStartupPluginPlan;
 
 export type PluginLookUpTableMetrics = {
   registrySnapshotMs: number;
@@ -52,6 +47,38 @@ export type LoadPluginLookUpTableParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
 };
 
+let lookupTableMemoBySnapshot = new WeakMap<
+  PluginMetadataSnapshot,
+  Map<string, PluginLookUpTable>
+>();
+
+export function clearPluginLookUpTableMemoForTest(): void {
+  lookupTableMemoBySnapshot = new WeakMap<PluginMetadataSnapshot, Map<string, PluginLookUpTable>>();
+}
+
+function createPluginLookUpTableMemoKey(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  index?: PluginRegistrySnapshot;
+}): string {
+  return hashJson({
+    activationSourceConfig: params.activationSourceConfig ?? null,
+    config: params.config,
+    env: params.env,
+    indexPolicyHash: params.index?.policyHash ?? null,
+    indexGeneratedAtMs: params.index?.generatedAtMs ?? null,
+    indexPlugins:
+      params.index?.plugins.map((plugin) => [
+        plugin.pluginId,
+        plugin.manifestHash,
+        plugin.installRecordHash,
+      ]) ?? null,
+    workspaceDir: params.workspaceDir ?? null,
+  });
+}
+
 export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): PluginLookUpTable {
   const requestedSnapshotConfig = params.activationSourceConfig ?? params.config;
   const metadataSnapshot =
@@ -59,26 +86,34 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     isPluginMetadataSnapshotCompatible({
       snapshot: params.metadataSnapshot,
       config: requestedSnapshotConfig,
+      env: params.env,
       workspaceDir: params.workspaceDir,
       index: params.index,
     })
       ? params.metadataSnapshot
-      : loadPluginMetadataSnapshot({
+      : resolvePluginMetadataSnapshot({
           config: requestedSnapshotConfig,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
           ...(params.index ? { index: params.index } : {}),
         });
+  const memoKey = createPluginLookUpTableMemoKey({
+    config: params.config,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    env: params.env,
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.index !== undefined ? { index: params.index } : {}),
+  });
+  const memo = lookupTableMemoBySnapshot.get(metadataSnapshot)?.get(memoKey);
+  if (memo) {
+    return memo;
+  }
   const { index, manifestRegistry } = metadataSnapshot;
   const startupPlanStartedAt = performance.now();
-  const channelPluginIds = resolveChannelPluginIdsFromRegistry({ manifestRegistry });
-  const configuredDeferredChannelPluginIds = resolveConfiguredDeferredChannelPluginIdsFromRegistry({
-    config: params.config,
-    env: params.env,
-    index,
-    manifestRegistry,
-  });
-  const pluginIds = resolveGatewayStartupPluginIdsFromRegistry({
+  const startup = resolveGatewayStartupPluginPlanFromRegistry({
     config: params.config,
     ...(params.activationSourceConfig !== undefined
       ? { activationSourceConfig: params.activationSourceConfig }
@@ -88,13 +123,8 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
     manifestRegistry,
   });
   const startupPlanMs = performance.now() - startupPlanStartedAt;
-  const startup = {
-    channelPluginIds,
-    configuredDeferredChannelPluginIds,
-    pluginIds,
-  };
 
-  return {
+  const table: PluginLookUpTable = {
     ...metadataSnapshot,
     key: hashJson({
       policyHash: index.policyHash,
@@ -111,8 +141,15 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
       ...metadataSnapshot.metrics,
       startupPlanMs,
       totalMs: metadataSnapshot.metrics.totalMs + startupPlanMs,
-      startupPluginCount: pluginIds.length,
-      deferredChannelPluginCount: configuredDeferredChannelPluginIds.length,
+      startupPluginCount: startup.pluginIds.length,
+      deferredChannelPluginCount: startup.configuredDeferredChannelPluginIds.length,
     },
   };
+  let memoByKey = lookupTableMemoBySnapshot.get(metadataSnapshot);
+  if (!memoByKey) {
+    memoByKey = new Map();
+    lookupTableMemoBySnapshot.set(metadataSnapshot, memoByKey);
+  }
+  memoByKey.set(memoKey, table);
+  return table;
 }

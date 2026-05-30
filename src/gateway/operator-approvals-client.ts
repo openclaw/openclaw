@@ -1,12 +1,61 @@
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
+import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
+import { getOperatorApprovalRuntimeToken } from "./operator-approval-runtime-token.js";
+
+function isLoopbackGatewayUrl(rawUrl: string): boolean {
+  try {
+    const hostname = new URL(rawUrl).hostname.toLowerCase();
+    const unbracketed =
+      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
+  } catch {
+    return false;
+  }
+}
+
+function shouldOmitOperatorApprovalDeviceIdentity(params: {
+  url: string;
+  token?: string;
+  password?: string;
+}): boolean {
+  return Boolean((params.token || params.password) && isLoopbackGatewayUrl(params.url));
+}
+
+function shouldSendApprovalRuntimeToken(urlSource: string): boolean {
+  // This token is process-local authority; loopback alone may be a tunnel or another gateway.
+  return (
+    urlSource === "local loopback" || urlSource === "missing gateway.remote.url (fallback local)"
+  );
+}
+
+function shouldOmitApprovalRuntimeDeviceIdentity(params: {
+  url: string;
+  token?: string;
+  password?: string;
+  sendsApprovalRuntimeToken: boolean;
+}): boolean {
+  if (params.sendsApprovalRuntimeToken) {
+    return true;
+  }
+  return shouldOmitOperatorApprovalDeviceIdentity(params);
+}
 
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
     GatewayClientOptions,
-    "clientDisplayName" | "onClose" | "onConnectError" | "onEvent" | "onHelloOk"
+    | "clientDisplayName"
+    | "onClose"
+    | "onConnectError"
+    | "onEvent"
+    | "onHelloOk"
+    | "onReconnectPaused"
   > & {
     config: OpenClawConfig;
     gatewayUrl?: string;
@@ -17,18 +66,32 @@ export async function createOperatorApprovalsGatewayClient(
     gatewayUrl: params.gatewayUrl,
     env: process.env,
   });
+  const sendsApprovalRuntimeToken = shouldSendApprovalRuntimeToken(bootstrap.urlSource);
 
   return new GatewayClient({
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
+    ...(sendsApprovalRuntimeToken
+      ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
+      : {}),
+    preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     scopes: ["operator.approvals"],
+    deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
+      url: bootstrap.url,
+      token: bootstrap.auth.token,
+      password: bootstrap.auth.password,
+      sendsApprovalRuntimeToken,
+    })
+      ? null
+      : undefined,
     onEvent: params.onEvent,
     onHelloOk: params.onHelloOk,
     onConnectError: params.onConnectError,
+    onReconnectPaused: params.onReconnectPaused,
     onClose: params.onClose,
   });
 }
@@ -79,7 +142,16 @@ export async function withOperatorApprovalsGatewayClient<T>(
   });
 
   try {
-    gatewayClient.start();
+    const readiness = await startGatewayClientWhenEventLoopReady(gatewayClient, {
+      clientOptions: { preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs },
+    });
+    if (!readiness.ready) {
+      throw new Error(
+        readiness.aborted
+          ? "gateway approval client start aborted before readiness"
+          : "gateway readiness unavailable before approval client start",
+      );
+    }
     await ready;
     return await run(gatewayClient);
   } finally {

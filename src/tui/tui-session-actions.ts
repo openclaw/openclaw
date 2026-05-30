@@ -1,6 +1,6 @@
-import type { TUI } from "@mariozechner/pi-tui";
+import type { TUI } from "@earendil-works/pi-tui";
+import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
-import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -10,6 +10,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 type SessionActionBtwPresenter = {
@@ -32,12 +33,14 @@ type SessionActionContext = {
   updateAutocompleteProvider: () => void;
   setActivityStatus: (text: string) => void;
   clearLocalRunIds?: () => void;
+  rememberSessionKey?: (sessionKey: string) => void | Promise<void>;
 };
 
 type SessionInfoDefaults = {
   model?: string | null;
   modelProvider?: string | null;
   contextTokens?: number | null;
+  thinkingLevels?: Array<{ id: string; label: string }>;
 };
 
 type SessionInfoEntry = SessionInfo & {
@@ -62,6 +65,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    rememberSessionKey,
   } = context;
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
@@ -140,6 +144,7 @@ export function createSessionActions(context: SessionActionContext) {
     defaults?: SessionInfoDefaults | null;
     force?: boolean;
   }) => {
+    const hasEntryUpdate = "entry" in params;
     const entry = params.entry ?? undefined;
     const defaults = params.defaults ?? lastSessionDefaults ?? undefined;
     const previousDefaults = lastSessionDefaults;
@@ -168,6 +173,9 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.thinkingLevel !== undefined) {
       next.thinkingLevel = entry.thinkingLevel;
     }
+    if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
+      next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
+    }
     if (entry?.fastMode !== undefined) {
       next.fastMode = entry.fastMode;
     }
@@ -191,6 +199,9 @@ export function createSessionActions(context: SessionActionContext) {
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
+    }
+    if (hasEntryUpdate) {
+      next.goal = entry?.goal;
     }
     if (entry?.contextTokens !== undefined || defaults?.contextTokens !== undefined) {
       next.contextTokens =
@@ -220,7 +231,10 @@ export function createSessionActions(context: SessionActionContext) {
   const runRefreshSessionInfo = async () => {
     try {
       const resolveListAgentId = () => {
-        if (state.currentSessionKey === "global" || state.currentSessionKey === "unknown") {
+        if (state.currentSessionKey === "global") {
+          return state.currentAgentId;
+        }
+        if (state.currentSessionKey === "unknown") {
           return undefined;
         }
         const parsed = parseAgentSessionKey(state.currentSessionKey);
@@ -228,8 +242,10 @@ export function createSessionActions(context: SessionActionContext) {
       };
       const listAgentId = resolveListAgentId();
       const result = await client.listSessions({
-        includeGlobal: false,
-        includeUnknown: false,
+        limit: TUI_SESSION_LOOKUP_LIMIT,
+        search: state.currentSessionKey,
+        includeGlobal: state.currentSessionKey === "global",
+        includeUnknown: state.currentSessionKey === "unknown",
         agentId: listAgentId,
       });
       const normalizeMatchKey = (key: string) => parseAgentSessionKey(key)?.rest ?? key;
@@ -289,6 +305,7 @@ export function createSessionActions(context: SessionActionContext) {
     try {
       const history = await client.loadHistory({
         sessionKey: state.currentSessionKey,
+        ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
         limit: opts.historyLimit ?? 200,
       });
       const record = history as {
@@ -358,6 +375,7 @@ export function createSessionActions(context: SessionActionContext) {
         }
       }
       state.historyLoaded = true;
+      void rememberSessionKey?.(state.currentSessionKey);
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
@@ -370,6 +388,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
+    state.pendingChatRunId = null;
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
@@ -383,17 +402,45 @@ export function createSessionActions(context: SessionActionContext) {
     await loadHistory();
   };
 
-  const abortActive = async () => {
-    if (!state.activeChatRunId) {
-      chatLog.addSystem("no active run");
+  const abortActive = async (params?: { preferActive?: boolean }) => {
+    if (
+      opts.local === true &&
+      state.activityStatus === "finishing context" &&
+      !params?.preferActive &&
+      !state.pendingChatRunId
+    ) {
+      chatLog.addSystem("agent is finishing context; wait for it to finish before aborting");
       tui.requestRender();
       return;
     }
+    const runIds =
+      params?.preferActive && state.activeChatRunId && state.pendingChatRunId
+        ? [state.pendingChatRunId, state.activeChatRunId]
+        : [
+            !params?.preferActive && state.activeChatRunId && state.pendingChatRunId
+              ? state.pendingChatRunId
+              : (state.activeChatRunId ?? state.pendingChatRunId ?? null),
+          ].filter((runId) => runId !== null);
+    if (runIds.length === 0) {
+      chatLog.addSystem("no active run", { coalesceConsecutive: true });
+      tui.requestRender();
+      return;
+    }
+    const abortsPendingRun = Boolean(
+      state.pendingChatRunId && runIds.includes(state.pendingChatRunId),
+    );
     try {
-      await client.abortChat({
-        sessionKey: state.currentSessionKey,
-        runId: state.activeChatRunId,
-      });
+      for (const runId of runIds) {
+        await client.abortChat({
+          sessionKey: state.currentSessionKey,
+          ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
+          runId,
+        });
+      }
+      state.pendingChatRunId = null;
+      if (abortsPendingRun) {
+        state.pendingOptimisticUserMessage = false;
+      }
       setActivityStatus("aborted");
     } catch (err) {
       chatLog.addSystem(`abort failed: ${String(err)}`);

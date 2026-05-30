@@ -1,11 +1,9 @@
-import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
-import { z } from "openclaw/plugin-sdk/zod";
-import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
+import { z } from "zod";
 
-export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
+const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 
-export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
+const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
 export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
@@ -35,7 +33,7 @@ export type AcpxPluginConfig = {
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
   mcpServers?: Record<string, McpServerConfig>;
-  agents?: Record<string, { command: string }>;
+  agents?: Record<string, { command: string; args?: string[] }>;
 };
 
 export type ResolvedAcpxPluginConfig = {
@@ -113,11 +111,8 @@ export const AcpxPluginConfigSchema = z.strictObject({
       z.string(),
       z.strictObject({
         command: nonEmptyTrimmedString("agents.<id>.command must be a non-empty string"),
+        args: z.array(z.string({ error: "args must be an array of strings" })).optional(),
       }),
     )
     .optional(),
 });
-
-export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
-  return buildPluginConfigSchema(AcpxPluginConfigSchema);
-}

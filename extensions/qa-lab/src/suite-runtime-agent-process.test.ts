@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -19,6 +21,7 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   waitForTransportReady: waitForTransportReadyMock,
 }));
 
+import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import {
   findManagedDreamingCronJob,
   isManagedDreamingCronJob,
@@ -56,10 +59,20 @@ function createSpawnedProcess() {
 }
 
 async function waitForSpawnCount(count: number) {
-  while (spawnMock.mock.calls.length < count) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await vi.waitFor(() => {
+    expect(spawnMock).toHaveBeenCalledTimes(count);
+  });
+  await Promise.resolve();
+}
+
+function firstSpawnCall(): unknown[] | undefined {
+  return spawnMock.mock.calls[0];
+}
+
+function firstGatewayCall(
+  gatewayCall: ReturnType<typeof vi.fn>,
+): [string, unknown, unknown] | undefined {
+  return gatewayCall.mock.calls[0] as [string, unknown, unknown] | undefined;
 }
 
 describe("qa suite runtime agent process helpers", () => {
@@ -93,14 +106,13 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toBe("ok");
-    expect(spawnMock).toHaveBeenCalledWith(
-      "/usr/bin/node",
-      ["/repo/dist/index.js", "qa", "suite"],
-      expect.objectContaining({
-        cwd: "/tmp/runtime",
-        env: { PATH: "/usr/bin" },
-      }),
+    const spawnCall = firstSpawnCall();
+    expect(spawnCall?.[0]).toBe("/usr/bin/node");
+    expect(spawnCall?.[1]).toEqual([path.join("/repo", "dist", "index.js"), "qa", "suite"]);
+    expect((spawnCall?.[2] as { cwd?: string; env?: unknown } | undefined)?.cwd).toBe(
+      "/tmp/runtime",
     );
+    expect((spawnCall?.[2] as { env?: unknown } | undefined)?.env).toEqual({ PATH: "/usr/bin" });
   });
 
   it("merges isolated env overrides into qa cli runs", async () => {
@@ -132,17 +144,18 @@ describe("qa suite runtime agent process helpers", () => {
     child.emit("exit", 0);
 
     await expect(pending).resolves.toBe("ok");
-    expect(spawnMock).toHaveBeenCalledWith(
-      "/usr/bin/node",
-      ["/repo/dist/index.js", "crestodian", "-m", "overview"],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          PATH: "/usr/bin",
-          OPENCLAW_STATE_DIR: "/tmp/isolated-state",
-          OPENCLAW_CONFIG_PATH: "/tmp/isolated-state/openclaw.json",
-        }),
-      }),
-    );
+    const spawnCall = firstSpawnCall();
+    expect(spawnCall?.[0]).toBe("/usr/bin/node");
+    expect(spawnCall?.[1]).toEqual([
+      path.join("/repo", "dist", "index.js"),
+      "crestodian",
+      "-m",
+      "overview",
+    ]);
+    const spawnEnv = (spawnCall?.[2] as { env?: Record<string, string> } | undefined)?.env;
+    expect(spawnEnv?.PATH).toBe("/usr/bin");
+    expect(spawnEnv?.OPENCLAW_STATE_DIR).toBe("/tmp/isolated-state");
+    expect(spawnEnv?.OPENCLAW_CONFIG_PATH).toBe("/tmp/isolated-state/openclaw.json");
   });
 
   it("parses json qa cli output when requested", async () => {
@@ -194,7 +207,7 @@ describe("qa suite runtime agent process helpers", () => {
     child.stdout.emit(
       "data",
       Buffer.from(
-        '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex installed bundled runtime deps\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
+        '\u001b[35m[plugins]\u001b[39m \u001b[36mcodex loaded plugin package metadata\u001b[39m\n{"results":[{"text":"ORBIT-10"}]}\n',
       ),
     );
     child.emit("exit", 0);
@@ -225,12 +238,75 @@ describe("qa suite runtime agent process helpers", () => {
     child.stdout.emit(
       "data",
       Buffer.from(
-        '[plugins] memory-core installed bundled runtime deps\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
+        '[plugins] memory-core loaded plugin package metadata\n{\n  "results": [\n    {\n      "text": "ORBIT-10"\n    }\n  ]\n}\n',
       ),
     );
     child.emit("exit", 0);
 
     await expect(pending).resolves.toEqual({ results: [{ text: "ORBIT-10" }] });
+  });
+
+  it("rejects oversized qa cli stdout instead of parsing truncated output", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: {},
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["memory", "search", "--json"],
+      { json: true },
+    );
+
+    await waitForSpawnCount(1);
+    child.stdout.emit("data", Buffer.alloc(QA_CHILD_STDOUT_MAX_BYTES + 1, "x"));
+    child.emit("exit", 0);
+
+    await expect(pending).rejects.toThrow(
+      `qa cli stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
+    );
+  });
+
+  it("keeps only a bounded qa cli stderr tail for failure diagnostics", async () => {
+    const child = createSpawnedProcess();
+    spawnMock.mockReturnValue(child);
+
+    const pending = runQaCli(
+      {
+        repoRoot: "/repo",
+        gateway: {
+          tempRoot: "/tmp/runtime",
+          runtimeEnv: {},
+        },
+        primaryModel: "openai/gpt-5.5",
+        alternateModel: "openai/gpt-5.5-mini",
+        providerMode: "mock-openai",
+      } as never,
+      ["memory", "search", "--json"],
+      { json: true },
+    );
+
+    await waitForSpawnCount(1);
+    child.stderr.emit(
+      "data",
+      Buffer.from(`head-marker\n${"x".repeat(QA_CHILD_STDERR_TAIL_BYTES)}\ntail-marker`),
+    );
+    child.emit("exit", 1);
+
+    const error = await pending.catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("qa cli failed (1):");
+    expect(message).toContain("qa cli stderr truncated to last");
+    expect(message).toContain("tail-marker");
+    expect(message).not.toContain("head-marker");
   });
 
   it("starts an agent run with transport-derived delivery metadata", async () => {
@@ -252,17 +328,23 @@ describe("qa suite runtime agent process helpers", () => {
         message: "hello",
       }),
     ).resolves.toEqual({ runId: "run-1" });
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "agent",
-      expect.objectContaining({
-        sessionKey: "session-1",
-        message: "hello",
-        channel: "qa-channel",
-        replyChannel: "reply-channel",
-        replyTo: "reply-target",
-      }),
-      expect.any(Object),
-    );
+    const gatewayArgs = firstGatewayCall(gatewayCall);
+    expect(gatewayArgs?.[0]).toBe("agent");
+    const agentPayload = gatewayArgs?.[1] as
+      | {
+          channel?: string;
+          message?: string;
+          replyChannel?: string;
+          replyTo?: string;
+          sessionKey?: string;
+        }
+      | undefined;
+    expect(agentPayload?.sessionKey).toBe("session-1");
+    expect(agentPayload?.message).toBe("hello");
+    expect(agentPayload?.channel).toBe("qa-channel");
+    expect(agentPayload?.replyChannel).toBe("reply-channel");
+    expect(agentPayload?.replyTo).toBe("reply-target");
+    expect(gatewayArgs?.[2]).toBeTypeOf("object");
   });
 
   it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {
@@ -325,6 +407,20 @@ describe("qa suite runtime agent process helpers", () => {
       "agent.wait",
       { runId: "run-3", timeoutMs: 30_000 },
       { timeoutMs: 35_000 },
+    );
+  });
+
+  it("caps the gateway client timeout when waiting for oversized agent runs", async () => {
+    const gatewayCall = vi.fn(async () => ({ status: "ok" }));
+
+    await expect(
+      waitForAgentRun({ gateway: { call: gatewayCall } } as never, "run-oversized", 9e15),
+    ).resolves.toEqual({ status: "ok" });
+
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "agent.wait",
+      { runId: "run-oversized", timeoutMs: 9e15 },
+      { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });
 

@@ -2,10 +2,14 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { __testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
+import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCKER_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-live-docker.sh");
+const PREPARE_PACKAGE_PATH = path.resolve(
+  TEST_DIR,
+  "../../scripts/e2e/lib/npm-telegram-live/prepare-package.mjs",
+);
 
 describe("package Telegram live Docker E2E", () => {
   it("supports npm-specific Convex credential aliases", () => {
@@ -31,14 +35,58 @@ describe("package Telegram live Docker E2E", () => {
   it("installs the package candidate before forwarding runtime secrets", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
     const installRunStart = script.indexOf('echo "Running package Telegram live Docker E2E');
-    const installRunEnd = script.indexOf('run_logged docker run --rm \\\n  "${docker_env[@]}"');
+    const installRunEnd = script.indexOf("# Mount only QA harness source");
     const installRun = script.slice(installRunStart, installRunEnd);
 
+    expect(installRunStart).toBeGreaterThanOrEqual(0);
+    expect(installRunEnd).toBeGreaterThan(installRunStart);
+    expect(installRun).toContain(
+      '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
+    );
+    expect(installRun).toContain(
+      '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+    );
+    expect(installRun).toContain('elif command -v gtimeout >/dev/null 2>&1; then');
+    expect(installRun).toContain("timeout_bin=\"gtimeout\"");
+    expect(installRun).toContain(
+      'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
+    );
+    expect(installRun).toContain('"$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1');
+    expect(installRun).toContain(
+      '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+    );
     expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
+    expect(installRun).not.toContain("running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT");
     expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
+    expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
+    expect(installRun).not.toContain("run_logged docker run --rm");
+    expect(script).toContain("run_logged docker_e2e_run_with_harness");
+    expect(script).toContain('"${docker_env[@]}"');
     expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
     expect(script).toContain('credential_role="ci"');
+  });
+
+  it("bounds installed-package hot path OpenClaw commands", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const runtimeRunStart = script.indexOf("# Mount only QA harness source");
+    const runtimeRun = script.slice(runtimeRunStart);
+
+    expect(runtimeRunStart).toBeGreaterThanOrEqual(0);
+    expect(script).toContain(
+      '-e OPENCLAW_E2E_COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"',
+    );
+    expect(runtimeRun).toContain("source scripts/lib/openclaw-e2e-instance.sh");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw --version");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw onboard");
+    expect(runtimeRun).toContain(
+      'OPENAI_API_KEY="$hotpath_openai_api_key" openclaw_e2e_run_command openclaw onboard',
+    );
+    expect(runtimeRun).not.toContain("export OPENAI_API_KEY=");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --fix");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --non-interactive");
+    expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
   });
 
   it("can install a resolved package tarball instead of a registry spec", () => {
@@ -57,6 +105,7 @@ describe("package Telegram live Docker E2E", () => {
 
   it("keeps private QA harness imports local while using the installed package dist", () => {
     const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const preparePackage = readFileSync(PREPARE_PACKAGE_PATH, "utf8");
     const gatewayRpcClient = readFileSync(
       path.resolve(TEST_DIR, "../../extensions/qa-lab/src/gateway-rpc-client.ts"),
       "utf8",
@@ -68,17 +117,14 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(script).toContain('ln -sfnT "$openclaw_package_dir/dist" /app/dist');
     expect(script).toContain('cp "$openclaw_package_dir/package.json" /app/package.json');
-    expect(script).toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
-    expect(script).toContain('"/app/node_modules/openclaw/package.json"');
-    expect(script).toContain('pkg.exports["./plugin-sdk/qa-channel"]');
-    expect(script).toContain('"./extensions/qa-channel/api.ts"');
-    expect(script).toContain('pkg.exports["./plugin-sdk/qa-channel-protocol"]');
-    expect(script).toContain('"./extensions/qa-channel/src/protocol.ts"');
-    expect(script).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
-    expect(script).toContain('"./dist/plugin-sdk/browser-node-runtime.js"');
+    expect(script).toContain('-v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro"');
+    expect(script).not.toContain('ln -sfnT /app/extensions "$openclaw_package_dir/extensions"');
+    expect(script).toContain("node scripts/e2e/lib/npm-telegram-live/prepare-package.mjs");
+    expect(script).toContain("/app/node_modules/openclaw/package.json");
+    expect(preparePackage).toContain('pkg.exports["./plugin-sdk/gateway-runtime"]');
+    expect(preparePackage).toContain('"./dist/plugin-sdk/gateway-runtime.js"');
     expect(gatewayRpcClient).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
     expect(qaRuntimeApi).toContain('from "openclaw/plugin-sdk/gateway-runtime"');
-    expect(gatewayRpcClient).not.toContain('from "openclaw/plugin-sdk/browser-node-runtime"');
   });
 
   it("exposes installed package dependencies to the mounted QA harness", () => {
@@ -97,13 +143,13 @@ describe("package Telegram live Docker E2E", () => {
 
   it("lets npm-specific credential aliases override shared QA env", () => {
     expect(
-      __testing.resolveCredentialSource({
+      testing.resolveCredentialSource({
         OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: "convex",
         OPENCLAW_QA_CREDENTIAL_SOURCE: "env",
       }),
     ).toBe("convex");
     expect(
-      __testing.resolveCredentialRole({
+      testing.resolveCredentialRole({
         OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: "ci",
         OPENCLAW_QA_CREDENTIAL_ROLE: "maintainer",
       }),

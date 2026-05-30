@@ -7,9 +7,9 @@ export type QaLabLatestReport = {
   generatedAt: string;
 };
 
-export type QaLabRunStatus = "idle" | "running" | "completed";
+type QaLabRunStatus = "idle" | "running" | "completed";
 
-export type QaLabScenarioStep = {
+type QaLabScenarioStep = {
   name: string;
   status: "pass" | "fail" | "skip";
   details?: string;
@@ -49,12 +49,13 @@ export type QaLabServerStartParams = {
   advertiseHost?: string;
   advertisePort?: number;
   controlUiUrl?: string;
-  controlUiToken?: string;
+  controlUiProxyToken?: string;
   controlUiProxyTarget?: string;
   uiDistDir?: string;
   autoKickoffTarget?: string;
   embeddedGateway?: string;
   sendKickoffOnStart?: boolean;
+  selfCheckWaitTimeoutMs?: number;
 };
 
 export type QaLabServerHandle = {
@@ -63,7 +64,7 @@ export type QaLabServerHandle = {
   state: QaBusState;
   setControlUi: (next: {
     controlUiUrl?: string | null;
-    controlUiToken?: string | null;
+    controlUiProxyToken?: string | null;
     controlUiProxyTarget?: string | null;
   }) => void;
   setScenarioRun: (next: Omit<QaLabScenarioRun, "counts"> | null) => void;

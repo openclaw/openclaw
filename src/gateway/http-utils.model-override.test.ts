@@ -9,6 +9,10 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => loadConfigMock(),
 }));
 
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => loadConfigMock(),
+}));
+
 vi.mock("./server-model-catalog.js", () => ({
   loadGatewayModelCatalog: () => loadGatewayModelCatalogMock(),
 }));

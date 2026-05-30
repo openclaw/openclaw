@@ -19,9 +19,16 @@ or validating a change without wasting hours.
 Prove the touched surface first. Do not reflexively run the whole suite.
 
 1. Inspect the diff and classify the touched surface:
-   - source: `pnpm changed:lanes --json`, then `pnpm check:changed`
-   - tests only: `pnpm test:changed`
-   - one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
+   - normal source checkout, source change: `pnpm changed:lanes --json`, then `pnpm check:changed`
+   - normal source checkout, tests only: `pnpm test:changed`
+   - normal source checkout, one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
+   - Codex worktree or linked/sparse checkout, one/few explicit files: `node scripts/run-vitest.mjs <path-or-filter>`
+   - Codex worktree or linked/sparse checkout, changed gates or anything broad:
+     use the Crabbox wrapper with the provider that matches the proof surface.
+     For maintainer heavy `pnpm` gates, that is usually delegated Blacksmith
+     Testbox through Crabbox, e.g. `node scripts/crabbox-wrapper.mjs run
+--provider blacksmith-testbox ... -- pnpm check:changed`. For direct AWS
+     Crabbox proof, omit `--provider` and let `.crabbox.yaml` choose AWS.
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
 2. Reproduce narrowly before fixing.
@@ -36,6 +43,24 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
 - If deps are missing, run `pnpm install`, retry once, then report the first actionable error.
+- In a Codex worktree or linked/sparse checkout, do not run direct local
+  `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer` until
+  you have verified pnpm will not reconcile or reinstall dependencies. Use
+  `node scripts/run-vitest.mjs` for tiny local proof, `node
+scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
+  after the relevant remote or node-wrapper proof is already clean.
+- For remote proof, use the Crabbox wrapper first, but name the actual backend.
+  Direct AWS Crabbox uses `provider=aws` and `cbx_...` ids. Delegated
+  Blacksmith Testbox through Crabbox uses `provider=blacksmith-testbox`,
+  `syncDelegated=true`, and `tbx_...` ids. Both satisfy "remote proof" when the
+  requested proof surface allows either.
+- Do not infer "no Testbox is running" from plain `blacksmith testbox list`.
+  Use `blacksmith testbox list --all` or `blacksmith testbox status <tbx_id>`
+  before reporting cloud state.
+- Reuse only an id/slug created in this operator session unless explicitly
+  coordinating with another lane. If Testbox queues, fails capacity, or cannot
+  allocate, report the blocker or switch to direct AWS Crabbox only when that
+  still proves the requested surface.
 
 ## Local Test Shortcuts
 
@@ -43,19 +68,32 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 pnpm changed:lanes --json
 pnpm check:changed       # changed typecheck/lint/guards; no Vitest
 pnpm test:changed        # cheap smart changed Vitest targets
+pnpm verify              # full check, then full Vitest
 OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
 pnpm test <path-or-filter> -- --reporter=verbose
 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 ```
 
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
-`pnpm test` wrapper so project routing, workers, and setup stay correct.
+`pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
+Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch
+mode and will not exit on its own.
+When the checkout is a Codex worktree, prefer the direct node harness instead:
+
+```bash
+node scripts/run-vitest.mjs <path-or-filter>
+```
+
+That keeps the test scoped without giving pnpm a chance to run dependency
+status checks or install reconciliation in a linked worktree.
 
 ## Command Semantics
 
 - `pnpm check` and `pnpm check:changed` do not run Vitest tests. They are for
   typecheck, lint, and guard proof.
 - `pnpm test` and `pnpm test:changed` run Vitest tests.
+- `pnpm verify` runs `pnpm check`, then `pnpm test`, with Crabbox phase markers
+  so remote summaries show which half failed.
 - `pnpm test:changed` is intentionally cheap by default: direct test edits,
   sibling tests, explicit source mappings, and import-graph dependents.
 - `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` is the explicit broad
@@ -76,6 +114,9 @@ Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 - Direct test edits run themselves. Source edits prefer explicit mappings,
   sibling `*.test.ts`, then import-graph dependents. Shared harness/config/root
   edits are skipped by default unless they have precise mapped tests.
+- Shared group-room delivery config and source-reply prompt edits are precise
+  mapped tests: they run the core auto-reply regressions plus Discord and Slack
+  delivery tests so cross-channel default changes fail before a PR push.
 - Public SDK or contract edits do not automatically run every plugin test.
   `check:changed` proves extension type contracts; the agent chooses the
   smallest plugin/contract Vitest proof that matches the actual risk.
@@ -95,6 +136,8 @@ gh run view <run-id> --job <job-id> --log
 - Check exact SHA. Ignore newer unrelated `main` unless asked.
 - For cancelled same-branch runs, confirm whether a newer run superseded it.
 - Fetch full logs only for failed or relevant jobs.
+- Prefer `gh run view <run-id> --json jobs` over PR rollup while debugging; rollup can be stale/noisy.
+- For `prompt:snapshots:check` failures, treat Linux Node 24 as CI truth. If macOS passes but CI drifts, reproduce in a Linux Node 24 container or Testbox, commit that generated output, then rerun.
 
 ## GitHub Release Workflows
 
@@ -108,7 +151,10 @@ rerun after a focused patch.
 the manual "everything before release" umbrella. It resolves a target ref, then
 dispatches:
 
-- manual `CI` for the full normal CI graph
+- manual `CI` for the full normal CI graph, with Android enabled via
+  `include_android=true`
+- `Plugin Prerelease` for release-only plugin static checks, extension shards,
+  the release-only `agentic-plugins` shard, and plugin product Docker lanes
 - `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
   E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
   Telegram release lanes
@@ -123,17 +169,31 @@ gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=<branch-or-sha> \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=stable
 ```
 
 Run the workflow itself from the trusted current ref, normally `--ref main`;
 child workflows are dispatched from that same ref even when `ref` points at an
 older release branch or tag. Full Release Validation has no separate child
 workflow ref input; choose the trusted harness by choosing the workflow run ref.
+Use `release_profile=minimum|stable|full` to control live/provider breadth:
+`minimum` keeps the fastest OpenAI/core release-critical set, `stable` adds the
+stable provider/backend set, and `full` adds the broad advisory provider/media
+matrix. Do not make `full` faster by silently dropping suites; optimize setup,
+artifact reuse, and sharding instead. The parent verifier job appends a child
+overview plus slowest-job tables for child runs; rerun only that verifier after
+a child rerun turns green.
+
+Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
+extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
+lanes are intentionally reserved for the separate `Plugin Prerelease` child so
+PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
+all-plugin runtime time on release-only product coverage.
 
 If a full run is already active on a newer `origin/main`, prefer watching that
-run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
-cancel it and monitor the current run.
+run over dispatching a duplicate. Do not cancel release, release-check, or child
+workflow runs unless Peter explicitly asks for cancellation.
 
 The child-dispatch jobs record the child run ids. The final
 `Verify full validation` job re-queries those child runs and is the canonical
@@ -141,10 +201,21 @@ parent gate. If a child workflow failed but was later rerun successfully, rerun
 only the failed parent verifier job; do not dispatch a new full umbrella unless
 the release evidence is stale.
 
+For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
+Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
+`release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
+`qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
+the failed box. After a targeted release-check fix, do not restart the full
+umbrella by habit: dispatch the matching `rerun_group` and rerun only the parent
+verifier/evidence step after the child is green unless the release evidence is
+stale. For a single failed live/E2E shard, use
+`-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
+workflow only spends setup and queue time on that suite.
+
 ### Release Evidence
 
 After release-candidate validation or before a release decision, record the
-important run ids in the private `openclaw/releases-private` evidence ledger.
+important run ids in the public `openclaw/releases` evidence ledger.
 Use the manual `OpenClaw Release Evidence`
 (`openclaw-release-evidence.yml`) workflow there. It writes durable summaries
 under `evidence/<release-id>/` and commits:
@@ -167,13 +238,13 @@ short release-manager notes there. Do not store raw logs, provider
 prompts/responses, channel transcripts, signing material, or secret-bearing
 config in git; raw logs stay in Actions artifacts.
 
-When `Full Release Validation` completes and
-`OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN` is configured in the public repo, it
-requests the private `OpenClaw Release Evidence From Full Validation` workflow.
-That private workflow reads the parent full-validation run, extracts the child
-CI/release-checks/Telegram run ids from the parent logs, and opens the evidence
-PR automatically. If the token is absent or the run predates this wiring, trigger
-that private workflow manually with the full-validation run id.
+When `Full Release Validation` completes and `OPENCLAW_RELEASES_DISPATCH_TOKEN`
+is configured in the source repo, it requests the public
+`OpenClaw Release Evidence From Full Validation` workflow. That workflow reads
+the parent full-validation run, extracts the child CI/release-checks/Telegram
+run ids from the parent logs, and opens the evidence PR automatically. If the
+token is absent or the run predates this wiring, trigger that workflow manually
+with the full-validation run id.
 
 ### Release Checks
 
@@ -192,8 +263,45 @@ gh workflow run openclaw-release-checks.yml \
   --ref main \
   -f ref=<branch-or-sha> \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f release_profile=stable \
+  -f rerun_group=all
 ```
+
+Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
+`package`, `qa`, `qa-parity`, and `qa-live`.
+`OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
+ref once as `release-package-under-test` and passes that artifact into cross-OS
+release checks, release-path Docker live/E2E checks, and Package Acceptance.
+When `Full Release Validation` dispatches release checks, it passes the requested
+branch/tag plus an `expected_sha` so branch/tag refs resolve through the fast
+remote-ref path while the package and QA jobs still validate the exact SHA.
+
+The full install-smoke child is split on purpose: one job prepares or reuses the
+target-SHA GHCR root Dockerfile smoke image, QR package install runs in its own
+job, root Dockerfile/gateway smokes pull the prepared image, and installer/Bun
+smokes pull the same image while building only their small installer images.
+If install-smoke gets slow again, first check whether the root image was reused
+or rebuilt before adding/removing coverage.
+
+The full-profile native live media shards use the prebuilt
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04` container so
+`ffmpeg`/`ffprobe` are already present. If those jobs suddenly spend minutes in
+dependency setup again, first check the `Live Media Runner Image` workflow and
+the `Verify preinstalled live media dependencies` step before assuming the media
+tests themselves slowed down.
+
+The release Docker path intentionally shards the plugin/runtime tail. The
+workflow uses `plugins-runtime-plugins`, `plugins-runtime-services`, and
+`plugins-runtime-install-a` through `plugins-runtime-install-d`; aggregate
+aliases such as `plugins-runtime-core`, `plugins-runtime`, and
+`plugins-integrations` remain for manual reruns.
+
+The release QA parity box is internally split into candidate and baseline lane
+jobs, followed by a report job that downloads both artifacts and runs
+`pnpm openclaw qa parity-report`. For parity failures, inspect the failed lane
+first; inspect the report job when both lane summaries exist but the comparison
+fails.
 
 ### QA Lab Matrix Profiles
 
@@ -236,7 +344,9 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
 Useful knobs:
 
 - `docker_lanes='<lane[,lane]>'`: run selected Docker scheduler lanes against
-  prepared artifacts instead of the three release chunks.
+  prepared artifacts instead of the release chunk matrix. Multiple selected
+  lanes fan out as parallel targeted Docker jobs after one shared package/image
+  preparation step.
 - `include_live_suites=false`: skip live/provider suites when testing Docker
   scheduler or release packaging only.
 - `live_models_only=true`: run only Docker live model coverage.
@@ -244,18 +354,44 @@ Useful knobs:
   targeted Docker live model job instead of the full provider matrix.
 - blank `live_model_providers`: run the full live-model provider matrix.
 
+Release-path Docker chunks are currently `core`, `package-update-openai`,
+`package-update-anthropic`, `package-update-core`,
+`plugins-runtime-plugins`, `plugins-runtime-services`,
+`plugins-runtime-install-a`, `plugins-runtime-install-b`,
+`plugins-runtime-install-c`, `plugins-runtime-install-d`,
+`bundled-channels-core`, `bundled-channels-update-a`,
+`bundled-channels-update-b`, and `bundled-channels-contracts`. The aggregate
+`bundled-channels`, `plugins-runtime-core`, `plugins-runtime`, and
+`plugins-integrations` chunks remain valid for manual one-shot reruns, but
+release checks use the split chunks.
+
 When live suites are enabled, the workflow shards broad native `pnpm test:live`
 coverage through `scripts/test-live-shard.mjs` instead of one serial `live-all`
 job:
 
 - `native-live-src-agents`
-- `native-live-src-gateway`
+- `native-live-src-gateway-core`
+- `native-live-src-gateway-profiles` (release CI runs this with provider
+  filters such as `OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic`)
+- `native-live-src-gateway-backends`
 - `native-live-test`
 - `native-live-extensions-a-k`
-- `native-live-extensions-l-z`
+- `native-live-extensions-l-n`
+- `native-live-extensions-openai`
+- `native-live-extensions-o-z`
+- `native-live-extensions-o-z-other`
+- `native-live-extensions-xai`
+- `native-live-extensions-media`
+- `native-live-extensions-media-audio`
+- `native-live-extensions-media-music`
+- `native-live-extensions-media-music-google`
+- `native-live-extensions-media-music-minimax`
+- `native-live-extensions-media-video`
 
 Use `node scripts/test-live-shard.mjs <shard> --list` to see the exact files
-before rerunning a failed native live shard.
+before rerunning a failed native live shard. The aggregate `o-z` and `media`
+shards remain useful locally; release CI uses the smaller provider/media shards
+so one live-provider flake does not force a broad native live rerun.
 
 For model-list or provider-selection fixes, use `live_models_only=true` plus the
 specific `live_model_providers` allowlist. Confirm logs show the expected
@@ -304,19 +440,29 @@ generated inside GitHub artifacts include `package_artifact_run_id`,
 exact tarball and prepared images from the failed run. When the fix changes
 package contents, omit those reuse inputs so the workflow packs a new tarball.
 Live-only targeted reruns skip the E2E images and build only the live-test
-image. Release-path normal mode fans out into four Docker chunk jobs:
+image. Release-path normal mode fans out into smaller Docker chunk jobs:
 
 - `core`
-- `package-update`
-- `plugins-runtime`
+- `package-update-openai`
+- `package-update-anthropic`
+- `package-update-core`
+- `plugins-runtime-plugins`
+- `plugins-runtime-services`
+- `plugins-runtime-install-a`
+- `plugins-runtime-install-b`
+- `plugins-runtime-install-c`
+- `plugins-runtime-install-d`
 - `bundled-channels`
 
-OpenWebUI is folded into `plugins-runtime` for full release-path coverage and
-keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches. The
-legacy `plugins-integrations` chunk still works as an aggregate alias for manual
-reruns, but the release workflow uses the split chunks so plugin runtime checks
-and bundled-channel checks can run on separate machines. The bundled-channel
-runtime-dependency coverage inside `bundled-channels`
+OpenWebUI is folded into `plugins-runtime-services` for full release-path
+coverage and keeps a standalone `openwebui` chunk only for OpenWebUI-only
+dispatches. The legacy `package-update`, `plugins-runtime-core`,
+`plugins-runtime`, and `plugins-integrations` chunks still work as aggregate
+aliases for manual reruns, but the release workflow uses the split chunks so
+provider installer checks, plugin runtime checks, bundled plugin
+install/uninstall shards, and bundled-channel checks can run on separate
+machines. The bundled-channel runtime-dependency coverage
+inside `bundled-channels`
 uses the split `bundled-channel-*` and `bundled-channel-update-*` lanes rather
 than the serial `bundled-channel-deps` lane, so failures produce cheap targeted
 reruns for the exact channel/update scenario. The bundled plugin
@@ -440,6 +586,13 @@ timing, timeout state, image kind, and log file path. The summary also includes
 top-level phase timings for preflight, image build, package prep, lane pools,
 and cleanup. Use `pnpm test:docker:timings <summary.json>` to rank slow lanes
 and phases before deciding whether a broader rerun is justified.
+
+Skill install proof: use `pnpm test:docker:skill-install` or targeted
+`docker_lanes=skill-install` for live ClawHub skill-install validation. The
+lane installs the package tarball in a bare runner, keeps
+`skills.install.allowUploadedArchives=false`, resolves the current live slug
+from `openclaw skills search`, installs it, and verifies `.clawhub` origin/lock
+metadata. Prefer this checked-in script over inline heredoc Testbox recipes.
 
 ## Cheap Docker Reruns
 

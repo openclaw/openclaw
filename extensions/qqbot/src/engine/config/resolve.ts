@@ -12,7 +12,7 @@ import { getPlatformAdapter } from "../adapter/index.js";
 import {
   asOptionalObjectRecord as asRecord,
   normalizeOptionalLowercaseString,
-  normalizeStringifiedOptionalString,
+  normalizeStringifiedEntries,
   readStringField as readString,
 } from "../utils/string-normalize.js";
 
@@ -41,7 +41,7 @@ interface QQBotChannelConfig {
  *
  * The outer config.ts layer extends this with clientSecret / secretSource.
  */
-export interface ResolvedAccountBase {
+interface ResolvedAccountBase {
   accountId: string;
   name?: string;
   enabled: boolean;
@@ -171,7 +171,7 @@ export function resolveAccountBase(
 
 // ---- Account config apply ----
 
-export interface ApplyAccountInput {
+interface ApplyAccountInput {
   appId?: string;
   clientSecret?: string;
   clientSecretFile?: string;
@@ -239,7 +239,7 @@ export function applyAccountConfig(
 // ---- Account status helpers ----
 
 /** Resolved account shape expected by isAccountConfigured / describeAccount. */
-export interface AccountSnapshot {
+interface AccountSnapshot {
   accountId: string;
   name?: string;
   enabled: boolean;
@@ -275,9 +275,7 @@ export function describeAccount(account: AccountSnapshot | undefined) {
 
 /** Normalize allowFrom entries into uppercase strings without the qqbot: prefix. */
 export function formatAllowFrom(allowFrom: Array<string | number> | undefined | null): string[] {
-  return (allowFrom ?? [])
-    .map((entry) => normalizeStringifiedOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry))
+  return normalizeStringifiedEntries(allowFrom ?? [])
     .map((entry) => entry.replace(/^qqbot:/i, ""))
     .map((entry) => entry.toUpperCase());
 }

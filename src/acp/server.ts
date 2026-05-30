@@ -2,13 +2,19 @@
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient } from "../gateway/client.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { createFileAcpEventLedger, resolveDefaultAcpEventLedgerPath } from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
@@ -58,10 +64,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
+    preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
+    caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
       void agent?.handleGatewayEvent(evt);
     },
@@ -102,7 +110,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   process.once("SIGTERM", shutdown);
 
   // Start gateway first and wait for hello before accepting ACP requests.
-  gateway.start();
+  const readiness = await startGatewayClientWhenEventLoopReady(gateway, {
+    clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+  });
+  if (!readiness.ready) {
+    rejectGatewayReady(new Error("gateway event loop readiness timeout"));
+  }
   await gatewayReady.catch((err) => {
     shutdown();
     throw err;
@@ -114,9 +127,12 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
+  const eventLedger = createFileAcpEventLedger({
+    filePath: resolveDefaultAcpEventLedgerPath(process.env),
+  });
 
-  const _connection = new AgentSideConnection((conn: AgentSideConnection) => {
-    agent = new AcpGatewayAgent(conn, gateway, opts);
+  void new AgentSideConnection((conn: AgentSideConnection) => {
+    agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
     agent.start();
     return agent;
   }, stream);

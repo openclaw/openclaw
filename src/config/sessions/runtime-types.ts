@@ -1,4 +1,5 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { SessionMaintenanceMode } from "../types.base.js";
 import type { SessionEntry, GroupKeyResolution } from "./types.js";
@@ -22,7 +23,6 @@ export type ResolvedSessionMaintenanceConfigRuntime = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  rotateBytes: number;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -67,7 +67,9 @@ export type UpdateLastRoute = (params: {
   to?: string;
   accountId?: string;
   threadId?: string | number;
+  route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
   ctx?: MsgContext;
   groupResolution?: GroupKeyResolution | null;
-}) => Promise<SessionEntry>;
+  createIfMissing?: boolean;
+}) => Promise<SessionEntry | null>;

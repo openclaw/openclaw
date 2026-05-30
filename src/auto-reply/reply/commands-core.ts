@@ -1,18 +1,17 @@
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
-import { emitResetCommandHooks } from "./commands-reset-hooks.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
-export { emitResetCommandHooks } from "./commands-reset-hooks.js";
-let commandHandlersRuntimePromise: Promise<typeof import("./commands-handlers.runtime.js")> | null =
-  null;
+const commandHandlersRuntimeLoader = createLazyImportLoader(
+  () => import("./commands-handlers.runtime.js"),
+);
 
 function loadCommandHandlersRuntime() {
-  commandHandlersRuntimePromise ??= import("./commands-handlers.runtime.js");
-  return commandHandlersRuntimePromise;
+  return commandHandlersRuntimeLoader.load();
 }
 
 let HANDLERS: CommandHandler[] | null = null;

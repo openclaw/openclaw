@@ -1,44 +1,68 @@
+import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Command } from "commander";
-import { agentCommand } from "../agents/agent-command.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listProfilesForProvider,
   loadAuthProfileStoreForRuntime,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import { buildExplicitSessionIdSessionKey } from "../agents/command/session.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "../agents/simple-completion-runtime.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.js";
+import {
+  getRuntimeConfig,
+  getRuntimeConfigSourceSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
+import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
   ImageGenerationBackground,
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "../infra/parse-finite-number.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
   describeImageFile,
   describeImageFileWithModel,
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
-import { getImageMetadata } from "../media/image-ops.js";
+import { convertHeicToJpeg, getImageMetadata } from "../media/media-services.js";
 import { detectMime, extensionForMime, normalizeMimeType } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
   createEmbeddingProvider,
   registerBuiltInMemoryEmbeddingProviders,
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
+import { listEmbeddingProviders } from "../plugins/embedding-provider-runtime.js";
 import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
@@ -50,8 +74,6 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
 import {
   getTtsProvider,
@@ -79,13 +101,23 @@ import {
   runWebSearch,
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
-import { createDefaultDeps } from "./deps.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
+import {
+  getCapabilityWebFetchCommandSecretTargets,
+  getCapabilityWebSearchCommandSecretTargets,
+  getMemoryEmbeddingCommandSecretTargetIds,
+  getModelsCommandSecretTargetIds,
+  getTtsCommandSecretTargetIds,
+} from "./command-secret-targets.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
 type CapabilityTransport = "local" | "gateway";
 const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
+const LOCAL_MODEL_RUN_SYSTEM_PROMPT = "You are a personal assistant running inside OpenClaw.";
+const HEIC_MODEL_RUN_MIMES = new Set(["image/heic", "image/heif"]);
 
 type CapabilityMetadata = {
   id: string;
@@ -102,6 +134,7 @@ type CapabilityEnvelope = {
   provider?: string;
   model?: string;
   attempts: Array<Record<string, unknown>>;
+  inputs?: Array<Record<string, unknown>>;
   outputs: Array<Record<string, unknown>>;
   ignoredOverrides?: Array<Record<string, unknown>>;
   error?: string;
@@ -110,9 +143,9 @@ type CapabilityEnvelope = {
 const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
-    description: "Run a one-shot text inference turn through the agent runtime.",
+    description: "Run a one-shot inference turn through the selected model provider.",
     transports: ["local", "gateway"],
-    flags: ["--prompt", "--model", "--local", "--gateway", "--json"],
+    flags: ["--prompt", "--file", "--model", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
   },
   {
@@ -197,14 +230,14 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "image.describe",
     description: "Describe one image file through media-understanding providers.",
     transports: ["local"],
-    flags: ["--file", "--prompt", "--model", "--json"],
+    flags: ["--file", "--prompt", "--model", "--timeout-ms", "--json"],
     resultShape: "normalized text output",
   },
   {
     id: "image.describe-many",
     description: "Describe multiple image files independently.",
     transports: ["local"],
-    flags: ["--file", "--prompt", "--model", "--json"],
+    flags: ["--file", "--prompt", "--model", "--timeout-ms", "--json"],
     resultShape: "one text output per file",
   },
   {
@@ -552,6 +585,20 @@ function resolveModelRefOverride(raw: string | undefined): { provider?: string; 
   };
 }
 
+async function canonicalizeModelRunRef(params: {
+  raw: string | undefined;
+  cfg: OpenClawConfig;
+  preserveAuthProfile: boolean;
+}): Promise<string | undefined> {
+  return await canonicalizeCaseOnlyCatalogModelRef({
+    cfg: params.cfg,
+    raw: params.raw,
+    defaultProvider: DEFAULT_PROVIDER,
+    loadCatalog: () => loadModelCatalog({ config: params.cfg, readOnly: true }),
+    preserveAuthProfile: params.preserveAuthProfile,
+  });
+}
+
 function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
@@ -568,58 +615,232 @@ function requireProviderModelOverride(
   };
 }
 
+function collectModelRunText(content: Array<{ type: string; text?: string }>): string {
+  return content
+    .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
+    .join("")
+    .trim();
+}
+
+function requireModelRunPrompt(value: unknown): string {
+  if (typeof value !== "string" || normalizeOptionalString(value) === undefined) {
+    throw new Error("--prompt cannot be empty or whitespace-only.");
+  }
+  return value;
+}
+
+type ModelRunImageFile = {
+  path: string;
+  fileName: string;
+  mimeType: string;
+  data: string;
+};
+
+async function readModelRunImageFiles(files: string[] | undefined): Promise<ModelRunImageFile[]> {
+  if (!files || files.length === 0) {
+    return [];
+  }
+  return await Promise.all(
+    files.map(async (filePath) => {
+      const resolvedPath = path.resolve(filePath);
+      const buffer = await fs.readFile(resolvedPath);
+      const mimeType = normalizeMimeType(
+        await detectMime({
+          buffer,
+          filePath: resolvedPath,
+        }),
+      );
+      if (!mimeType?.startsWith("image/")) {
+        throw new Error(
+          `Unsupported --file for model run: ${resolvedPath}. Only image files are supported; use infer audio transcribe for audio files.`,
+        );
+      }
+      if (HEIC_MODEL_RUN_MIMES.has(mimeType)) {
+        const converted = await convertHeicToJpeg(buffer);
+        return {
+          path: resolvedPath,
+          fileName: path.basename(resolvedPath),
+          mimeType: "image/jpeg",
+          data: converted.toString("base64"),
+        };
+      }
+      return {
+        path: resolvedPath,
+        fileName: path.basename(resolvedPath),
+        mimeType,
+        data: buffer.toString("base64"),
+      };
+    }),
+  );
+}
+
+function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error("--thinking must be a string.");
+  }
+  const normalized = normalizeThinkLevel(value);
+  if (!normalized) {
+    throw new Error(
+      "Invalid thinking level. Use one of: off, minimal, low, medium, high, adaptive, xhigh, max.",
+    );
+  }
+  return normalized;
+}
+
 async function runModelRun(params: {
   prompt: string;
+  files?: string[];
   model?: string;
+  thinking?: ThinkLevel;
   transport: CapabilityTransport;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg =
+    params.transport === "local"
+      ? await resolveLocalCapabilityRuntimeConfig({
+          commandName: "infer model run",
+          targetIds: getModelsCommandSecretTargetIds(),
+        })
+      : getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
+  const modelRef = await canonicalizeModelRunRef({
+    raw: params.model,
+    cfg,
+    preserveAuthProfile: params.transport === "local",
+  });
+  const explicitModelOverride = resolveModelRefOverride(params.model);
+  const hasExplicitProviderModelOverride = Boolean(
+    params.model?.trim() && explicitModelOverride.provider && explicitModelOverride.model,
+  );
+  const imageFiles = await readModelRunImageFiles(params.files);
+  const messageContent =
+    imageFiles.length > 0
+      ? [
+          { type: "text" as const, text: params.prompt },
+          ...imageFiles.map((image) => ({
+            type: "image" as const,
+            data: image.data,
+            mimeType: image.mimeType,
+          })),
+        ]
+      : params.prompt;
   if (params.transport === "local") {
-    const result = await agentCommand(
-      {
-        message: params.prompt,
-        agentId,
-        model: params.model,
-        json: false,
-        modelRun: true,
-        promptMode: "none",
-        cleanupBundleMcpOnRunEnd: true,
+    const prepared = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId,
+      modelRef,
+      allowMissingApiKeyModes: ["aws-sdk"],
+      ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
+      skipAgentDiscovery: true,
+    });
+    if ("error" in prepared) {
+      throw new Error(prepared.error);
+    }
+    if (prepared.selection.provider === "codex") {
+      throw new Error(
+        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+      );
+    }
+    const localModelRunSystemPrompt =
+      prepared.selection.provider === "openai-codex" ||
+      prepared.model.api === "openai-codex-responses"
+        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
+        : undefined;
+    const result = await completeWithPreparedSimpleCompletionModel({
+      model: prepared.model,
+      auth: prepared.auth,
+      cfg,
+      context: {
+        ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
+        messages: [
+          {
+            role: "user",
+            content: messageContent,
+            timestamp: Date.now(),
+          },
+        ],
       },
-      {
-        ...defaultRuntime,
-        log: () => {},
+      options: {
+        maxTokens:
+          typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
+            ? prepared.model.maxTokens
+            : undefined,
+        ...(params.thinking ? { reasoning: params.thinking } : {}),
       },
-      createDefaultDeps(),
-    );
+    });
+    const text = collectModelRunText(result.content);
+    if (!text) {
+      const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
+      const detail =
+        typeof providerErrorMessage === "string" && providerErrorMessage.trim()
+          ? `: ${providerErrorMessage.trim()}`
+          : "";
+      throw new Error(
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
+      );
+    }
     return {
       ok: true,
       capability: "model.run",
       transport: "local" as const,
-      provider: result?.meta?.agentMeta?.provider,
-      model: result?.meta?.agentMeta?.model,
+      provider: prepared.selection.provider,
+      model: prepared.selection.modelId,
       attempts: [],
-      outputs: (result?.payloads ?? []).map((payload) => ({
-        text: payload.text,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-      })),
+      ...(imageFiles.length > 0
+        ? {
+            inputs: imageFiles.map((image) => ({
+              path: image.path,
+              mimeType: image.mimeType,
+            })),
+          }
+        : {}),
+      outputs: [
+        {
+          text,
+          mediaUrl: null,
+        },
+      ],
     } satisfies CapabilityEnvelope;
   }
 
-  const { provider, model } = resolveModelRefOverride(params.model);
+  const { provider, model } = resolveModelRefOverride(modelRef);
+  // Provider/model overrides require trusted-operator scope. Use the backend
+  // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
+  const hasModelOverride = Boolean(provider || model);
+  const sessionId = `model-run-${randomUUID()}`;
+  const sessionKey = buildExplicitSessionIdSessionKey({ agentId, sessionId });
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
-      meta?: { agentMeta?: { provider?: string; model?: string } };
+      meta?: {
+        agentMeta?: {
+          provider?: string;
+          model?: string;
+          fallbackAttempts?: Array<Record<string, unknown>>;
+        };
+      };
     };
   } = await callGateway({
     method: "agent",
     params: {
       agentId,
+      sessionId,
+      sessionKey,
       message: params.prompt,
+      attachments:
+        imageFiles.length > 0
+          ? imageFiles.map((image) => ({
+              type: "image",
+              fileName: image.fileName,
+              mimeType: image.mimeType,
+              content: image.data,
+            }))
+          : undefined,
       provider,
       model,
+      ...(params.thinking ? { thinking: params.thinking } : {}),
       modelRun: true,
       promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
@@ -627,8 +848,9 @@ async function runModelRun(params: {
     },
     expectFinal: true,
     timeoutMs: 120_000,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    mode: GATEWAY_CLIENT_MODES.CLI,
+    clientName: hasModelOverride ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
+    mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
   });
   return {
     ok: true,
@@ -636,12 +858,20 @@ async function runModelRun(params: {
     transport: "gateway" as const,
     provider: response?.result?.meta?.agentMeta?.provider,
     model: response?.result?.meta?.agentMeta?.model,
-    attempts: [],
+    attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
     outputs: (response?.result?.payloads ?? []).map((payload) => ({
       text: payload.text,
       mediaUrl: payload.mediaUrl,
       mediaUrls: payload.mediaUrls,
     })),
+    ...(imageFiles.length > 0
+      ? {
+          inputs: imageFiles.map((image) => ({
+            path: image.path,
+            mimeType: image.mimeType,
+          })),
+        }
+      : {}),
   } satisfies CapabilityEnvelope;
 }
 
@@ -699,9 +929,10 @@ async function runModelAuthStatus() {
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
 }
 
-async function runModelAuthLogout(provider: string) {
+async function runModelAuthLogout(provider: string, agent?: string) {
   const cfg = getRuntimeConfig();
-  const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
+  const agentId = agent?.trim() || resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, agentId);
   const store = loadAuthProfileStoreForRuntime(agentDir);
   const profileIds = listProfilesForProvider(store, provider);
   const updated = await updateAuthProfileStoreWithLock({
@@ -753,7 +984,10 @@ async function runImageGenerate(params: {
   output?: string;
   timeoutMs?: number;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: `infer ${params.capability}`,
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const inputImages =
     params.file && params.file.length > 0
@@ -819,28 +1053,45 @@ async function runImageDescribe(params: {
   capability: "image.describe" | "image.describe-many";
   files: string[];
   model?: string;
+  prompt?: string;
+  timeoutMs?: number;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: `infer ${params.capability}`,
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const activeModel = requireProviderModelOverride(params.model);
+  const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
-      const resolvedPath = path.resolve(filePath);
+      const resolvedPath = resolveImageDescribeInput(filePath);
+      const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
       const result = activeModel
         ? await describeImageFileWithModel({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
             provider: activeModel.provider,
             model: activeModel.model,
-            prompt: "Describe the image.",
+            prompt: prompt ?? "Describe the image.",
+            timeoutMs: params.timeoutMs,
           })
         : await describeImageFile({
             filePath: resolvedPath,
+            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
             agentDir,
+            prompt,
+            timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
+        if (isMissingMediaUnderstandingProvider(result)) {
+          throw new Error(
+            "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
+          );
+        }
         throw new Error(`No description returned for image: ${resolvedPath}`);
       }
       return {
@@ -863,13 +1114,25 @@ async function runImageDescribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
+function isMissingMediaUnderstandingProvider(result: RunMediaUnderstandingFileResult): boolean {
+  const decision = result.decision;
+  return (
+    decision?.outcome === "skipped" &&
+    decision.attachments.length > 0 &&
+    decision.attachments.every((attachment) => attachment.attempts.length === 0)
+  );
+}
+
 async function runAudioTranscribe(params: {
   file: string;
   language?: string;
   model?: string;
   prompt?: string;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer audio transcribe",
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const activeModel = requireProviderModelOverride(params.model);
   const result = await transcribeAudioFile({
     filePath: path.resolve(params.file),
@@ -879,6 +1142,11 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
+    if (isMissingMediaUnderstandingProvider(result)) {
+      throw new Error(
+        "No audio transcription provider is configured or ready. Configure tools.media.audio.models, or pass --model <provider/model> after configuring that provider's auth/API key.",
+      );
+    }
     throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
   }
   return {
@@ -897,11 +1165,29 @@ function parseOptionalFiniteNumber(
   if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
     return undefined;
   }
-  const value = Number(raw);
-  if (!Number.isFinite(value)) {
+  const value = parseStrictFiniteNumber(raw);
+  if (value === undefined) {
     throw new Error(`${label} must be a finite number`);
   }
   return value;
+}
+
+function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  const value = parseStrictPositiveInteger(raw);
+  if (value === undefined) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error" });
 }
 
 function normalizeImageOutputFormat(
@@ -937,14 +1223,16 @@ function normalizeVideoResolution(raw: string | undefined): VideoGenerationResol
     return undefined;
   }
   if (
+    normalized === "360P" ||
     normalized === "480P" ||
+    normalized === "540P" ||
     normalized === "720P" ||
     normalized === "768P" ||
     normalized === "1080P"
   ) {
     return normalized;
   }
-  throw new Error("video resolution must be one of 480P, 720P, 768P, or 1080P");
+  throw new Error("video resolution must be one of 360P, 480P, 540P, 720P, 768P, or 1080P");
 }
 
 async function runVideoGenerate(params: {
@@ -959,7 +1247,10 @@ async function runVideoGenerate(params: {
   watermark?: boolean;
   timeoutMs?: number;
 }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer video.generate",
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const result = await generateVideo({
     cfg,
@@ -1034,7 +1325,10 @@ async function runVideoGenerate(params: {
 }
 
 async function runVideoDescribe(params: { file: string; model?: string }) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer video.describe",
+    targetIds: getModelsCommandSecretTargetIds(),
+  });
   const activeModel = requireProviderModelOverride(params.model);
   const result = await describeVideoFile({
     filePath: path.resolve(params.file),
@@ -1113,7 +1407,10 @@ async function runTtsConvert(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer tts convert",
+    targetIds: getTtsCommandSecretTargetIds(),
+  });
   const overrides = resolveExplicitTtsOverrides({
     cfg,
     provider: params.provider,
@@ -1204,6 +1501,11 @@ async function runTtsProviders(transport: CapabilityTransport) {
   };
 }
 
+function resolveImageDescribeInput(filePath: string): string {
+  const trimmed = filePath.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
+}
+
 async function runTtsPersonas(transport: CapabilityTransport) {
   if (transport === "gateway") {
     return await callGateway({
@@ -1229,7 +1531,10 @@ async function runTtsPersonas(transport: CapabilityTransport) {
 }
 
 async function runTtsVoices(providerRaw?: string) {
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer tts voices",
+    targetIds: getTtsCommandSecretTargetIds(),
+  });
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const provider = normalizeOptionalString(providerRaw) || getTtsProvider(config, prefsPath);
@@ -1304,8 +1609,51 @@ async function runTtsStateMutation(params: {
   return { provider };
 }
 
+async function resolveLocalCapabilityRuntimeConfig(params: {
+  commandName: string;
+  targetIds: Set<string>;
+  allowedPaths?: Set<string>;
+  forcedActivePaths?: Set<string>;
+  optionalActivePaths?: Set<string>;
+  config?: OpenClawConfig;
+}): Promise<OpenClawConfig> {
+  const cfg = params.config ?? getRuntimeConfig();
+  const sourceConfig = getRuntimeConfigSourceSnapshot();
+  const { effectiveConfig } = await resolveCommandConfigWithSecrets({
+    config: cfg,
+    commandName: params.commandName,
+    targetIds: params.targetIds,
+    ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
+    ...(params.forcedActivePaths ? { forcedActivePaths: params.forcedActivePaths } : {}),
+    ...(params.optionalActivePaths ? { optionalActivePaths: params.optionalActivePaths } : {}),
+    runtime: defaultRuntime,
+    autoEnable: true,
+  });
+  if (sourceConfig) {
+    setRuntimeConfigSnapshot(effectiveConfig, sourceConfig);
+  } else {
+    setRuntimeConfigSnapshot(effectiveConfig);
+  }
+  return effectiveConfig;
+}
+
 async function runWebSearchCommand(params: { query: string; provider?: string; limit?: number }) {
-  const cfg = getRuntimeConfig();
+  const rawConfig = getRuntimeConfig();
+  const scopedTargets = getCapabilityWebSearchCommandSecretTargets(rawConfig, {
+    providerId: params.provider,
+  });
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer web search",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    ...(scopedTargets.forcedActivePaths
+      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
+      : {}),
+    config: rawConfig,
+  });
   const result = await runWebSearch({
     config: cfg,
     providerId: params.provider,
@@ -1326,7 +1674,22 @@ async function runWebSearchCommand(params: { query: string; provider?: string; l
 }
 
 async function runWebFetchCommand(params: { url: string; provider?: string; format?: string }) {
-  const cfg = getRuntimeConfig();
+  const rawConfig = getRuntimeConfig();
+  const scopedTargets = getCapabilityWebFetchCommandSecretTargets(rawConfig, {
+    providerId: params.provider,
+  });
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer web fetch",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+    ...(scopedTargets.forcedActivePaths
+      ? { forcedActivePaths: scopedTargets.forcedActivePaths }
+      : {}),
+    ...(scopedTargets.optionalActivePaths
+      ? { optionalActivePaths: scopedTargets.optionalActivePaths }
+      : {}),
+    config: rawConfig,
+  });
   const resolved = resolveWebFetchDefinition({
     config: cfg,
     providerId: params.provider,
@@ -1354,7 +1717,10 @@ async function runMemoryEmbeddingCreate(params: {
   model?: string;
 }) {
   ensureMemoryEmbeddingProvidersRegistered();
-  const cfg = getRuntimeConfig();
+  const cfg = await resolveLocalCapabilityRuntimeConfig({
+    commandName: "infer embedding create",
+    targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
+  });
   const modelRef = resolveModelRefOverride(params.model);
   const requestedProvider = normalizeOptionalString(params.provider) || modelRef.provider || "auto";
   const result = await createEmbeddingProvider({
@@ -1452,12 +1818,16 @@ export function registerCapabilityCli(program: Command) {
     .command("run")
     .description("Run a one-shot model turn")
     .requiredOption("--prompt <text>", "Prompt text")
+    .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
+    .option("--thinking <level>", "Thinking level override")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const prompt = requireModelRunPrompt(opts.prompt);
+        const thinking = normalizeModelRunThinking(opts.thinking);
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1465,8 +1835,10 @@ export function registerCapabilityCli(program: Command) {
           defaultTransport: "local",
         });
         const result = await runModelRun({
-          prompt: String(opts.prompt),
+          prompt,
+          files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
+          thinking,
           transport,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1522,10 +1894,17 @@ export function registerCapabilityCli(program: Command) {
     .command("login")
     .description("Run provider auth login")
     .requiredOption("--provider <id>", "Provider id")
+    .option("--method <id>", "Provider auth method id")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
-        await modelsAuthLoginCommand({ provider: String(opts.provider) }, defaultRuntime);
+        await modelsAuthLoginCommand(
+          {
+            provider: String(opts.provider),
+            method: opts.method ? String(opts.method) : undefined,
+          },
+          defaultRuntime,
+        );
       });
     });
 
@@ -1533,10 +1912,14 @@ export function registerCapabilityCli(program: Command) {
     .command("logout")
     .description("Remove saved auth profiles for one provider")
     .requiredOption("--provider <id>", "Provider id")
+    .option("--agent <id>", "Agent id (default: configured default agent)")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const result = await runModelAuthLogout(String(opts.provider));
+        const result = await runModelAuthLogout(
+          String(opts.provider),
+          typeof opts.agent === "string" ? opts.agent : undefined,
+        );
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, (value) =>
           JSON.stringify(value, null, 2),
         );
@@ -1579,7 +1962,7 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.generate",
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
-          count: opts.count ? Number.parseInt(String(opts.count), 10) : undefined,
+          count: parseOptionalPositiveInteger(opts.count, "--count"),
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
@@ -1589,7 +1972,7 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1628,7 +2011,7 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1639,7 +2022,9 @@ export function registerCapabilityCli(program: Command) {
     .command("describe")
     .description("Describe one image file")
     .requiredOption("--file <path>", "Image file")
+    .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -1647,6 +2032,8 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.describe",
           files: [String(opts.file)],
           model: opts.model as string | undefined,
+          prompt: opts.prompt as string | undefined,
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -1656,7 +2043,9 @@ export function registerCapabilityCli(program: Command) {
     .command("describe-many")
     .description("Describe multiple image files")
     .requiredOption("--file <path>", "Image file", collectOption, [])
+    .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -1664,6 +2053,8 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.describe-many",
           files: opts.file as string[],
           model: opts.model as string | undefined,
+          prompt: opts.prompt as string | undefined,
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -1953,7 +2344,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--model <provider/model>", "Model override")
     .option("--size <size>", "Size hint like 1280x720")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
-    .option("--resolution <value>", "Resolution hint: 480P, 720P, 768P, or 1080P")
+    .option("--resolution <value>", "Resolution hint: 360P, 480P, 540P, 720P, 768P, or 1080P")
     .option("--duration <seconds>", "Target duration in seconds")
     .option("--audio", "Enable generated audio when supported")
     .option("--watermark", "Request provider watermark when supported")
@@ -1972,7 +2363,7 @@ export function registerCapabilityCli(program: Command) {
           durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2048,7 +2439,7 @@ export function registerCapabilityCli(program: Command) {
         const result = await runWebSearchCommand({
           query: String(opts.query),
           provider: opts.provider as string | undefined,
-          limit: opts.limit ? Number.parseInt(String(opts.limit), 10) : undefined,
+          limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2139,35 +2530,48 @@ export function registerCapabilityCli(program: Command) {
         const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
-        const selectedProvider =
-          resolvedMemory?.provider && resolvedMemory.provider !== "auto"
-            ? resolvedMemory.provider
-            : undefined;
-        const autoSelectedProvider =
-          resolvedMemory?.provider === "auto"
-            ? (
-                await createEmbeddingProvider({
-                  config: cfg,
-                  agentDir: resolveAgentDir(cfg, agentId),
-                  provider: "auto",
-                  fallback: "none",
-                  model: resolvedMemory.model,
-                  local: resolvedMemory.local,
-                  remote: resolvedMemory.remote,
-                  outputDimensionality: resolvedMemory.outputDimensionality,
-                }).catch(() => ({ provider: null }))
-              )?.provider?.id
-            : undefined;
-        const result = listMemoryEmbeddingProviders().map((provider) => ({
+        const selectedProvider = resolvedMemory?.provider;
+        const providers = new Map(
+          listMemoryEmbeddingProviders().map((provider) => [
+            provider.id,
+            {
+              id: provider.id,
+              defaultModel: provider.defaultModel,
+              transport: provider.transport,
+              autoSelectPriority: provider.autoSelectPriority,
+            },
+          ]),
+        );
+        for (const provider of listEmbeddingProviders(cfg)) {
+          if (providers.has(provider.id)) {
+            continue;
+          }
+          providers.set(provider.id, {
+            id: provider.id,
+            defaultModel: provider.defaultModel,
+            transport: provider.transport,
+            autoSelectPriority: undefined,
+          });
+        }
+        if (selectedProvider && !providers.has(selectedProvider)) {
+          providers.set(selectedProvider, {
+            id: selectedProvider,
+            defaultModel: resolvedMemory?.model || undefined,
+            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider })
+              ? "remote"
+              : undefined,
+            autoSelectPriority: undefined,
+          });
+        }
+        const result = Array.from(providers.values()).map((provider) => ({
           available: true,
           configured:
             provider.id === selectedProvider ||
-            provider.id === autoSelectedProvider ||
             providerHasGenericConfig({
               cfg,
               providerId: provider.id,
             }),
-          selected: provider.id === selectedProvider || provider.id === autoSelectedProvider,
+          selected: provider.id === selectedProvider,
           id: provider.id,
           defaultModel: provider.defaultModel,
           transport: provider.transport,

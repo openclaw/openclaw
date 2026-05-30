@@ -86,6 +86,358 @@ describe("config io write prepare", () => {
     expect(persisted.plugins?.installs).toBeUndefined();
   });
 
+  it("preserves authored agent provider params during narrowed agent-list writes", () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          params: { transport: "sse", openaiWsWarmup: false },
+          models: {
+            "openai/gpt-5.4": {
+              alias: "GPT",
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          },
+        },
+        list: [{ id: "main" }],
+      },
+      gateway: { mode: "local" },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: {
+        ...sourceConfig,
+        agents: {
+          ...sourceConfig.agents,
+          defaults: {
+            ...sourceConfig.agents.defaults,
+            maxConcurrent: 4,
+          },
+        },
+      },
+      sourceConfig,
+      nextConfig: {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        gateway: { mode: "local" },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.params).toEqual({
+      transport: "sse",
+      openaiWsWarmup: false,
+    });
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
+      alias: "GPT",
+      params: { transport: "sse", openaiWsWarmup: false },
+    });
+    expect(persisted.agents?.list).toEqual([{ id: "main" }, { id: "ops" }]);
+  });
+
+  it("preserves authored Google model params under normalized config keys", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3-pro-preview" },
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "Gemini",
+              params: { thinking: { level: "high" } },
+            },
+          },
+        },
+      },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: {
+        agents: {
+          defaults: {
+            model: { primary: "google/gemini-3.1-pro-preview" },
+            models: {
+              "google/gemini-3.1-pro-preview": {},
+            },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
+    expect(persisted.agents?.defaults?.models).not.toHaveProperty("google/gemini-3-pro-preview");
+    expect(persisted.agents?.defaults?.models?.["google/gemini-3.1-pro-preview"]).toEqual({
+      params: { thinking: { level: "high" } },
+    });
+  });
+
+  it("normalizes retired Google model refs during unrelated config writes", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3-pro-preview",
+            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
+          },
+          heartbeat: { model: "google/gemini-3-pro-preview" },
+          subagents: {
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+          },
+          compaction: {
+            model: "google/gemini-3-pro-preview",
+            memoryFlush: { model: "google/gemini-3-pro-preview" },
+          },
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "Gemini",
+            },
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            heartbeat: { model: "google/gemini-3-pro-preview" },
+            subagents: { model: "google/gemini-3-pro-preview" },
+            models: {
+              "google/gemini-3-pro-preview": {
+                alias: "Ops Gemini",
+              },
+            },
+          },
+        ],
+      },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3.1-pro-preview",
+            fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+          },
+          heartbeat: { model: "google/gemini-3.1-pro-preview" },
+          subagents: {
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+              fallbacks: ["google/gemini-3.1-pro-preview"],
+            },
+          },
+          compaction: {
+            model: "google/gemini-3.1-pro-preview",
+            memoryFlush: { model: "google/gemini-3.1-pro-preview" },
+          },
+          models: {
+            "google/gemini-3.1-pro-preview": {
+              alias: "Gemini",
+            },
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+              fallbacks: ["google/gemini-3.1-pro-preview"],
+            },
+            heartbeat: { model: "google/gemini-3.1-pro-preview" },
+            subagents: { model: "google/gemini-3.1-pro-preview" },
+            models: {
+              "google/gemini-3.1-pro-preview": {
+                alias: "Ops Gemini",
+              },
+            },
+          },
+        ],
+      },
+      gateway: { port: 18789 },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: {
+        ...runtimeConfig,
+        gateway: { port: 18888 },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+    });
+    expect(persisted.agents?.defaults?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.defaults?.subagents?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(persisted.agents?.defaults?.compaction?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.defaults?.compaction?.memoryFlush?.model).toBe(
+      "google/gemini-3.1-pro-preview",
+    );
+    expect(persisted.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "Gemini",
+      },
+    });
+    expect(persisted.agents?.list?.[0]?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(persisted.agents?.list?.[0]?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.list?.[0]?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.list?.[0]?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "Ops Gemini",
+      },
+    });
+    expect(persisted.gateway?.port).toBe(18888);
+  });
+
+  it("normalizes retired Google provider catalog refs during unrelated config writes", () => {
+    const makeModel = (id: string, name: string) => ({
+      id,
+      name,
+      reasoning: true,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+    });
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [makeModel("google/gemini-3-pro-preview", "Gemini 3 Pro")],
+          },
+          kilocode: {
+            baseUrl: "https://kilocode.test/v1",
+            models: [makeModel("google/gemini-3-pro-preview", "Gemini via Kilo")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [makeModel("google/gemini-3.1-pro-preview", "Gemini 3 Pro")],
+          },
+          kilocode: {
+            baseUrl: "https://kilocode.test/v1",
+            models: [makeModel("google/gemini-3.1-pro-preview", "Gemini via Kilo")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: {
+        ...runtimeConfig,
+        gateway: { port: 18888 },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.models?.providers?.google?.models).toEqual([
+      makeModel("google/gemini-3.1-pro-preview", "Gemini 3 Pro"),
+    ]);
+    expect(persisted.models?.providers?.kilocode?.models).toEqual([
+      makeModel("google/gemini-3.1-pro-preview", "Gemini via Kilo"),
+    ]);
+    expect(persisted.gateway?.port).toBe(18888);
+  });
+
+  it("normalizes manifest-backed provider catalog refs during unrelated config writes", () => {
+    const makeModel = (id: string) => ({
+      id,
+      name: "Custom latest",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    });
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            models: [makeModel("latest")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            models: [makeModel("vendor/modern-model")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: {
+        ...runtimeConfig,
+        gateway: { port: 18888 },
+      },
+      modelIdNormalizationPolicies: new Map([
+        [
+          "myproxy",
+          {
+            aliases: { latest: "modern-model" },
+            prefixWhenBare: "vendor",
+          },
+        ],
+      ]),
+    }) as OpenClawConfig;
+
+    expect(persisted.models?.providers?.myproxy?.models).toEqual([
+      makeModel("vendor/modern-model"),
+    ]);
+    expect(persisted.gateway?.port).toBe(18888);
+  });
+
+  it("allows explicit unsets to remove authored agent provider params", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          params: { transport: "sse", openaiWsWarmup: false },
+          models: {
+            "openai/gpt-5.4": {
+              params: { transport: "sse", openaiWsWarmup: false },
+            },
+          },
+        },
+      },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig: sourceConfig,
+      sourceConfig,
+      nextConfig: { agents: { defaults: { models: { "openai/gpt-5.4": {} } } } },
+      unsetPaths: [
+        ["agents", "defaults", "params"],
+        ["agents", "defaults", "models", "openai/gpt-5.4", "params"],
+      ],
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults).not.toHaveProperty("params");
+    expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).not.toHaveProperty("params");
+  });
+
   it("preserves untouched include-owned subtrees during unrelated writes", () => {
     const persisted = resolvePersistCandidateForWrite({
       runtimeConfig: {
@@ -192,6 +544,24 @@ describe("config io write prepare", () => {
       "exec",
       "read",
     ]);
+  });
+
+  it("treats invalid array-index unset paths as no-ops", () => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      tools: { alsoAllow: ["exec", "fetch"] },
+    } satisfies OpenClawConfig;
+
+    for (const path of [
+      ["tools", "alsoAllow", "1abc"],
+      ["tools", "alsoAllow", "+0"],
+      ["tools", "alsoAllow", "9007199254740993"],
+      ["tools", "alsoAllow", "4294967294"],
+    ]) {
+      const next = unsetPathForWrite(input, path);
+      expect(next.changed).toBe(false);
+      expect(next.next).toBe(input);
+    }
   });
 
   it("treats missing unset paths as no-op without mutating caller config", () => {
@@ -373,13 +743,12 @@ describe("config io write prepare", () => {
     ).toBeUndefined();
   });
 
-  it("keeps plugin AJV defaults out of the persisted candidate", () => {
+  it("keeps runtime-only channel defaults out of the persisted candidate", () => {
     const sourceConfig = {
       gateway: { port: 18789 },
       channels: {
-        bluebubbles: {
-          serverUrl: "http://localhost:1234",
-          password: "test-password",
+        imessage: {
+          cliPath: "/usr/local/bin/imsg",
         },
       },
     } satisfies OpenClawConfig;
@@ -387,13 +756,12 @@ describe("config io write prepare", () => {
     const runtimeConfig: OpenClawConfig = {
       gateway: { port: 18789 },
       channels: {
-        bluebubbles: {
-          serverUrl: "http://localhost:1234",
-          password: "test-password",
-          enrichGroupParticipantsFromContacts: true,
+        imessage: {
+          cliPath: "/usr/local/bin/imsg",
         },
       },
     } satisfies OpenClawConfig;
+    (runtimeConfig.channels?.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
 
     const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {
@@ -412,10 +780,8 @@ describe("config io write prepare", () => {
       auth: { mode: "token" },
     });
     const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
-    expect(channels?.bluebubbles).toBeDefined();
-    expect(channels?.bluebubbles).not.toHaveProperty("enrichGroupParticipantsFromContacts");
-    expect(channels?.bluebubbles?.serverUrl).toBe("http://localhost:1234");
-    expect(channels?.bluebubbles?.password).toBe("test-password");
+    expect(channels?.imessage?.cliPath).toBe("/usr/local/bin/imsg");
+    expect(channels?.imessage).not.toHaveProperty("runtimeOnlyDefault");
   });
 
   it("does not reintroduce legacy nested dm.policy defaults in the persisted candidate", () => {
@@ -594,5 +960,181 @@ describe("config io write prepare", () => {
 
     expect(persisted.$schema).toBe(123);
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+  });
+
+  it("persists explicitly set keys whose values match runtime defaults", () => {
+    const runtimeConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const sourceConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+        },
+      },
+      gateway: { port: 18789 },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [
+        ["channels", "telegram", "dmPolicy"],
+        ["channels", "telegram", "groupPolicy"],
+      ],
+    }) as { channels?: { telegram?: Record<string, unknown> } };
+
+    expect(persisted.channels?.telegram?.dmPolicy).toBe("pairing");
+    expect(persisted.channels?.telegram?.groupPolicy).toBe("allowlist");
+    expect(persisted.channels?.telegram?.botToken).toBe("tok-abc");
+  });
+
+  it("persists default-valued children inside explicitly set objects", () => {
+    const runtimeConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+        },
+      },
+    };
+    const sourceConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+        },
+      },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [["channels", "telegram"]],
+    }) as { channels?: { telegram?: Record<string, unknown> } };
+
+    expect(persisted.channels?.telegram).toEqual({
+      botToken: "tok-abc",
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+    });
+  });
+
+  it("persists explicitly set array-index children whose values match runtime defaults", () => {
+    const runtimeConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", contextWindow: 128000 }],
+          },
+        },
+      },
+    };
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [["models", "providers", "openai", "models", "0", "contextWindow"]],
+    }) as { models?: { providers?: { openai?: { models?: Array<Record<string, unknown>> } } } };
+
+    expect(persisted.models?.providers?.openai?.models?.[0]).toEqual({
+      id: "gpt-5.5",
+      contextWindow: 128000,
+    });
+  });
+
+  it("ignores unsafe array-index explicit set paths", () => {
+    const runtimeConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", contextWindow: 128000 }],
+          },
+        },
+      },
+    };
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [
+        ["models", "providers", "openai", "models", "0abc", "contextWindow"],
+        ["models", "providers", "openai", "models", "+0", "contextWindow"],
+        ["models", "providers", "openai", "models", "9007199254740993", "contextWindow"],
+        ["models", "providers", "openai", "models", "4294967294", "contextWindow"],
+      ],
+    }) as { models?: { providers?: { openai?: { models?: Array<Record<string, unknown>> } } } };
+
+    expect(persisted.models?.providers?.openai?.models).toEqual([{ id: "gpt-5.5" }]);
+  });
+
+  it("rejects default-valued explicit writes under include-owned paths", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          agents: {
+            defaults: {
+              params: { temperature: 0 },
+            },
+          },
+        },
+        sourceConfig: {
+          agents: {
+            defaults: {},
+          },
+        },
+        rootAuthoredConfig: {
+          agents: {
+            defaults: { $include: "./agents-defaults.json" },
+          },
+        },
+        nextConfig: {
+          agents: {
+            defaults: {},
+          },
+        },
+        explicitSetValueSource: {
+          agents: {
+            defaults: {
+              params: { temperature: 0 },
+            },
+          },
+        },
+        explicitSetPaths: [["agents", "defaults", "params"]],
+      }),
+    ).toThrow("Config write would flatten $include-owned config at agents.defaults");
   });
 });

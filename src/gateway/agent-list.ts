@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type GatewayAgentListRow = {
+type GatewayAgentListRow = {
   id: string;
   name?: string;
 };
@@ -62,8 +62,10 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
     if (!entry?.id) {
       continue;
     }
+    const configuredName = normalizeOptionalString(entry.name);
+    const identityName = normalizeOptionalString(entry.identity?.name);
     configuredById.set(normalizeAgentId(entry.id), {
-      name: normalizeOptionalString(entry.name),
+      name: configuredName ?? identityName,
     });
   }
   const explicitIds = new Set(

@@ -1,115 +1,128 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type {
   DiagnosticStabilityBundle,
   ReadDiagnosticStabilityBundleResult,
 } from "../../logging/diagnostic-stability-bundle.js";
 import {
-  normalizeDiagnosticStabilityQuery,
-  selectDiagnosticStabilitySnapshot,
   type DiagnosticStabilityEventRecord,
   type DiagnosticStabilitySnapshot,
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatHelpExamples } from "../help-format.js";
-import { withProgress } from "../progress.js";
-import { callGatewayCli, gatewayCallOpts, type GatewayRpcOpts } from "./call.js";
+import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
-import {
-  dedupeBeacons,
-  parseDiscoverTimeoutMs,
-  pickBeaconHost,
-  pickGatewayPort,
-  renderBeaconLines,
-} from "./discover.js";
-import { addGatewayRunCommand } from "./run.js";
+import { addGatewayRunCommand } from "./run-command.js";
 
-let configModulePromise:
-  | Promise<typeof import("../../config/read-best-effort-config.runtime.js")>
-  | undefined;
-let gatewayStatusModulePromise:
-  | Promise<typeof import("../../commands/gateway-status.js")>
-  | undefined;
-let gatewayHealthModulePromise: Promise<typeof import("../../commands/health.js")> | undefined;
-let bonjourDiscoveryModulePromise:
-  | Promise<typeof import("../../infra/bonjour-discovery.js")>
-  | undefined;
-let wideAreaDnsModulePromise: Promise<typeof import("../../infra/widearea-dns.js")> | undefined;
-let healthStyleModulePromise: Promise<typeof import("../../terminal/health-style.js")> | undefined;
-let usageFormatModulePromise: Promise<typeof import("../../utils/usage-format.js")> | undefined;
-let stabilityBundleModulePromise:
-  | Promise<typeof import("../../logging/diagnostic-stability-bundle.js")>
-  | undefined;
-let supportExportModulePromise:
-  | Promise<typeof import("../../logging/diagnostic-support-export.js")>
-  | undefined;
-let daemonStatusGatherModulePromise:
-  | Promise<typeof import("../daemon-cli/status.gather.js")>
-  | undefined;
+const configModuleLoader = createLazyImportLoader(
+  () => import("../../config/read-best-effort-config.runtime.js"),
+);
+const gatewayStatusModuleLoader = createLazyImportLoader(
+  () => import("../../commands/gateway-status.js"),
+);
+const gatewayHealthModuleLoader = createLazyImportLoader(() => import("../../commands/health.js"));
+const bonjourDiscoveryModuleLoader = createLazyImportLoader(
+  () => import("../../infra/bonjour-discovery.js"),
+);
+const wideAreaDnsModuleLoader = createLazyImportLoader(() => import("../../infra/widearea-dns.js"));
+const healthStyleModuleLoader = createLazyImportLoader(
+  () => import("../../../packages/terminal-core/src/health-style.js"),
+);
+const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
+const stabilityBundleModuleLoader = createLazyImportLoader(
+  () => import("../../logging/diagnostic-stability-bundle.js"),
+);
+const supportExportModuleLoader = createLazyImportLoader(
+  () => import("../../logging/diagnostic-support-export.js"),
+);
+const daemonStatusGatherModuleLoader = createLazyImportLoader(
+  () => import("../daemon-cli/status.gather.js"),
+);
 
 function loadConfigModule() {
-  configModulePromise ??= import("../../config/read-best-effort-config.runtime.js");
-  return configModulePromise;
+  return configModuleLoader.load();
 }
 
 function loadGatewayStatusModule() {
-  gatewayStatusModulePromise ??= import("../../commands/gateway-status.js");
-  return gatewayStatusModulePromise;
+  return gatewayStatusModuleLoader.load();
 }
 
 function loadGatewayHealthModule() {
-  gatewayHealthModulePromise ??= import("../../commands/health.js");
-  return gatewayHealthModulePromise;
+  return gatewayHealthModuleLoader.load();
 }
 
 function loadBonjourDiscoveryModule() {
-  bonjourDiscoveryModulePromise ??= import("../../infra/bonjour-discovery.js");
-  return bonjourDiscoveryModulePromise;
+  return bonjourDiscoveryModuleLoader.load();
 }
 
 function loadWideAreaDnsModule() {
-  wideAreaDnsModulePromise ??= import("../../infra/widearea-dns.js");
-  return wideAreaDnsModulePromise;
+  return wideAreaDnsModuleLoader.load();
 }
 
 function loadHealthStyleModule() {
-  healthStyleModulePromise ??= import("../../terminal/health-style.js");
-  return healthStyleModulePromise;
+  return healthStyleModuleLoader.load();
 }
 
 function loadUsageFormatModule() {
-  usageFormatModulePromise ??= import("../../utils/usage-format.js");
-  return usageFormatModulePromise;
+  return usageFormatModuleLoader.load();
 }
 
 function loadStabilityBundleModule() {
-  stabilityBundleModulePromise ??= import("../../logging/diagnostic-stability-bundle.js");
-  return stabilityBundleModulePromise;
+  return stabilityBundleModuleLoader.load();
 }
 
 function loadSupportExportModule() {
-  supportExportModulePromise ??= import("../../logging/diagnostic-support-export.js");
-  return supportExportModulePromise;
+  return supportExportModuleLoader.load();
 }
 
 function loadDaemonStatusGatherModule() {
-  daemonStatusGatherModulePromise ??= import("../daemon-cli/status.gather.js");
-  return daemonStatusGatherModulePromise;
+  return daemonStatusGatherModuleLoader.load();
 }
 
-function runGatewayCommand(action: () => Promise<void>, label?: string) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
+function gatewayCallOpts(cmd: Command): Command {
+  return cmd
+    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--password <password>", "Gateway password (password auth)")
+    .option("--timeout <ms>", "Timeout in ms", "10000")
+    .option("--expect-final", "Wait for final response (agent)", false)
+    .option("--json", "Output JSON", false);
+}
+
+async function callGatewayCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
+  const mod = await import("./call.js");
+  return mod.callGatewayCli(method, opts, params);
+}
+
+async function runGatewayCommand(
+  action: () => Promise<void>,
+  label?: string,
+  opts?: { json?: boolean },
+) {
+  try {
+    await action();
+  } catch (err) {
+    if (opts?.json) {
+      const { formatGatewayTransportErrorJson } = await import("../../gateway/call.js");
+      const payload = formatGatewayTransportErrorJson(err);
+      if (payload) {
+        defaultRuntime.writeJson(payload);
+        defaultRuntime.exit(1);
+        return;
+      }
+    }
     const message = String(err);
     defaultRuntime.error(label ? `${label}: ${message}` : message);
     defaultRuntime.exit(1);
-  });
+  }
 }
 
 function parseDaysOption(raw: unknown, fallback = 30): number {
@@ -117,9 +130,9 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
     return Math.max(1, Math.floor(raw));
   }
   if (typeof raw === "string" && raw.trim() !== "") {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) {
-      return Math.max(1, Math.floor(parsed));
+    const parsed = parseStrictPositiveInteger(raw);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return fallback;
@@ -199,6 +212,9 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
     record.bytes !== undefined ? `bytes=${formatBytes(record.bytes)}` : "",
     record.limitBytes !== undefined ? `limit=${formatBytes(record.limitBytes)}` : "",
     record.queueDepth !== undefined ? `queueDepth=${record.queueDepth}` : "",
+    record.queueLength !== undefined ? `queueLength=${record.queueLength}` : "",
+    record.droppedEvents !== undefined ? `dropped=${record.droppedEvents}` : "",
+    record.maxQueueLength !== undefined ? `maxQueue=${record.maxQueueLength}` : "",
     record.queued !== undefined ? `queued=${record.queued}` : "",
     record.memory ? `rss=${formatBytes(record.memory.rssBytes)}` : "",
     record.memory ? `heap=${formatBytes(record.memory.heapUsedBytes)}` : "",
@@ -323,6 +339,42 @@ function renderStabilityBundleSummary(params: {
       lines.push(`${colorize(rich, theme.muted, "Error:")} ${errorParts.join(" ")}`);
     }
   }
+  const memoryPressure = bundle.evidence?.memoryPressure;
+  if (memoryPressure) {
+    lines.push(
+      `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
+        memoryPressure.reason
+      } rss=${formatBytes(memoryPressure.memory.rssBytes)} heap=${formatBytes(
+        memoryPressure.memory.heapUsedBytes,
+      )} threshold=${formatBytes(memoryPressure.thresholdBytes)}`,
+    );
+    if (memoryPressure.heapStatistics) {
+      lines.push(
+        `${colorize(rich, theme.muted, "V8 heap:")} used=${formatBytes(
+          memoryPressure.heapStatistics.usedHeapSizeBytes,
+        )} limit=${formatBytes(
+          memoryPressure.heapStatistics.heapSizeLimitBytes,
+        )} available=${formatBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
+      );
+    }
+    if (memoryPressure.activeResources) {
+      const resources = Object.entries(memoryPressure.activeResources.byType)
+        .map(([type, count]) => `${type}=${count}`)
+        .join(", ");
+      lines.push(
+        `${colorize(rich, theme.muted, "Active resources:")} total=${
+          memoryPressure.activeResources.total
+        }${resources ? ` · ${resources}` : ""}`,
+      );
+    }
+    if (memoryPressure.topSessionFiles?.length) {
+      const files = memoryPressure.topSessionFiles
+        .slice(0, 5)
+        .map((file) => `${file.relativePath}=${formatBytes(file.sizeBytes)}`)
+        .join(", ");
+      lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
+    }
+  }
   lines.push("", ...renderStabilitySummary(snapshot, rich));
   return lines;
 }
@@ -352,6 +404,17 @@ function resolveSupportExportRpcOptions(
   };
 }
 
+function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null || raw === "") {
+    return undefined;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 async function writeSupportExportFromCli(opts: {
   json?: boolean;
   output?: string;
@@ -364,8 +427,8 @@ async function writeSupportExportFromCli(opts: {
   const rpc = resolveSupportExportRpcOptions(opts.rpc);
   const result = await writeDiagnosticSupportExport({
     outputPath: opts.output,
-    logLimit: opts.logLines ? Number(opts.logLines) : undefined,
-    logMaxBytes: opts.logBytes ? Number(opts.logBytes) : undefined,
+    logLimit: parseOptionalPositiveIntegerOption(opts.logLines, "--log-lines"),
+    logMaxBytes: parseOptionalPositiveIntegerOption(opts.logBytes, "--log-bytes"),
     stabilityBundle: opts.stabilityBundle,
     readStatusSnapshot: async () => {
       const { gatherDaemonStatus } = await loadDaemonStatusGatherModule();
@@ -466,30 +529,34 @@ export function registerGatewayCli(program: Command) {
       .command("health")
       .description("Fetch Gateway health")
       .action(async (opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
-            loadGatewayHealthModule(),
-            loadHealthStyleModule(),
-          ]);
-          const result = await callGatewayCli("health", rpcOpts);
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
-          const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
-          defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
-          defaultRuntime.log(
-            `${colorize(rich, theme.success, "OK")}${durationMs != null ? ` (${durationMs}ms)` : ""}`,
-          );
-          if (obj.channels && typeof obj.channels === "object") {
-            for (const line of formatHealthChannelLines(obj as HealthSummary)) {
-              defaultRuntime.log(styleHealthChannelLine(line, rich));
+        await runGatewayCommand(
+          async () => {
+            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
+              loadGatewayHealthModule(),
+              loadHealthStyleModule(),
+            ]);
+            const result = await callGatewayCli("health", rpcOpts);
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
             }
-          }
-        });
+            const rich = isRich();
+            const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
+            const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
+            defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
+            defaultRuntime.log(
+              `${colorize(rich, theme.success, "OK")}${durationMs != null ? ` (${durationMs}ms)` : ""}`,
+            );
+            if (obj.channels && typeof obj.channels === "object") {
+              for (const line of formatHealthChannelLines(obj as HealthSummary)) {
+                defaultRuntime.log(styleHealthChannelLine(line, rich));
+              }
+            }
+          },
+          undefined,
+          { json: Boolean(opts.json) },
+        );
       }),
   );
 
@@ -508,6 +575,8 @@ export function registerGatewayCli(program: Command) {
       .option("--output <path>", "Diagnostics export output .zip path")
       .action(async (opts, command) => {
         await runGatewayCommand(async () => {
+          const { normalizeDiagnosticStabilityQuery, selectDiagnosticStabilitySnapshot } =
+            await import("../../logging/diagnostic-stability.js");
           const rpcOpts = resolveGatewayRpcOptions(opts, command);
           const query = normalizeDiagnosticStabilityQuery(
             {
@@ -634,10 +703,20 @@ export function registerGatewayCli(program: Command) {
           { readSourceConfigBestEffort },
           { discoverGatewayBeacons },
           { resolveWideAreaDiscoveryDomain },
+          {
+            dedupeBeacons,
+            parseDiscoverTimeoutMs,
+            pickBeaconHost,
+            pickGatewayPort,
+            renderBeaconLines,
+          },
+          { withProgress },
         ] = await Promise.all([
           loadConfigModule(),
           loadBonjourDiscoveryModule(),
           loadWideAreaDnsModule(),
+          import("./discover.js"),
+          import("../progress.js"),
         ]);
         const cfg = await readSourceConfigBestEffort();
         const wideAreaDomain = resolveWideAreaDiscoveryDomain({

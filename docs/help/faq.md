@@ -215,7 +215,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
     - Global defaults: `session.threadBindings.enabled`, `session.threadBindings.idleHours`, `session.threadBindings.maxAgeHours`.
     - Discord overrides: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.idleHours`, `channels.discord.threadBindings.maxAgeHours`.
-    - Auto-bind on spawn: set `channels.discord.threadBindings.spawnSubagentSessions: true`.
+    - Auto-bind on spawn: `channels.discord.threadBindings.spawnSessions` defaults to `true`; set it to `false` to disable thread-bound session spawns.
 
     Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), [Slash commands](/tools/slash-commands).
 
@@ -229,7 +229,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - If neither a bound route nor a usable stored route exists, direct delivery can fail and the result falls back to queued session delivery instead of posting immediately to chat.
     - Invalid or stale targets can still force queue fallback or final delivery failure.
     - If the child's last visible assistant reply is the exact silent token `NO_REPLY` / `no_reply`, or exactly `ANNOUNCE_SKIP`, OpenClaw intentionally suppresses the announce instead of posting stale earlier progress.
-    - If the child timed out after only tool calls, the announce can collapse that into a short partial-progress summary instead of replaying raw tool output.
+    - Tool/toolResult output is not promoted into child result text; the result is the child's latest visible assistant reply.
 
     Debug:
 
@@ -258,7 +258,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     openclaw cron runs --id <jobId> --limit 50
     ```
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation).
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation](/automation).
 
   </Accordion>
 
@@ -324,16 +324,19 @@ lives on the [First-run FAQ](/help/faq-first-run).
     openclaw skills install <skill-slug>
     openclaw skills install <skill-slug> --version <version>
     openclaw skills install <skill-slug> --force
+    openclaw skills install <skill-slug> --global
     openclaw skills update --all
+    openclaw skills update --all --global
     openclaw skills list --eligible
     openclaw skills check
     ```
 
     Native `openclaw skills install` writes into the active workspace `skills/`
-    directory. Install the separate `clawhub` CLI only if you want to publish or
-    sync your own skills. For shared installs across agents, put the skill under
-    `~/.openclaw/skills` and use `agents.defaults.skills` or
-    `agents.list[].skills` if you want to narrow which agents can see it.
+    directory by default. Add `--global` to install into the shared managed
+    skills directory for all local agents. Install the separate `clawhub` CLI
+    only if you want to publish or sync your own skills. Use
+    `agents.defaults.skills` or `agents.list[].skills` if you want to narrow
+    which agents can see shared skills.
 
   </Accordion>
 
@@ -344,7 +347,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - **Heartbeat** for "main session" periodic checks.
     - **Isolated jobs** for autonomous agents that post summaries or deliver to chats.
 
-    Docs: [Cron jobs](/automation/cron-jobs), [Automation & Tasks](/automation),
+    Docs: [Cron jobs](/automation/cron-jobs), [Automation](/automation),
     [Heartbeat](/gateway/heartbeat).
 
   </Accordion>
@@ -409,7 +412,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     openclaw skills update --all
     ```
 
-    Native installs land in the active workspace `skills/` directory. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. If only some agents should see a shared install, configure `agents.defaults.skills` or `agents.list[].skills`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills), [Skills config](/tools/skills-config), and [ClawHub](/tools/clawhub).
+    Native installs land in the active workspace `skills/` directory. For shared skills across all local agents, use `openclaw skills install <slug> --global` (or place them manually in `~/.openclaw/skills/<name>/SKILL.md`). If only some agents should see a shared install, configure `agents.defaults.skills` or `agents.list[].skills`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills), [Skills config](/tools/skills-config), and [ClawHub](/tools/clawhub).
 
   </Accordion>
 
@@ -451,7 +454,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     include system packages, Homebrew, or bundled browsers. For a fuller setup:
 
     - Persist `/home/node` with `OPENCLAW_HOME_VOLUME` so caches survive.
-    - Bake system deps into the image with `OPENCLAW_DOCKER_APT_PACKAGES`.
+    - Bake system deps into the image with `OPENCLAW_IMAGE_APT_PACKAGES`.
     - Install Playwright browsers via the bundled CLI:
       `node /app/node_modules/playwright-core/cli.js install chromium`
     - Set `PLAYWRIGHT_BROWSERS_PATH` and ensure the path is persisted.
@@ -520,20 +523,17 @@ lives on the [First-run FAQ](/help/faq-first-run).
     Codex CLI login)** does not help for semantic memory search. OpenAI embeddings
     still need a real API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`).
 
-    If you don't set a provider explicitly, OpenClaw auto-selects a provider when it
-    can resolve an API key (auth profiles, `models.providers.*.apiKey`, or env vars).
-    It prefers OpenAI if an OpenAI key resolves, otherwise Gemini if a Gemini key
-    resolves, then Voyage, then Mistral. If no remote key is available, memory
-    search stays disabled until you configure it. If you have a local model path
-    configured and present, OpenClaw
-    prefers `local`. Ollama is supported when you explicitly set
-    `memorySearch.provider = "ollama"`.
+    If you don't set a provider explicitly, OpenClaw uses OpenAI embeddings. Legacy
+    configs that still say `memorySearch.provider = "auto"` resolve to OpenAI too.
+    If no OpenAI API key is available, semantic memory search stays unavailable
+    until you configure a key or choose another provider explicitly.
 
     If you'd rather stay local, set `memorySearch.provider = "local"` (and optionally
     `memorySearch.fallback = "none"`). If you want Gemini embeddings, set
     `memorySearch.provider = "gemini"` and provide `GEMINI_API_KEY` (or
-    `memorySearch.remote.apiKey`). We support **OpenAI, Gemini, Voyage, Mistral, Ollama, or local** embedding
-    models - see [Memory](/concepts/memory) for the setup details.
+    `memorySearch.remote.apiKey`). We support **OpenAI, OpenAI-compatible, Gemini,
+    Voyage, Mistral, Bedrock, Ollama, LM Studio, GitHub Copilot, DeepInfra, or local**
+    embedding models - see [Memory](/concepts/memory) for the setup details.
 
   </Accordion>
 </AccordionGroup>
@@ -669,7 +669,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     Non-loopback binds **require a valid gateway auth path**. In practice that means:
 
     - shared-secret auth: token or password
-    - `gateway.auth.mode: "trusted-proxy"` behind a correctly configured non-loopback identity-aware reverse proxy
+    - `gateway.auth.mode: "trusted-proxy"` behind a correctly configured identity-aware reverse proxy
 
     ```json5
     {
@@ -690,14 +690,14 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - For password auth, set `gateway.auth.mode: "password"` plus `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`) instead.
     - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
     - Shared-secret Control UI setups authenticate via `connect.params.auth.token` or `connect.params.auth.password` (stored in app/UI settings). Identity-bearing modes such as Tailscale Serve or `trusted-proxy` use request headers instead. Avoid putting shared secrets in URLs.
-    - With `gateway.auth.mode: "trusted-proxy"`, same-host loopback reverse proxies still do **not** satisfy trusted-proxy auth. The trusted proxy must be a configured non-loopback source.
+    - With `gateway.auth.mode: "trusted-proxy"`, same-host loopback reverse proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true` and a loopback entry in `gateway.trustedProxies`.
 
   </Accordion>
 
   <Accordion title="Why do I need a token on localhost now?">
-    OpenClaw enforces gateway auth by default, including loopback. In the normal default path that means token auth: if no explicit auth path is configured, gateway startup resolves to token mode and auto-generates one, saving it to `gateway.auth.token`, so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway.
+    OpenClaw enforces gateway auth by default, including loopback. In the normal default path that means token auth: if no explicit auth path is configured, gateway startup resolves to token mode and generates a runtime-only token for that startup, so **local WS clients must authenticate**. Configure `gateway.auth.token`, `gateway.auth.password`, `OPENCLAW_GATEWAY_TOKEN`, or `OPENCLAW_GATEWAY_PASSWORD` explicitly when clients need a stable secret across restarts. This blocks other local processes from calling the Gateway.
 
-    If you prefer a different auth path, you can explicitly choose password mode (or, for non-loopback identity-aware reverse proxies, `trusted-proxy`). If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
+    If you prefer a different auth path, you can explicitly choose password mode (or, for identity-aware reverse proxies, `trusted-proxy`). If you **really** want open loopback, set `gateway.auth.mode: "none"` explicitly in your config. Doctor can generate a token for you any time: `openclaw doctor --generate-gateway-token`.
 
   </Accordion>
 
@@ -733,7 +733,8 @@ lives on the [First-run FAQ](/help/faq-first-run).
     `web_fetch` works without an API key. `web_search` depends on your selected
     provider:
 
-    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Perplexity, and Tavily require their normal API key setup.
+    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Kimi, MiniMax Search, Perplexity, and Tavily require their normal API key setup.
+    - Grok can reuse xAI OAuth from model auth, or fall back to `XAI_API_KEY` / plugin web-search config.
     - Ollama Web Search is key-free, but it uses your configured Ollama host and requires `ollama signin`.
     - DuckDuckGo is key-free, but it is an unofficial HTML-based integration.
     - SearXNG is key-free/self-hosted; configure `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl`.
@@ -745,7 +746,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - Exa: `EXA_API_KEY`
     - Firecrawl: `FIRECRAWL_API_KEY`
     - Gemini: `GEMINI_API_KEY`
-    - Grok: `XAI_API_KEY`
+    - Grok: xAI OAuth, `XAI_API_KEY`
     - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
     - MiniMax Search: `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`
     - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
@@ -804,15 +805,15 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
     - OpenClaw-owned config writes validate the full post-change config before writing.
     - Invalid or destructive OpenClaw-owned writes are rejected and saved as `openclaw.json.rejected.*`.
-    - If a direct edit breaks startup or hot reload, the Gateway restores the last-known-good config and saves the rejected file as `openclaw.json.clobbered.*`.
-    - The main agent receives a boot warning after recovery so it does not blindly write the bad config again.
+    - If a direct edit breaks startup or hot reload, Gateway fails closed or skips the reload; it does not rewrite `openclaw.json`.
+    - `openclaw doctor --fix` owns repair and can restore last-known-good while saving the rejected file as `openclaw.json.clobbered.*`.
 
     Recover:
 
-    - Check `openclaw logs --follow` for `Config auto-restored from last-known-good`, `Config write rejected:`, or `config reload restored last-known-good config`.
+    - Check `openclaw logs --follow` for `Invalid config at`, `Config write rejected:`, or `config reload skipped (invalid config)`.
     - Inspect the newest `openclaw.json.clobbered.*` or `openclaw.json.rejected.*` beside the active config.
-    - Keep the active restored config if it works, then copy only the intended keys back with `openclaw config set` or `config.patch`.
-    - Run `openclaw config validate` and `openclaw doctor`.
+    - Run `openclaw config validate` and `openclaw doctor --fix`.
+    - Copy only the intended keys back with `openclaw config set` or `config.patch`.
     - If you have no last-known-good or rejected payload, restore from backup, or re-run `openclaw doctor` and reconfigure channels/models.
     - If this was unexpected, file a bug and include your last known config or any backup.
     - A local coding agent can often reconstruct a working config from logs or history.
@@ -823,9 +824,9 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - Use `openclaw configure` for interactive edits.
     - Use `config.schema.lookup` first when you are not sure about an exact path or field shape; it returns a shallow schema node plus immediate child summaries for drill-down.
     - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
-    - If you are using the owner-only `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
+    - If you are using the agent-facing `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
 
-    Docs: [Config](/cli/config), [Configure](/cli/configure), [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config), [Doctor](/gateway/doctor).
+    Docs: [Config](/cli/config), [Configure](/cli/configure), [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config), [Doctor](/gateway/doctor).
 
   </Accordion>
 
@@ -988,7 +989,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     to the gateway (iOS/Android nodes, or macOS "node mode" in the menubar app). For headless node
     hosts and CLI control, see [Node host CLI](/cli/node).
 
-    A full restart is required for `gateway`, `discovery`, and `canvasHost` changes.
+    A full restart is required for `gateway`, `discovery`, and hosted plugin surface changes.
 
   </Accordion>
 
@@ -999,7 +1000,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - `config.get`: fetch the current snapshot + hash
     - `config.patch`: safe partial update (preferred for most RPC edits); hot-reloads when possible and restarts when required
     - `config.apply`: validate + replace the full config; hot-reloads when possible and restarts when required
-    - The owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
+    - The agent-facing `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
 
   </Accordion>
 
@@ -1084,6 +1085,9 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - a global fallback `.env` from `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`)
 
     Neither `.env` file overrides existing env vars.
+    Provider credential variables are an exception for workspace `.env`: keys such as
+    `GEMINI_API_KEY`, `XAI_API_KEY`, or `MISTRAL_API_KEY` are ignored from workspace
+    `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env`.
 
     You can also define inline env vars in config (applied only if missing from the process env):
 
@@ -1459,7 +1463,7 @@ lives on the [Models FAQ](/help/faq-models).
     - On `AUTH_TOKEN_MISMATCH`, trusted clients can attempt one bounded retry with a cached device token when the gateway returns retry hints (`canRetryWithDeviceToken=true`, `recommendedNextStep=retry_with_device_token`).
     - That cached-token retry now reuses the cached approved scopes stored with the device token. Explicit `deviceToken` / explicit `scopes` callers still keep their requested scope set instead of inheriting cached scopes.
     - Outside that retry path, connect auth precedence is explicit shared token/password first, then explicit `deviceToken`, then stored device token, then bootstrap token.
-    - Bootstrap token scope checks are role-prefixed. The built-in bootstrap operator allowlist only satisfies operator requests; node or other non-operator roles still need scopes under their own role prefix.
+    - Built-in setup-code bootstrap is node-only. After approval, it returns a node device token with `scopes: []` and does not return a handed-off operator token.
 
     Fix:
 
@@ -1468,7 +1472,7 @@ lives on the [Models FAQ](/help/faq-models).
     - If remote, tunnel first: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/`.
     - Shared-secret mode: set `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, then paste the matching secret in Control UI settings.
     - Tailscale Serve mode: make sure `gateway.auth.allowTailscale` is enabled and you are opening the Serve URL, not a raw loopback/tailnet URL that bypasses Tailscale identity headers.
-    - Trusted-proxy mode: make sure you are coming through the configured non-loopback identity-aware proxy, not a same-host loopback proxy or raw gateway URL.
+    - Trusted-proxy mode: make sure you are coming through the configured identity-aware proxy, not a raw gateway URL. Same-host loopback proxies also need `gateway.auth.trustedProxy.allowLoopback = true`.
     - If mismatch persists after the one retry, rotate/re-approve the paired device token:
       - `openclaw devices list`
       - `openclaw devices rotate --device <id> --role operator`
@@ -1560,7 +1564,7 @@ lives on the [Models FAQ](/help/faq-models).
 
     Service/supervisor logs (when the gateway runs via launchd/systemd):
 
-    - macOS: `$OPENCLAW_STATE_DIR/logs/gateway.log` and `gateway.err.log` (default: `~/.openclaw/logs/...`; profiles use `~/.openclaw-<profile>/logs/...`)
+    - macOS launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use `gateway-<profile>.log`; stderr is suppressed)
     - Linux: `journalctl --user -u openclaw-gateway[-<profile>].service -n 200 --no-pager`
     - Windows: `schtasks /Query /TN "OpenClaw Gateway (<profile>)" /V /FO LIST`
 
@@ -1789,6 +1793,71 @@ lives on the [Models FAQ](/help/faq-models).
 
   </Accordion>
 
+  <Accordion title="Is OpenClaw less safe because it uses TypeScript/Node instead of Rust/WASM?">
+    Language and runtime matter, but they are not the main risk for a personal
+    agent. The practical OpenClaw risks are gateway exposure, who can message the
+    bot, prompt injection, tool scope, credential handling, browser access, exec
+    access, and third-party skill or plugin trust.
+
+    Rust and WASM can provide stronger isolation for some classes of code, but
+    they do not solve prompt injection, bad allowlists, public gateway exposure,
+    overbroad tools, or a browser profile that is already logged in to sensitive
+    accounts. Treat those as the primary controls:
+
+    - keep the Gateway private or authenticated
+    - use pairing and allowlists for DMs and groups
+    - deny or sandbox risky tools for untrusted inputs
+    - install only trusted plugins and skills
+    - run `openclaw security audit --deep` after config changes
+
+    Details: [Security](/gateway/security), [Sandboxing](/gateway/sandboxing).
+
+  </Accordion>
+
+  <Accordion title="I saw reports about exposed OpenClaw instances. What should I check?">
+    First check your actual deployment:
+
+    ```bash
+    openclaw security audit --deep
+    openclaw gateway status
+    ```
+
+    A safer baseline is:
+
+    - Gateway bound to `loopback`, or exposed only through authenticated private
+      access such as a tailnet, SSH tunnel, token/password auth, or a correctly
+      configured trusted proxy
+    - DMs in `pairing` or `allowlist` mode
+    - groups allowlisted and mention-gated unless every member is trusted
+    - high-risk tools (`exec`, `browser`, `gateway`, `cron`) denied or tightly
+      scoped for agents that read untrusted content
+    - sandboxing enabled where tool execution needs a smaller blast radius
+
+    Public binds without auth, open DMs/groups with tools, and exposed browser
+    control are the findings to fix first. Details:
+    [Security audit checklist](/gateway/security#security-audit-checklist).
+
+  </Accordion>
+
+  <Accordion title="Are ClawHub skills and third-party plugins safe to install?">
+    Treat third-party skills and plugins as code you are choosing to trust.
+    ClawHub skill pages expose scan state before install, and OpenClaw plugin
+    install/update flows run built-in dangerous-code checks, but scans are not a
+    complete security boundary.
+
+    Safer pattern:
+
+    - prefer trusted authors and pinned versions
+    - read the skill or plugin before enabling it
+    - keep plugin and skill allowlists narrow
+    - run untrusted-input workflows in a sandbox with minimal tools
+    - avoid giving third-party code broad filesystem, exec, browser, or secret access
+
+    Details: [Skills](/tools/skills), [Plugins](/tools/plugin),
+    [Security](/gateway/security).
+
+  </Accordion>
+
   <Accordion title="Should my bot have its own email, GitHub account, or phone number?">
     Yes, for most setups. Isolating the bot with separate accounts and phone numbers
     reduces the blast radius if something goes wrong. This also makes it easier to rotate
@@ -1874,7 +1943,7 @@ lives on the [Models FAQ](/help/faq-models).
     to **inherit**. Also confirm you are not using a bot profile with `verboseDefault` set
     to `on` in config.
 
-    Docs: [Thinking and verbose](/tools/thinking), [Security](/gateway/security#reasoning-verbose-output-in-groups).
+    Docs: [Thinking and verbose](/tools/thinking), [Security](/gateway/security/index#reasoning-and-verbose-output-in-groups).
 
   </Accordion>
 
@@ -1941,15 +2010,14 @@ lives on the [Models FAQ](/help/faq-models).
   </Accordion>
 
   <Accordion title='Why does it feel like the bot "ignores" rapid-fire messages?'>
-    Queue mode controls how new messages interact with an in-flight run. Use `/queue` to change modes:
+    Mid-run prompts are steered into the active run by default. Use `/queue` to choose active-run behavior:
 
-    - `steer` - new messages redirect the current task
-    - `followup` - run messages one at a time
-    - `collect` - batch messages and reply once (default)
-    - `steer-backlog` - steer now, then process backlog
+    - `steer` - guide the active run at the next model boundary
+    - `followup` - queue messages and run them one at a time after the current run ends
+    - `collect` - queue compatible messages and reply once after the current run ends
     - `interrupt` - abort current run and start fresh
 
-    You can add options like `debounce:2s cap:25 drop:summarize` for followup modes.
+    Default mode is `steer`. You can add options like `debounce:0.5s cap:25 drop:summarize` for queued modes. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
   </Accordion>
 </AccordionGroup>

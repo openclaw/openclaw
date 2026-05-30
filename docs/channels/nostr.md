@@ -19,11 +19,14 @@ builds do not need a separate install.
 
 - Onboarding (`openclaw onboard`) and `openclaw channels add` still surface
   Nostr from the shared channel catalog.
-- If your build excludes bundled Nostr, install it manually.
+- If your build excludes bundled Nostr, install the npm package directly.
 
 ```bash
 openclaw plugins install @openclaw/nostr
 ```
+
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Use a local checkout (dev workflows):
 

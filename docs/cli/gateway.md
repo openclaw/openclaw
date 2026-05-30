@@ -42,8 +42,11 @@ openclaw gateway run
     - `openclaw onboard --mode local` and `openclaw setup` are expected to write `gateway.mode=local`. If the file exists but `gateway.mode` is missing, treat that as a broken or clobbered config and repair it instead of assuming local mode implicitly.
     - If the file exists and `gateway.mode` is missing, the Gateway treats that as suspicious config damage and refuses to "guess local" for you.
     - Binding beyond loopback without auth is blocked (safety guardrail).
+    - `lan`, `tailnet`, and `custom` currently resolve over IPv4-only BYOH paths.
+    - IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy if the host itself is IPv6-only.
     - `SIGUSR1` triggers an in-process restart when authorized (`commands.restart` is enabled by default; set `commands.restart: false` to block manual restart, while gateway tool/config apply/update remain allowed).
     - `SIGINT`/`SIGTERM` handlers stop the gateway process, but they don't restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
+
   </Accordion>
 </AccordionGroup>
 
@@ -53,7 +56,7 @@ openclaw gateway run
   WebSocket port (default comes from config/env; usually `18789`).
 </ParamField>
 <ParamField path="--bind <loopback|lan|tailnet|auto|custom>" type="string">
-  Listener bind mode.
+  Listener bind mode. `lan`, `tailnet`, and `custom` currently resolve over IPv4-only paths.
 </ParamField>
 <ParamField path="--auth <token|password>" type="string">
   Auth mode override.
@@ -72,6 +75,9 @@ openclaw gateway run
 </ParamField>
 <ParamField path="--tailscale-reset-on-exit" type="boolean">
   Reset Tailscale serve/funnel config on shutdown.
+</ParamField>
+<ParamField path="--bind custom + gateway.customBindHost" type="string">
+  Expects an IPv4 address today. For IPv6-only BYOH, place an IPv4 sidecar or proxy in front of the Gateway and point OpenClaw at that IPv4 endpoint.
 </ParamField>
 <ParamField path="--allow-unconfigured" type="boolean">
   Allow gateway start without `gateway.mode=local` in config. Bypasses the startup guard for ad-hoc/dev bootstrap only; does not write or repair the config file.
@@ -104,14 +110,31 @@ openclaw gateway run
   Raw stream jsonl path.
 </ParamField>
 
+## Restart the Gateway
+
+```bash
+openclaw gateway restart
+openclaw gateway restart --safe
+openclaw gateway restart --safe --skip-deferral
+openclaw gateway restart --force
+```
+
+`openclaw gateway restart --safe` asks the running Gateway to preflight active OpenClaw work before restarting. If queued operations, reply delivery, embedded runs, or task runs are active, the Gateway reports the blockers, coalesces duplicate safe restart requests, and restarts once the active work drains. Plain `restart` keeps the existing service-manager behavior for compatibility. Use `--force` only when you explicitly want the immediate override path.
+
+`openclaw gateway restart --safe --skip-deferral` runs the same OpenClaw-aware coordinated restart as `--safe`, but bypasses the active-work deferral gate so the Gateway emits the restart immediately even when blockers are reported. Use it as the operator escape hatch when a deferral has been pinned by a stuck task run and `--safe` alone would wait indefinitely. `--skip-deferral` requires `--safe`.
+
 <Warning>
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.
 </Warning>
 
-### Startup profiling
+### Gateway profiling
 
 - Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to log phase timings during Gateway startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings for installed-index, manifest registry, startup planning, and owner-map work.
-- Run `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup. The benchmark records first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing details.
+- Set `OPENCLAW_GATEWAY_RESTART_TRACE=1` to log restart-scoped `restart trace:` lines for restart signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics.
+- Set `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` to write a best-effort JSONL startup diagnostics timeline for external QA harnesses. You can also enable the flag with `diagnostics.flags: ["timeline"]` in config; the path is still env-provided. Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
+- Run `pnpm build` first, then `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup against the built CLI entry. The benchmark records first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing details.
+- Run `pnpm build` first, then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` to benchmark in-process Gateway restart against the built CLI entry on macOS or Linux. The restart benchmark uses SIGUSR1, enables both startup and restart traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
+- Treat `/healthz` as liveness and `/readyz` as usable readiness. Trace lines and benchmark output are for owner attribution; do not treat one trace span or one sample as a complete performance conclusion.
 
 ## Query a running Gateway
 
@@ -122,6 +145,7 @@ All query commands use WebSocket RPC.
     - Default: human-readable (colored in TTY).
     - `--json`: machine-readable JSON (no styling/spinner).
     - `--no-color` (or `NO_COLOR=1`): disable ANSI while keeping human layout.
+
   </Tab>
   <Tab title="Shared options">
     - `--url <url>`: Gateway WebSocket URL.
@@ -129,6 +153,7 @@ All query commands use WebSocket RPC.
     - `--password <password>`: Gateway password.
     - `--timeout <ms>`: timeout/budget (varies per command).
     - `--expect-final`: wait for a "final" response (agent calls).
+
   </Tab>
 </Tabs>
 
@@ -142,7 +167,7 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 openclaw gateway health --url ws://127.0.0.1:18789
 ```
 
-The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup sidecars, channels, or configured hooks are still settling.
+The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed readiness responses include an `eventLoop` diagnostic block with event-loop delay, event-loop utilization, CPU core ratio, and a `degraded` flag.
 
 ### `gateway usage-cost`
 
@@ -193,6 +218,7 @@ openclaw gateway stability --json
   <Accordion title="Privacy and bundle behavior">
     - Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and redacted session summaries. They do not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, secret values, hostnames, or raw session ids. Set `diagnostics.enabled: false` to disable the recorder entirely.
     - On fatal Gateway exits, shutdown timeouts, and restart startup failures, OpenClaw writes the same diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json` when the recorder has events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` also apply to bundle output.
+
   </Accordion>
 </AccordionGroup>
 
@@ -278,14 +304,19 @@ openclaw gateway status --require-rpc
     - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
     - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
     - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
+    - When probing is enabled, JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the follow-up handshake probe cannot provide version metadata.
     - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need read-scope RPC calls to be healthy too.
     - `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
+    - `--deep` also reports a recent Gateway supervisor restart handoff when the service process exited cleanly for an external supervisor restart.
+    - `--deep` runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces configured plugin manifest warnings (for example missing channel config metadata) so install and update smoke checks catch them. Default `gateway status` keeps the fast read-only path that skips plugin validation.
     - Human output includes the resolved file log path plus the CLI-vs-service config paths/validity snapshot to help diagnose profile or state-dir drift.
+
   </Accordion>
   <Accordion title="Linux systemd auth-drift checks">
     - On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
     - Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
     - If token auth is not effectively active (explicit `gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or mode unset where password can win and no token candidate can win), token-drift checks skip config token resolution.
+
   </Accordion>
 </AccordionGroup>
 
@@ -317,14 +348,16 @@ openclaw gateway probe --json
     - `Capability: read-only|write-capable|admin-capable|pairing-pending|connect-only` reports what the probe could prove about auth. It is separate from reachability.
     - `Read probe: ok` means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
     - `Read probe: limited - missing scope: operator.read` means connect succeeded but read-scope RPC is limited. This is reported as **degraded** reachability, not full failure.
+    - `Read probe: failed` after `Connect: ok` means the Gateway accepted the WebSocket connection, but follow-up read diagnostics timed out or failed. This is also **degraded** reachability, not an unreachable Gateway.
     - Like `gateway status`, probe reuses existing cached device auth but does not create first-time device identity or pairing state.
     - Exit code is non-zero only when no probed target is reachable.
+
   </Accordion>
   <Accordion title="JSON output">
     Top level:
 
     - `ok`: at least one target is reachable.
-    - `degraded`: at least one target had scope-limited detail RPC.
+    - `degraded`: at least one target accepted a connection but did not complete full detail RPC diagnostics.
     - `capability`: best capability seen across reachable targets (`read_only`, `write_capable`, `admin_capable`, `pairing_pending`, `connected_no_operator_scope`, or `unknown`).
     - `primaryTargetId`: best target to treat as the active winner in this order: explicit URL, SSH tunnel, configured remote, then local loopback.
     - `warnings[]`: best-effort warning records with `code`, `message`, and optional `targetIds`.
@@ -349,6 +382,7 @@ openclaw gateway probe --json
     - `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
     - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
     - `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -461,11 +495,20 @@ openclaw gateway restart
   <Accordion title="Command options">
     - `gateway status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
     - `gateway install`: `--port`, `--runtime <node|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`
-    - `gateway uninstall|start|stop|restart`: `--json`
+    - `gateway restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--json`
+    - `gateway uninstall|start`: `--json`
+    - `gateway stop`: `--disable`, `--json`
+
   </Accordion>
   <Accordion title="Lifecycle behavior">
-    - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute; on macOS, `gateway stop` intentionally disables the LaunchAgent before stopping it.
+    - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute.
+    - On macOS, `gateway stop` uses `launchctl bootout` by default, which removes the LaunchAgent from the current boot session without persisting a disable — KeepAlive auto-recovery remains active for future crashes and `gateway start` re-enables cleanly without a manual `launchctl enable`. Pass `--disable` to persistently suppress KeepAlive and RunAtLoad so the gateway does not respawn until the next explicit `gateway start`; use this when a manual stop should survive reboots or system restarts.
+    - `gateway restart --safe` asks the running Gateway to preflight active OpenClaw work and defer the restart until reply delivery, embedded runs, and task runs drain. `--safe` cannot be combined with `--force` or `--wait`.
+    - `gateway restart --wait 30s` overrides the configured restart drain budget for that restart. Bare numbers are milliseconds; units such as `s`, `m`, and `h` are accepted. `--wait 0` waits indefinitely.
+    - `gateway restart --safe --skip-deferral` runs the OpenClaw-aware safe restart but bypasses the deferral gate so the Gateway emits the restart immediately even when blockers are reported. Operator escape hatch for stuck-task-run deferrals; requires `--safe`.
+    - `gateway restart --force` skips the active-work drain and restarts immediately. Use it when an operator has already inspected the listed task blockers and wants the gateway back now.
     - Lifecycle commands accept `--json` for scripting.
+
   </Accordion>
   <Accordion title="Auth and SecretRefs at install time">
     - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `gateway install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
@@ -473,6 +516,7 @@ openclaw gateway restart
     - For password auth on `gateway run`, prefer `OPENCLAW_GATEWAY_PASSWORD`, `--password-file`, or a SecretRef-backed `gateway.auth.password` over inline `--password`.
     - In inferred auth mode, shell-only `OPENCLAW_GATEWAY_PASSWORD` does not relax install token requirements; use durable config (`gateway.auth.password` or config `env`) when installing a managed service.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
+
   </Accordion>
 </AccordionGroup>
 
@@ -485,15 +529,15 @@ openclaw gateway restart
 
 Only gateways with Bonjour discovery enabled (default) advertise the beacon.
 
-Wide-Area discovery records include (TXT):
+Wide-area discovery records can include these TXT hints:
 
 - `role` (gateway role hint)
 - `transport` (transport hint, e.g. `gateway`)
 - `gatewayPort` (WebSocket port, usually `18789`)
-- `sshPort` (optional; clients default SSH targets to `22` when it is absent)
+- `sshPort` (full discovery mode only; clients default SSH targets to `22` when it is absent)
 - `tailnetDns` (MagicDNS hostname, when available)
 - `gatewayTls` / `gatewayTlsSha256` (TLS enabled + cert fingerprint)
-- `cliPath` (remote-install hint written to the wide-area zone)
+- `cliPath` (full discovery mode only)
 
 ### `gateway discover`
 
@@ -518,7 +562,8 @@ openclaw gateway discover --json | jq '.beacons[].wsUrl'
 <Note>
 - The CLI scans `local.` plus the configured wide-area domain when one is enabled.
 - `wsUrl` in JSON output is derived from the resolved service endpoint, not from TXT-only hints such as `lanHost` or `tailnetDns`.
-- On `local.` mDNS, `sshPort` and `cliPath` are only broadcast when `discovery.mdns.mode` is `full`. Wide-area DNS-SD still writes `cliPath`; `sshPort` stays optional there too.
+- On `local.` mDNS and wide-area DNS-SD, `sshPort` and `cliPath` are only published when `discovery.mdns.mode` is `full`.
+
 </Note>
 
 ## Related

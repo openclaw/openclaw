@@ -106,7 +106,7 @@ export async function maybeHandleResetCommand(
     return null;
   }
 
-  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
+  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/i);
   if (!resetMatch) {
     return null;
   }
@@ -117,7 +117,8 @@ export async function maybeHandleResetCommand(
     return { shouldContinue: false };
   }
 
-  const commandAction: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
+  const commandAction: ResetCommandAction =
+    resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
   const resetTail = params.command.commandBodyNormalized.slice(resetMatch[0].length).trimStart();
   const boundAcpSessionKey = resolveBoundAcpThreadSessionKey(params);
   const boundAcpKey =
@@ -156,7 +157,7 @@ export async function maybeHandleResetCommand(
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
-  await emitResetCommandHooks({
+  const hookResult = await emitResetCommandHooks({
     action: commandAction,
     ctx: params.ctx,
     cfg: params.cfg,
@@ -166,5 +167,17 @@ export async function maybeHandleResetCommand(
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,
   });
+  if (!resetTail) {
+    return {
+      shouldContinue: false,
+      ...(hookResult.routedReply
+        ? {}
+        : {
+            reply: {
+              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+            },
+          }),
+    };
+  }
   return null;
 }

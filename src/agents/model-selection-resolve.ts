@@ -1,9 +1,8 @@
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelRef } from "./model-selection-normalize.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "./model-selection-normalize.js";
 import {
-  buildAllowedModelSetWithFallbacks,
   buildModelAliasIndex,
   getModelRefStatusWithFallbackModels,
   resolveAllowedModelRefFromAliasIndex,
@@ -12,48 +11,28 @@ import {
 
 export {
   buildConfiguredAllowlistKeys,
-  buildConfiguredModelCatalog,
   buildModelAliasIndex,
-  inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";
-export type { ModelAliasIndex, ModelRefStatus } from "./model-selection-shared.js";
+export type { ModelRefStatus } from "./model-selection-shared.js";
 
 function resolveDefaultFallbackModels(cfg: OpenClawConfig): string[] {
   return resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
 }
 
-export function buildAllowedModelSet(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: string;
-}): {
-  allowAny: boolean;
-  allowedCatalog: ModelCatalogEntry[];
-  allowedKeys: Set<string>;
-} {
-  const { cfg, catalog, defaultProvider, defaultModel } = params;
-  return buildAllowedModelSetWithFallbacks({
-    cfg,
-    catalog,
-    defaultProvider,
-    defaultModel,
-    fallbackModels: resolveDefaultFallbackModels(cfg),
-  });
-}
-
-export function getModelRefStatus(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  ref: ModelRef;
-  defaultProvider: string;
-  defaultModel?: string;
-}): ModelRefStatus {
-  const { cfg, catalog, ref, defaultProvider, defaultModel } = params;
+export function getModelRefStatus(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    ref: ModelRef;
+    defaultProvider: string;
+    defaultModel?: string;
+  } & ModelManifestNormalizationContext,
+): ModelRefStatus {
+  const { cfg, catalog, ref, defaultProvider, defaultModel, manifestPlugins } = params;
   return getModelRefStatusWithFallbackModels({
     cfg,
     catalog,
@@ -61,16 +40,19 @@ export function getModelRefStatus(params: {
     defaultProvider,
     defaultModel,
     fallbackModels: resolveDefaultFallbackModels(cfg),
+    manifestPlugins,
   });
 }
 
-export function resolveAllowedModelRef(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  raw: string;
-  defaultProvider: string;
-  defaultModel?: string;
-}):
+export function resolveAllowedModelRef(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    raw: string;
+    defaultProvider: string;
+    defaultModel?: string;
+  } & ModelManifestNormalizationContext,
+):
   | { ref: ModelRef; key: string }
   | {
       error: string;
@@ -78,12 +60,14 @@ export function resolveAllowedModelRef(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   return resolveAllowedModelRefFromAliasIndex({
     cfg: params.cfg,
     raw: params.raw,
     defaultProvider: params.defaultProvider,
     aliasIndex,
+    manifestPlugins: params.manifestPlugins,
     getStatus: (ref) =>
       getModelRefStatus({
         cfg: params.cfg,
@@ -91,6 +75,7 @@ export function resolveAllowedModelRef(params: {
         ref,
         defaultProvider: params.defaultProvider,
         defaultModel: params.defaultModel,
+        manifestPlugins: params.manifestPlugins,
       }),
   });
 }

@@ -1,14 +1,13 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatCommandArgMenuTitle,
   resolveStoredModelOverride,
   type ChatCommandDefinition,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import {
   type CommandArgs,
-  resolveCommandAuthorizedFromAuthorizers,
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -21,14 +20,20 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  chunkItems,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import type { ResolvedSlackAccount } from "../accounts.js";
+import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
+import { formatSlackError } from "../errors.js";
+import {
+  compileSlackInteractiveReplies,
+  isSlackInteractiveRepliesEnabled,
+} from "../interactive-replies.js";
 import { truncateSlackText } from "../truncate.js";
-import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "./allow-list.js";
-import { resolveSlackEffectiveAllowFrom } from "./auth.js";
+import { resolveSlackCommandIngress, resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
@@ -52,8 +57,14 @@ const SLACK_COMMAND_ARG_BUTTON_ROW_SIZE = 5;
 const SLACK_COMMAND_ARG_OVERFLOW_MIN = 3;
 const SLACK_COMMAND_ARG_OVERFLOW_MAX = 5;
 const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
-const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
+const SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX = 75;
+const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 150;
+const SLACK_COMMAND_ARG_BUTTON_TEXT_MAX = 75;
+const SLACK_COMMAND_ARG_BUTTON_VALUE_MAX = 2000;
+const SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX = 300;
 const SLACK_HEADER_TEXT_MAX = 150;
+const SLACK_COMMAND_ARG_CHROME_BLOCKS = 3;
+const SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX = SLACK_MAX_BLOCKS - SLACK_COMMAND_ARG_CHROME_BLOCKS;
 let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime.js")> | null =
   null;
 let slashDispatchRuntimePromise: Promise<typeof import("./slash-dispatch.runtime.js")> | null =
@@ -140,7 +151,10 @@ function buildSlackArgMenuConfirm(params: { command: string; arg: string }) {
     title: { type: "plain_text", text: "Confirm selection" },
     text: {
       type: "mrkdwn",
-      text: `Run */${command}* with *${arg}* set to this value?`,
+      text: truncateSlackText(
+        `Run */${command}* with *${arg}* set to this value?`,
+        SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX,
+      ),
     },
     confirm: { type: "plain_text", text: "Run command" },
     deny: { type: "plain_text", text: "Cancel" },
@@ -217,7 +231,10 @@ function parseSlackCommandArgValue(raw?: string | null): {
 
 function buildSlackArgMenuOptions(choices: EncodedMenuChoice[]) {
   return choices.map((choice) => ({
-    text: { type: "plain_text", text: choice.label.slice(0, 75) },
+    text: {
+      type: "plain_text",
+      text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX),
+    },
     value: choice.value,
   }));
 }
@@ -287,18 +304,24 @@ function buildSlackCommandArgMenuBlocks(params: {
           },
         ]
       : encodedChoices.length <= SLACK_COMMAND_ARG_BUTTON_ROW_SIZE || !canUseStaticSelect
-        ? chunkItems(encodedChoices, SLACK_COMMAND_ARG_BUTTON_ROW_SIZE).map(
-            (choices, rowIndex) => ({
-              type: "actions",
-              elements: choices.map((choice, colIndex) => ({
-                type: "button",
-                action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
-                text: { type: "plain_text", text: choice.label },
-                value: choice.value,
-                confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
-              })),
-            }),
-          )
+        ? chunkItems(
+            encodedChoices.filter(
+              (choice) => choice.value.length <= SLACK_COMMAND_ARG_BUTTON_VALUE_MAX,
+            ),
+            SLACK_COMMAND_ARG_BUTTON_ROW_SIZE,
+          ).map((choices, rowIndex) => ({
+            type: "actions",
+            elements: choices.map((choice, colIndex) => ({
+              type: "button",
+              action_id: `${SLACK_COMMAND_ARG_ACTION_ID}_${rowIndex}_${colIndex}`,
+              text: {
+                type: "plain_text",
+                text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_BUTTON_TEXT_MAX),
+              },
+              value: choice.value,
+              confirm: buildSlackArgMenuConfirm({ command: params.command, arg: params.arg }),
+            })),
+          }))
         : chunkItems(encodedChoices, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX).map(
             (choices, index) => ({
               type: "actions",
@@ -326,6 +349,7 @@ function buildSlackCommandArgMenuBlocks(params: {
     `Select one option to continue /${params.command} (${params.arg})`,
     3000,
   );
+  const visibleRows = rows.slice(0, SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX);
   return [
     {
       type: "header",
@@ -339,7 +363,7 @@ function buildSlackCommandArgMenuBlocks(params: {
       type: "context",
       elements: [{ type: "mrkdwn", text: contextText }],
     },
-    ...rows,
+    ...visibleRows,
   ];
 }
 
@@ -416,12 +440,9 @@ export async function registerSlackMonitorSlashCommands(params: {
         return;
       }
 
-      const { allowFromLower: effectiveAllowFromLower } = await resolveSlackEffectiveAllowFrom(
-        ctx,
-        {
-          includePairingStore: isDirectMessage,
-        },
-      );
+      const effectiveAllowFromLower = await resolveSlackEffectiveAllowFrom(ctx, {
+        includePairingStore: isDirectMessage,
+      });
 
       // Privileged command surface: compute CommandAuthorized, don't assume true.
       // Keep this aligned with the Slack message path (message-handler/prepare.ts).
@@ -503,17 +524,21 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       const sender = await ctx.resolveUserName(command.user_id);
       const senderName = sender?.name ?? command.user_name ?? command.user_id;
-      const channelUsersAllowlistConfigured =
-        isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
-      const channelUserAllowed = channelUsersAllowlistConfigured
-        ? resolveSlackUserAllowed({
-            allowList: channelConfig?.users,
-            userId: command.user_id,
-            userName: senderName,
-            allowNameMatching: ctx.allowNameMatching,
-          })
-        : false;
-      if (channelUsersAllowlistConfigured && !channelUserAllowed) {
+      const slashIngress = await resolveSlackCommandIngress({
+        ctx,
+        senderId: command.user_id,
+        senderName,
+        channelType: channelType ?? "channel",
+        channelId: command.channel_id,
+        ownerAllowFromLower: effectiveAllowFromLower,
+        channelUsers: isRoom ? channelConfig?.users : undefined,
+        allowTextCommands: false,
+        hasControlCommand: false,
+        eventKind: "slash-command",
+        modeWhenAccessGroupsOff: "configured",
+      });
+      const senderGate = slashIngress.senderAccess.gate;
+      if (isRoom && senderGate?.allowed === false) {
         await respond({
           text: "You are not authorized to use this command here.",
           response_type: "ephemeral",
@@ -521,28 +546,10 @@ export async function registerSlackMonitorSlashCommands(params: {
         return;
       }
 
-      const ownerAllowed = resolveSlackAllowListMatch({
-        allowList: effectiveAllowFromLower,
-        id: command.user_id,
-        name: senderName,
-        allowNameMatching: ctx.allowNameMatching,
-      }).allowed;
       // DMs: allow chatting in dmPolicy=open, but keep privileged command gating intact by setting
       // CommandAuthorized based on allowlists/access-groups (downstream decides which commands need it).
-      commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups: ctx.useAccessGroups,
-        authorizers: [{ configured: effectiveAllowFromLower.length > 0, allowed: ownerAllowed }],
-        modeWhenAccessGroupsOff: "configured",
-      });
+      commandAuthorized = slashIngress.commandAccess.authorized;
       if (isRoomish) {
-        commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-          useAccessGroups: ctx.useAccessGroups,
-          authorizers: [
-            { configured: effectiveAllowFromLower.length > 0, allowed: ownerAllowed },
-            { configured: channelUsersAllowlistConfigured, allowed: channelUserAllowed },
-          ],
-          modeWhenAccessGroupsOff: "configured",
-        });
         if (ctx.useAccessGroups && !commandAuthorized) {
           await respond({
             text: "You are not authorized to use this command.",
@@ -708,11 +715,19 @@ export async function registerSlackMonitorSlashCommands(params: {
           ),
       });
 
-      const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+      const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
         cfg,
         agentId: route.agentId,
         channel: "slack",
         accountId: route.accountId,
+        transformReplyPayload: (payload) => {
+          if (payload.isReasoning === true) {
+            return null;
+          }
+          return isSlackInteractiveRepliesEnabled({ cfg, accountId: route.accountId })
+            ? compileSlackInteractiveReplies(payload)
+            : payload;
+        },
       });
 
       const deliverSlashPayloads = async (replies: ReplyPayload[]) => {
@@ -738,7 +753,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           deliver: async (payload) => deliverSlashPayloads([payload]),
           onError: (err, info) => {
             runtime.error?.(
-              danger(`slack slash ${info.kind} reply failed: ${formatErrorMessage(err)}`),
+              danger(`slack slash ${info.kind} reply failed: ${formatSlackError(err)}`),
             );
           },
         },
@@ -782,7 +797,7 @@ export async function registerSlackMonitorSlashCommands(params: {
       provider: "slack",
     });
     const existingNativeNames = new Set(
-      nativeCommands.map((c) => normalizeLowercaseStringOrEmpty(c.name)).filter(Boolean),
+      normalizeStringEntriesLower(nativeCommands.map((command) => command.name)),
     );
     const { listProviderPluginCommandSpecs } = await loadSlackPluginCommandsRuntime();
     for (const pluginCommand of listProviderPluginCommandSpecs("slack")) {

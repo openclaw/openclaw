@@ -53,6 +53,13 @@ If the same person contacts you from multiple channels, use
 `session.identityLinks` to link their identities so they share one session.
 </Tip>
 
+### Dock linked channels
+
+Dock commands let a user move the current direct-chat session's reply route to
+another linked channel without starting a new session. See
+[Channel docking](/concepts/channel-docking) for examples, config, and
+troubleshooting.
+
 Verify your setup with `openclaw security audit`.
 
 ## Session lifecycle
@@ -118,7 +125,17 @@ to `"enforce"` for automatic cleanup:
 }
 ```
 
-For production-sized `maxEntries` limits, Gateway runtime writes use a small high-water buffer and clean back down to the configured cap in batches. This avoids running full store cleanup on every isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
+For production-sized `maxEntries` limits, Gateway runtime writes use a small high-water buffer and clean back down to the configured cap in batches. Session store reads do not prune or cap entries during Gateway startup. This avoids running full store cleanup on every startup or isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
+
+Maintenance preserves durable external conversation pointers, including group
+sessions and thread-scoped chat sessions, while still allowing synthetic cron,
+hook, heartbeat, ACP, and sub-agent entries to age out.
+
+If you previously used direct-message isolation and later returned
+`session.dmScope` to `main`, preview stale peer-keyed DM rows with
+`openclaw sessions cleanup --dry-run --fix-dm-scope`. Applying the same flag
+retires those old direct-DM rows and keeps their transcripts as deleted
+archives.
 
 Preview with `openclaw sessions cleanup --dry-run`.
 

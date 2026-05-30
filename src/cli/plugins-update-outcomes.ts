@@ -1,6 +1,6 @@
-import { theme } from "../terminal/theme.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 
-export type PluginUpdateCliOutcome = {
+type PluginUpdateCliOutcome = {
   status: string;
   message: string;
 };

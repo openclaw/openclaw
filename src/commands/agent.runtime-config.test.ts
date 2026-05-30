@@ -1,6 +1,6 @@
 import path from "node:path";
+import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { resolveAgentRuntimeConfig } from "../agents/agent-runtime-config.js";
 import { resolveSession } from "../agents/command/session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -61,6 +61,15 @@ const runtime = createThrowingTestRuntime();
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
+}
+
+function requireResolveCommandConfigParams(callIndex = 0): ResolveCommandConfigParams {
+  const call = resolveCommandConfigWithSecretsMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected command config resolution call ${callIndex}`);
+  }
+  const [params] = call;
+  return params;
 }
 
 function mockConfig(home: string, storePath: string): OpenClawConfig {
@@ -150,12 +159,10 @@ describe("agentCommand runtime config", () => {
       expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledWith({
         config: loadedConfig,
         commandName: "agent",
-        targetIds: expect.objectContaining({
-          has: expect.any(Function),
-        }),
+        targetIds: new Set(["models.providers.*.apiKey"]),
         runtime,
       });
-      const targetIds = resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].targetIds;
+      const targetIds = requireResolveCommandConfigParams().targetIds;
       expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
       expect(targetIds.has("channels.telegram.botToken")).toBe(false);
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
@@ -182,7 +189,7 @@ describe("agentCommand runtime config", () => {
         runtimeTargetsChannelSecrets: true,
       });
 
-      const targetIds = resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].targetIds;
+      const targetIds = requireResolveCommandConfigParams().targetIds;
       expect(targetIds.has("channels.telegram.botToken")).toBe(true);
     });
   });
@@ -194,7 +201,9 @@ describe("agentCommand runtime config", () => {
 
       const prepared = await resolveAgentRuntimeConfig(runtime);
 
+      expect(readConfigFileSnapshotForWriteMock).toHaveBeenCalledTimes(1);
       expect(resolveCommandConfigWithSecretsMock).not.toHaveBeenCalled();
+      expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(loadedConfig, loadedConfig);
       expect(prepared.cfg).toBe(loadedConfig);
     });
   });
@@ -207,8 +216,14 @@ describe("agentCommand runtime config", () => {
       const resolved = resolveSession({ cfg, to: "+1555" });
 
       expect(resolved.storePath).toBe(store);
-      expect(resolved.sessionKey).toBeTruthy();
-      expect(resolved.sessionId).toBeTruthy();
+      expect(resolved.sessionKey).toBeTypeOf("string");
+      const sessionKey = resolved.sessionKey;
+      if (!sessionKey) {
+        throw new Error("expected session key");
+      }
+      expect(sessionKey.length).toBeGreaterThan(0);
+      expect(resolved.sessionId).toBeTypeOf("string");
+      expect(resolved.sessionId.length).toBeGreaterThan(0);
       expect(resolved.isNewSession).toBe(true);
     });
   });

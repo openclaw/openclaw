@@ -1,7 +1,11 @@
-import type { RequestClient } from "@buape/carbon";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordRestClient } from "./client.js";
+import type { RequestClient } from "./internal/discord.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("createDiscordRestClient", () => {
   const fakeRest = {} as RequestClient;
@@ -55,10 +59,11 @@ describe("createDiscordRestClient", () => {
 
     expect(result.token).toBe("explicit-account-token");
     expect(result.account.accountId).toBe("ops");
-    expect(result.account.config.retry).toMatchObject({ attempts: 7 });
+    expect(result.account.config.retry).toEqual({ attempts: 7 });
   });
 
-  it("still throws when no explicit token is provided and config token is unresolved", () => {
+  it("still fails closed when no explicit token is provided and config token is unresolved", () => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
     const cfg = {
       channels: {
         discord: {
@@ -71,6 +76,8 @@ describe("createDiscordRestClient", () => {
       },
     } as OpenClawConfig;
 
-    expect(() => createDiscordRestClient({ cfg, rest: fakeRest })).toThrow(/unresolved SecretRef/i);
+    expect(() => createDiscordRestClient({ cfg, rest: fakeRest })).toThrow(
+      /configured for account "default" is unavailable/i,
+    );
   });
 });

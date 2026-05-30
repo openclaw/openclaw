@@ -126,6 +126,27 @@ describe("remote sandbox fs bridge", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "reads dot-dot-prefixed filenames inside the workspace",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(path.join(workspaceDir, "..note.txt"), "hidden", "utf8");
+
+        const bridge = createWorkspaceReadBridge(workspaceDir);
+
+        expect(bridge.resolvePath({ filePath: "..note.txt" })).toMatchObject({
+          relativePath: "..note.txt",
+          containerPath: `${workspaceDir}/..note.txt`,
+        });
+        await expect(bridge.readFile({ filePath: "..note.txt" })).resolves.toEqual(
+          Buffer.from("hidden"),
+        );
+      });
+    },
+  );
+
   it.runIf(process.platform !== "win32")("rejects symlink escapes while reading", async () => {
     await withTempDir("openclaw-remote-fs-bridge-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
@@ -160,6 +181,107 @@ describe("remote sandbox fs bridge", () => {
       });
     },
   );
+
+  it("saturates unsafe stat size output without returning NaN", async () => {
+    await withTempDir("openclaw-remote-fs-bridge-stat-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const runtime: RemoteShellSandboxHandle = {
+        remoteWorkspaceDir: workspaceDir,
+        remoteAgentWorkspaceDir: workspaceDir,
+        runRemoteShellScript: async (command) => {
+          if (command.script.includes('if [ -e "$1" ] || [ -L "$1" ]')) {
+            return { stdout: Buffer.from("1\n"), stderr: Buffer.alloc(0), code: 0 };
+          }
+          if (command.script.includes('readlink -f -- "$cursor"')) {
+            return {
+              stdout: Buffer.from(`${workspaceDir}/note.txt\n`),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (command.script.includes('stat -c "%F|%h"')) {
+            return {
+              stdout: Buffer.from("regular file|1\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (command.script.includes('stat -c "%F|%s|%y"')) {
+            return {
+              stdout: Buffer.from("regular file|9007199254740992|not-a-date\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          throw new Error(`unexpected remote script: ${command.script}`);
+        },
+      };
+      const bridge = createRemoteShellSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+        runtime,
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).resolves.toEqual({
+        type: "file",
+        size: Number.MAX_SAFE_INTEGER,
+        mtimeMs: 0,
+      });
+    });
+  });
+
+  it("does not reject malformed non-decimal hardlink counts", async () => {
+    await withTempDir("openclaw-remote-fs-bridge-hardlink-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const runtime: RemoteShellSandboxHandle = {
+        remoteWorkspaceDir: workspaceDir,
+        remoteAgentWorkspaceDir: workspaceDir,
+        runRemoteShellScript: async (command) => {
+          if (command.script.includes('if [ -e "$1" ] || [ -L "$1" ]')) {
+            return { stdout: Buffer.from("1\n"), stderr: Buffer.alloc(0), code: 0 };
+          }
+          if (command.script.includes('readlink -f -- "$cursor"')) {
+            return {
+              stdout: Buffer.from(`${workspaceDir}/note.txt\n`),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (command.script.includes('stat -c "%F|%h"')) {
+            return {
+              stdout: Buffer.from("regular file|0x2\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (command.script.includes('stat -c "%F|%s|%y"')) {
+            return {
+              stdout: Buffer.from("regular file|12|2026-05-29 12:00:00.000000000 +0000\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          throw new Error(`unexpected remote script: ${command.script}`);
+        },
+      };
+      const bridge = createRemoteShellSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+        runtime,
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
+        type: "file",
+        size: 12,
+      });
+    });
+  });
 });
 
 async function withTempDir<T>(prefix: string, run: (stateDir: string) => Promise<T>): Promise<T> {

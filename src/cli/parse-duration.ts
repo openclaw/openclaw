@@ -15,10 +15,24 @@ const DURATION_MULTIPLIERS: Record<string, number> = {
   d: 86_400_000,
 };
 
+function invalidDuration(raw: string, reason?: string): Error {
+  const value = raw.trim() ? `"${raw}"` : "empty value";
+  const prefix = reason ? `Invalid duration (${reason}): ${value}.` : `Invalid duration: ${value}.`;
+  return new Error(`${prefix} Use values like 500ms, 30s, 5m, 2h, or 1h30m.`);
+}
+
+function roundSafeDurationMs(raw: string, value: number): number {
+  const ms = Math.round(value);
+  if (!Number.isSafeInteger(ms)) {
+    throw invalidDuration(raw);
+  }
+  return ms;
+}
+
 export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): number {
   const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
   if (!trimmed) {
-    throw new Error("invalid duration (empty)");
+    throw invalidDuration(raw, "empty");
   }
 
   // Fast path for a single token (supports default unit for bare numbers).
@@ -26,14 +40,10 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
   if (single) {
     const value = Number(single[1]);
     if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`invalid duration: ${raw}`);
+      throw invalidDuration(raw);
     }
     const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as "ms" | "s" | "m" | "h" | "d";
-    const ms = Math.round(value * DURATION_MULTIPLIERS[unit]);
-    if (!Number.isFinite(ms)) {
-      throw new Error(`invalid duration: ${raw}`);
-    }
-    return ms;
+    return roundSafeDurationMs(raw, value * DURATION_MULTIPLIERS[unit]);
   }
 
   // Composite form (e.g. "1h30m", "2m500ms"); each token must include a unit.
@@ -44,30 +54,26 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
     const [full, valueRaw, unitRaw] = match;
     const index = match.index ?? -1;
     if (!full || !valueRaw || !unitRaw || index < 0) {
-      throw new Error(`invalid duration: ${raw}`);
+      throw invalidDuration(raw);
     }
     if (index !== consumed) {
-      throw new Error(`invalid duration: ${raw}`);
+      throw invalidDuration(raw, "each composite segment needs a unit");
     }
     const value = Number(valueRaw);
     if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`invalid duration: ${raw}`);
+      throw invalidDuration(raw);
     }
     const multiplier = DURATION_MULTIPLIERS[unitRaw];
     if (!multiplier) {
-      throw new Error(`invalid duration: ${raw}`);
+      throw invalidDuration(raw);
     }
     totalMs += value * multiplier;
     consumed += full.length;
   }
 
   if (consumed !== trimmed.length || consumed === 0) {
-    throw new Error(`invalid duration: ${raw}`);
+    throw invalidDuration(raw);
   }
 
-  const ms = Math.round(totalMs);
-  if (!Number.isFinite(ms)) {
-    throw new Error(`invalid duration: ${raw}`);
-  }
-  return ms;
+  return roundSafeDurationMs(raw, totalMs);
 }

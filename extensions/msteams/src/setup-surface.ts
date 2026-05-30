@@ -1,10 +1,10 @@
-import { spawn } from "node:child_process";
 import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
   createTopLevelChannelGroupPolicySetter,
   mergeAllowFromEntries,
   splitSetupEntries,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type OpenClawConfig,
@@ -17,8 +17,10 @@ import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { createMSTeamsSetupWizardBase, msteamsSetupAdapter } from "./setup-core.js";
+import { createMSTeamsSetupWizardBase } from "./setup-core.js";
 import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
+
+const t = createSetupTranslator();
 
 const channel = "msteams" as const;
 const setMSTeamsAllowFrom = createTopLevelChannelAllowFromSetter({
@@ -30,19 +32,9 @@ const setMSTeamsGroupPolicy = createTopLevelChannelGroupPolicySetter({
 });
 
 export function openDelegatedOAuthUrl(url: string): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const cmd = process.platform === "darwin" ? "open" : "xdg-open";
-    const child = spawn(cmd, [url], { stdio: "ignore", shell: false });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      const reason = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
-      reject(new Error(`${cmd} failed with ${reason}`));
-    });
-  });
+  return Promise.reject(
+    new Error(`Automatic browser launch is not available. Open this URL manually: ${url}`),
+  );
 }
 
 function looksLikeGuid(value: string): boolean {
@@ -56,26 +48,29 @@ async function promptMSTeamsAllowFrom(params: {
   const existing = params.cfg.channels?.msteams?.allowFrom ?? [];
   await params.prompter.note(
     [
-      "Allowlist MS Teams DMs by display name, UPN/email, or user id.",
-      "We resolve names to user IDs via Microsoft Graph when credentials allow.",
-      "Examples:",
+      t("wizard.msteams.allowlistIntro"),
+      t("wizard.msteams.allowlistResolve"),
+      t("wizard.msteams.examples"),
       "- alex@example.com",
       "- Alex Johnson",
       "- 00000000-0000-0000-0000-000000000000",
     ].join("\n"),
-    "MS Teams allowlist",
+    t("wizard.msteams.allowlistTitle"),
   );
 
   while (true) {
     const entry = await params.prompter.text({
-      message: "MS Teams allowFrom (usernames or ids)",
+      message: t("wizard.msteams.allowFromPrompt"),
       placeholder: "alex@example.com, Alex Johnson",
       initialValue: existing[0] ? existing[0] : undefined,
-      validate: (value) => (value.trim() ? undefined : "Required"),
+      validate: (value) => (value.trim() ? undefined : t("common.required")),
     });
     const parts = splitSetupEntries(entry);
     if (parts.length === 0) {
-      await params.prompter.note("Enter at least one user.", "MS Teams allowlist");
+      await params.prompter.note(
+        t("wizard.msteams.enterAtLeastOneUser"),
+        t("wizard.msteams.allowlistTitle"),
+      );
       continue;
     }
 
@@ -88,8 +83,8 @@ async function promptMSTeamsAllowFrom(params: {
       const ids = parts.filter((part) => looksLikeGuid(part));
       if (ids.length !== parts.length) {
         await params.prompter.note(
-          "Graph lookup unavailable. Use user IDs only.",
-          "MS Teams allowlist",
+          t("wizard.msteams.graphLookupUnavailable"),
+          t("wizard.msteams.allowlistTitle"),
         );
         continue;
       }
@@ -100,8 +95,10 @@ async function promptMSTeamsAllowFrom(params: {
     const unresolved = resolved.filter((item) => !item.resolved || !item.id);
     if (unresolved.length > 0) {
       await params.prompter.note(
-        `Could not resolve: ${unresolved.map((item) => item.input).join(", ")}`,
-        "MS Teams allowlist",
+        t("wizard.msteams.couldNotResolve", {
+          entries: unresolved.map((item) => item.input).join(", "),
+        }),
+        t("wizard.msteams.allowlistTitle"),
       );
       continue;
     }
@@ -192,38 +189,42 @@ async function resolveMSTeamsGroupAllowlist(params: {
     const summary: string[] = [];
     if (resolvedChannels.length > 0) {
       summary.push(
-        `Resolved channels: ${resolvedChannels
-          .map((entry) => entry.channelId)
-          .filter(Boolean)
-          .join(", ")}`,
+        t("wizard.msteams.resolvedChannels", {
+          entries: resolvedChannels
+            .map((entry) => entry.channelId)
+            .filter(Boolean)
+            .join(", "),
+        }),
       );
     }
     if (resolvedTeams.length > 0) {
       summary.push(
-        `Resolved teams: ${resolvedTeams
-          .map((entry) => entry.teamId)
-          .filter(Boolean)
-          .join(", ")}`,
+        t("wizard.msteams.resolvedTeams", {
+          entries: resolvedTeams
+            .map((entry) => entry.teamId)
+            .filter(Boolean)
+            .join(", "),
+        }),
       );
     }
     if (unresolved.length > 0) {
-      summary.push(`Unresolved (kept as typed): ${unresolved.join(", ")}`);
+      summary.push(t("wizard.msteams.unresolvedKept", { entries: unresolved.join(", ") }));
     }
     if (summary.length > 0) {
-      await params.prompter.note(summary.join("\n"), "MS Teams channels");
+      await params.prompter.note(summary.join("\n"), t("wizard.msteams.channelsLabel"));
     }
     return resolvedEntries;
   } catch (err) {
     await params.prompter.note(
-      `Channel lookup failed; keeping entries as typed. ${formatUnknownError(err)}`,
-      "MS Teams channels",
+      t("wizard.msteams.channelLookupFailed", { error: formatUnknownError(err) }),
+      t("wizard.msteams.channelsLabel"),
     );
     return resolvedEntries;
   }
 }
 
 const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
-  label: "MS Teams channels",
+  label: t("wizard.msteams.channelsLabel"),
   placeholder: "Team Name/Channel Name, teamId/conversationId",
   currentPolicy: ({ cfg }) => cfg.channels?.msteams?.groupPolicy ?? "allowlist",
   currentEntries: ({ cfg }) => listMSTeamsGroupEntries(cfg),
@@ -244,8 +245,6 @@ const msteamsDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   promptAllowFrom: promptMSTeamsAllowFrom,
 });
 
-export { msteamsSetupAdapter } from "./setup-core.js";
-
 const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 
 export const msteamsSetupWizard: ChannelSetupWizard = {
@@ -263,7 +262,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
     const finalCreds = resolveMSTeamsCredentials(next.channels?.msteams);
     if (finalCreds?.type === "secret") {
       const enableDelegated = await params.prompter.confirm({
-        message: "Enable delegated auth? (required for reactions and write operations)",
+        message: t("wizard.msteams.delegatedAuthPrompt"),
         initialValue: false,
       });
       if (enableDelegated) {
@@ -279,12 +278,10 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
         };
         try {
           const { loginMSTeamsDelegated } = await import("./oauth.js");
-          const { shouldUseManualOAuthFlow } = await import("./oauth.flow.js");
-          const isRemote = Boolean(process.env.SSH_TTY || process.env.SSH_CONNECTION);
-          const progress = params.prompter.progress("MSTeams Delegated OAuth");
+          const progress = params.prompter.progress(t("wizard.msteams.delegatedOAuthProgress"));
           const tokens = await loginMSTeamsDelegated(
             {
-              isRemote: shouldUseManualOAuthFlow(isRemote),
+              isRemote: true,
               openUrl: openDelegatedOAuthUrl,
               log: (msg) => params.prompter.note(msg),
               note: (msg, title) => params.prompter.note(msg, title),
@@ -298,12 +295,12 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
             },
           );
           saveDelegatedTokens(tokens);
-          progress.stop("Delegated auth configured");
+          progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
         } catch (err) {
           await params.prompter.note(
             `Delegated auth setup failed: ${formatUnknownError(err)}\n` +
-              "You can retry later via the setup wizard.",
-            "MS Teams delegated auth",
+              t("wizard.msteams.delegatedAuthRetry"),
+            t("wizard.msteams.delegatedAuthTitle"),
           );
         }
       }

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -226,46 +227,56 @@ describe("local-heavy-check-runtime", () => {
   });
 
   it("serializes local oxlint runs onto one thread on constrained hosts", () => {
-    const { args } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
+    const { args, env } = applyLocalOxlintPolicy([], makeEnv(), CONSTRAINED_HOST);
 
     expect(args).toEqual([
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
       "--report-unused-disable-directives-severity",
       "error",
       "--threads=1",
     ]);
+    expect(env.GOGC).toBe("30");
+    expect(env.GOMEMLIMIT).toBe("3GiB");
   });
 
   it("defaults local oxlint to one thread on roomy hosts", () => {
-    const { args } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
+    const { args, env } = applyLocalOxlintPolicy([], makeEnv(), ROOMY_HOST);
 
     expect(args).toEqual([
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
       "--report-unused-disable-directives-severity",
       "error",
       "--threads=1",
     ]);
+    expect(env.GOGC).toBe("30");
+    expect(env.GOMEMLIMIT).toBe("3GiB");
   });
 
   it("honors an explicit oxlint thread count", () => {
-    const { args } = applyLocalOxlintPolicy(["--threads=8"], makeEnv(), ROOMY_HOST);
+    const { args, env } = applyLocalOxlintPolicy(
+      ["--threads=8"],
+      makeEnv({ GOGC: "80", GOMEMLIMIT: "5GiB" }),
+      ROOMY_HOST,
+    );
 
     expect(args).toEqual([
       "--threads=8",
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
       "--report-unused-disable-directives-severity",
       "error",
     ]);
+    expect(env.GOGC).toBe("80");
+    expect(env.GOMEMLIMIT).toBe("5GiB");
   });
 
   it("allows forcing full-speed oxlint runs on roomy hosts", () => {
-    const { args } = applyLocalOxlintPolicy(
+    const { args, env } = applyLocalOxlintPolicy(
       [],
       makeEnv({
         OPENCLAW_LOCAL_CHECK_MODE: "full",
@@ -276,10 +287,12 @@ describe("local-heavy-check-runtime", () => {
     expect(args).toEqual([
       "--type-aware",
       "--tsconfig",
-      "tsconfig.oxlint.json",
+      "config/tsconfig/oxlint.json",
       "--report-unused-disable-directives-severity",
       "error",
     ]);
+    expect(env.GOGC).toBeUndefined();
+    expect(env.GOMEMLIMIT).toBeUndefined();
   });
 
   it("skips the heavy-check lock for explicit oxlint file targets", () => {
@@ -352,6 +365,36 @@ describe("local-heavy-check-runtime", () => {
 
     release();
     expect(fs.existsSync(lockDir)).toBe(false);
+  });
+
+  it("uses a worktree-local heavy-check lock when explicitly requested", () => {
+    const repoRoot = createTempDir("openclaw-local-heavy-check-worktree-");
+    execFileSync("git", ["init"], { cwd: repoRoot, stdio: "ignore" });
+    const cwd = path.join(repoRoot, "nested", "tooling");
+    fs.mkdirSync(cwd, { recursive: true });
+    const commonLockDir = path.join(repoRoot, ".git", "openclaw-local-checks", "heavy-check.lock");
+    const worktreeLockDir = path.join(
+      repoRoot,
+      ".artifacts",
+      "openclaw-local-checks",
+      "heavy-check.lock",
+    );
+    const nestedLockDir = path.join(cwd, ".artifacts", "openclaw-local-checks", "heavy-check.lock");
+
+    const release = acquireLocalHeavyCheckLockSync({
+      cwd,
+      env: makeEnv({ OPENCLAW_HEAVY_CHECK_LOCK_SCOPE: "worktree" }),
+      toolName: "check:changed",
+    });
+
+    const owner = JSON.parse(fs.readFileSync(path.join(worktreeLockDir, "owner.json"), "utf8"));
+    expect(owner.tool).toBe("check:changed");
+    expect(fs.existsSync(worktreeLockDir)).toBe(true);
+    expect(fs.existsSync(commonLockDir)).toBe(false);
+    expect(fs.existsSync(nestedLockDir)).toBe(false);
+
+    release();
+    expect(fs.existsSync(worktreeLockDir)).toBe(false);
   });
 
   it("cleans up stale legacy test locks when acquiring the shared heavy-check lock", () => {

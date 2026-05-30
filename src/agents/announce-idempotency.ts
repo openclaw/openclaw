@@ -1,4 +1,4 @@
-export type AnnounceIdFromChildRunParams = {
+type AnnounceIdFromChildRunParams = {
   childSessionKey: string;
   childRunId: string;
 };
@@ -9,17 +9,4 @@ export function buildAnnounceIdFromChildRun(params: AnnounceIdFromChildRunParams
 
 export function buildAnnounceIdempotencyKey(announceId: string): string {
   return `announce:${announceId}`;
-}
-
-export function resolveQueueAnnounceId(params: {
-  announceId?: string;
-  sessionKey: string;
-  enqueuedAt: number;
-}): string {
-  const announceId = params.announceId?.trim();
-  if (announceId) {
-    return announceId;
-  }
-  // Backward-compatible fallback for queue items that predate announceId.
-  return `legacy:${params.sessionKey}:${params.enqueuedAt}`;
 }

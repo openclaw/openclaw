@@ -1,12 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
+import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import {
-  resolveDirectDmAuthorizationOutcome,
-  resolveSenderCommandAuthorizationWithRuntime,
-} from "openclaw/plugin-sdk/command-auth";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
@@ -18,6 +14,7 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { registerPluginHttpRoute, resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
@@ -33,14 +30,14 @@ import {
   type ZaloMessage,
   type ZaloUpdate,
 } from "./api.js";
-import {
-  evaluateZaloGroupAccess,
-  isZaloSenderAllowed,
-  resolveZaloRuntimeGroupPolicy,
-} from "./group-access.js";
+import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { getZaloRuntime } from "./runtime.js";
 export type { ZaloRuntimeEnv } from "./monitor.types.js";
+import {
+  prepareZaloDurableReplyPayload,
+  resolveZaloDurableReplyOptions,
+} from "./monitor-durable.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
@@ -83,6 +80,7 @@ type ZaloProcessingContext = {
   statusSink?: ZaloStatusSink;
   fetcher?: ZaloFetch;
 };
+
 type ZaloPollingLoopParams = ZaloProcessingContext & {
   abortSignal: AbortSignal;
   isStopped: () => boolean;
@@ -108,7 +106,6 @@ function registerSharedHostedMediaRoute(params: {
     auth: "plugin",
     match: "prefix",
     path: params.path,
-    replaceExisting: true,
     pluginId: "zalo",
     source: "zalo-hosted-media",
     accountId: params.accountId,
@@ -381,13 +378,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
   if (photo_url) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo_url, maxBytes });
-      const saved = await core.channel.media.saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType,
-        "inbound",
-        maxBytes,
-      );
+      const saved = await core.channel.media.saveRemoteMedia({ url: photo_url, maxBytes });
       mediaPath = saved.path;
       mediaType = saved.contentType;
     } catch (err) {
@@ -422,68 +413,71 @@ async function authorizeZaloMessage(
   const senderName = from.display_name ?? from.name;
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
-  const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
-  const configuredGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
-  const groupAllowFrom =
-    configuredGroupAllowFrom.length > 0 ? configuredGroupAllowFrom : configAllowFrom;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
-  const groupAccess = isGroup
-    ? evaluateZaloGroupAccess({
-        providerConfigPresent: config.channels?.zalo !== undefined,
-        configuredGroupPolicy: account.config.groupPolicy,
-        defaultGroupPolicy,
-        groupAllowFrom,
-        senderId,
-      })
-    : undefined;
-  if (groupAccess) {
+  const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");
+  const { groupPolicy, providerMissingFallbackApplied } = resolveZaloRuntimeGroupPolicy({
+    providerConfigPresent: config.channels?.zalo !== undefined,
+    groupPolicy: account.config.groupPolicy,
+    defaultGroupPolicy,
+  });
+  const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
+  const access = await resolveStableChannelMessageIngress({
+    channelId: "zalo",
+    accountId: account.accountId,
+    identity: {
+      key: "zalo-user-id",
+      normalize: normalizeZaloAllowEntry,
+      sensitivity: "pii",
+      entryIdPrefix: "zalo-entry",
+    },
+    cfg: config,
+    readStoreAllowFrom: async () => await pairing.readAllowFromStore(),
+    subject: { stableId: senderId },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: chatId,
+    },
+    providerMissingFallbackApplied,
+    dmPolicy,
+    groupPolicy,
+    policy: { groupAllowFromFallbackToAllowFrom: true },
+    allowFrom: normalizeStringEntries(account.config.allowFrom),
+    groupAllowFrom: normalizeStringEntries(account.config.groupAllowFrom),
+    command: shouldComputeAuth ? {} : undefined,
+  });
+  const senderAccess = access.senderAccess;
+  if (isGroup) {
     warnMissingProviderGroupPolicyFallbackOnce({
-      providerMissingFallbackApplied: groupAccess.providerMissingFallbackApplied,
+      providerMissingFallbackApplied: senderAccess.providerMissingFallbackApplied,
       providerKey: "zalo",
       accountId: account.accountId,
       log: (message) => logVerbose(core, runtime, message),
     });
-    if (!groupAccess.allowed) {
-      if (groupAccess.reason === "disabled") {
+    if (!senderAccess.allowed) {
+      if (senderAccess.reasonCode === "group_policy_disabled") {
         logVerbose(core, runtime, `zalo: drop group ${chatId} (groupPolicy=disabled)`);
-      } else if (groupAccess.reason === "empty_allowlist") {
+      } else if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
         logVerbose(
           core,
           runtime,
           `zalo: drop group ${chatId} (groupPolicy=allowlist, no groupAllowFrom)`,
         );
-      } else if (groupAccess.reason === "sender_not_allowlisted") {
+      } else if (senderAccess.reasonCode === "group_policy_not_allowlisted") {
         logVerbose(core, runtime, `zalo: drop group sender ${senderId} (groupPolicy=allowlist)`);
       }
       return undefined;
     }
   }
 
-  const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");
-  const { senderAllowedForCommands, commandAuthorized } =
-    await resolveSenderCommandAuthorizationWithRuntime({
-      cfg: config,
-      rawBody,
-      isGroup,
-      dmPolicy,
-      configuredAllowFrom: configAllowFrom,
-      configuredGroupAllowFrom: groupAllowFrom,
-      senderId,
-      isSenderAllowed: isZaloSenderAllowed,
-      readAllowFromStore: pairing.readAllowFromStore,
-      runtime: core.channel.commands,
-    });
-
-  const directDmOutcome = resolveDirectDmAuthorizationOutcome({
-    isGroup,
-    dmPolicy,
-    senderAllowedForCommands,
-  });
-  if (directDmOutcome === "disabled") {
+  if (
+    !isGroup &&
+    senderAccess.decision === "block" &&
+    senderAccess.reasonCode === "dm_policy_disabled"
+  ) {
     logVerbose(core, runtime, `Blocked zalo DM from ${senderId} (dmPolicy=disabled)`);
     return undefined;
   }
-  if (directDmOutcome === "unauthorized") {
+  if (!isGroup && senderAccess.decision !== "allow") {
     if (dmPolicy === "pairing") {
       await pairing.issueChallenge({
         senderId,
@@ -519,7 +513,7 @@ async function authorizeZaloMessage(
 
   return {
     chatId,
-    commandAuthorized,
+    commandAuthorized: access.commandAccess.requested ? access.commandAccess.authorized : undefined,
     isGroup,
     rawBody,
     senderId,
@@ -583,36 +577,48 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     body: rawBody,
   });
 
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
-    BodyForAgent: rawBody,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    From: isGroup ? `zalo:group:${chatId}` : `zalo:${senderId}`,
-    To: `zalo:${chatId}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: isGroup ? "group" : "direct",
-    ConversationLabel: fromLabel,
-    SenderName: senderName || undefined,
-    SenderId: senderId,
-    CommandAuthorized: commandAuthorized,
-    Provider: "zalo",
-    Surface: "zalo",
-    MessageSid: message_id,
-    MediaPath: mediaPath,
-    MediaType: mediaType,
-    MediaUrl: mediaPath,
-    OriginatingChannel: "zalo",
-    OriginatingTo: `zalo:${chatId}`,
-  });
-
-  await core.channel.session.recordInboundSession({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
-    onRecordError: (err) => {
-      runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+  const ctxPayload = core.channel.inbound.buildContext({
+    channel: "zalo",
+    accountId: route.accountId,
+    messageId: message_id,
+    timestamp: date ? date * 1000 : undefined,
+    from: isGroup ? `zalo:group:${chatId}` : `zalo:${senderId}`,
+    sender: {
+      id: senderId,
+      name: senderName || undefined,
+    },
+    conversation: {
+      kind: isGroup ? "group" : "direct",
+      id: chatId,
+      label: fromLabel,
+    },
+    route: {
+      agentId: route.agentId,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+    },
+    reply: {
+      to: `zalo:${chatId}`,
+    },
+    message: {
+      body,
+      bodyForAgent: rawBody,
+      rawBody,
+      commandBody: rawBody,
+    },
+    media:
+      mediaPath || mediaType
+        ? [
+            {
+              path: mediaPath,
+              url: mediaPath,
+              contentType: mediaType,
+            },
+          ]
+        : undefined,
+    extra: {
+      CommandAuthorized: commandAuthorized,
+      GroupSubject: undefined,
     },
   });
 
@@ -621,11 +627,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     channel: "zalo",
     accountId: account.accountId,
   });
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg: config,
-    agentId: route.agentId,
-    channel: "zalo",
-    accountId: account.accountId,
+  const replyPipeline = {
     typing: {
       start: async () => {
         await sendChatAction(
@@ -638,7 +640,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           ZALO_TYPING_TIMEOUT_MS,
         );
       },
-      onStartError: (err) => {
+      onStartError: (err: unknown) => {
         logTypingFailure({
           log: (message) => logVerbose(core, runtime, message),
           channel: "zalo",
@@ -648,13 +650,32 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
         });
       },
     },
-  });
+  };
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
+  await core.channel.inbound.dispatchReply({
     cfg: config,
-    dispatcherOptions: {
-      ...replyPipeline,
+    channel: "zalo",
+    accountId: account.accountId,
+    agentId: route.agentId,
+    routeSessionKey: route.sessionKey,
+    storePath,
+    ctxPayload,
+    recordInboundSession: core.channel.session.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher:
+      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      preparePayload: (payload) =>
+        prepareZaloDurableReplyPayload({
+          payload,
+          tableMode,
+          convertMarkdownTables: core.channel.text.convertMarkdownTables,
+        }),
+      durable: (payload, info) =>
+        resolveZaloDurableReplyOptions({
+          payload,
+          infoKind: info.kind,
+          chatId,
+        }),
       deliver: async (payload) => {
         await deliverZaloReply({
           payload,
@@ -671,15 +692,21 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           accountId: account.accountId,
           statusSink,
           fetcher,
-          tableMode,
+          tableMode: "off",
         });
+      },
+      onDelivered: () => {
+        statusSink?.({ lastOutboundAt: Date.now() });
       },
       onError: (err, info) => {
         runtime.error?.(`[${account.accountId}] Zalo ${info.kind} reply failed: ${String(err)}`);
       },
     },
-    replyOptions: {
-      onModelSelected,
+    replyPipeline,
+    record: {
+      onRecordError: (err) => {
+        runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+      },
     },
   });
 }
@@ -972,8 +999,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   }
 }
 
-export const __testing = {
-  evaluateZaloGroupAccess,
+export const testing = {
   resolveZaloRuntimeGroupPolicy,
   clearHostedMediaRouteRefsForTest: () => hostedMediaRouteRefs.clear(),
 };
+export { testing as __testing };

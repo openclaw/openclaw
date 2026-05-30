@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
@@ -62,7 +62,7 @@ vi.mock("./channel-access-token.js", () => ({
   resolveLineChannelAccessToken: resolveLineChannelAccessTokenMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", () => ({
   recordChannelActivity: recordChannelActivityMock,
 }));
 
@@ -93,11 +93,25 @@ const LINE_TEST_CFG = {
 };
 
 describe("LINE send helpers", () => {
+  const fixedSentAt = 1_800_000_000_000;
+
   beforeAll(async () => {
     sendModule = await import("./send.js");
   });
 
+  afterAll(() => {
+    vi.doUnmock("@line/bot-sdk");
+    vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./channel-access-token.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-activity-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
+    vi.setSystemTime(fixedSentAt);
     pushMessageMock.mockReset();
     replyMessageMock.mockReset();
     showLoadingAnimationMock.mockReset();
@@ -165,7 +179,40 @@ describe("LINE send helpers", () => {
       direction: "outbound",
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: pushed image to U123");
-    expect(result).toEqual({ messageId: "push", chatId: "U123" });
+    expect(result).toEqual({
+      chatId: "U123",
+      messageId: "push",
+      receipt: {
+        parts: [
+          {
+            index: 0,
+            kind: "media",
+            platformMessageId: "push",
+            raw: {
+              channel: "line",
+              chatId: "U123",
+              conversationId: "U123",
+              messageId: "push",
+              meta: { messageCount: 1 },
+            },
+            threadId: "U123",
+          },
+        ],
+        platformMessageIds: ["push"],
+        primaryPlatformMessageId: "push",
+        raw: [
+          {
+            channel: "line",
+            chatId: "U123",
+            conversationId: "U123",
+            messageId: "push",
+            meta: { messageCount: 1 },
+          },
+        ],
+        sentAt: fixedSentAt,
+        threadId: "U123",
+      },
+    });
   });
 
   it("replies when reply token is provided", async () => {
@@ -193,7 +240,40 @@ describe("LINE send helpers", () => {
       ],
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
-    expect(result).toEqual({ messageId: "reply", chatId: "C1" });
+    expect(result).toEqual({
+      chatId: "C1",
+      messageId: "reply",
+      receipt: {
+        parts: [
+          {
+            index: 0,
+            kind: "media",
+            platformMessageId: "reply",
+            raw: {
+              channel: "line",
+              chatId: "C1",
+              conversationId: "C1",
+              messageId: "reply",
+              meta: { messageCount: 2 },
+            },
+            threadId: "C1",
+          },
+        ],
+        platformMessageIds: ["reply"],
+        primaryPlatformMessageId: "reply",
+        raw: [
+          {
+            channel: "line",
+            chatId: "C1",
+            conversationId: "C1",
+            messageId: "reply",
+            meta: { messageCount: 2 },
+          },
+        ],
+        sentAt: fixedSentAt,
+        threadId: "C1",
+      },
+    });
   });
 
   it("sends video with explicit image preview URL", async () => {
@@ -278,6 +358,33 @@ describe("LINE send helpers", () => {
     );
   });
 
+  it("rejects lowercased LINE-shaped recipients (#81628 safety net)", async () => {
+    // 33-char value with lowercase leading char — what an upstream session-key
+    // fragment looked like before the cron-tool fix. LINE rejects with HTTP 400
+    // anyway; throwing locally keeps the failure permanent so delivery-recovery
+    // moves the entry to failed/ immediately instead of silently retrying 5×.
+    await expect(
+      sendModule.pushMessagesLine(
+        "cabcdef0123456789abcdef0123456789",
+        [{ type: "text", text: "hello" }],
+        { cfg: LINE_TEST_CFG },
+      ),
+    ).rejects.toThrow(/Recipient is not a valid LINE id/);
+    expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts case-exact LINE recipients with the leading capital preserved", async () => {
+    await sendModule.pushMessagesLine(
+      "Cabcdef0123456789abcdef0123456789",
+      [{ type: "text", text: "hello" }],
+      { cfg: LINE_TEST_CFG },
+    );
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "Cabcdef0123456789abcdef0123456789",
+      messages: [{ type: "text", text: "hello" }],
+    });
+  });
+
   it("logs HTTP body when push fails", async () => {
     const err = new Error("LINE push failed") as Error & {
       status: number;
@@ -325,7 +432,7 @@ describe("LINE send helpers", () => {
     ).resolves.toBeUndefined();
 
     expect(logVerboseMock).toHaveBeenCalledWith(
-      expect.stringContaining("line: loading animation failed (non-fatal)"),
+      "line: loading animation failed (non-fatal): Error: unsupported",
     );
   });
 
@@ -338,7 +445,7 @@ describe("LINE send helpers", () => {
     );
 
     expect(pushMessageMock).toHaveBeenCalledTimes(1);
-    const firstCall = pushMessageMock.mock.calls[0] as [
+    const firstCall = pushMessageMock.mock.calls.at(0) as [
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
     expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);

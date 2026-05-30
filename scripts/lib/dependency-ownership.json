@@ -16,24 +16,9 @@
       "class": "core-runtime",
       "risk": ["native", "terminal"]
     },
-    "@mariozechner/pi-agent-core": {
-      "owner": "capability:agent-runtime-pi",
-      "class": "default-runtime-initially",
-      "risk": ["large-transitive-cone", "agent-runtime"]
-    },
-    "@mariozechner/pi-ai": {
-      "owner": "capability:agent-runtime-pi",
-      "class": "default-runtime-initially",
-      "risk": ["large-transitive-cone", "provider-sdk-fanout"]
-    },
-    "@mariozechner/pi-coding-agent": {
-      "owner": "capability:agent-runtime-pi",
-      "class": "default-runtime-initially",
-      "risk": ["large-transitive-cone", "agent-runtime"]
-    },
-    "@mariozechner/pi-tui": {
+    "@earendil-works/pi-tui": {
       "owner": "capability:tui-pi",
-      "class": "default-runtime-initially",
+      "class": "tui-runtime",
       "risk": ["tui-runtime"]
     },
     "@modelcontextprotocol/sdk": {
@@ -46,25 +31,6 @@
       "class": "plugin-runtime",
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
-    },
-    "@napi-rs/canvas": {
-      "owner": "plugin:document-extract",
-      "class": "optional-peer-runtime",
-      "activation": [
-        "input_file.application_pdf.image_fallback",
-        "plugins.entries.document-extract.enabled"
-      ],
-      "risk": ["native", "parser", "untrusted-files"]
-    },
-    "@vincentkoc/qrcode-tui": {
-      "owner": "core:qr-setup",
-      "class": "default-runtime-initially",
-      "risk": ["terminal-rendering"]
-    },
-    "ajv": {
-      "owner": "core:json-schema-validation",
-      "class": "core-runtime",
-      "risk": ["schema-validation"]
     },
     "chalk": {
       "owner": "core:cli",
@@ -101,15 +67,10 @@
       "class": "core-runtime",
       "risk": ["file-sniffing", "untrusted-files"]
     },
-    "https-proxy-agent": {
+    "@openclaw/proxyline": {
       "owner": "core:proxy",
       "class": "core-runtime",
       "risk": ["network", "proxy"]
-    },
-    "ipaddr.js": {
-      "owner": "core:ssrf-guard",
-      "class": "core-runtime",
-      "risk": ["network-policy"]
     },
     "jiti": {
       "owner": "core:plugin-loader",
@@ -125,6 +86,11 @@
       "owner": "core:archive-handling",
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
+    },
+    "kysely": {
+      "owner": "core:sqlite-storage",
+      "class": "core-runtime",
+      "risk": ["database-query-builder"]
     },
     "linkedom": {
       "owner": "plugin:web-readability",
@@ -142,32 +108,26 @@
       "class": "default-runtime-initially",
       "risk": ["provider-sdk", "network"]
     },
-    "osc-progress": {
-      "owner": "core:terminal-progress",
+    "playwright-core": {
+      "owner": "core:browser",
       "class": "core-runtime",
-      "risk": ["terminal-rendering"]
+      "risk": ["browser-automation", "cdp"]
     },
-    "pdfjs-dist": {
+    "clawpdf": {
       "owner": "plugin:document-extract",
       "class": "plugin-runtime",
       "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
-      "risk": ["parser", "untrusted-files"]
+      "risk": ["wasm", "parser", "untrusted-files"]
     },
-    "proxy-agent": {
-      "owner": "core:proxy",
+    "qrcode": {
+      "owner": "core:qr-setup",
+      "class": "default-runtime-initially",
+      "risk": ["terminal-rendering", "png-encoding"]
+    },
+    "rastermill": {
+      "owner": "core:media",
       "class": "core-runtime",
-      "risk": ["network", "proxy"]
-    },
-    "semver": {
-      "owner": "core:package-versioning",
-      "class": "core-runtime",
-      "risk": ["version-parser"]
-    },
-    "sharp": {
-      "owner": "plugin:media-understanding-core",
-      "class": "plugin-runtime",
-      "activation": ["media-understanding-core.image-ops"],
-      "risk": ["native", "parser", "untrusted-files"]
+      "risk": ["wasm", "parser", "untrusted-files", "native-tool-fallback"]
     },
     "sqlite-vec": {
       "owner": "capability:memory-sqlite-vec",

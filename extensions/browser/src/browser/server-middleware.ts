@@ -3,7 +3,7 @@ import express from "express";
 import { browserMutationGuardMiddleware } from "./csrf.js";
 import { isAuthorizedBrowserRequest } from "./http-auth.js";
 
-export const BROWSER_AUTH_VERIFIED_FLAG = "__openclawBrowserAuthVerified";
+const BROWSER_AUTH_VERIFIED_FLAG = "__openclawBrowserAuthVerified";
 
 type BrowserAuthMarkedRequest = Request & {
   [BROWSER_AUTH_VERIFIED_FLAG]?: boolean;
@@ -27,8 +27,15 @@ export function installBrowserCommonMiddleware(app: Express) {
         abort();
       }
     });
-    // Make the signal available to browser route handlers (best-effort).
-    (req as unknown as { signal?: AbortSignal }).signal = ctrl.signal;
+    // Make the signal available to browser route handlers on Node versions
+    // whose IncomingMessage does not already expose a native read-only signal.
+    const requestWithSignal = req as Request & { signal?: AbortSignal };
+    if (!(requestWithSignal.signal instanceof AbortSignal)) {
+      Object.defineProperty(req, "signal", {
+        value: ctrl.signal,
+        configurable: true,
+      });
+    }
     next();
   });
   app.use(express.json({ limit: "1mb" }));

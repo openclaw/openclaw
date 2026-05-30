@@ -1,6 +1,16 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeMediaProviderId } from "./provider-registry.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { kindFromMime, mimeTypeFromFilePath } from "../media/mime.js";
+import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
+import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
+import { describeImageWithModel } from "./image-runtime.js";
+import {
+  buildMediaUnderstandingRegistry,
+  getMediaUnderstandingProvider,
+  normalizeMediaProviderId,
+} from "./provider-registry.js";
+import { resolveMediaRuntimeTimeoutMs } from "./resolve.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
@@ -12,6 +22,7 @@ import type {
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
   DescribeVideoFileParams,
+  ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
@@ -20,6 +31,7 @@ export type {
   DescribeImageFileParams,
   DescribeImageFileWithModelParams,
   DescribeVideoFileParams,
+  ExtractStructuredWithModelParams,
   RunMediaUnderstandingFileParams,
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
@@ -40,45 +52,133 @@ function resolveDecisionFailureReason(
   return normalizeDecisionReason(findDecisionReason(decision, "failed"));
 }
 
-function buildFileContext(params: { filePath: string; mime?: string }) {
+function buildFileContext(params: {
+  filePath: string;
+  mediaUrl?: string;
+  mime?: string;
+  capability?: MediaUnderstandingCapability;
+}) {
+  const remoteRef =
+    params.mediaUrl ??
+    (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
+  const extensionMime = remoteRef ? mimeTypeFromFilePath(remoteRef) : undefined;
+  const extensionKind = kindFromMime(extensionMime);
+  const mediaType =
+    params.mime ??
+    (remoteRef && params.capability && extensionKind === params.capability
+      ? `${params.capability}/*`
+      : extensionMime) ??
+    (remoteRef && params.capability ? `${params.capability}/*` : undefined);
+  if (remoteRef) {
+    return {
+      MediaUrl: remoteRef,
+      MediaType: mediaType,
+    };
+  }
   return {
     MediaPath: params.filePath,
-    MediaType: params.mime,
+    MediaType: mediaType,
   };
+}
+
+function isRemoteMediaReference(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function concreteMime(mime: string | undefined): string | undefined {
+  const normalized = mime?.trim();
+  if (!normalized || normalized.endsWith("/*")) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function resolveFileLocalRoots(filePath: string): string[] | undefined {
+  return isRemoteMediaReference(filePath) ? undefined : [path.dirname(filePath)];
+}
+
+function basenameFromMediaReference(value: string): string {
+  if (isRemoteMediaReference(value)) {
+    try {
+      const url = new URL(value);
+      return path.basename(url.pathname) || "image";
+    } catch {}
+  }
+  return path.basename(value);
+}
+
+function hasStructuredImageInput(input: ExtractStructuredWithModelParams["input"]): boolean {
+  return input.some((entry) => entry.type === "image");
 }
 
 export async function runMediaUnderstandingFile(
   params: RunMediaUnderstandingFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const ctx = buildFileContext(params);
+  const requestPrompt = params.prompt?.trim();
+  const requestTimeoutSeconds =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? Math.ceil(params.timeoutMs / 1000)
+      : undefined;
+  const cfg =
+    requestPrompt || requestTimeoutSeconds !== undefined
+      ? {
+          ...params.cfg,
+          tools: {
+            ...params.cfg.tools,
+            media: {
+              ...params.cfg.tools?.media,
+              [params.capability]: {
+                ...params.cfg.tools?.media?.[params.capability],
+                ...(requestPrompt
+                  ? {
+                      prompt: requestPrompt,
+                      _requestPromptOverride: requestPrompt,
+                    }
+                  : {}),
+                ...(requestTimeoutSeconds !== undefined
+                  ? { timeoutSeconds: requestTimeoutSeconds }
+                  : {}),
+              },
+            },
+          },
+        }
+      : params.cfg;
+  const ctx = buildFileContext({ ...params, capability: params.capability });
   const attachments = normalizeMediaAttachments(ctx);
   if (attachments.length === 0) {
-    return { text: undefined };
+    return {
+      text: undefined,
+      decision: { capability: params.capability, outcome: "no-attachment", attachments: [] },
+    };
   }
-  const config = params.cfg.tools?.media?.[params.capability];
+  const config = cfg.tools?.media?.[params.capability];
   if (config?.enabled === false) {
     return {
       text: undefined,
       provider: undefined,
       model: undefined,
       output: undefined,
+      decision: { capability: params.capability, outcome: "disabled", attachments: [] },
     };
   }
 
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
+  const providerRegistry = buildProviderRegistry(undefined, cfg);
   const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: [path.dirname(params.filePath)],
-    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+    localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
+    ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
   });
 
   try {
     const result = await runCapability({
       capability: params.capability,
-      cfg: params.cfg,
+      cfg,
       ctx,
       attachments: cache,
       media: attachments,
       agentDir: params.agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       providerRegistry,
       config,
       activeModel: params.activeModel,
@@ -93,12 +193,16 @@ export async function runMediaUnderstandingFile(
       (entry) => entry.kind === KIND_BY_CAPABILITY[params.capability],
     );
     const text = output?.text?.trim();
-    return {
+    const fileResult: RunMediaUnderstandingFileResult = {
       text: text || undefined,
       provider: output?.provider,
       model: output?.model,
       output,
     };
+    if (result.decision) {
+      fileResult.decision = result.decision;
+    }
+    return fileResult;
   } finally {
     await cache.cleanup();
   }
@@ -111,21 +215,100 @@ export async function describeImageFile(
 }
 
 export async function describeImageFileWithModel(params: DescribeImageFileWithModelParams) {
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
-  if (!provider?.describeImage) {
-    throw new Error(`Provider does not support image analysis: ${params.provider}`);
-  }
-  const buffer = await fs.readFile(params.filePath);
-  return await provider.describeImage({
-    buffer,
-    fileName: path.basename(params.filePath),
+  const image = await readImageDescriptionInput({
+    filePath: params.filePath,
+    mediaUrl: params.mediaUrl,
     mime: params.mime,
+    cfg: params.cfg,
+    timeoutMs,
+  });
+  const normalizedImage = await normalizeImageDescriptionInput({
+    buffer: image.buffer,
+    fileName: image.fileName,
+    mime: image.mime,
+    maxBytes: DEFAULT_MAX_BYTES.image,
+  });
+  const describeImage = provider?.describeImage ?? describeImageWithModel;
+  return await describeImage({
+    buffer: normalizedImage.buffer,
+    fileName: image.fileName,
+    mime: normalizedImage.mime,
     provider: params.provider,
     model: params.model,
     prompt: params.prompt,
     maxTokens: params.maxTokens,
+    timeoutMs,
+    cfg: params.cfg,
+    agentDir: params.agentDir ?? "",
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+}
+
+async function readImageDescriptionInput(params: {
+  filePath: string;
+  mediaUrl?: string;
+  mime?: string;
+  cfg: OpenClawConfig;
+  timeoutMs: number;
+}): Promise<{ buffer: Buffer; fileName: string; mime?: string }> {
+  const remoteRef =
+    params.mediaUrl ??
+    (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
+  if (!remoteRef) {
+    return {
+      buffer: (await readLocalFileSafely({ filePath: params.filePath })).buffer,
+      fileName: basenameFromMediaReference(params.filePath),
+      mime: params.mime,
+    };
+  }
+  const attachments = normalizeMediaAttachments(
+    buildFileContext({ ...params, capability: "image" }),
+  );
+  const cache = createMediaAttachmentCache(attachments, {
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+  });
+  try {
+    const media = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: DEFAULT_MAX_BYTES.image,
+      timeoutMs: params.timeoutMs,
+    });
+    return {
+      buffer: media.buffer,
+      fileName: media.fileName || basenameFromMediaReference(remoteRef),
+      mime: concreteMime(params.mime) ?? media.mime,
+    };
+  } finally {
+    await cache.cleanup();
+  }
+}
+
+export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
+  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
+  if (!hasStructuredImageInput(params.input)) {
+    throw new Error("Structured extraction requires at least one image input.");
+  }
+  const provider = getMediaUnderstandingProvider(
+    params.provider,
+    buildMediaUnderstandingRegistry(undefined, params.cfg),
+  );
+  if (!provider?.extractStructured) {
+    throw new Error(`Provider does not support structured extraction: ${params.provider}`);
+  }
+  return await provider.extractStructured({
+    input: params.input,
+    instructions: params.instructions,
+    schemaName: params.schemaName,
+    jsonSchema: params.jsonSchema,
+    jsonMode: params.jsonMode,
+    provider: params.provider,
+    model: params.model,
+    profile: params.profile,
+    preferredProfile: params.preferredProfile,
+    authStore: params.authStore,
     timeoutMs,
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
@@ -140,7 +323,7 @@ export async function describeVideoFile(
 
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
-): Promise<{ text: string | undefined }> {
+): Promise<RunMediaUnderstandingFileResult> {
   const cfg =
     params.language || params.prompt
       ? {
@@ -161,5 +344,5 @@ export async function transcribeAudioFile(
         }
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
-  return { text: result.text };
+  return result;
 }

@@ -1,5 +1,5 @@
 import {
-  DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+  DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
   resolveCronStyleNow,
   SILENT_REPLY_TOKEN,
@@ -31,7 +31,7 @@ export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
 ].join(" ");
 
-export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
+const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
   "Pre-compaction memory flush turn.",
   "The session is near auto-compaction; capture durable memories to disk.",
   MEMORY_FLUSH_TARGET_HINT,
@@ -113,7 +113,7 @@ export function buildMemoryFlushPlan(
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
   const reserveTokensFloor =
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
-    DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+    DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
@@ -132,6 +132,7 @@ export function buildMemoryFlushPlan(
     softThresholdTokens,
     forceFlushTranscriptBytes,
     reserveTokensFloor,
+    model: defaults?.model?.trim() || undefined,
     prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
     systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,
