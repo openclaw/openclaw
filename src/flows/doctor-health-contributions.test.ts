@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   shortenHomePath: vi.fn((p: string) => p),
+  checkGatewayHealth: vi.fn(),
   formatCliCommand: vi.fn((cmd: string) => cmd),
 }));
 
@@ -39,6 +40,10 @@ vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () =>
 
 vi.mock("./doctor-core-checks.js", () => ({
   registerCoreHealthChecks: mocks.registerCoreHealthChecks,
+  buildGatewayTokenSecretRefFixHint: vi.fn(() => "Fix the SecretRef."),
+  buildGatewayTokenSecretRefUnavailableMessage: vi.fn(
+    () => "Gateway token SecretRef could not be resolved.",
+  ),
 }));
 
 vi.mock("./bundled-health-checks.js", () => ({
@@ -85,6 +90,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
+  randomToken: vi.fn(() => "generated-token"),
 }));
 
 vi.mock("../config/logging.js", () => ({
@@ -93,6 +99,12 @@ vi.mock("../config/logging.js", () => ({
 
 vi.mock("../utils.js", () => ({
   shortenHomePath: mocks.shortenHomePath,
+  isRecord: (value: unknown) =>
+    typeof value === "object" && value !== null && !Array.isArray(value),
+}));
+
+vi.mock("../commands/doctor-gateway-health.js", () => ({
+  checkGatewayHealth: mocks.checkGatewayHealth,
 }));
 
 vi.mock("../cli/command-format.js", () => ({
@@ -175,6 +187,8 @@ describe("doctor health contributions", () => {
       config: {},
       issues: [],
     });
+    mocks.checkGatewayHealth.mockReset();
+    mocks.checkGatewayHealth.mockResolvedValue({ healthOk: false });
   });
 
   afterEach(() => {
@@ -316,6 +330,72 @@ describe("doctor health contributions", () => {
     );
     expect(ids.indexOf("doctor:structured-health-repairs")).toBeLessThan(
       ids.indexOf("doctor:write-config"),
+    );
+  });
+
+  it("does not probe gateway health for inline token auth", async () => {
+    const contribution = requireDoctorContribution("doctor:gateway-auth");
+    const ctx = {
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: "inline-token",
+          },
+        },
+      },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+  });
+
+  it("suppresses unresolved SecretRef token warning when the gateway is already healthy", async () => {
+    const contribution = requireDoctorContribution("doctor:gateway-auth");
+    mocks.checkGatewayHealth.mockResolvedValue({ healthOk: true });
+    const ctx = {
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_GATEWAY_TOKEN",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { nonInteractive: true },
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.checkGatewayHealth).toHaveBeenCalledWith({
+      runtime: ctx.runtime,
+      cfg: ctx.cfg,
+      timeoutMs: 3000,
+    });
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Gateway token SecretRef could not be resolved"),
+      "Gateway auth",
     );
   });
 

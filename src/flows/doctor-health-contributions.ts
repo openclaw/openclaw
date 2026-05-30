@@ -192,22 +192,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { note } = await loadNoteModule();
   const { randomToken } = await loadOnboardHelpersModule();
 
-  // Probe gateway health inline so we know if it's healthy before deciding
-  // whether to warn about a SecretRef token. The contribution order runs
-  // doctor:gateway-auth before doctor:gateway-health, so ctx.healthOk is not
-  // yet populated. We only probe when we have a SecretRef to avoid adding
-  // latency for simple inline-token cases.
-  let healthOk = ctx.healthOk;
-  if (healthOk === undefined) {
-    const { checkGatewayHealth } = await import("../commands/doctor-gateway-health.js");
-    const probeResult = await checkGatewayHealth({
-      runtime: ctx.runtime,
-      cfg: ctx.cfg,
-      timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
-    });
-    healthOk = probeResult.healthOk;
-  }
-
   if (resolveDoctorMode(ctx.cfg) !== "local" || !ctx.sourceConfigValid) {
     return;
   }
@@ -267,6 +251,16 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (gatewayTokenRef) {
     // Skip warning when gateway is confirmed healthy — the SecretRef resolves fine
     // at Gateway runtime even if the CLI doctor cannot resolve it in audit mode.
+    let healthOk = ctx.healthOk;
+    if (healthOk === undefined) {
+      const { checkGatewayHealth } = await import("../commands/doctor-gateway-health.js");
+      const probeResult = await checkGatewayHealth({
+        runtime: ctx.runtime,
+        cfg: ctx.cfg,
+        timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
+      });
+      healthOk = probeResult.healthOk;
+    }
     if (healthOk === true) {
       return;
     }
