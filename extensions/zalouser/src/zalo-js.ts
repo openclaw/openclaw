@@ -280,13 +280,15 @@ function normalizeMessageContent(content: unknown): string {
  * public Zalo CDN URL that does not require auth to GET.
  *
  * Returns null for plain-text or non-photo content (links, files, stickers
- * etc.) - those flow through `normalizeMessageContent` as text. Photo
- * detection is intentionally inclusive: explicit `type === "photo"` wins,
- * but a missing type with a recognisable image extension in the href OR a
- * non-empty `thumb` field (only photos carry thumbs in zca-js) also matches.
- * Defensive about the inclusive path because some clients send photos with
- * type omitted; better to surface a photo as media than as JSON-stringified
- * text.
+ * etc.) - those flow through `normalizeMessageContent` as text. Detection is
+ * deliberately CONSERVATIVE: a photo only matches on an explicit
+ * `type === "photo"` or a recognisable image file extension in the href.
+ *
+ * We do NOT treat `thumb` presence as a photo signal: zca-js link previews
+ * (`type === "link"`) also carry `href` + `thumb`, so a thumb-only match
+ * would mislabel a webpage link as an image and make the runtime fetch the
+ * non-image href and tag the bytes as image/jpeg (maintainer review on
+ * openclaw#84924). `type === "link"` is rejected outright.
  */
 export function extractInboundMedia(content: unknown): ZaloInboundMedia | null {
   if (!content || typeof content !== "object") {
@@ -298,14 +300,14 @@ export function extractInboundMedia(content: unknown): ZaloInboundMedia | null {
     return null;
   }
   const type = typeof record.type === "string" ? record.type : "";
-  const thumbUrl = typeof record.thumb === "string" ? record.thumb.trim() : "";
-  const looksLikeImage =
-    type === "photo" ||
-    /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(href) ||
-    thumbUrl.length > 0;
+  if (type === "link") {
+    return null;
+  }
+  const looksLikeImage = type === "photo" || /\.(jpe?g|png|gif|webp|bmp)(\?|$)/i.test(href);
   if (!looksLikeImage) {
     return null;
   }
+  const thumbUrl = typeof record.thumb === "string" ? record.thumb.trim() : "";
   return {
     kind: "image",
     url: href,

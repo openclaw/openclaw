@@ -56,17 +56,28 @@ describe("extractInboundMedia", () => {
     });
   });
 
-  it("extracts media via thumb-presence fallback when type + extension absent", () => {
-    // Some message shapes carry only `thumb` without explicit type; treat as photo.
+  it("returns null for a link preview that carries a thumb (thumb is NOT a photo signal)", () => {
+    // zca-js link previews carry both href + thumb. Treating thumb-presence
+    // as a photo would mislabel a webpage link as an image and make the
+    // runtime fetch the non-image href (openclaw#84924). Must be null.
+    expect(
+      extractInboundMedia({
+        type: "link",
+        title: "Tingee",
+        href: "https://tingee.vn/products",
+        thumb: "https://photo-stal-7.zdn.vn/link-preview-thumb.jpg",
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when only a thumb is present with no photo type and no image extension", () => {
+    // Without an explicit type === "photo" or a recognisable image extension,
+    // a bare href + thumb is not a safe photo discriminator.
     const result = extractInboundMedia({
       href: "https://photo-stal-7.zdn.vn/some/random/path",
       thumb: "https://photo-stal-7.zdn.vn/some/random/thumb",
     });
-    expect(result).toEqual({
-      kind: "image",
-      url: "https://photo-stal-7.zdn.vn/some/random/path",
-      thumbUrl: "https://photo-stal-7.zdn.vn/some/random/thumb",
-    });
+    expect(result).toBeNull();
   });
 
   it("trims whitespace in href + thumb so URL builders downstream don't fail", () => {

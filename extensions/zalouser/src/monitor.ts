@@ -1090,6 +1090,26 @@ export { testing as __testing };
  * message processing continues with text only). Exported via __testing for
  * unit tests; not part of the public plugin surface.
  */
+const ZALO_INBOUND_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
+// Read-idle bound: abort if the CDN stalls mid-stream for this long.
+const ZALO_INBOUND_MEDIA_READ_IDLE_MS = 10_000;
+// Hard ceiling on the whole download so a slow Zalo CDN can never stall the
+// inbound message turn (the download is awaited before context assembly).
+const ZALO_INBOUND_MEDIA_TOTAL_TIMEOUT_MS = 30_000;
+
+/**
+ * Redact a media URL down to its origin for logs. Zalo CDN URLs can carry
+ * path/query material; we never want raw URLs (or tokens) in failure logs,
+ * so only the scheme + host is surfaced.
+ */
+function redactMediaUrl(rawUrl: string): string {
+  try {
+    return new URL(rawUrl).origin;
+  } catch {
+    return "[unparseable-media-url]";
+  }
+}
+
 async function resolveInboundMediaFacts(params: {
   media: ZaloInboundMedia | undefined;
   logVerbose: (msg: string) => void;
@@ -1097,11 +1117,22 @@ async function resolveInboundMediaFacts(params: {
   if (!params.media) {
     return [];
   }
+  // Bound the download: a read-idle timeout plus a hard total-timeout that
+  // aborts the underlying fetch, so a slow/unreachable Zalo CDN cannot stall
+  // the inbound message queue (this await sits before turn assembly).
+  const abortController = new AbortController();
+  const totalTimeout = setTimeout(
+    () => abortController.abort(),
+    ZALO_INBOUND_MEDIA_TOTAL_TIMEOUT_MS,
+  );
+  totalTimeout.unref?.();
   try {
     const saved = await saveRemoteMedia({
       url: params.media.url,
       filePathHint: `zalouser-inbound-${Date.now()}.jpg`,
-      maxBytes: 25 * 1024 * 1024,
+      maxBytes: ZALO_INBOUND_MEDIA_MAX_BYTES,
+      readIdleTimeoutMs: ZALO_INBOUND_MEDIA_READ_IDLE_MS,
+      requestInit: { signal: abortController.signal },
     });
     // Zalo CDN returns `application/octet-stream` for photos (verified
     // 2026-05-21 on photo-stal-*.zdn.vn). The kernel's
@@ -1121,9 +1152,15 @@ async function resolveInboundMediaFacts(params: {
       },
     ]);
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    params.logVerbose(`zalouser: inbound media fetch failed for ${params.media.url}: ${reason}`);
+    // Redact: never surface the raw Zalo CDN URL (path/query/token) in logs.
+    // Also scrub any occurrence of it from the underlying error message.
+    const safeUrl = redactMediaUrl(params.media.url);
+    const rawReason = err instanceof Error ? err.message : String(err);
+    const reason = rawReason.split(params.media.url).join(safeUrl);
+    params.logVerbose(`zalouser: inbound media fetch failed for ${safeUrl}: ${reason}`);
     return [];
+  } finally {
+    clearTimeout(totalTimeout);
   }
 }
 
