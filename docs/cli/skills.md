@@ -187,10 +187,12 @@ scans them, verifies their hashes before apply, and writes them beside the
 active `SKILL.md` only after the proposal is applied.
 
 Agents can create, revise, list, and inspect pending proposals through the
-`skill_workshop` tool when they identify reusable work. If the user explicitly
-asks to approve/use/apply, reject, or quarantine a specific proposal,
-`skill_workshop` can also perform that proposal lifecycle action through the
-same Skill Workshop safeguards.
+`skill_workshop` tool when the user asks for reusable work to be captured.
+Autonomous proposal capture from durable conversation signals is off by
+default and is enabled with `skills.workshop.autonomous.enabled`. If the user
+explicitly asks to approve/use/apply, reject, or quarantine a specific
+proposal, `skill_workshop` can also perform that proposal lifecycle action
+through the same Skill Workshop safeguards.
 
 ## Related
 

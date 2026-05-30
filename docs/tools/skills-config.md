@@ -27,7 +27,7 @@ Most skills loader/install configuration lives under `skills` in
     },
     workshop: {
       autonomous: {
-        enabled: true,
+        enabled: false,
       },
       approvalPolicy: "pending", // pending | auto
       maxPending: 50,
@@ -120,7 +120,7 @@ Rules:
   installs do not require it.
 - `workshop.autonomous.enabled`: allow agents to create pending Skill Workshop
   proposals from durable conversation signals after successful turns (default:
-  true). User-prompted skill creation still goes through Skill Workshop.
+  false). User-prompted skill creation still goes through Skill Workshop.
 - `workshop.approvalPolicy`: proposal lifecycle policy. `pending` requires
   approval before agent-initiated apply/reject/quarantine actions; `auto`
   allows those actions without approval.

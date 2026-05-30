@@ -12,7 +12,7 @@ export type SkillWorkshopConfig = {
 
 const DEFAULT_CONFIG: SkillWorkshopConfig = {
   autonomous: {
-    enabled: true,
+    enabled: false,
   },
   approvalPolicy: "pending",
   maxPending: 50,
