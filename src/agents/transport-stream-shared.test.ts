@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  assignTransportErrorDetails,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -87,5 +88,18 @@ describe("transport stream shared helpers", () => {
       error: output,
     });
     expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not throw while recording non-JSON transport rejections", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    for (const error of [1n, circular]) {
+      const output: { stopReason: string; errorMessage?: string } = { stopReason: "stop" };
+
+      expect(() => assignTransportErrorDetails(output, error)).not.toThrow();
+      expect(output.stopReason).toBe("error");
+      expect(output.errorMessage).toBeTruthy();
+    }
   });
 });

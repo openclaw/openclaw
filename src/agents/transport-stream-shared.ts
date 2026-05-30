@@ -170,6 +170,21 @@ function stringifyErrorBody(value: unknown): string | undefined {
   }
 }
 
+function stringifyTransportErrorMessage(value: unknown): string | undefined {
+  if (value instanceof Error) {
+    return value.message;
+  }
+  const encoded = stringifyErrorBody(value);
+  if (encoded !== undefined) {
+    return encoded;
+  }
+  try {
+    return String(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeTransportErrorBody(value: unknown): string | undefined {
   const text = stringifyErrorBody(value);
   if (!text?.trim()) {
@@ -208,7 +223,7 @@ export function assignTransportErrorDetails(
   signal?: AbortSignal,
 ): void {
   output.stopReason = signal?.aborted ? "aborted" : "error";
-  output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+  output.errorMessage = stringifyTransportErrorMessage(error);
   Object.assign(output, extractTransportErrorDetails(error));
 }
 
