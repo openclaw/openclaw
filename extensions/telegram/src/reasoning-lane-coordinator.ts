@@ -45,31 +45,33 @@ function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   return result.trim();
 }
 
-// Unwrap reasoning tag markers for the interleaved progress lane: remove the
-// `<think>` / `</think>` (and friends) tokens while KEEPING their inner content,
-// so the lane renders the model's prose as a plain CLI-style transcript instead
-// of showing raw tags. Tags inside code regions are preserved (a literal
-// `<think>` in a fenced block is content, not a marker). This is the
-// plain-text analogue of splitTelegramReasoningText, which the default lane
-// uses to format the same payloads as `Thinking\n\n_..._`.
+function hasThinkingTagOutsideCode(text: string): boolean {
+  const codeRegions = findCodeRegions(text);
+  THINKING_TAG_RE.lastIndex = 0;
+  for (const match of text.matchAll(THINKING_TAG_RE)) {
+    if (!isInsideCode(match.index ?? 0, codeRegions)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Project a reasoning-stream payload to the plain prose shown in the interleaved
+// lane. When the payload carries reasoning tags (e.g. `<think>reason</think>`)
+// keep ONLY the in-tag reasoning and drop any answer prose after `</think>`, so
+// answer text is never persisted into the Thinking lane (the answer is delivered
+// once via the answer lane). Untagged payloads are entirely reasoning and pass
+// through unchanged; literal tags inside code regions are content, not markers,
+// so a fenced `<think>` is preserved. This mirrors splitTelegramReasoningText,
+// which the default lane uses to format the same payloads as `Thinking\n\n_..._`.
 export function stripReasoningTagsForInterleaved(text: string): string {
   if (!text) {
     return text;
   }
-  const codeRegions = findCodeRegions(text);
-  let result = "";
-  let lastIndex = 0;
-  THINKING_TAG_RE.lastIndex = 0;
-  for (const match of text.matchAll(THINKING_TAG_RE)) {
-    const idx = match.index ?? 0;
-    if (isInsideCode(idx, codeRegions)) {
-      continue;
-    }
-    result += text.slice(lastIndex, idx);
-    lastIndex = idx + match[0].length;
+  if (hasThinkingTagOutsideCode(text)) {
+    return extractThinkingFromTaggedStreamOutsideCode(text);
   }
-  result += text.slice(lastIndex);
-  return result;
+  return text;
 }
 
 function isPartialReasoningTagPrefix(text: string): boolean {

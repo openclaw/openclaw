@@ -5,14 +5,20 @@ import {
 } from "./reasoning-lane-coordinator.js";
 
 describe("stripReasoningTagsForInterleaved", () => {
-  it("unwraps think tags, keeping the inner content as plain text", () => {
-    expect(stripReasoningTagsForInterleaved("<think>planning</think>Done")).toBe("planningDone");
+  it("keeps only the in-tag reasoning, dropping answer prose after </think>", () => {
+    // The answer after the closing tag must NOT land in the Thinking lane — it
+    // is delivered once via the answer lane.
+    expect(stripReasoningTagsForInterleaved("<think>planning</think>Done")).toBe("planning");
   });
 
-  it("keeps content from multiple/closing tag variants without leaving raw tags", () => {
+  it("extracts reasoning across tag variants, dropping between-tag and trailing text", () => {
     const out = stripReasoningTagsForInterleaved("<thinking>a</thinking> b <thought>c</thought>");
-    expect(out).toBe("a b c");
+    expect(out).toBe("ac");
     expect(out).not.toMatch(/<\/?(?:think|thinking|thought)/u);
+  });
+
+  it("keeps an unclosed (streaming) reasoning tag's content", () => {
+    expect(stripReasoningTagsForInterleaved("<think>still thinking")).toBe("still thinking");
   });
 
   it("is a no-op for tag-free text (interactive backend thinking_delta)", () => {
