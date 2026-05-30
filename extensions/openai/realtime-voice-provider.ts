@@ -1475,6 +1475,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         vadThreshold: config.vadThreshold,
         silenceDurationMs: config.silenceDurationMs,
         prefixPaddingMs: config.prefixPaddingMs,
+        autoRespondToAudio: req.autoRespondToAudio ?? config.autoRespondToAudio,
         interruptResponseOnInputAudio:
           req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
         minBargeInAudioEndMs: config.minBargeInAudioEndMs,
