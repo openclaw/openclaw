@@ -30,6 +30,13 @@ describe("scripts/profile-extension-memory", () => {
     });
   });
 
+  it("accepts package-manager argument separators before script options", () => {
+    expect(parseArgs(["--", "--extension", "discord", "--skip-combined"])).toMatchObject({
+      extensions: ["discord"],
+      skipCombined: true,
+    });
+  });
+
   it("rejects loose numeric flags before scanning built plugin artifacts", () => {
     const cases = [
       ["--concurrency", "2abc"],

@@ -409,6 +409,45 @@ describe("Code Mode", () => {
     ]);
   });
 
+  it("fails yield suspension when snapshot expiry would exceed the Date range", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    let details: Record<string, unknown>;
+    try {
+      details = resultDetails(
+        await codeModeTools[0].execute("code-call-yield-overflow", {
+          code: 'await yield_control("pause"); return "done";',
+        }),
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(details.status).toBe("failed");
+    expect(details.error).toBe("code mode run expiry is unavailable.");
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("expires suspended runs with invalid expiry timestamps", async () => {
+    const { tools: codeModeTools } = createCodeModeHarness();
+    testing.activeRuns.set("invalid-expiry-run", {
+      expiresAt: 8_640_000_000_000_001,
+    } as never);
+
+    await expect(
+      codeModeTools[1].execute("code-wait-invalid-expiry", { runId: "invalid-expiry-run" }),
+    ).rejects.toThrow("code mode run is unavailable or expired");
+    expect(testing.activeRuns.has("invalid-expiry-run")).toBe(false);
+  });
+
   it("rejects wait calls from a different session scope", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -552,9 +591,7 @@ describe("Code Mode", () => {
     expect(activeRun).toBeDefined();
     activeRun!.config.timeoutMs = 100;
 
-    const second = resultDetails(
-      await codeModeTools[1].execute("code-wait-timeout", { runId }),
-    );
+    const second = resultDetails(await codeModeTools[1].execute("code-wait-timeout", { runId }));
 
     expect(second.status).toBe("waiting");
     expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "call" })]);

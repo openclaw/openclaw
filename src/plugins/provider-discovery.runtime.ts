@@ -1,5 +1,5 @@
 import path from "node:path";
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";

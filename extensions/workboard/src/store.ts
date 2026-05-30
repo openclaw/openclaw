@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+  isFutureDateTimestampMs,
   MAX_DATE_TIMESTAMP_MS,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -2741,7 +2742,7 @@ export class WorkboardStore {
         throw new Error("card exhausted its retry budget.");
       }
       const existingClaim = guarded.metadata?.claim;
-      if (existingClaim && existingClaim.expiresAt && existingClaim.expiresAt > now) {
+      if (existingClaim && isFutureDateTimestampMs(existingClaim.expiresAt, { nowMs: now })) {
         throw new Error(`card already claimed by ${existingClaim.ownerId}.`);
       }
       const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);

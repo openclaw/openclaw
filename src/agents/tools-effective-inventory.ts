@@ -1,3 +1,7 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
@@ -12,7 +16,6 @@ import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { resolveModel } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 import { normalizeToolName } from "./tool-policy.js";
 import {
   buildEffectiveToolInventoryGroups,

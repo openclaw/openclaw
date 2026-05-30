@@ -3,6 +3,11 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
+import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
+  normalizeGooglePreviewModelId as normalizeGooglePreviewModelIdCore,
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -21,10 +26,6 @@ import type {
   ProviderSanitizeReplayHistoryContext,
   ProviderThinkingProfile,
 } from "./plugin-entry.js";
-import {
-  normalizeAntigravityPreviewModelId,
-  normalizeGooglePreviewModelId,
-} from "./provider-model-id-normalize.js";
 
 export type {
   ModelApi,
@@ -72,7 +73,6 @@ export {
   resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,
 } from "../plugins/provider-model-compat.js";
-export { normalizeProviderId } from "../agents/provider-id.js";
 export {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -84,6 +84,10 @@ export {
   sanitizeGoogleGeminiReplayHistory,
   buildStrictAnthropicReplayPolicy,
 };
+
+export function normalizeProviderId(provider: string): string {
+  return normalizeProviderIdCore(provider);
+}
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
@@ -168,7 +172,13 @@ export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingP
   return { levels: BASE_CLAUDE_THINKING_LEVELS };
 }
 
-export { normalizeAntigravityPreviewModelId, normalizeGooglePreviewModelId };
+export function normalizeAntigravityPreviewModelId(id: string): string {
+  return normalizeAntigravityPreviewModelIdCore(id);
+}
+
+export function normalizeGooglePreviewModelId(id: string): string {
+  return normalizeGooglePreviewModelIdCore(id);
+}
 
 export type ProviderReplayFamily =
   | "openai-compatible"

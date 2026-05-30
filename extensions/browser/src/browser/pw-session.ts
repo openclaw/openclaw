@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  isFutureDateTimestampMs,
+  parseFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   Browser,
@@ -354,7 +358,7 @@ function observeDialog(pageState: PageState, dialog: Dialog): void {
   pageState.pendingDialogs.push(pending);
 
   const armed = pageState.armedDialogResponse;
-  if (armed && armed.expiresAt >= Date.now()) {
+  if (armed && isFutureDateTimestampMs(armed.expiresAt)) {
     clearArmedDialogResponse(pageState);
     void settleObservedDialog({
       state: pageState,
@@ -791,9 +795,13 @@ export function armObservedDialogResponseOnPage(opts: {
   const state = ensurePageState(opts.page);
   clearArmedDialogResponse(state);
   const timeoutMs = resolveObservedDialogTimeoutMs(opts.timeoutMs);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(timeoutMs);
+  if (expiresAt === undefined) {
+    return;
+  }
   const response: ArmedDialogResponse = {
     accept: opts.accept,
-    expiresAt: Date.now() + timeoutMs,
+    expiresAt,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {

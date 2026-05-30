@@ -8,6 +8,7 @@ import {
   clampPositiveTimerTimeoutMs,
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
+  isFutureDateTimestampMs,
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
   nonNegativeSecondsToSafeMilliseconds,
@@ -134,6 +135,14 @@ describe("number-coercion", () => {
     expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();
     expect(timestampMsToIsoString(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(timestampMsToIsoString("0")).toBeUndefined();
+  });
+
+  test("future timestamp helper rejects invalid Date timestamps", () => {
+    expect(isFutureDateTimestampMs(1_001, { nowMs: 1_000 })).toBe(true);
+    expect(isFutureDateTimestampMs(1_000, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(999, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(8_640_000_000_000_001, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(1_001, { nowMs: Number.NaN })).toBe(false);
   });
 
   test("timestamp fallback helpers resolve Date-invalid timestamps", () => {

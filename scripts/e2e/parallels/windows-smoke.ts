@@ -137,6 +137,7 @@ Options:
 }
 
 export function parseArgs(argv: string[]): WindowsOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
   const valueHandlers: Record<string, (value: string) => void> = {
     "--api-key-env": (value) => {
@@ -194,14 +195,14 @@ export function parseArgs(argv: string[]): WindowsOptions {
       options.upgradeFromPackedMain = true;
     },
   };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
     if (arg === "--") {
       break;
     }
     const valueHandler = valueHandlers[arg];
     if (valueHandler) {
-      valueHandler(ensureValue(argv, i, arg));
+      valueHandler(ensureValue(args, i, arg));
       i++;
       continue;
     }
@@ -217,6 +218,10 @@ export function parseArgs(argv: string[]): WindowsOptions {
     die(`unknown arg: ${arg}`);
   }
   return options;
+}
+
+function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
+  return argv[0] === "--" ? argv.slice(1) : argv;
 }
 
 class WindowsSmoke extends SmokeRunController<WindowsOptions> {

@@ -11,6 +11,7 @@ import {
   parsePositiveInt,
   parsePositiveNumber,
 } from "./lib/numeric-options.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
@@ -34,6 +35,7 @@ const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     repoRoot: process.cwd(),
     outputDir: path.join(
@@ -68,10 +70,10 @@ export function parseArgs(argv) {
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
   options.pluginIds.push(...envIds);
-  parseArgv: for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  parseArgv: for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     const readValue = () => {
-      const value = argv[index + 1];
+      const value = args[index + 1];
       if (!value) {
         throw new Error(`Missing value for ${arg}`);
       }

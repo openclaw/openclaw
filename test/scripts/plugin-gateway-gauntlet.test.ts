@@ -47,6 +47,24 @@ describe("plugin gateway gauntlet helpers", () => {
     });
   });
 
+  it("accepts package-manager argument separators before script options", () => {
+    expect(
+      parseArgs([
+        "--",
+        "--plugin",
+        "telegram",
+        "--limit",
+        "3",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ]),
+    ).toMatchObject({
+      limit: 3,
+      pluginIds: ["telegram"],
+      qaScenarios: ["channel-chat-baseline"],
+    });
+  });
+
   it("discovers bundled plugin manifests into lifecycle matrix rows", async () => {
     await writeManifest(
       "alpha",

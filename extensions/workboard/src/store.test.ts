@@ -518,6 +518,30 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("does not let invalid stored claim expiry block a fresh claim", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Invalid claim expiry",
+      status: "todo",
+      metadata: {
+        claim: {
+          ownerId: "stale-worker",
+          token: "stale-token",
+          claimedAt: 1,
+          lastHeartbeatAt: 1,
+          expiresAt: Number.MAX_VALUE,
+        },
+      },
+    });
+
+    const claimed = await store.claim(card.id, { ownerId: "main", token: "fresh-token" });
+
+    expect(claimed.card.metadata?.claim).toMatchObject({
+      ownerId: "main",
+      token: "fresh-token",
+    });
+  });
+
   it("creates idempotent child cards and promotes them when parents finish", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({ title: "Parent", status: "running" });

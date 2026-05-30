@@ -105,6 +105,12 @@ export function asDateTimestampMs(value: unknown): number | undefined {
   });
 }
 
+export function isFutureDateTimestampMs(value: unknown, opts: { nowMs?: number } = {}): boolean {
+  const timestampMs = asDateTimestampMs(value);
+  const nowMs = asDateTimestampMs(opts.nowMs ?? Date.now());
+  return timestampMs !== undefined && nowMs !== undefined && timestampMs > nowMs;
+}
+
 export function timestampMsToIsoString(value: unknown): string | undefined {
   const timestampMs = asDateTimestampMs(value);
   return timestampMs === undefined ? undefined : new Date(timestampMs).toISOString();

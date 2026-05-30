@@ -979,8 +979,16 @@ describe("server-channels auto restart", () => {
   });
 
   it("does not start traced channel accounts after stop wins the handoff", async () => {
+    const handoffEntered = createDeferred();
+    const releaseHandoff = createDeferred();
     const startupTrace = {
-      measure: async <T>(_name: string, run: () => T | Promise<T>) => await run(),
+      measure: async <T>(name: string, run: () => T | Promise<T>) => {
+        if (name === "channels.discord.start-account-handoff") {
+          handoffEntered.resolve();
+          await releaseHandoff.promise;
+        }
+        return await run();
+      },
     };
     const startAccount = vi.fn(async () => {});
 
@@ -988,8 +996,11 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ startupTrace });
 
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
     await vi.advanceTimersByTimeAsync(0);
+    await handoffEntered.promise;
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    releaseHandoff.resolve();
     await stopTask;
     await flushMicrotasks();
 

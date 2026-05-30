@@ -563,6 +563,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             }
             let startAccountTask: ReturnType<typeof startAccount> | undefined;
             await measureStartup(`channels.${channelId}.start-account-handoff`, () => {
+              if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+                return;
+              }
               const runStartAccount = () =>
                 startAccount({
                   cfg,
@@ -580,6 +583,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount)
                 : runStartAccount();
             });
+            if (!startAccountTask) {
+              return;
+            }
             await startAccountTask;
           });
           const trackedPromise = task
