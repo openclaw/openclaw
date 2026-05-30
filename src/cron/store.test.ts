@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
+} from "../commands/doctor-cron-legacy-store-migration.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
   loadCronQuarantineFile,
   loadCronStore,
   loadCronStoreSync,

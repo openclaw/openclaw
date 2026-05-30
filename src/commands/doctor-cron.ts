@@ -6,13 +6,10 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { legacyCronRunLogFilesExist, migrateLegacyCronRunLogsToSqlite } from "../cron/run-log.js";
 import {
-  archiveLegacyCronStoreForMigration,
-  legacyCronStoreFilesExist,
-  loadLegacyCronStoreForMigration,
   loadCronQuarantineFile,
+  loadCronStore,
   resolveCronQuarantinePath,
   resolveCronStorePath,
-  loadCronStore,
   saveCronStore,
 } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
@@ -25,6 +22,11 @@ import {
   countStaleDreamingJobs,
   migrateLegacyDreamingPayloadShape,
 } from "./doctor-cron-dreaming-payload-migration.js";
+import {
+  archiveLegacyCronStoreForMigration,
+  legacyCronStoreFilesExist,
+  loadLegacyCronStoreForMigration,
+} from "./doctor-cron-legacy-store-migration.js";
 import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
 import type { DoctorPrompter, DoctorOptions } from "./doctor-prompter.js";
 

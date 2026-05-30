@@ -424,7 +424,12 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--target", "windows", "--", "echo ok"],
-      { env: { CRABBOX_PROVIDER: "aws" } },
+      {
+        env: {
+          CRABBOX_PROVIDER: "aws",
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1",
+        },
+      },
     );
 
     expect(result.status).toBe(0);
@@ -442,7 +447,12 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const result = runWrapper(
       azureProviderHelp,
       ["run", "--id", "cbx_existing", "--target", "windows", "--", "echo ok"],
-      { env: { CRABBOX_PROVIDER: "aws" } },
+      {
+        env: {
+          CRABBOX_PROVIDER: "aws",
+          OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "1",
+        },
+      },
     );
 
     expect(result.status).toBe(0);
