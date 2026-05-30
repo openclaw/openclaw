@@ -541,7 +541,7 @@ export function registerSkillsCli(program: Command) {
     .option("--proposal <path>", "Path to PROPOSAL.md draft content")
     .option(
       "--proposal-dir <path>",
-      "Path to proposal directory with PROPOSAL.md and support files",
+      "Path to proposal directory with PROPOSAL.md and UTF-8 text support files",
     )
     .option("--goal <text>", "Research or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
@@ -592,7 +592,7 @@ export function registerSkillsCli(program: Command) {
     .option("--proposal <path>", "Path to PROPOSAL.md draft content")
     .option(
       "--proposal-dir <path>",
-      "Path to proposal directory with PROPOSAL.md and support files",
+      "Path to proposal directory with PROPOSAL.md and UTF-8 text support files",
     )
     .option("--goal <text>", "Research or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
@@ -646,7 +646,7 @@ export function registerSkillsCli(program: Command) {
     .option("--proposal <path>", "Path to revised PROPOSAL.md draft content")
     .option(
       "--proposal-dir <path>",
-      "Path to revised proposal directory with PROPOSAL.md and support files",
+      "Path to revised proposal directory with PROPOSAL.md and UTF-8 text support files",
     )
     .option("--description <description>", "Replacement proposal description")
     .option("--goal <text>", "Replacement research or improvement goal")

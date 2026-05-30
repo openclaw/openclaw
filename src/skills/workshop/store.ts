@@ -169,6 +169,9 @@ export function prepareSkillProposalSupportFiles(
     if (sizeBytes > MAX_PROPOSAL_SUPPORT_FILE_BYTES) {
       throw new Error(`Support file is too large: ${filePath}`);
     }
+    if (file.content.includes("\0")) {
+      throw new Error(`Support files must be UTF-8 text: ${filePath}`);
+    }
     totalBytes += sizeBytes;
     if (totalBytes > MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES) {
       throw new Error("Skill proposal support files exceed the total size limit.");

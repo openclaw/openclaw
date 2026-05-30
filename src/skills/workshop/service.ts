@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readLocalFileSafely, root, walkDirectory } from "../../infra/fs-safe.js";
@@ -92,7 +93,7 @@ export async function readSkillProposalDraftFile(filePath: string): Promise<stri
     filePath,
     maxBytes: MAX_PROPOSAL_DRAFT_BYTES,
   });
-  return read.buffer.toString("utf8");
+  return decodeProposalTextFile(read.buffer, filePath);
 }
 
 export async function readSkillProposalDraftDirectory(dirPath: string): Promise<{
@@ -129,17 +130,32 @@ export async function readSkillProposalDraftDirectory(dirPath: string): Promise<
       throw new Error(`Proposal support file must be a regular file: ${relativePath}`);
     }
     const supportPath = normalizeSkillProposalSupportPath(relativePath);
+    const stats = await fs.stat(entry.path);
+    if ((stats.mode & 0o111) !== 0) {
+      throw new Error(`Proposal support files must not be executable: ${relativePath}`);
+    }
     const read = await draftRoot.read(relativePath, {
       hardlinks: "reject",
       maxBytes: MAX_PROPOSAL_SUPPORT_FILE_BYTES,
       symlinks: "reject",
     });
-    supportFiles.push({ path: supportPath, content: read.buffer.toString("utf8") });
+    supportFiles.push({
+      path: supportPath,
+      content: decodeProposalTextFile(read.buffer, relativePath),
+    });
   }
   return {
-    content: proposal.buffer.toString("utf8"),
+    content: decodeProposalTextFile(proposal.buffer, "PROPOSAL.md"),
     supportFiles,
   };
+}
+
+function decodeProposalTextFile(buffer: Buffer, label: string): string {
+  const content = buffer.toString("utf8");
+  if (!Buffer.from(content, "utf8").equals(buffer) || content.includes("\0")) {
+    throw new Error(`Proposal files must be UTF-8 text: ${label}`);
+  }
+  return content;
 }
 
 export async function inspectSkillProposal(

@@ -12,6 +12,7 @@ import {
   proposeCreateSkill,
   proposeUpdateSkill,
   quarantineSkillProposal,
+  readSkillProposalDraftDirectory,
   rejectSkillProposal,
   resolvePendingSkillProposal,
   reviseSkillProposal,
@@ -616,6 +617,27 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow("cannot overlap");
 
     await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+  });
+
+  it("rejects non-text and executable proposal directory support files", async () => {
+    const draftDir = path.join(await makeWorkspace(), "draft");
+    await fs.mkdir(path.join(draftDir, "assets"), { recursive: true });
+    await fs.writeFile(path.join(draftDir, "PROPOSAL.md"), "# Binary Asset\n", "utf8");
+    await fs.writeFile(path.join(draftDir, "assets", "icon.png"), Buffer.from([0x89, 0x50]));
+
+    await expect(readSkillProposalDraftDirectory(draftDir)).rejects.toThrow(
+      "Proposal files must be UTF-8 text",
+    );
+
+    await fs.rm(path.join(draftDir, "assets", "icon.png"));
+    await fs.mkdir(path.join(draftDir, "scripts"), { recursive: true });
+    const scriptPath = path.join(draftDir, "scripts", "run.sh");
+    await fs.writeFile(scriptPath, "#!/bin/sh\necho ok\n", "utf8");
+    await fs.chmod(scriptPath, 0o755);
+
+    await expect(readSkillProposalDraftDirectory(draftDir)).rejects.toThrow(
+      "Proposal support files must not be executable",
+    );
   });
 
   it("rejects rendered proposals that exceed the persisted draft size limit", async () => {
