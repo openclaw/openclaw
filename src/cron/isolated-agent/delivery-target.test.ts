@@ -624,6 +624,67 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBeUndefined();
   });
 
+  it("preserves plugin-canonical targets returned for aliases", async () => {
+    setMainSessionEntry(undefined);
+    const canonicalTarget = "Bncr:tgBot:-1003891624016:6278285192";
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "bncr",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "bncr",
+            outbound: createStubOutbound("Bncr"),
+            messaging: {
+              targetPrefixes: ["bncr"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === "alerts"
+                    ? { to: canonicalTarget, kind: "group" as const, source: "normalized" as const }
+                    : null,
+              },
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "bncr",
+      to: "alerts",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe(canonicalTarget);
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("still strips selected prefixes from generic normalized fallback targets", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: createStubOutbound("Alpha"),
+            messaging: { targetPrefixes: ["alpha"] },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "alpha",
+      to: "alpha:room-a",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("room-a");
+    expect(result.threadId).toBeUndefined();
+  });
+
   it("uses plugin-resolved directory targets for route parsing", async () => {
     setMainSessionEntry(undefined);
     setActivePluginRegistry(
