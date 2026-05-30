@@ -30,8 +30,8 @@ jobs:
         uses: anthropics/claude-code-action@51ea8ea73a139f2a74ff649e3092c25a904aed7e # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          model: claude-opus-4-8
-          allowed_tools: "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
+          track_progress: true
+          claude_args: '--model claude-opus-4-8 --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'
           prompt: |
             You are a code reviewer for mctlhq/mctl-openclaw, a TypeScript ESM
             strict-mode repository (pnpm workspaces, Vitest, oxfmt/oxlint).
