@@ -147,6 +147,27 @@ function createCliBackendConfig(
   } satisfies OpenClawConfig;
 }
 
+function setClaudeCliBackendForPrepareTest() {
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupCliBackend: () => undefined,
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "anthropic",
+        bundleMcp: false,
+        config: {
+          command: "claude",
+          args: ["--print"],
+          resumeArgs: ["--resume", "{sessionId}"],
+          output: "jsonl",
+          input: "stdin",
+          sessionMode: "existing",
+        },
+      },
+    ],
+  });
+}
+
 function createSessionFile() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-prepare-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
@@ -1407,27 +1428,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("drops the claude-cli sessionId when the on-disk transcript is missing (#77011)", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: false,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              resumeArgs: ["--resume", "{sessionId}"],
-              output: "jsonl",
-              input: "stdin",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
+      setClaudeCliBackendForPrepareTest();
       const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => true);
       setCliRunnerPrepareTestDeps({
         claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
       });
 
       const context = await prepareCliRunContext({
@@ -1449,7 +1455,91 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sessionId: "stale-claude-sid",
         workspaceDir: dir,
       });
+      expect(orphanCheck).not.toHaveBeenCalled();
       expect(context.reusableCliSession).toEqual({ invalidatedReason: "missing-transcript" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("invalidates orphaned claude-cli transcripts during run preparation", async () => {
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      setClaudeCliBackendForPrepareTest();
+      const transcriptCheck = vi.fn(async () => true);
+      const orphanCheck = vi.fn(async () => true);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "follow-up",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-orphan-tool-use",
+        cliSessionBinding: {
+          sessionId: "orphaned-claude-sid",
+          cwdHash: hashCliSessionText(dir),
+        },
+        cliSessionId: "orphaned-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      expect(transcriptCheck).toHaveBeenCalledWith({
+        sessionId: "orphaned-claude-sid",
+        workspaceDir: dir,
+      });
+      expect(orphanCheck).toHaveBeenCalledWith({
+        sessionId: "orphaned-claude-sid",
+        workspaceDir: dir,
+      });
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "orphaned-tool-use" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps auth-boundary invalidation ahead of orphaned transcript checks", async () => {
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      setClaudeCliBackendForPrepareTest();
+      const transcriptCheck = vi.fn(async () => true);
+      const orphanCheck = vi.fn(async () => true);
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "follow-up",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-orphan-auth-boundary",
+        cliSessionBinding: {
+          sessionId: "orphaned-claude-sid",
+          authProfileId: "anthropic:old-profile",
+          cwdHash: hashCliSessionText(dir),
+        },
+        cliSessionId: "orphaned-claude-sid",
+        config: createCliBackendConfig(),
+      });
+
+      expect(transcriptCheck).not.toHaveBeenCalled();
+      expect(orphanCheck).not.toHaveBeenCalled();
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "auth-profile" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1458,27 +1548,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("keeps the claude-cli sessionId when the on-disk transcript is present", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      cliBackendsTesting.setDepsForTest({
-        resolvePluginSetupCliBackend: () => undefined,
-        resolveRuntimeCliBackends: () => [
-          {
-            id: "claude-cli",
-            pluginId: "anthropic",
-            bundleMcp: false,
-            config: {
-              command: "claude",
-              args: ["--print"],
-              resumeArgs: ["--resume", "{sessionId}"],
-              output: "jsonl",
-              input: "stdin",
-              sessionMode: "existing",
-            },
-          },
-        ],
-      });
+      setClaudeCliBackendForPrepareTest();
       const transcriptCheck = vi.fn(async () => true);
+      const orphanCheck = vi.fn(async () => false);
       setCliRunnerPrepareTestDeps({
         claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
       });
 
       const context = await prepareCliRunContext({
@@ -1497,6 +1572,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
 
       expect(transcriptCheck).toHaveBeenCalledWith({
+        sessionId: "live-claude-sid",
+        workspaceDir: dir,
+      });
+      expect(orphanCheck).toHaveBeenCalledWith({
         sessionId: "live-claude-sid",
         workspaceDir: dir,
       });

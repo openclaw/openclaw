@@ -478,6 +478,82 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("clears stale CLI bindings when a successful run reports an unflushed replacement", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": {
+                command: "claude",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-clear-unflushed-cli";
+      const sessionId = "test-openclaw-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "stale-cli-session",
+              authEpoch: "old-epoch",
+            },
+            "codex-cli": {
+              sessionId: "codex-session",
+            },
+          },
+          cliSessionIds: {
+            "claude-cli": "stale-cli-session",
+            "codex-cli": "codex-session",
+          },
+          claudeCliSessionId: "stale-cli-session",
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedAgentRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId: "",
+            provider: "claude-cli",
+            model: "claude-sonnet-4-6",
+            clearCliSessionBinding: true,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        contextTokensOverride: 200_000,
+        defaultProvider: "claude-cli",
+        defaultModel: "claude-sonnet-4-6",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
+        sessionId: "codex-session",
+      });
+      expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds?.["codex-cli"]).toBe("codex-session");
+      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+
+      const persisted = loadSessionStore(storePath, { skipCache: true });
+      expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    });
+  });
+
   it("preserves ACP metadata when caller has a stale session snapshot", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:codex:acp:test-acp-preserve";
