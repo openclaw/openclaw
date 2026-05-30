@@ -247,14 +247,25 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
     `[${account.accountId}] Nostr provider started, connected to ${account.relays.length} relay(s)`,
   );
 
-  return {
-    stop: () => {
-      bus.close();
-      activeBuses.delete(account.accountId);
-      metricsSnapshots.delete(account.accountId);
-      ctx.log?.info?.(`[${account.accountId}] Nostr provider stopped`);
-    },
-  };
+  // Keep startAccount pending until abort fires; otherwise the channel
+  // supervisor reads the settled task as `channel exited without an error`
+  // and triggers a restart loop (see twitch #60071 for the same pattern).
+  try {
+    if (!ctx.abortSignal.aborted) {
+      await new Promise<void>((resolve) => {
+        const onAbort = () => {
+          ctx.abortSignal.removeEventListener("abort", onAbort);
+          resolve();
+        };
+        ctx.abortSignal.addEventListener("abort", onAbort, { once: true });
+      });
+    }
+  } finally {
+    bus.close();
+    activeBuses.delete(account.accountId);
+    metricsSnapshots.delete(account.accountId);
+    ctx.log?.info?.(`[${account.accountId}] Nostr provider stopped`);
+  }
 };
 
 export const nostrPairingTextAdapter = {
