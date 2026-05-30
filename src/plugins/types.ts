@@ -640,8 +640,10 @@ export type ProviderResolveUsageAuthContext = {
     providerIds?: string[];
     envDirect?: Array<string | undefined>;
   }) => string | undefined;
-  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderResolvedUsageAuth | null>;
+  resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
+
+export type ProviderUsageAuthToken = { token: string; accountId?: string };
 
 /**
  * Result of `resolveUsageAuth`.
@@ -655,7 +657,7 @@ export type ProviderResolveUsageAuthContext = {
  * Returning `null` or `undefined` means "not handled by this provider"; core
  * proceeds to generic fallback resolution.
  */
-export type ProviderResolvedUsageAuth = { token: string; accountId?: string } | { handled: true };
+export type ProviderResolvedUsageAuth = ProviderUsageAuthToken | { handled: true };
 
 /**
  * Usage/quota snapshot input for providers that own their usage endpoint

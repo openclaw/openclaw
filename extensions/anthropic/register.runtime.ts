@@ -7,6 +7,7 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
   ProviderResolveUsageAuthContext,
+  ProviderResolvedUsageAuth,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -678,7 +679,9 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   };
 }
 
-async function resolveAnthropicUsageAuth(ctx: ProviderResolveUsageAuthContext) {
+async function resolveAnthropicUsageAuth(
+  ctx: ProviderResolveUsageAuthContext,
+): Promise<ProviderResolvedUsageAuth> {
   const oauthToken = await ctx.resolveOAuthToken();
   if (oauthToken) {
     return oauthToken;
