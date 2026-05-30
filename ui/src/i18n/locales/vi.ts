@@ -1234,6 +1234,7 @@ export const vi: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      resetSession: "Reset session",
       export: "Xuất",
       exportChat: "Export chat",
       queue: "Queue",

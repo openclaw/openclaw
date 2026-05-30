@@ -1245,6 +1245,7 @@ export const uk: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      resetSession: "Reset session",
       export: "Експорт",
       exportChat: "Export chat",
       queue: "Queue",

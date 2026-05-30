@@ -1249,6 +1249,7 @@ export const it: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      resetSession: "Reset session",
       export: "Esporta",
       exportChat: "Export chat",
       queue: "Queue",

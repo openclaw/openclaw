@@ -22,6 +22,7 @@ import {
   createChatSession,
   dismissChatError,
   switchChatSession,
+  resetChatSession,
 } from "./app-render.helpers.ts";
 import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -301,6 +302,30 @@ function renderSidebarSessions(state: AppViewState) {
           ? nothing
           : html`<span class="sidebar-new-session__label"
               >${t("chat.runControls.newSession")}</span
+            >`}
+      </button>
+      <button
+        type="button"
+        class="sidebar-reset-session"
+        title=${newSessionDisabled
+          ? "Finish the active run before resetting the session"
+          : "Reset session"}
+        aria-label=${t("chat.runControls.resetSession")}
+        ?disabled=${newSessionDisabled}
+        @click=${async () => {
+          if (newSessionDisabled) {
+            return;
+          }
+          if (await resetChatSession(state)) {
+            state.setTab("chat" as import("./navigation.ts").Tab);
+          }
+        }}
+      >
+        <span class="sidebar-reset-session__icon" aria-hidden="true">${icons.refresh}</span>
+        ${collapsed
+          ? nothing
+          : html`<span class="sidebar-reset-session__label"
+              >${t("chat.runControls.resetSession")}</span
             >`}
       </button>
       ${collapsed || recent.length === 0

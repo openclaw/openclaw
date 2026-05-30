@@ -1235,6 +1235,7 @@ export const ko: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      resetSession: "Reset session",
       export: "내보내기",
       exportChat: "Export chat",
       queue: "Queue",

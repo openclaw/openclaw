@@ -668,6 +668,65 @@
   stroke-linejoin: round;
 }
 
+.sidebar-reset-session {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  margin-top: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 15%, var(--border) 85%);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.sidebar-reset-session:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-hover) 92%);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border) 72%);
+  color: var(--text-strong);
+  transform: translateY(-1px);
+}
+
+.sidebar-reset-session:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.sidebar-reset-session__icon,
+.sidebar-reset-session__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-reset-session__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+.sidebar-reset-session__icon svg {
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar-recent-sessions {
   display: grid;
   gap: 6px;

@@ -1209,6 +1209,7 @@ export const zh_TW: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      resetSession: "Reset session",
       export: "匯出",
       exportChat: "Export chat",
       queue: "Queue",
