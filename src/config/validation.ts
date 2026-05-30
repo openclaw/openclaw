@@ -1796,6 +1796,15 @@ function validateConfigObjectWithPluginsBase(
   validateWebSearchProvider();
   validateConfiguredModelRefs();
 
+  if (config.hooks?.enabled === true && !config.hooks?.token?.trim()) {
+    issues.push({
+      path: "hooks.token",
+      message:
+        "hooks.enabled is true but hooks.token is not set. " +
+        "Set hooks.token before enabling hooks (for example with `openclaw config set hooks.token <redacted>` or a redacted `openclaw gateway call config.patch --params ...`).",
+    });
+  }
+
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {
       return { ok: false, issues, warnings };
