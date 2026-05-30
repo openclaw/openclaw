@@ -112,7 +112,7 @@ function stableStringifyJsonValue(value: JsonValue): string {
   if (Array.isArray(value)) {
     return `[${value.map(stableStringifyJsonValue).join(",")}]`;
   }
-  const entries = Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const entries = Object.entries(value).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return `{${entries
     .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringifyJsonValue(entryValue)}`)
     .join(",")}}`;
