@@ -1695,13 +1695,49 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResult.result).toEqual({ status: "completed", exitCode: 0, durationMs: 42 });
   });
 
+  it("treats nonzero native command exits as completed tool results", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-no-matches",
+          command: "grep -R missing docs",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "failed",
+          commandActions: [],
+          aggregatedOutput: "",
+          exitCode: 1,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toBeUndefined();
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-no-matches",
+      name: "bash",
+    }).data;
+    expect(toolResult).toMatchObject({
+      status: "completed",
+      isError: false,
+      result: { status: "completed", exitCode: 1, durationMs: 42 },
+    });
+  });
+
   it("uses streamed command output for failed native tool errors", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(
       forCurrentTurn("item/commandExecution/outputDelta", {
         itemId: "cmd-streamed-failure",
-        delta: "fatal: missing fixture\n",
+        delta: "pnpm: command not found\n",
       }),
     );
     await projector.handleNotification(
@@ -1716,7 +1752,7 @@ describe("CodexAppServerEventProjector", () => {
           status: "failed",
           commandActions: [],
           aggregatedOutput: null,
-          exitCode: 1,
+          exitCode: 127,
           durationMs: 42,
         },
       ]),
@@ -1725,7 +1761,7 @@ describe("CodexAppServerEventProjector", () => {
     expect(projector.buildResult(buildEmptyToolTelemetry()).lastToolError).toEqual({
       toolName: "bash",
       meta: "run tests (workspace)",
-      error: "fatal: missing fixture",
+      error: "pnpm: command not found",
       mutatingAction: true,
       actionFingerprint: JSON.stringify({
         type: "commandExecution",
