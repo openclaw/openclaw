@@ -1521,6 +1521,30 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("does not broad-scan failover hooks for unresolved providers with structured descriptors", () => {
+    const classifyFailoverReason = vi.fn(() => "overloaded" as const);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "mantle",
+        label: "Mantle",
+        auth: [],
+        classifyFailoverReason,
+      },
+    ]);
+
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "my-openai-compatible",
+        context: {
+          provider: "my-openai-compatible",
+          status: 403,
+          errorMessage: "service unavailable",
+        },
+      }),
+    ).toBeUndefined();
+    expect(classifyFailoverReason).not.toHaveBeenCalled();
+  });
+
   it("resolves stream wrapper hooks through hook-only aliases without provider ownership", () => {
     const wrappedStreamFn = vi.fn();
     resolvePluginProvidersMock.mockReturnValue([

@@ -662,6 +662,7 @@ function resolveProviderPluginsForScopedHook(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  context: ProviderFailoverErrorContext;
 }): ProviderPlugin[] {
   if (!params.provider) {
     return resolveProviderPluginsForHooks(params);
@@ -670,10 +671,20 @@ function resolveProviderPluginsForScopedHook(params: {
   if (plugin) {
     return [plugin];
   }
-  // Custom provider ids may only name their canonical API in config, and some
-  // callers only have the runtime id here. Preserve the old broad hook scan
-  // when owner lookup cannot resolve that id.
+  if (hasStructuredFailoverDescriptor(params.context)) {
+    return [];
+  }
+  // Custom provider ids may only name their canonical API in config, and the
+  // legacy message classifier only has the runtime id here. Preserve its old
+  // broad hook scan for descriptor-free messages, but do not let unrelated
+  // hooks override structured HTTP/auth signals.
   return resolveProviderPluginsForHooks(params);
+}
+
+function hasStructuredFailoverDescriptor(context: ProviderFailoverErrorContext): boolean {
+  return (
+    context.status !== undefined || context.code !== undefined || context.errorType !== undefined
+  );
 }
 
 export function formatProviderAuthProfileApiKeyWithPlugin(params: {
