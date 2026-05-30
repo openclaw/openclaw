@@ -466,7 +466,11 @@ function resolveExplicitAgentCommandSessionKey(params: {
   shouldScopeDefaultAgentKey?: boolean;
   cfg: OpenClawConfig;
 }): string | undefined {
-  if (isUnscopedSessionKeySentinel(params.rawExplicitSessionKey)) {
+  if (
+    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
+    !params.agentIdOverride &&
+    !params.shouldScopeDefaultAgentKey
+  ) {
     return params.rawExplicitSessionKey;
   }
   return scopeLegacySessionKeyToAgent({
