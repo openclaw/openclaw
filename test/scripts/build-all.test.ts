@@ -180,9 +180,7 @@ describe("resolveBuildAllSteps", () => {
       help: true,
       profile: "cliStartup",
     });
-    expect(() => parseBuildAllArgs(["cliStartup", "--bogus"])).toThrow(
-      "unknown argument: --bogus",
-    );
+    expect(() => parseBuildAllArgs(["cliStartup", "--bogus"])).toThrow("unknown argument: --bogus");
     expect(() => parseBuildAllArgs(["wat"])).toThrow("Unknown build profile: wat");
   });
 
@@ -277,6 +275,28 @@ describe("resolveBuildAllSteps", () => {
       "write-cli-startup-metadata",
       "write-cli-compat",
     ]);
+  });
+
+  it("skips generated static plugin assets for minimal backend-only profiles", () => {
+    for (const profile of ["gatewayWatch", "cliStartup"]) {
+      const runtimePostbuild = resolveBuildAllSteps(profile).find(
+        (step) => step.label === "runtime-postbuild",
+      );
+      if (!runtimePostbuild) {
+        throw new Error(`Missing ${profile} runtime-postbuild step`);
+      }
+
+      expect(BUILD_ALL_PROFILE_STEP_ENV[profile]["runtime-postbuild"]).toEqual({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+      });
+      expect(
+        resolveBuildAllStep(runtimePostbuild, {
+          env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },
+        }).options.env,
+      ).toMatchObject({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+      });
+    }
   });
 
   it("writes the runtime postbuild stamp after the build stamp", () => {
