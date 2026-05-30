@@ -14,6 +14,7 @@ export type FeishuMessageEvent = {
     suppress_reply_target?: boolean;
     root_id?: string;
     parent_id?: string;
+    upper_message_id?: string;
     thread_id?: string;
     chat_id: string;
     chat_type: "p2p" | "group" | "topic_group" | "private";
