@@ -138,6 +138,8 @@ function formatEventLabel(event: WorkboardEvent): string {
       return t("workboard.eventDiagnostic");
     case "notification":
       return t("workboard.eventNotification");
+    case "dispatch":
+      return t("workboard.eventDispatch");
     case "archived":
       return t("workboard.eventArchived");
     case "unarchived":
@@ -192,6 +194,15 @@ function renderMetadataBadges(card: WorkboardCard) {
     metadata.artifacts?.length
       ? t("workboard.badgeArtifacts", { count: String(metadata.artifacts.length) })
       : null,
+    metadata.automation?.tenant
+      ? t("workboard.badgeTenant", { tenant: metadata.automation.tenant })
+      : null,
+    metadata.automation?.skills?.length
+      ? t("workboard.badgeSkills", { count: String(metadata.automation.skills.length) })
+      : null,
+    metadata.automation?.dispatchCount
+      ? t("workboard.badgeDispatches", { count: String(metadata.automation.dispatchCount) })
+      : null,
     metadata.claim ? t("workboard.badgeClaimed", { owner: metadata.claim.ownerId }) : null,
     metadata.diagnostics?.length
       ? t("workboard.badgeDiagnostics", { count: String(metadata.diagnostics.length) })
@@ -227,6 +238,13 @@ function matchesFilter(
     card.execution?.model,
     card.execution?.sessionKey,
     card.metadata?.templateId,
+    card.metadata?.automation?.tenant,
+    card.metadata?.automation?.idempotencyKey,
+    card.metadata?.automation?.workspace?.kind,
+    card.metadata?.automation?.workspace?.path,
+    card.metadata?.automation?.workspace?.branch,
+    ...(card.metadata?.automation?.skills ?? []),
+    ...(card.metadata?.automation?.createdCardIds ?? []),
     ...(card.metadata?.comments ?? []).map((comment) => comment.body),
     ...(card.metadata?.links ?? []).flatMap((link) => [link.title, link.url, link.targetCardId]),
     ...(card.metadata?.proof ?? []).flatMap((proof) => [

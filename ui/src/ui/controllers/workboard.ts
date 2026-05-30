@@ -2,8 +2,11 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow } from "../types.ts";
 
 export const WORKBOARD_STATUSES = [
+  "triage",
   "backlog",
   "todo",
+  "scheduled",
+  "ready",
   "running",
   "review",
   "blocked",
@@ -36,6 +39,7 @@ export const WORKBOARD_EVENT_KINDS = [
   "artifact_added",
   "diagnostic",
   "notification",
+  "dispatch",
   "archived",
   "unarchived",
   "stale",
@@ -47,7 +51,13 @@ export const WORKBOARD_ATTEMPT_STATUSES = [
   "blocked",
   "stopped",
 ] as const;
-export const WORKBOARD_LINK_TYPES = ["blocks", "blocked_by", "relates_to"] as const;
+export const WORKBOARD_LINK_TYPES = [
+  "parent",
+  "child",
+  "blocks",
+  "blocked_by",
+  "relates_to",
+] as const;
 export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
@@ -173,12 +183,33 @@ export type WorkboardNotification = {
   runId?: string;
 };
 
+export type WorkboardWorkspace = {
+  kind: "scratch" | "dir" | "worktree";
+  path?: string;
+  branch?: string;
+};
+
+export type WorkboardAutomation = {
+  tenant?: string;
+  idempotencyKey?: string;
+  skills?: string[];
+  workspace?: WorkboardWorkspace;
+  maxRuntimeSeconds?: number;
+  maxRetries?: number;
+  scheduledAt?: number;
+  summary?: string;
+  createdCardIds?: string[];
+  dispatchCount?: number;
+  lastDispatchAt?: number;
+};
+
 export type WorkboardMetadata = {
   attempts?: WorkboardRunAttempt[];
   comments?: WorkboardComment[];
   links?: WorkboardLink[];
   proof?: WorkboardProof[];
   artifacts?: WorkboardArtifact[];
+  automation?: WorkboardAutomation;
   claim?: WorkboardClaim;
   diagnostics?: WorkboardDiagnostic[];
   notifications?: WorkboardNotification[];
@@ -393,6 +424,50 @@ function normalizeEvents(value: unknown): WorkboardEvent[] {
     : [];
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
+    : [];
+}
+
+function normalizeAutomation(value: unknown): WorkboardAutomation | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const workspace = isRecord(value.workspace)
+    ? {
+        kind:
+          value.workspace.kind === "scratch" ||
+          value.workspace.kind === "dir" ||
+          value.workspace.kind === "worktree"
+            ? value.workspace.kind
+            : undefined,
+        ...(typeof value.workspace.path === "string" ? { path: value.workspace.path } : {}),
+        ...(typeof value.workspace.branch === "string" ? { branch: value.workspace.branch } : {}),
+      }
+    : undefined;
+  const automation: WorkboardAutomation = {
+    ...(typeof value.tenant === "string" ? { tenant: value.tenant } : {}),
+    ...(typeof value.idempotencyKey === "string" ? { idempotencyKey: value.idempotencyKey } : {}),
+    ...(normalizeStringArray(value.skills).length
+      ? { skills: normalizeStringArray(value.skills) }
+      : {}),
+    ...(workspace?.kind ? { workspace: workspace as WorkboardWorkspace } : {}),
+    ...(typeof value.maxRuntimeSeconds === "number"
+      ? { maxRuntimeSeconds: value.maxRuntimeSeconds }
+      : {}),
+    ...(typeof value.maxRetries === "number" ? { maxRetries: value.maxRetries } : {}),
+    ...(typeof value.scheduledAt === "number" ? { scheduledAt: value.scheduledAt } : {}),
+    ...(typeof value.summary === "string" ? { summary: value.summary } : {}),
+    ...(normalizeStringArray(value.createdCardIds).length
+      ? { createdCardIds: normalizeStringArray(value.createdCardIds) }
+      : {}),
+    ...(typeof value.dispatchCount === "number" ? { dispatchCount: value.dispatchCount } : {}),
+    ...(typeof value.lastDispatchAt === "number" ? { lastDispatchAt: value.lastDispatchAt } : {}),
+  };
+  return Object.keys(automation).length ? automation : undefined;
+}
+
 function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -585,12 +660,14 @@ function normalizeMetadata(value: unknown): WorkboardMetadata | undefined {
             : "Session has not reported recent activity.",
       }
     : undefined;
+  const automation = normalizeAutomation(value.automation);
   const metadata: WorkboardMetadata = {
     ...(attempts.length ? { attempts } : {}),
     ...(comments.length ? { comments } : {}),
     ...(links.length ? { links } : {}),
     ...(proof.length ? { proof } : {}),
     ...(artifacts.length ? { artifacts } : {}),
+    ...(automation ? { automation } : {}),
     ...(claim?.ownerId && claim.claimedAt ? { claim } : {}),
     ...(diagnostics.length ? { diagnostics } : {}),
     ...(notifications.length ? { notifications } : {}),
@@ -718,6 +795,29 @@ function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
   state.cards = next.toSorted((left, right) => left.position - right.position);
 }
 
+function removeCardAndReferences(cards: readonly WorkboardCard[], cardId: string): WorkboardCard[] {
+  const nextCards: WorkboardCard[] = [];
+  for (const card of cards) {
+    if (card.id === cardId) {
+      continue;
+    }
+    const links = card.metadata?.links;
+    if (!links?.some((link) => link.targetCardId === cardId)) {
+      nextCards.push(card);
+      continue;
+    }
+    const nextLinks = links.filter((link) => link.targetCardId !== cardId);
+    const metadata: WorkboardMetadata = { ...card.metadata, links: nextLinks };
+    if (nextLinks.length === 0) {
+      delete metadata.links;
+    }
+    nextCards.push(
+      Object.keys(metadata).length ? { ...card, metadata } : { ...card, metadata: undefined },
+    );
+  }
+  return nextCards;
+}
+
 function resetDraftState(state: WorkboardUiState) {
   state.draftOpen = false;
   state.editingCardId = null;
@@ -821,10 +921,10 @@ function shouldSyncCardStatus(card: WorkboardCard, targetStatus: WorkboardStatus
     return false;
   }
   if (targetStatus === "running") {
-    return card.status === "backlog" || card.status === "todo";
+    return card.status === "backlog" || card.status === "todo" || card.status === "ready";
   }
   if (targetStatus === "blocked" || targetStatus === "review") {
-    return card.status === "running" || card.status === "todo";
+    return card.status === "running" || card.status === "todo" || card.status === "ready";
   }
   return false;
 }
@@ -1246,7 +1346,7 @@ export async function deleteWorkboardCard(params: {
   params.requestUpdate?.();
   try {
     await params.client.request("workboard.cards.delete", { id: params.cardId });
-    state.cards = state.cards.filter((card) => card.id !== params.cardId);
+    state.cards = removeCardAndReferences(state.cards, params.cardId);
   } catch (error) {
     state.error = formatError(error);
   } finally {
@@ -1290,6 +1390,19 @@ function buildCardPrompt(card: WorkboardCard): string {
   if (card.labels.length > 0) {
     lines.push("", `Labels: ${card.labels.join(", ")}`);
   }
+  const parents = card.metadata?.links
+    ?.filter((link) => link.type === "parent" && link.targetCardId)
+    .map((link) => link.targetCardId);
+  if (parents?.length) {
+    lines.push("", `Parents: ${parents.join(", ")}`);
+  }
+  if (card.metadata?.automation?.skills?.length) {
+    lines.push("", `Suggested skills: ${card.metadata.automation.skills.join(", ")}`);
+  }
+  if (card.metadata?.automation?.workspace) {
+    const workspace = card.metadata.automation.workspace;
+    lines.push("", `Workspace: ${workspace.kind}${workspace.path ? ` ${workspace.path}` : ""}`);
+  }
   lines.push("", "When done, summarize what changed and what remains.");
   return lines.join("\n");
 }
@@ -1303,6 +1416,14 @@ function buildCardSessionLabel(card: WorkboardCard): string {
   }
   const titleMax = WORKBOARD_SESSION_LABEL_MAX_CHARS - suffixText.length;
   return `${title.slice(0, titleMax - 3).trimEnd()}...${suffixText}`;
+}
+
+function isScheduledForLater(card: WorkboardCard, now = Date.now()): boolean {
+  const scheduledAt = card.metadata?.automation?.scheduledAt;
+  if (typeof scheduledAt === "number") {
+    return scheduledAt > now;
+  }
+  return card.status === "scheduled";
 }
 
 function buildWorkboardExecution(params: {
@@ -1340,17 +1461,37 @@ export async function startWorkboardCard(params: {
   if (!params.client) {
     return null;
   }
-  state.busyCardId = params.card.id;
-  state.error = null;
-  params.requestUpdate?.();
   const engine = params.engine;
   const mode = params.mode ?? "autonomous";
+  state.error = null;
+  if (isScheduledForLater(params.card)) {
+    state.error = "Scheduled cards cannot start before their scheduled time.";
+    params.requestUpdate?.();
+    return null;
+  }
+  state.busyCardId = params.card.id;
+  params.requestUpdate?.();
+  let preflightCard: WorkboardCard | null = null;
   try {
+    const nextCardStatus = mode === "autonomous" ? "running" : params.card.status;
+    const nextExecutionStatus = mode === "autonomous" ? "running" : "idle";
+    let card = params.card;
+    if (mode === "autonomous") {
+      const preflightPayload = await params.client.request("workboard.cards.update", {
+        id: params.card.id,
+        patch: { status: nextCardStatus },
+      });
+      preflightCard = normalizeCardPayload(preflightPayload);
+      if (preflightCard) {
+        replaceCard(state, preflightCard);
+        card = preflightCard;
+      }
+    }
     const created = await params.client.request("sessions.create", {
-      ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
-      label: buildCardSessionLabel(params.card),
+      ...(card.agentId ? { agentId: card.agentId } : {}),
+      label: buildCardSessionLabel(card),
       ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
-      ...(mode === "autonomous" ? { message: buildCardPrompt(params.card) } : {}),
+      ...(mode === "autonomous" ? { message: buildCardPrompt(card) } : {}),
     });
     const sessionKey =
       isRecord(created) && typeof created.key === "string" && created.key.trim()
@@ -1371,7 +1512,7 @@ export async function startWorkboardCard(params: {
           ...(engine
             ? {
                 execution: buildWorkboardExecution({
-                  card: params.card,
+                  card,
                   engine,
                   mode,
                   sessionKey,
@@ -1390,8 +1531,6 @@ export async function startWorkboardCard(params: {
           : "Agent run did not start.";
       return sessionKey;
     }
-    const nextCardStatus = mode === "autonomous" ? "running" : params.card.status;
-    const nextExecutionStatus = mode === "autonomous" ? "running" : "idle";
     const payload = await params.client.request("workboard.cards.update", {
       id: params.card.id,
       patch: {
@@ -1401,7 +1540,7 @@ export async function startWorkboardCard(params: {
         ...(engine
           ? {
               execution: buildWorkboardExecution({
-                card: params.card,
+                card,
                 engine,
                 mode,
                 sessionKey,
@@ -1415,6 +1554,22 @@ export async function startWorkboardCard(params: {
     replaceCard(state, normalizeCardPayload(payload));
     return sessionKey;
   } catch (error) {
+    if (preflightCard) {
+      try {
+        const rollbackPayload = await params.client.request("workboard.cards.update", {
+          id: params.card.id,
+          patch: {
+            status: params.card.status,
+            startedAt: params.card.startedAt ?? null,
+            completedAt: params.card.completedAt ?? null,
+            ...(params.card.execution !== undefined ? { execution: params.card.execution } : {}),
+          },
+        });
+        replaceCard(state, normalizeCardPayload(rollbackPayload) ?? params.card);
+      } catch {
+        replaceCard(state, params.card);
+      }
+    }
     state.error = formatError(error);
     return null;
   } finally {

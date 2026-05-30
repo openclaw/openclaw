@@ -9,9 +9,14 @@
   "contracts": {
     "tools": [
       "workboard_list",
+      "workboard_create",
+      "workboard_link",
       "workboard_read",
       "workboard_claim",
       "workboard_heartbeat",
+      "workboard_complete",
+      "workboard_block",
+      "workboard_dispatch",
       "workboard_release",
       "workboard_comment",
       "workboard_proof",
@@ -22,6 +27,12 @@
     "workboard_list": {
       "optional": true
     },
+    "workboard_create": {
+      "optional": true
+    },
+    "workboard_link": {
+      "optional": true
+    },
     "workboard_read": {
       "optional": true
     },
@@ -29,6 +40,15 @@
       "optional": true
     },
     "workboard_heartbeat": {
+      "optional": true
+    },
+    "workboard_complete": {
+      "optional": true
+    },
+    "workboard_block": {
+      "optional": true
+    },
+    "workboard_dispatch": {
       "optional": true
     },
     "workboard_release": {

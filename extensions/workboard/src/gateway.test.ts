@@ -51,15 +51,19 @@ describe("workboard gateway methods", () => {
       "workboard.cards.delete",
       "workboard.cards.comment",
       "workboard.cards.link",
+      "workboard.cards.linkDependency",
       "workboard.cards.proof",
       "workboard.cards.artifact",
       "workboard.cards.claim",
       "workboard.cards.heartbeat",
       "workboard.cards.release",
+      "workboard.cards.complete",
+      "workboard.cards.block",
       "workboard.cards.unblock",
       "workboard.cards.bulk",
       "workboard.cards.diagnostics",
       "workboard.cards.diagnostics.refresh",
+      "workboard.cards.dispatch",
       "workboard.cards.archive",
       "workboard.cards.export",
     ]);
@@ -220,6 +224,41 @@ describe("workboard gateway methods", () => {
     } as never);
     expect(bulkRespond.mock.calls[0]?.[1]).toMatchObject({
       cards: [expect.objectContaining({ priority: "urgent" })],
+    });
+
+    const completeRespond = vi.fn();
+    await methods.get("workboard.cards.complete")?.handler({
+      params: { id: cardId, summary: "Operator closed it." },
+      respond: completeRespond,
+    } as never);
+    expect(completeRespond.mock.calls[0]?.[1]).toMatchObject({
+      card: {
+        status: "done",
+        metadata: {
+          comments: expect.arrayContaining([
+            expect.objectContaining({ body: "Operator closed it." }),
+          ]),
+        },
+      },
+    });
+
+    const blockedCreateRespond = vi.fn();
+    await methods.get("workboard.cards.create")?.handler({
+      params: { title: "Block me" },
+      respond: blockedCreateRespond,
+    } as never);
+    const blockedCardId = blockedCreateRespond.mock.calls[0]?.[1]?.card.id;
+    await methods.get("workboard.cards.claim")?.handler({
+      params: { id: blockedCardId, ownerId: "main" },
+      respond: vi.fn(),
+    } as never);
+    const blockRespond = vi.fn();
+    await methods.get("workboard.cards.block")?.handler({
+      params: { id: blockedCardId, reason: "Operator blocked it." },
+      respond: blockRespond,
+    } as never);
+    expect(blockRespond.mock.calls[0]?.[1]).toMatchObject({
+      card: { status: "blocked" },
     });
   });
 });

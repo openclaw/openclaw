@@ -4,6 +4,7 @@ import {
   archiveWorkboardCard,
   captureSessionToWorkboard,
   createWorkboardCard,
+  deleteWorkboardCard,
   getWorkboardLifecycle,
   getWorkboardState,
   loadWorkboard,
@@ -66,6 +67,39 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
     expect(getWorkboardState(host).cards).toEqual([sampleCard]);
+  });
+
+  it("preserves automation metadata loaded from the plugin gateway method", async () => {
+    const host = {};
+    const client = createClient({
+      "workboard.cards.list": {
+        cards: [
+          {
+            ...sampleCard,
+            metadata: {
+              automation: {
+                tenant: "qa",
+                skills: ["testing"],
+                workspace: { kind: "scratch" },
+                dispatchCount: 2,
+                lastDispatchAt: 20,
+              },
+            },
+          },
+        ],
+        statuses: ["ready", "done"],
+      },
+    });
+
+    await loadWorkboard({ host, client: client as never, force: true });
+
+    expect(getWorkboardState(host).cards[0]?.metadata?.automation).toMatchObject({
+      tenant: "qa",
+      skills: ["testing"],
+      workspace: { kind: "scratch" },
+      dispatchCount: 2,
+      lastDispatchAt: 20,
+    });
   });
 
   it("creates cards from draft state", async () => {
@@ -411,15 +445,23 @@ describe("workboard controller", () => {
     expect(sessionKey).toBe("agent:main:dashboard:1");
     expect(client.request).toHaveBeenNthCalledWith(
       1,
+      "workboard.cards.update",
+      expect.objectContaining({
+        id: "card-1",
+        patch: { status: "running" },
+      }),
+    );
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
       "sessions.create",
       expect.objectContaining({
         label: "Build board (card-1)",
         message: expect.stringContaining("Work on this OpenClaw Workboard card: Build board"),
       }),
     );
-    expect(client.request.mock.calls[0]?.[1]).not.toHaveProperty("model");
+    expect(client.request.mock.calls[1]?.[1]).not.toHaveProperty("model");
     expect(client.request).toHaveBeenNthCalledWith(
-      2,
+      3,
       "workboard.cards.update",
       expect.objectContaining({
         id: "card-1",
@@ -429,7 +471,228 @@ describe("workboard controller", () => {
         }),
       }),
     );
-    expect(client.request.mock.calls[1]?.[1]).toHaveProperty("patch.execution", null);
+    expect(client.request.mock.calls[2]?.[1]).toHaveProperty("patch.execution", null);
+  });
+
+  it("lets the gateway preflight decide starts when local parent state is stale", async () => {
+    const host = {};
+    const parent = { ...sampleCard, id: "parent-1", title: "Parent", status: "running" };
+    const child: WorkboardCard = {
+      ...sampleCard,
+      id: "child-1",
+      title: "Child",
+      metadata: {
+        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    };
+    const running = { ...child, status: "running", sessionKey: "agent:main:dashboard:child" };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [parent, child], statuses: ["todo", "running", "done"] };
+      }
+      if (method === "sessions.create") {
+        return { key: "agent:main:dashboard:child" };
+      }
+      return { card: running };
+    });
+    await loadWorkboard({ host, client: client as never, force: true });
+    client.request.mockClear();
+
+    const sessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: child,
+    });
+
+    expect(sessionKey).toBe("agent:main:dashboard:child");
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "workboard.cards.update",
+      expect.objectContaining({ id: child.id, patch: { status: "running" } }),
+    );
+  });
+
+  it("does not create a session when the gateway rejects start preflight", async () => {
+    const host = {};
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        throw new Error("Parent cards must be done before starting this card.");
+      }
+      return { key: "agent:main:dashboard:1" };
+    });
+
+    const sessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: sampleCard,
+    });
+
+    expect(sessionKey).toBeNull();
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith(
+      "workboard.cards.update",
+      expect.objectContaining({ patch: { status: "running" } }),
+    );
+    expect(getWorkboardState(host).error).toBe(
+      "Parent cards must be done before starting this card.",
+    );
+  });
+
+  it("rolls back the running preflight when session creation fails", async () => {
+    const host = {};
+    const running = { ...sampleCard, status: "running" } satisfies WorkboardCard;
+    let updateCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        updateCalls += 1;
+        return { card: updateCalls === 1 ? running : sampleCard };
+      }
+      if (method === "sessions.create") {
+        throw new Error("gateway disconnected");
+      }
+      return {};
+    });
+
+    const sessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: sampleCard,
+    });
+
+    expect(sessionKey).toBeNull();
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "workboard.cards.update",
+      expect.objectContaining({ patch: { status: "running" } }),
+    );
+    expect(client.request).toHaveBeenNthCalledWith(
+      3,
+      "workboard.cards.update",
+      expect.objectContaining({
+        patch: expect.objectContaining({
+          status: "todo",
+          startedAt: null,
+          completedAt: null,
+        }),
+      }),
+    );
+    expect(getWorkboardState(host).cards).toEqual([sampleCard]);
+    expect(getWorkboardState(host).error).toBe("gateway disconnected");
+  });
+
+  it("rolls back the running preflight when final session link update fails", async () => {
+    const host = {};
+    const running = { ...sampleCard, status: "running" } satisfies WorkboardCard;
+    let updateCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.update") {
+        updateCalls += 1;
+        if (updateCalls === 1) {
+          return { card: running };
+        }
+        if (updateCalls === 2) {
+          throw new Error("write conflict");
+        }
+        return { card: sampleCard };
+      }
+      if (method === "sessions.create") {
+        return { key: "agent:main:dashboard:1", runId: "run-1" };
+      }
+      return {};
+    });
+
+    const sessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: sampleCard,
+    });
+
+    expect(sessionKey).toBeNull();
+    expect(client.request).toHaveBeenNthCalledWith(
+      4,
+      "workboard.cards.update",
+      expect.objectContaining({
+        patch: expect.objectContaining({
+          status: "todo",
+          startedAt: null,
+          completedAt: null,
+        }),
+      }),
+    );
+    expect(getWorkboardState(host).cards).toEqual([sampleCard]);
+    expect(getWorkboardState(host).error).toBe("write conflict");
+  });
+
+  it("does not start a card before its scheduled time", async () => {
+    const host = {};
+    const scheduled = {
+      ...sampleCard,
+      id: "scheduled-1",
+      status: "scheduled",
+      metadata: { automation: { scheduledAt: Date.now() + 60_000 } },
+    } satisfies WorkboardCard;
+    const client = createClient({
+      "workboard.cards.list": { cards: [scheduled], statuses: ["scheduled", "running", "done"] },
+    });
+    await loadWorkboard({ host, client: client as never, force: true });
+    client.request.mockClear();
+
+    const sessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: scheduled,
+    });
+
+    expect(sessionKey).toBeNull();
+    expect(client.request).not.toHaveBeenCalled();
+    expect(getWorkboardState(host).error).toBe(
+      "Scheduled cards cannot start before their scheduled time.",
+    );
+
+    const manualScheduled = {
+      ...sampleCard,
+      id: "scheduled-2",
+      status: "scheduled",
+    } satisfies WorkboardCard;
+    const manualSessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: manualScheduled,
+    });
+    expect(manualSessionKey).toBeNull();
+    expect(client.request).not.toHaveBeenCalled();
+
+    const dueScheduled = {
+      ...scheduled,
+      id: "scheduled-3",
+      metadata: { automation: { scheduledAt: Date.now() - 60_000 } },
+    } satisfies WorkboardCard;
+    const dueRunning = {
+      ...dueScheduled,
+      status: "running",
+      sessionKey: "agent:main:dashboard:1",
+    } satisfies WorkboardCard;
+    const dueClient = createClient({
+      "workboard.cards.list": { cards: [dueScheduled], statuses: ["scheduled", "running", "done"] },
+      "sessions.create": { key: "agent:main:dashboard:1", runId: "run-1" },
+      "workboard.cards.update": { card: dueRunning },
+    });
+    await loadWorkboard({ host, client: dueClient as never, force: true });
+    dueClient.request.mockClear();
+
+    const dueSessionKey = await startWorkboardCard({
+      host,
+      client: dueClient as never,
+      card: dueScheduled,
+    });
+
+    expect(dueSessionKey).toBe("agent:main:dashboard:1");
+    expect(dueClient.request).toHaveBeenCalledWith(
+      "sessions.create",
+      expect.objectContaining({
+        label: "Build board (schedule)",
+      }),
+    );
   });
 
   it("starts a Codex execution with an explicit model override", async () => {
@@ -465,6 +728,13 @@ describe("workboard controller", () => {
 
     expect(client.request).toHaveBeenNthCalledWith(
       1,
+      "workboard.cards.update",
+      expect.objectContaining({
+        patch: { status: "running" },
+      }),
+    );
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
       "sessions.create",
       expect.objectContaining({
         model: "openai/gpt-5.5",
@@ -472,7 +742,7 @@ describe("workboard controller", () => {
       }),
     );
     expect(client.request).toHaveBeenNthCalledWith(
-      2,
+      3,
       "workboard.cards.update",
       expect.objectContaining({
         id: "card-1",
@@ -521,7 +791,7 @@ describe("workboard controller", () => {
       });
 
       expect(client.request).toHaveBeenNthCalledWith(
-        2,
+        3,
         "workboard.cards.update",
         expect.objectContaining({
           patch: expect.objectContaining({
@@ -616,7 +886,7 @@ describe("workboard controller", () => {
 
     expect(sessionKey).toBe("agent:main:dashboard:1");
     expect(client.request).toHaveBeenNthCalledWith(
-      2,
+      3,
       "workboard.cards.update",
       expect.objectContaining({
         id: "card-1",
@@ -626,7 +896,7 @@ describe("workboard controller", () => {
         }),
       }),
     );
-    expect(client.request.mock.calls[1]?.[1]).toHaveProperty("patch.execution", null);
+    expect(client.request.mock.calls[2]?.[1]).toHaveProperty("patch.execution", null);
     expect(getWorkboardState(host).error).toBe("Agent run did not start: provider unavailable");
   });
 
@@ -647,6 +917,60 @@ describe("workboard controller", () => {
       status: "blocked",
       position: 2000,
     });
+  });
+
+  it("removes stale dependency links from local cards after delete", async () => {
+    const host = {};
+    const parent: WorkboardCard = {
+      ...sampleCard,
+      id: "parent-1",
+      title: "Parent",
+      status: "done",
+    };
+    const child: WorkboardCard = {
+      ...sampleCard,
+      id: "child-1",
+      title: "Child",
+      metadata: {
+        links: [{ id: "link-1", type: "parent", targetCardId: parent.id, createdAt: 1 }],
+      },
+    };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.delete") {
+        return { deleted: true };
+      }
+      if (method === "sessions.create") {
+        return { key: "agent:main:dashboard:child", runId: "run-child" };
+      }
+      return { card: { ...child, status: "running", metadata: undefined } };
+    });
+    getWorkboardState(host).cards = [parent, child];
+
+    await deleteWorkboardCard({
+      host,
+      client: client as never,
+      cardId: parent.id,
+    });
+
+    const remaining = getWorkboardState(host).cards[0];
+    expect(remaining).toMatchObject({ id: child.id });
+    expect(remaining?.metadata?.links).toBeUndefined();
+
+    client.request.mockClear();
+    await startWorkboardCard({
+      host,
+      client: client as never,
+      card: remaining,
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(
+      1,
+      "workboard.cards.update",
+      expect.objectContaining({
+        id: child.id,
+        patch: { status: "running" },
+      }),
+    );
   });
 
   it("derives lifecycle state from linked dashboard sessions", () => {
