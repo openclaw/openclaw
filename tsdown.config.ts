@@ -251,6 +251,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
+    "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
@@ -392,8 +393,28 @@ function buildSpeechCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildLlmCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/llm-core/src/index.ts",
+    types: "packages/llm-core/src/types.ts",
+    "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
+    "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",
+    validation: "packages/llm-core/src/validation.ts",
+  };
+}
+
+function buildLlmRuntimeDistEntries(): Record<string, string> {
+  return {
+    index: "packages/llm-runtime/src/index.ts",
+    "api-registry": "packages/llm-runtime/src/api-registry.ts",
+    stream: "packages/llm-runtime/src/stream.ts",
+  };
+}
+
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
+    id === "@openclaw/llm-core" ||
+    id.startsWith("@openclaw/llm-core/") ||
     id === "ignore" ||
     id === "openclaw" ||
     id.startsWith("openclaw/") ||
@@ -423,6 +444,14 @@ function shouldExternalizeNetPolicyDependency(id: string): boolean {
 
 function shouldExternalizeSpeechCoreDependency(id: string): boolean {
   return id === "openclaw" || id.startsWith("openclaw/");
+}
+
+function shouldExternalizeLlmCoreDependency(id: string): boolean {
+  return id === "typebox" || id.startsWith("typebox/");
+}
+
+function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
+  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
 const coreDistEntries = buildCoreDistEntries();
@@ -501,6 +530,24 @@ export default defineConfig([
     outDir: "packages/speech-core/dist",
     deps: {
       neverBundle: shouldExternalizeSpeechCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildLlmCoreDistEntries(),
+    outDir: "packages/llm-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeLlmCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildLlmRuntimeDistEntries(),
+    outDir: "packages/llm-runtime/dist",
+    deps: {
+      neverBundle: shouldExternalizeLlmRuntimeDependency,
     },
   }),
   nodeBuildConfig({

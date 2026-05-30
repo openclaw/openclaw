@@ -182,9 +182,6 @@ importers:
       tar:
         specifier: 7.5.15
         version: 7.5.15
-      tokenjuice:
-        specifier: 0.8.0
-        version: 0.8.0
       tree-sitter-bash:
         specifier: 0.25.1
         version: 0.25.1
@@ -568,13 +565,14 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/copilot:
+    dependencies:
+      '@github/copilot-sdk':
+        specifier: 1.0.0-beta.4
+        version: 1.0.0-beta.4
     devDependencies:
       '@github/copilot':
         specifier: 1.0.48
         version: 1.0.48
-      '@github/copilot-sdk':
-        specifier: 1.0.0-beta.4
-        version: 1.0.0-beta.4
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
@@ -1564,6 +1562,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/tts-local-cli:
     devDependencies:
@@ -1696,6 +1697,19 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/workboard:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/xai:
     dependencies:
       typebox:
@@ -1755,6 +1769,9 @@ importers:
 
   packages/agent-core:
     dependencies:
+      '@openclaw/llm-core':
+        specifier: workspace:*
+        version: link:../llm-core
       ignore:
         specifier: 7.0.5
         version: 7.0.5
@@ -1782,6 +1799,18 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+
+  packages/llm-core:
+    dependencies:
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+
+  packages/llm-runtime:
+    dependencies:
+      '@openclaw/llm-core':
+        specifier: workspace:*
+        version: link:../llm-core
 
   packages/memory-host-sdk: {}
 

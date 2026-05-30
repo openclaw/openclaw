@@ -42,6 +42,7 @@ import {
   onInternalDiagnosticEvent,
   resolveDiagnosticModelContentCapturePolicy,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolveCodexAppServerForOpenClawToolPolicy } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -79,6 +80,7 @@ import {
   isCurrentApprovalTurnRequestParams,
   isCurrentThreadOptionalTurnRequestParams,
   isCurrentThreadTurnRequestParams,
+  isNativeResponseStreamDeltaNotification,
   isTerminalTurnStatus,
 } from "./attempt-notifications.js";
 import {
@@ -98,7 +100,10 @@ import {
   resolveCodexTurnTerminalIdleTimeoutMs,
   withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
-import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
+import {
+  createCodexAttemptTurnWatchController,
+  type CodexAttemptTurnWatchTimeoutKind,
+} from "./attempt-turn-watches.js";
 import {
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
@@ -118,6 +123,7 @@ import {
   readCodexPluginConfig,
   resolveCodexComputerUseConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveOpenClawExecPolicyForCodexAppServer,
   shouldAutoApproveCodexAppServerApprovals,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
@@ -200,6 +206,7 @@ import {
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   clearCodexAppServerBinding,
+  clearCodexAppServerBindingForThread,
   readCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
@@ -342,7 +349,11 @@ export async function runCodexAppServerAttempt(
   const attemptClientFactory = options.clientFactory ?? defaultLeasedCodexAppServerClientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
-  const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
   const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
   preDynamicStartupStages.mark("config");
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -357,6 +368,17 @@ export async function runCodexAppServerAttempt(
     workspaceDir: resolvedWorkspace,
   });
   preDynamicStartupStages.mark("sandbox");
+  const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+    execOverrides: params.execOverrides,
+    approvals: loadExecApprovals(),
+    config: params.config,
+    agentId: sessionAgentId,
+  });
+  const configuredAppServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig,
+    execPolicy,
+    openClawSandboxActive: sandbox?.enabled === true,
+  });
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? resolvedWorkspace
@@ -378,6 +400,7 @@ export async function runCodexAppServerAttempt(
     shouldPromote:
       beforeToolCallPolicy.hasBeforeToolCallHook ||
       beforeToolCallPolicy.trustedToolPolicies.length > 0,
+    execPolicy,
     canUseUntrustedApprovalPolicy:
       configuredAppServer.start.transport !== "stdio" ||
       isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
@@ -408,11 +431,6 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
 
-  const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
-  });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   preDynamicStartupStages.mark("session-agent");
   let startupBinding = await readCodexAppServerBinding(params.sessionFile);
@@ -928,6 +946,7 @@ export async function runCodexAppServerAttempt(
   let terminalTurnNotificationQueued = false;
   let timedOut = false;
   let turnCompletionIdleTimedOut = false;
+  let turnWatchTimeoutKind: CodexAttemptTurnWatchTimeoutKind | undefined;
   let turnCompletionIdleTimeoutMessage: string | undefined;
   let clientClosedPromptError: string | undefined;
   let clientClosedAbort = false;
@@ -1006,9 +1025,10 @@ export async function runCodexAppServerAttempt(
     turnTerminalIdleTimeoutMs,
     interruptTimeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
     onInterruptTurn: (input) => interruptCodexTurnBestEffort(client, input),
-    onTimeout: () => {
+    onTimeout: (timeout) => {
       timedOut = true;
       turnCompletionIdleTimedOut = true;
+      turnWatchTimeoutKind = timeout.kind;
       turnCompletionIdleTimeoutMessage =
         "codex app-server turn idle timed out waiting for turn/completed";
     },
@@ -1263,8 +1283,29 @@ export async function runCodexAppServerAttempt(
     // Touch idle-watch timestamps at receive time, not just after queued
     // projection.  A queued terminal event should suppress short false-idle
     // guards, while the full attempt watchdog still releases a wedged queue.
-    if (correlation.matchesActiveTurn !== false) {
-      turnWatches.noteNotificationReceived(notification.method);
+    const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
+    const nativeResponseStreamDeltaMatchesActiveTurn =
+      isNativeResponseStreamDelta &&
+      (correlation.matchesActiveTurn === true ||
+        (isUnscopedCodexNotification(correlation) &&
+          canAttributeUnscopedNativeResponseDeltaToThisTurn(client)));
+    const notificationMatchesActiveTurn =
+      correlation.matchesActiveTurn === true ||
+      (!isNativeResponseStreamDelta && correlation.matchesActiveTurn !== false) ||
+      nativeResponseStreamDeltaMatchesActiveTurn;
+    if (notificationMatchesActiveTurn) {
+      // If a future Codex app-server exposes raw response deltas, treat them as
+      // activity only when scoped to this turn or attributable to a single lease.
+      // Today the durable app-server raw-event surface is rawResponseItem/completed.
+      turnWatches.noteNotificationReceived(
+        notification.method,
+        isNativeResponseStreamDelta
+          ? {
+              attemptProgress: true,
+              details: { lastNotificationMethod: notification.method },
+            }
+          : undefined,
+      );
     }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
@@ -1868,11 +1909,15 @@ export async function runCodexAppServerAttempt(
   const abortListener = () => {
     const shouldRetireClient = timedOut;
     if (shouldRetireClient) {
-      void retireCodexAppServerClientAfterTimedOutTurn(client, {
-        threadId: thread.threadId,
-        turnId: activeTurnId,
-        reason: String(runAbortController.signal.reason ?? "timeout"),
-      }).finally(() => {
+      void (async () => {
+        // Timed-out native turns cannot be safely resumed on the same thread.
+        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
+        await retireCodexAppServerClientAfterTimedOutTurn(client, {
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          reason: String(runAbortController.signal.reason ?? "timeout"),
+        });
+      })().finally(() => {
         resolveCompletion?.();
       });
       return;
@@ -1890,6 +1935,11 @@ export async function runCodexAppServerAttempt(
 
   try {
     await completion;
+    // Timeout completion can win while a received notification is still being
+    // projected, for example while persisting raw image-generation media. Wait
+    // for already-queued projection work so the final result includes artifacts
+    // from the notification that triggered the idle watchdog.
+    await notificationQueue;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
     const finalAborted =
       result.aborted || (runAbortController.signal.aborted && !clientClosedAbort);
@@ -2082,6 +2132,10 @@ export async function runCodexAppServerAttempt(
         ? {
             codexAppServerFailure: {
               kind: codexAppServerFailureKind,
+              ...(codexAppServerFailureKind === "turn_completion_idle_timeout" &&
+              turnWatchTimeoutKind
+                ? { turnWatchTimeoutKind }
+                : {}),
               transport: appServer.start.transport,
               threadId: thread.threadId,
               turnId: activeTurnId,
@@ -2187,6 +2241,22 @@ async function clearCodexBindingAfterInvalidImagePayload(
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function canAttributeUnscopedNativeResponseDeltaToThisTurn(client: CodexAppServerClient): boolean {
+  const activeLeases = client.getActiveSharedLeaseCountForUnscopedNotifications?.();
+  return activeLeases === undefined || activeLeases <= 1;
+}
+
+function isUnscopedCodexNotification(
+  correlation: ReturnType<typeof describeCodexNotificationCorrelation>,
+): boolean {
+  return (
+    !correlation.threadId &&
+    !correlation.turnId &&
+    !correlation.nestedTurnThreadId &&
+    !correlation.nestedTurnId
+  );
 }
 
 function shouldRetryContextEngineTurnOnFreshCodexThread(params: {
