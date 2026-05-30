@@ -124,14 +124,6 @@ async function waitForMicrotaskCondition(
   throw new Error(message);
 }
 
-function firstSleepWithAbortCall(): [number, AbortSignal | undefined] {
-  const call = hoisted.sleepWithAbort.mock.calls[0];
-  if (!call) {
-    throw new Error("expected sleepWithAbort call");
-  }
-  return call as [number, AbortSignal | undefined];
-}
-
 function firstStartAccountContext(
   startAccount: ReturnType<typeof vi.fn>,
 ): ChannelGatewayContext<TestAccount> {
@@ -378,14 +370,56 @@ describe("server-channels auto restart", () => {
     expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
 
     releaseFirstTask.resolve();
-    await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(10);
-    await flushMicrotasks();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected timed-out recovery stop to restart without backoff",
+    );
 
     expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
-  it("lets manual stops cancel recovery backoff after recovery stop times out", async () => {
+  it("restarts immediately when recovery stop timeout settles with an error", async () => {
+    const rejectFirstTask = createDeferred();
+    let startCount = 0;
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      startCount += 1;
+      abortSignal.addEventListener("abort", () => {}, { once: true });
+      if (startCount === 1) {
+        await rejectFirstTask.promise;
+        throw new Error("late worker exit");
+      }
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await recoveryStopTask;
+
+    rejectFirstTask.resolve();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected rejected timed-out recovery stop to restart without backoff",
+    );
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toBeNull();
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("lets manual stops cancel recovery restart after recovery stop times out", async () => {
     const releaseFirstTask = createDeferred();
     const startAccount = vi.fn(
       async ({ abortSignal }: { abortSignal: AbortSignal }) =>
@@ -408,16 +442,10 @@ describe("server-channels auto restart", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     await recoveryStopTask;
 
+    const manualStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await manualStopTask;
     releaseFirstTask.resolve();
-    await waitForMicrotaskCondition(
-      () => hoisted.sleepWithAbort.mock.calls.length > 0,
-      "expected recovery restart backoff to be scheduled",
-    );
-    const sleepCall = firstSleepWithAbortCall();
-    expect(sleepCall[0]).toBe(10);
-    expect(sleepCall[1]).toBeInstanceOf(AbortSignal);
-
-    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
     await vi.advanceTimersByTimeAsync(10);
     await flushMicrotasks();
 
@@ -426,6 +454,7 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(false);
     expect(account?.restartPending).toBe(false);
     expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
   it("marks enabled/configured when account descriptors omit them", () => {
