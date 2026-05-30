@@ -32,6 +32,20 @@ export type CronConfig = {
   enabled?: boolean;
   store?: string;
   maxConcurrentRuns?: number;
+  /**
+   * Time budget (ms) for an isolated agent cron job to reach "runner started"
+   * before the setup watchdog aborts it with
+   * "isolated agent setup timed out before runner start".
+   *
+   * The watchdog protects the scheduler from genuinely-stuck agents, but the
+   * fixed default can produce false timeouts when several heavy isolated jobs
+   * start in the same window and contend on the single gateway event loop
+   * during setup (runtime init, plugin load, CLI handshake), even on idle,
+   * high-spec hosts.
+   *
+   * Accepts a value >= 1000 (clamped). Default: 60000 (60s).
+   */
+  agentSetupWatchdogMs?: number;
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;
   /**
