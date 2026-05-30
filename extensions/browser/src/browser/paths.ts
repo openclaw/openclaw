@@ -156,7 +156,7 @@ async function resolveDirectInboundMediaPath(params: {
   inboundMediaDir: string;
   requestedPath: string;
   strict: boolean;
-}): Promise<ExistingPathsResult | StrictExistingPathsResult> {
+}): Promise<ExistingPathsResult> {
   const inboundPathsResult = params.strict
     ? await resolveStrictExistingPathsWithinRoot({
         rootDir: params.inboundMediaDir,
