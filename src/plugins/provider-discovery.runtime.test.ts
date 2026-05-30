@@ -674,6 +674,22 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     });
   });
 
+  it("does not expose runtime-only manifest model catalogs as static discovery entries", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["xiaomi-token-plan"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("xiaomi-token-plan", "runtime")],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers).toStrictEqual([]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
   it("defaults missing manifest model costs for static discovery entries", async () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["anthropic"]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
