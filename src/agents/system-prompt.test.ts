@@ -683,6 +683,37 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("If several apply, choose the most specific.");
   });
 
+  it("instructs models to use skill_research only when the tool is available", () => {
+    const withoutTool = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
+    });
+    expect(withoutTool).not.toContain("## Skill Research");
+    expect(withoutTool).not.toContain("use `skill_research`");
+
+    const withTool = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "skill_research"],
+    });
+    expect(withTool).toContain(
+      "- skill_research: Create or revise pending Skill Workshop proposals",
+    );
+    expect(withTool).toContain("## Skill Research");
+    expect(withTool).toContain(
+      "Use `skill_research` when the user wants to capture, create, draft, formalize, improve, update, or revise a reusable skill, playbook, workflow, procedure, or durable instruction.",
+    );
+    expect(withTool).toContain(
+      "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
+    );
+    expect(withTool).toContain(
+      "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations.",
+    );
+    expect(withTool).toContain("`action=revise` for an existing pending proposal");
+    expect(withTool).toContain(
+      "You may gather context first, but the durable proposal write must use `skill_research`.",
+    );
+  });
+
   it("appends available skills when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

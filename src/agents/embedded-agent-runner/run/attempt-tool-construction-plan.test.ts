@@ -301,6 +301,21 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
         },
       },
     );
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["skill_research"] }),
+      {
+        constructTools: true,
+        includeCoreTools: true,
+        runtimeToolAllowlist: ["skill_research"],
+        coding: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
   });
 
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {
