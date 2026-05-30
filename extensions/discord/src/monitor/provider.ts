@@ -21,6 +21,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   resolveDiscordAccount,
   resolveDiscordAccountAllowFrom,
@@ -536,6 +537,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       mediaMaxBytes,
       textLimit,
       replyToMode,
+      replayStateDir: resolveStateDir(process.env),
       dmEnabled,
       dmPolicy,
       groupDmEnabled,

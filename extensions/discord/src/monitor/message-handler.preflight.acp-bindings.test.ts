@@ -1,4 +1,5 @@
 import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
@@ -228,6 +229,8 @@ async function runRestHydrationPreflight(params: {
 describe("preflightDiscordMessage configured ACP bindings", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => undefined);
+    vi.mocked(runtimeEnv.logVerbose).mockClear();
     ensureConfiguredBindingRouteReadyMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredDiscordRoute());
@@ -318,7 +321,33 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     expect(result?.route.agentId).toBe("codex");
   });
 
-  it("hydrates empty guild message payloads from REST before ensuring configured ACP bindings", async () => {
+  it("logs a structured outcome when configured ACP bindings are unavailable", async () => {
+    vi.mocked(runtimeEnv.logVerbose).mockClear();
+    ensureConfiguredBindingRouteReadyMock.mockResolvedValueOnce({
+      ok: false,
+      error: "binding offline",
+    });
+
+    const result = await preflightDiscordMessage(
+      createBasePreflightParams({
+        guildEntries: createAllowedGuildEntries(false),
+      }),
+    );
+
+    expect(result).toBeNull();
+    expect(
+      vi
+        .mocked(runtimeEnv.logVerbose)
+        .mock.calls.some(
+          ([entry]) =>
+            String(entry).includes("discord inbound outcome:") &&
+            String(entry).includes("reason=configured-binding-unavailable") &&
+            String(entry).includes("message=m-1"),
+        ),
+    ).toBe(true);
+  });
+
+  it("hydrates guild messages from REST before ensuring configured ACP bindings", async () => {
     const { result, restGet } = await runRestHydrationPreflight({
       messageId: "m-rest",
       restPayload: {

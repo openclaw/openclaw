@@ -53,18 +53,21 @@ async function processDiscordQueuedMessage(params: {
   try {
     await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
     await commitDiscordInboundReplay({
+      accountId: params.job.payload.accountId,
       replayKeys: params.job.replayKeys,
       replayGuard: params.replayGuard,
     });
   } catch (error) {
     if (error instanceof DiscordRetryableInboundError) {
       releaseDiscordInboundReplay({
+        accountId: params.job.payload.accountId,
         replayKeys: params.job.replayKeys,
         error,
         replayGuard: params.replayGuard,
       });
     } else {
       await commitDiscordInboundReplay({
+        accountId: params.job.payload.accountId,
         replayKeys: params.job.replayKeys,
         replayGuard: params.replayGuard,
       });

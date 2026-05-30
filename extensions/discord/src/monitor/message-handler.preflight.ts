@@ -44,6 +44,7 @@ import {
 } from "./message-handler.preflight-helpers.js";
 import { buildDiscordPreflightHistoryEntry } from "./message-handler.preflight-history.js";
 import {
+  logDiscordInboundOutcome,
   logDiscordPreflightChannelConfig,
   logDiscordPreflightInboundSummary,
 } from "./message-handler.preflight-logging.js";
@@ -671,6 +672,15 @@ export async function preflightDiscordMessage(
         },
         "discord: skipping guild message",
       );
+      logDiscordInboundOutcome({
+        accountId: params.accountId,
+        channelId: messageChannelId,
+        messageId: message.id,
+        isDirectMessage,
+        isGroupDm,
+        outcome: "skipped",
+        reason: "no-mention",
+      });
       await recordDiscordPendingHistoryEntry({
         preflight: params,
         historyKey: messageChannelId,
@@ -702,6 +712,22 @@ export async function preflightDiscordMessage(
     logVerbose(
       `discord: drop guild message (another user/role mentioned, ignoreOtherMentions=true, botId=${botId})`,
     );
+    logger.info(
+      {
+        channelId: messageChannelId,
+        reason: "other-mention",
+      },
+      "discord: skipping guild message",
+    );
+    logDiscordInboundOutcome({
+      accountId: params.accountId,
+      channelId: messageChannelId,
+      messageId: message.id,
+      isDirectMessage,
+      isGroupDm,
+      outcome: "skipped",
+      reason: "other-mention",
+    });
     await recordDiscordPendingHistoryEntry({
       preflight: params,
       historyKey: messageChannelId,
@@ -742,6 +768,15 @@ export async function preflightDiscordMessage(
       logVerbose(
         `discord: configured ACP binding unavailable for channel ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
       );
+      logDiscordInboundOutcome({
+        accountId: params.accountId,
+        channelId: messageChannelId,
+        messageId: message.id,
+        isDirectMessage,
+        isGroupDm,
+        outcome: "skipped",
+        reason: "configured-binding-unavailable",
+      });
       return null;
     }
   }

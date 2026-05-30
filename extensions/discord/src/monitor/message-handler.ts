@@ -40,6 +40,7 @@ type DiscordMessageHandlerParams = Omit<
 > & {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
+  replayStateDir?: string;
   testing?: DiscordMessageHandlerTestingHooks;
 };
 
@@ -107,7 +108,12 @@ export function createDiscordMessageHandler(
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
   const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
-  const replayGuard = createDiscordInboundReplayGuard();
+  const replayGuard = createDiscordInboundReplayGuard({
+    stateDir: params.replayStateDir,
+    onDiskError: (error) => {
+      params.runtime.error?.(danger(`discord inbound replay guard store failed: ${String(error)}`));
+    },
+  });
   const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
     setStatus: params.setStatus,
@@ -162,6 +168,7 @@ export function createDiscordMessageHandler(
       const abortSignal = last.abortSignal;
       if (abortSignal?.aborted) {
         releaseDiscordInboundReplay({
+          accountId: params.accountId,
           replayKeys,
           error: abortSignal.reason,
           replayGuard,
@@ -182,7 +189,11 @@ export function createDiscordMessageHandler(
             client: last.client,
           });
           if (!ctx) {
-            await commitDiscordInboundReplay({ replayKeys, replayGuard });
+            await commitDiscordInboundReplay({
+              accountId: params.accountId,
+              replayKeys,
+              replayGuard,
+            });
             return;
           }
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
@@ -232,7 +243,11 @@ export function createDiscordMessageHandler(
           client: last.client,
         });
         if (!ctx) {
-          await commitDiscordInboundReplay({ replayKeys, replayGuard });
+          await commitDiscordInboundReplay({
+            accountId: params.accountId,
+            replayKeys,
+            replayGuard,
+          });
           return;
         }
         applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
@@ -253,9 +268,18 @@ export function createDiscordMessageHandler(
         messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
       } catch (error) {
         if (error instanceof DiscordRetryableInboundError) {
-          releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
+          releaseDiscordInboundReplay({
+            accountId: params.accountId,
+            replayKeys,
+            error,
+            replayGuard,
+          });
         } else {
-          await commitDiscordInboundReplay({ replayKeys, replayGuard });
+          await commitDiscordInboundReplay({
+            accountId: params.accountId,
+            replayKeys,
+            replayGuard,
+          });
         }
         throw error;
       }
@@ -285,10 +309,14 @@ export function createDiscordMessageHandler(
       });
       if (
         !(await claimDiscordInboundReplay({
+          accountId: params.accountId,
           replayKey,
           replayGuard,
         }))
       ) {
+        params.runtime.log?.(
+          `discord inbound outcome: account=${params.accountId} channel=${data.channel_id ?? "<unknown>"} message=${data.message?.id ?? "<unknown>"} outcome=duplicate-before-queue`,
+        );
         return;
       }
 

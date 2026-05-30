@@ -34,6 +34,7 @@ import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import {
   createDiscordMessage,
   createDiscordPreflightArgs,
@@ -344,6 +345,8 @@ describe("resolvePreflightMentionRequirement", () => {
 describe("preflightDiscordMessage", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => undefined);
+    vi.mocked(runtimeEnv.logVerbose).mockClear();
     transcribeFirstAudioMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockResolvedValue({
@@ -1530,6 +1533,51 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.shouldRequireMention).toBe(false);
   });
 
+  it("logs a structured outcome when guild mention gating skips a message", async () => {
+    vi.mocked(runtimeEnv.logVerbose).mockClear();
+    const channelId = "channel-outcome-no-mention";
+    const guildId = "guild-outcome-no-mention";
+    const message = createDiscordMessage({
+      id: "m-outcome-no-mention",
+      channelId,
+      content: "general update without a mention",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(
+      vi
+        .mocked(runtimeEnv.logVerbose)
+        .mock.calls.some(
+          ([entry]) =>
+            String(entry).includes("discord inbound outcome:") &&
+            String(entry).includes("message=m-outcome-no-mention") &&
+            String(entry).includes("reason=no-mention"),
+        ),
+    ).toBe(true);
+  });
+
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {
     const channelId = "channel-other-mention-1";
     const guildId = "guild-other-mention-1";
@@ -1548,6 +1596,37 @@ describe("preflightDiscordMessage", () => {
     const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
 
     expect(result).toBeNull();
+  });
+
+  it("logs a structured outcome when ignoreOtherMentions skips a guild message", async () => {
+    vi.mocked(runtimeEnv.logVerbose).mockClear();
+    const channelId = "channel-outcome-other-mention";
+    const guildId = "guild-outcome-other-mention";
+    const message = createDiscordMessage({
+      id: "m-outcome-other-mention",
+      channelId,
+      content: "hello <@999>",
+      mentionedUsers: [{ id: "999" }],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
+
+    expect(result).toBeNull();
+    expect(
+      vi
+        .mocked(runtimeEnv.logVerbose)
+        .mock.calls.some(
+          ([entry]) =>
+            String(entry).includes("discord inbound outcome:") &&
+            String(entry).includes("message=m-outcome-other-mention") &&
+            String(entry).includes("reason=other-mention"),
+        ),
+    ).toBe(true);
   });
 
   it("records local image media for skipped mention-gated guild history", async () => {
