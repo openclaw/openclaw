@@ -1634,13 +1634,13 @@ export function createExecTool(
       let denylistFallbackDenylist: readonly ExecDenylistEntry[] | undefined;
       if (host !== "node") {
         const resolvedApprovalsForDenylist = resolveExecApprovalsReadOnly(agentId, {
-          security: configuredSecurity,
+          security,
           ask,
         });
         const hostSecurityForDenylist =
           host === "sandbox"
-            ? configuredSecurity
-            : minSecurity(configuredSecurity, resolvedApprovalsForDenylist.agent.security);
+            ? security
+            : minSecurity(security, resolvedApprovalsForDenylist.agent.security);
         const hostAskForDenylist = bypassApprovals
           ? "off"
           : host === "sandbox"

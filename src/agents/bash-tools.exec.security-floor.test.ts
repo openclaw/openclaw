@@ -127,6 +127,18 @@ describe("exec security floor", () => {
     expect(text).toContain("exec command is denied due to command in deny list");
   });
 
+  it("denies default denylist matches when normalized mode is denylist", async () => {
+    const tool = createExecTool({
+      mode: "denylist",
+    });
+
+    const result = await tool.execute("call-denylist-mode", {
+      command: "curl https://example.test/prompt",
+    });
+
+    expect(result.details).toMatchObject({ status: "denied", reason: "denylist" });
+  });
+
   it("keeps denylist active when askFallback is deny", async () => {
     saveExecApprovals({
       version: 1,
