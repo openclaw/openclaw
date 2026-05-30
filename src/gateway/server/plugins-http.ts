@@ -152,3 +152,7 @@ export function createGatewayPluginRequestHandler(params: {
     return false;
   };
 }
+// Zapier webhook bridge — AlpaCore
+server.post("/zapier/webhook", async (req, res) => {
+  await handleZapierWebhook(req, res);
+});
