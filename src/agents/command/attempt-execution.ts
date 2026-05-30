@@ -27,7 +27,7 @@ import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
-import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
+import { getCliSessionBinding } from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
@@ -44,7 +44,6 @@ import {
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
-import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -60,7 +59,7 @@ function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
   if (readErrorName(err) === "AbortError") {
     return true;
   }
-  return err instanceof FailoverError && err.reason !== "session_expired";
+  return err instanceof FailoverError;
 }
 
 function resolveClearedCliSessionReason(err: unknown): string {
@@ -538,6 +537,9 @@ export function runAgentAttempt(params: {
 
       return undefined;
     };
+    const canClearCliSessionBeforeRetry = Boolean(
+      params.sessionKey && params.sessionStore && params.storePath,
+    );
     const runCliWithSession = (
       nextCliSessionId: string | undefined,
       activeCliSessionBinding = cliSessionBinding,
@@ -579,59 +581,38 @@ export function runAgentAttempt(params: {
         toolsAllow: params.opts.toolsAllow,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
+        ...(canClearCliSessionBeforeRetry
+          ? {
+              onBeforeFreshCliSessionRetry: async (retry) => {
+                if (
+                  retry.sessionId !== activeCliSessionBinding?.sessionId ||
+                  !params.sessionKey ||
+                  !params.sessionStore ||
+                  !params.storePath
+                ) {
+                  return false;
+                }
+
+                log.warn(
+                  `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
+                );
+
+                params.sessionEntry =
+                  (await clearCliSessionInStore({
+                    provider: cliExecutionProvider,
+                    sessionKey: params.sessionKey,
+                    sessionStore: params.sessionStore,
+                    storePath: params.storePath,
+                  })) ?? params.sessionEntry;
+                return true;
+              },
+            }
+          : {}),
       });
     return resolveReusableCliSessionBinding().then(async (activeCliSessionBinding) => {
       try {
         return await runCliWithSession(activeCliSessionBinding?.sessionId, activeCliSessionBinding);
       } catch (err) {
-        if (
-          err instanceof FailoverError &&
-          err.reason === "session_expired" &&
-          activeCliSessionBinding?.sessionId &&
-          params.sessionKey &&
-          params.sessionStore &&
-          params.storePath
-        ) {
-          log.warn(
-            `CLI session expired, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
-          );
-
-          params.sessionEntry =
-            (await clearCliSessionInStore({
-              provider: cliExecutionProvider,
-              sessionKey: params.sessionKey,
-              sessionStore: params.sessionStore,
-              storePath: params.storePath,
-            })) ?? params.sessionEntry;
-
-          return await runCliWithSession(undefined).then(async (result) => {
-            if (
-              result.meta.agentMeta?.cliSessionBinding?.sessionId &&
-              params.sessionKey &&
-              params.sessionStore &&
-              params.storePath
-            ) {
-              const entry = params.sessionStore[params.sessionKey];
-              if (entry) {
-                const updatedEntry = { ...entry };
-                setCliSessionBinding(
-                  updatedEntry,
-                  cliExecutionProvider,
-                  result.meta.agentMeta.cliSessionBinding,
-                );
-                updatedEntry.updatedAt = Date.now();
-
-                await persistSessionEntry({
-                  sessionStore: params.sessionStore,
-                  sessionKey: params.sessionKey,
-                  storePath: params.storePath,
-                  entry: updatedEntry,
-                });
-              }
-            }
-            return result;
-          });
-        }
         if (
           isClaudeCliProvider(cliExecutionProvider) &&
           shouldClearReusedCliSessionAfterError(err) &&

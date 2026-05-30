@@ -57,6 +57,22 @@ function isClaudeCliProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
 }
 
+function shouldRetryFreshCliSessionAfterFailover(params: {
+  error: FailoverError;
+  hasHistoryPrompt: boolean;
+}): boolean {
+  // These reasons can mean only the resumed CLI session is bad. Auth, billing,
+  // rate-limit, and provider/config errors should clear stale state but surface.
+  if (!params.hasHistoryPrompt) {
+    return false;
+  }
+  return (
+    params.error.reason === "session_expired" ||
+    (params.error.reason === "unknown" && params.error.code === "cli_unknown_empty_failure") ||
+    (params.error.reason === "timeout" && params.error.code === "cli_no_output_timeout")
+  );
+}
+
 export async function isCliBindingFlushed(
   sessionId: string | undefined,
   provider: string | undefined,
@@ -498,8 +514,18 @@ export async function runPreparedCliAgent(
     throw error;
   };
 
-  const executeCliAttempt = async (cliSessionIdToUse?: string) => {
-    const output = await executePreparedCliRun(context, cliSessionIdToUse);
+  const executeCliAttempt = async (cliSessionIdToUse?: string, timeoutMs = params.timeoutMs) => {
+    const attemptContext =
+      timeoutMs === params.timeoutMs
+        ? context
+        : {
+            ...context,
+            params: {
+              ...context.params,
+              timeoutMs,
+            },
+          };
+    const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
     const assistantText = output.text.trim();
     if (!assistantText) {
       throw new FailoverError("CLI backend returned an empty response.", {
@@ -749,16 +775,34 @@ export async function runPreparedCliAgent(
       return buildCliRunResult({ output, effectiveCliSessionId, bindingFlushOk });
     } catch (err) {
       if (isFailoverError(err)) {
-        const retryableSessionId = context.reusableCliSession.sessionId ?? params.cliSessionId;
-        // Check if this is a session expired error and we have a session to clear
-        if (err.reason === "session_expired" && retryableSessionId && params.sessionKey) {
-          // Clear the expired session ID from the session entry
-          // This requires access to the session store, which we don't have here
-          // We'll need to modify the caller to handle this case
-
-          // For now, retry without the session ID to create a new session
+        const retryableSessionId = context.reusableCliSession.sessionId;
+        if (
+          shouldRetryFreshCliSessionAfterFailover({
+            error: err,
+            hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
+          }) &&
+          retryableSessionId &&
+          params.sessionKey
+        ) {
           try {
-            const { output, lastAssistant } = await executeCliAttempt(undefined);
+            const retryTimeoutMs = params.timeoutMs - (Date.now() - context.started);
+            if (retryTimeoutMs <= 0) {
+              throw err;
+            }
+            if (params.onBeforeFreshCliSessionRetry) {
+              const clearedStaleBinding = await params.onBeforeFreshCliSessionRetry({
+                provider: params.provider,
+                reason: err.reason,
+                sessionId: retryableSessionId,
+              });
+              if (clearedStaleBinding !== true) {
+                throw err;
+              }
+            }
+            cliBackendLog.warn(
+              `cli session recovery retry: provider=${params.provider} reason=${err.reason} sessionKey=${params.sessionKey}`,
+            );
+            const { output, lastAssistant } = await executeCliAttempt(undefined, retryTimeoutMs);
             const assistantText = output.text.trim();
             const effectiveCliSessionId = output.sessionId;
             await finalizeCliContextEngineTurn({
