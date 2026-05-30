@@ -136,6 +136,27 @@ function createReachableTarget(
   };
 }
 
+const MULTIPLE_GATEWAYS_WARNING = {
+  code: "multiple_gateways",
+  message:
+    "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
+};
+
+const GATEWAY_SELF = {
+  host: "gateway-host",
+  ip: "192.0.2.10",
+  version: "2026.5.22",
+  platform: "linux",
+  instanceId: "gateway-instance-1",
+};
+
+const GATEWAY_SELF_NO_PROCESS_ID = {
+  host: "gateway-host",
+  ip: "192.0.2.10",
+  version: "2026.5.22",
+  platform: "linux",
+};
+
 describe("gateway status output", () => {
   beforeEach(() => {
     mocks.writeRuntimeJson.mockReset();
@@ -167,162 +188,111 @@ describe("gateway status output", () => {
     });
   });
 
-  it("does not warn about multiple gateways when reachable probes share a gateway identity", () => {
-    const warnings = buildGatewayStatusWarnings({
+  it.each([
+    {
+      name: "suppresses warning for SSH tunnel and configured remote with the same self identity",
       probed: [
-        createReachableTarget(
-          "sshTunnel",
-          {
-            host: "gateway-host",
-            ip: "192.0.2.10",
-            version: "2026.5.22",
-            platform: "linux",
-            instanceId: "gateway-instance-1",
+        createReachableTarget("sshTunnel", GATEWAY_SELF, {
+          kind: "sshTunnel",
+          url: "ws://127.0.0.1:18789",
+          tunnel: {
+            kind: "ssh",
+            target: "user@gateway-host",
+            localPort: 18789,
+            remotePort: 18789,
+            pid: 1234,
           },
-          {
-            kind: "sshTunnel",
-            url: "ws://127.0.0.1:18789",
-            tunnel: {
-              kind: "ssh",
-              target: "user@gateway-host",
-              localPort: 18789,
-              remotePort: 18789,
-              pid: 1234,
-            },
-          },
-        ),
+        }),
         createReachableTarget(
           "configRemote",
           {
-            host: "GATEWAY-HOST",
-            ip: "192.0.2.10",
-            version: "2026.5.22",
-            platform: "linux",
-            instanceId: "gateway-instance-1",
+            ...GATEWAY_SELF,
+            host: GATEWAY_SELF.host.toUpperCase(),
           },
-          {
-            kind: "configRemote",
-            url: "ws://gateway-host:18789",
-          },
+          { kind: "configRemote", url: "ws://gateway-host:18789" },
         ),
       ],
       sshTarget: "user@gateway-host",
-      sshTunnelStarted: true,
-      sshTunnelError: null,
-      discoveryCount: 0,
-    });
-
-    expect(warnings.find((entry) => entry.code === "multiple_gateways")).toBeUndefined();
-  });
-
-  it("does not warn when the same gateway identity is reached through different transport ports", () => {
-    const self = {
-      host: "gateway-host",
-      ip: "192.0.2.10",
-      version: "2026.5.22",
-      platform: "linux",
-      instanceId: "gateway-instance-1",
-    };
-    const warnings = buildGatewayStatusWarnings({
+      expectedTargetIds: null,
+    },
+    {
+      name: "suppresses warning for the same self identity on different transport ports",
       probed: [
-        createReachableTarget("localLoopback", self, {
+        createReachableTarget("localLoopback", GATEWAY_SELF, {
           kind: "localLoopback",
           url: "ws://127.0.0.1:18789",
         }),
-        createReachableTarget("explicit", self, {
+        createReachableTarget("explicit", GATEWAY_SELF, {
           kind: "explicit",
           url: "ws://gateway-host:28789",
         }),
       ],
       sshTarget: null,
-      sshTunnelStarted: false,
-      sshTunnelError: null,
-      discoveryCount: 0,
-    });
-
-    expect(warnings.find((entry) => entry.code === "multiple_gateways")).toBeUndefined();
-  });
-
-  it("warns when same-host reachable probes do not report a process identity", () => {
-    const self = {
-      host: "gateway-host",
-      ip: "192.0.2.10",
-      version: "2026.5.22",
-      platform: "linux",
-    };
-    const warnings = buildGatewayStatusWarnings({
+      expectedTargetIds: null,
+    },
+    {
+      name: "warns when same-host probes do not report process identity",
       probed: [
-        createReachableTarget("localLoopback", self, {
+        createReachableTarget("localLoopback", GATEWAY_SELF_NO_PROCESS_ID, {
           kind: "localLoopback",
           url: "ws://127.0.0.1:18789",
         }),
-        createReachableTarget("explicit", self, {
+        createReachableTarget("explicit", GATEWAY_SELF_NO_PROCESS_ID, {
           kind: "explicit",
           url: "ws://gateway-host:28789",
         }),
       ],
       sshTarget: null,
-      sshTunnelStarted: false,
-      sshTunnelError: null,
-      discoveryCount: 0,
-    });
-
-    expect(warnings.find((entry) => entry.code === "multiple_gateways")).toStrictEqual({
-      code: "multiple_gateways",
-      message:
-        "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
-      targetIds: ["localLoopback", "explicit"],
-    });
-  });
-
-  it("warns about multiple gateways when reachable probes report distinct identities", () => {
-    const warnings = buildGatewayStatusWarnings({
+      expectedTargetIds: ["localLoopback", "explicit"],
+    },
+    {
+      name: "warns when probes report distinct identities",
       probed: [
         createReachableTarget("sshTunnel", {
           host: "gateway-a",
           ip: "192.0.2.10",
           version: "2026.5.22",
           platform: "linux",
+          instanceId: "gateway-instance-a",
         }),
         createReachableTarget("configRemote", {
           host: "gateway-b",
           ip: "192.0.2.11",
           version: "2026.5.22",
           platform: "linux",
+          instanceId: "gateway-instance-b",
         }),
       ],
       sshTarget: "user@gateway-a",
-      sshTunnelStarted: true,
-      sshTunnelError: null,
-      discoveryCount: 0,
-    });
-
-    expect(warnings.find((entry) => entry.code === "multiple_gateways")).toStrictEqual({
-      code: "multiple_gateways",
-      message:
-        "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
-      targetIds: ["sshTunnel", "configRemote"],
-    });
-  });
-
-  it("keeps the multiple gateways warning when reachable probe identity is unknown", () => {
-    const warnings = buildGatewayStatusWarnings({
+      expectedTargetIds: ["sshTunnel", "configRemote"],
+    },
+    {
+      name: "warns when probe identity is unknown",
       probed: [
         createReachableTarget("sshTunnel", null),
         createReachableTarget("configRemote", null),
       ],
       sshTarget: "user@gateway-host",
-      sshTunnelStarted: true,
+      expectedTargetIds: ["sshTunnel", "configRemote"],
+    },
+  ])("$name", ({ probed, sshTarget, expectedTargetIds }) => {
+    const warnings = buildGatewayStatusWarnings({
+      probed,
+      sshTarget,
+      sshTunnelStarted: sshTarget !== null,
       sshTunnelError: null,
       discoveryCount: 0,
     });
+    const warning = warnings.find((entry) => entry.code === "multiple_gateways");
 
-    expect(warnings.find((entry) => entry.code === "multiple_gateways")).toStrictEqual({
-      code: "multiple_gateways",
-      message:
-        "Unconventional setup: multiple reachable gateway identities detected. Usually one gateway per network is recommended unless you intentionally run isolated profiles, like a rescue bot (see docs: /gateway#multiple-gateways-same-host).",
-      targetIds: ["sshTunnel", "configRemote"],
-    });
+    if (expectedTargetIds === null) {
+      expect(warning).toBeUndefined();
+    } else {
+      expect(warning).toStrictEqual({
+        ...MULTIPLE_GATEWAYS_WARNING,
+        targetIds: expectedTargetIds,
+      });
+    }
   });
 
   it("derives summary capability from reachable probes only in json output", () => {
