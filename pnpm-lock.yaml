@@ -486,12 +486,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/capability-manifest-verifier:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/cerebras:
     devDependencies:
       '@openclaw/plugin-sdk':

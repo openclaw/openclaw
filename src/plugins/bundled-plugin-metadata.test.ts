@@ -35,6 +35,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "bonjour",
   "browser",
   "canvas",
+  "capability-manifest-verifier",
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
