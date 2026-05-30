@@ -8,7 +8,7 @@ const CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES = [{
 }, {
 	pluginId: "codex",
 	label: "Codex",
-	npmSpec: "@openclaw/codex",
+	npmSpec: "@openclaw/codex@2026.5.22",
 	trustedSourceLinkedOfficialInstall: true
 }];
 function resolveConfiguredRuntimePluginInstallCandidate(runtimeId) {

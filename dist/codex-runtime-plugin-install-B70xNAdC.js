@@ -8,7 +8,7 @@ import path from "node:path";
 //#region src/commands/codex-runtime-plugin-install.ts
 const CODEX_RUNTIME_PLUGIN_ID = "codex";
 const CODEX_RUNTIME_PLUGIN_LABEL = "Codex";
-const CODEX_RUNTIME_PLUGIN_NPM_SPEC = "@openclaw/codex";
+const CODEX_RUNTIME_PLUGIN_NPM_SPEC = "@openclaw/codex@2026.5.22";
 function isInstalledRecordPresentOnDisk(record, env) {
 	const installPath = record?.installPath?.trim();
 	if (!installPath) return false;

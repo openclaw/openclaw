@@ -122,7 +122,7 @@ function normalizePluginSpec(spec) {
 }
 
 function assertPlugin() {
-  const spec = process.argv[3] || "npm:@openclaw/codex";
+  const spec = process.argv[3] || "npm:@openclaw/codex@2026.5.22";
   const list = readJson("/tmp/openclaw-codex-plugins-list.json");
   const inspect = readJson("/tmp/openclaw-codex-plugin-inspect.json");
   const plugin = (list.plugins || []).find((entry) => entry.id === "codex");

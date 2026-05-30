@@ -6,6 +6,7 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const EXPECTED_CODEX_PLUGIN_SPEC = `@openclaw/codex@${pkg.version}`;
 
 function fail(message) {
   console.error("[zorg-verify-package-runtime] " + message);
@@ -73,6 +74,52 @@ if (
   !/zorg\/postinstall-existing-upgrade\.cjs/.test((pkg.scripts && pkg.scripts.postinstall) || "")
 ) {
   fail("package postinstall does not run zorg/postinstall-existing-upgrade.cjs");
+}
+
+const codexSpecChecks = [
+  ["src/commands/codex-runtime-plugin-install.ts", /CODEX_RUNTIME_PLUGIN_NPM_SPEC\s*=\s*"([^"]+)"/],
+  [
+    "src/commands/doctor/shared/configured-runtime-plugin-installs.ts",
+    /pluginId:\s*"codex"[\s\S]*?npmSpec:\s*"([^"]+)"/,
+  ],
+  [
+    "scripts/lib/official-external-provider-catalog.json",
+    /"id":\s*"codex"[\s\S]*?"npmSpec":\s*"([^"]+)"/,
+  ],
+  [
+    "dist/codex-runtime-plugin-install-B70xNAdC.js",
+    /CODEX_RUNTIME_PLUGIN_NPM_SPEC\s*=\s*"([^"]+)"/,
+  ],
+  [
+    "dist/configured-runtime-plugin-installs-D_FZggJS.js",
+    /pluginId:\s*"codex"[\s\S]*?npmSpec:\s*"([^"]+)"/,
+  ],
+  [
+    "dist/official-external-plugin-catalog-f6g4JsA2.js",
+    /"id":\s*"codex"[\s\S]*?"npmSpec":\s*"([^"]+)"/,
+  ],
+];
+
+for (const [relativePath, pattern] of codexSpecChecks) {
+  const filePath = path.join(root, relativePath);
+  if (!fs.existsSync(filePath)) {
+    if (relativePath.startsWith("src/")) {
+      continue;
+    }
+    fail(`missing packaged Codex plugin install spec file: ${relativePath}`);
+    continue;
+  }
+  const content = fs.readFileSync(filePath, "utf8");
+  const match = pattern.exec(content);
+  if (!match) {
+    fail(`missing Codex plugin npmSpec in ${relativePath}`);
+    continue;
+  }
+  if (match[1] !== EXPECTED_CODEX_PLUGIN_SPEC) {
+    fail(
+      `${relativePath} installs ${match[1]} instead of ${EXPECTED_CODEX_PLUGIN_SPEC}; unpinned Codex installs can pull an incompatible plugin SDK`,
+    );
+  }
 }
 
 if (process.exitCode) {

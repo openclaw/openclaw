@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Zorg: pin the auto-installed Codex plugin to the packaged OpenClaw version so direct GitHub installs of \`openclaw@2026.5.22\` do not pull a newer \`@openclaw/codex\` that expects missing plugin SDK runtime exports.
 - Zorg: make first-run installs fail closed when a host OpenClaw binary already exists, and require explicit existing-install/Docker config flags before touching upgrade or Docker/TUI compatibility paths.
 - Zorg: when the add-on bootstrap is launched through sudo, default to the invoking user's OpenClaw home and chown that workspace before creating the LAN chat service so systemd does not point at an unreadable /root/.openclaw path.
 - Zorg: keep the direct GitHub npm install Node prerequisite repair helper inside the packaged `zorg/` tree so old Linux hosts can still find it when npm runs lifecycle scripts from a temporary git install tree.

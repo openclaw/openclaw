@@ -666,7 +666,7 @@ const OFFICIAL_CATALOG_SOURCES = [
 					}]
 				}],
 				"install": {
-					"npmSpec": "@openclaw/codex",
+					"npmSpec": "@openclaw/codex@2026.5.22",
 					"defaultChoice": "npm",
 					"minHostVersion": ">=2026.5.1-beta.1"
 				}
