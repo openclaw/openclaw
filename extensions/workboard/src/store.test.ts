@@ -2,6 +2,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   WorkboardStore,
+  type PersistedWorkboardAttachment,
   type PersistedWorkboardBoard,
   type PersistedWorkboardCard,
   type PersistedWorkboardNotificationSubscription,
@@ -389,6 +390,140 @@ describe("WorkboardStore", () => {
     const restored = await store.archive(card.id, false);
     expect(restored.metadata?.archivedAt).toBeUndefined();
     expect(restored.events?.at(-1)).toMatchObject({ kind: "unarchived" });
+  });
+
+  it("stores attachments in the plugin kv namespace and adds worker context", async () => {
+    const attachments = createMemoryStore<PersistedWorkboardAttachment>();
+    const store = new WorkboardStore(createMemoryStore(), { attachments });
+    const card = await store.create({ title: "Review attached log" });
+
+    const attached = await store.addAttachment(card.id, {
+      fileName: "failure.log",
+      mimeType: "text/plain",
+      note: "Captured failing run",
+      contentBase64: Buffer.from("stack trace").toString("base64"),
+    });
+
+    expect(attached.metadata?.attachments?.[0]).toMatchObject({
+      fileName: "failure.log",
+      byteSize: "stack trace".length,
+      mimeType: "text/plain",
+    });
+    expect(attached.events?.at(-1)).toMatchObject({ kind: "attachment_added" });
+    const attachment = attached.metadata?.attachments?.[0];
+    if (!attachment) {
+      throw new Error("expected attachment metadata");
+    }
+    const persisted = await store.getAttachment(attachment.id);
+    if (!persisted) {
+      throw new Error("expected persisted attachment");
+    }
+    expect(Buffer.from(persisted.contentBase64, "base64").toString("utf8")).toBe("stack trace");
+    await expect(
+      store.addAttachment(card.id, {
+        fileName: "huge.bin",
+        contentBase64: Buffer.alloc(256 * 1024 + 1).toString("base64"),
+      }),
+    ).rejects.toThrow(/attachment must be/);
+    await expect(
+      store.addAttachment(card.id, {
+        fileName: "state-limit.bin",
+        contentBase64: Buffer.alloc(49 * 1024).toString("base64"),
+      }),
+    ).rejects.toThrow(/plugin state value/);
+    await expect(
+      store.addAttachment(card.id, {
+        fileName: "padded.txt",
+        contentBase64: `${Buffer.from("ok").toString("base64")}\n`,
+      }),
+    ).rejects.toThrow(/canonical base64/);
+
+    const context = await store.buildWorkerContext(card.id);
+    expect(context).toContain("failure.log");
+
+    const deleted = await store.deleteAttachment(card.id, attachment.id);
+    expect(deleted.metadata?.attachments).toBeUndefined();
+    expect(deleted.events?.at(-1)).toMatchObject({ kind: "edited" });
+    expect(await store.getAttachment(attachment.id)).toBeUndefined();
+  });
+
+  it("removes attachment blobs when the card attachment index prunes old entries", async () => {
+    const attachments = createMemoryStore<PersistedWorkboardAttachment>();
+    const store = new WorkboardStore(createMemoryStore(), { attachments });
+    const card = await store.create({ title: "Many attachments" });
+    let firstAttachmentId = "";
+
+    for (let index = 0; index < 21; index += 1) {
+      const updated = await store.addAttachment(card.id, {
+        fileName: `log-${index}.txt`,
+        contentBase64: Buffer.from(`log ${index}`).toString("base64"),
+      });
+      firstAttachmentId ||= updated.metadata?.attachments?.[0]?.id ?? "";
+    }
+
+    const saved = await store.get(card.id);
+    expect(saved?.metadata?.attachments).toHaveLength(20);
+    expect(await store.getAttachment(firstAttachmentId)).toBeUndefined();
+    const exported = await store.exportCards();
+    expect(exported.attachments).toHaveLength(20);
+    expect(exported.attachments[0]).not.toHaveProperty("contentBase64");
+  });
+
+  it("records worker logs and protocol violations on cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Protocol card",
+      status: "running",
+      sessionKey: "session-protocol",
+      runId: "run-protocol",
+      execution: {
+        id: "exec-protocol",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        startedAt: 10,
+        updatedAt: 10,
+      },
+    });
+
+    const logged = await store.addWorkerLog(card.id, {
+      level: "warning",
+      message: "Worker nearing timeout.",
+    });
+    expect(logged.metadata?.workerLogs?.[0]).toMatchObject({
+      level: "warning",
+      message: "Worker nearing timeout.",
+    });
+    expect(logged.events?.at(-1)).toMatchObject({ kind: "orchestration" });
+
+    const violated = await store.recordProtocolViolation(card.id, {
+      detail: "Worker exited without workboard_complete.",
+      sessionKey: "observed-session",
+      runId: "observed-run",
+    });
+    expect(violated.status).toBe("blocked");
+    expect(violated.execution?.status).toBe("blocked");
+    expect(violated.metadata?.attempts).toEqual([
+      expect.objectContaining({
+        status: "blocked",
+        error: "Worker exited without workboard_complete.",
+      }),
+    ]);
+    expect(violated.metadata?.workerProtocol).toMatchObject({
+      state: "violated",
+      detail: "Worker exited without workboard_complete.",
+    });
+    expect(violated.metadata?.failureCount).toBe(1);
+    expect(violated.metadata?.notifications).toEqual([
+      expect.objectContaining({
+        kind: "failed",
+        sessionKey: "observed-session",
+        runId: "observed-run",
+      }),
+    ]);
+    expect(violated.events?.at(-1)).toMatchObject({ kind: "protocol_violation" });
   });
 
   it("keeps concurrent metadata appends from dropping siblings", async () => {
@@ -1310,6 +1445,21 @@ describe("WorkboardStore", () => {
       status: "blocked",
       metadata: { failureCount: 2 },
     });
+    const doneWithAttachment = await store.create({
+      title: "Done with attachment",
+      status: "done",
+      metadata: {
+        attachments: [
+          {
+            id: "attachment-proof",
+            cardId: "attachment-card",
+            fileName: "result.log",
+            byteSize: 1,
+            createdAt: 10,
+          },
+        ],
+      },
+    });
 
     const now = Date.now() + 2 * 24 * 60 * 60 * 1000;
     const diagnostics = await store.refreshDiagnostics(now);
@@ -1333,6 +1483,11 @@ describe("WorkboardStore", () => {
           expect.objectContaining({ kind: "blocked_too_long" }),
           expect.objectContaining({ kind: "repeated_failures" }),
         ]),
+      },
+    });
+    await expect(store.get(doneWithAttachment.id)).resolves.not.toMatchObject({
+      metadata: {
+        diagnostics: expect.arrayContaining([expect.objectContaining({ kind: "missing_proof" })]),
       },
     });
   });
@@ -1588,6 +1743,316 @@ describe("WorkboardStore", () => {
     await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toMatchObject({
       subscriptions: [expect.objectContaining({ id: subscription.id, cardId: card.id })],
     });
+  });
+
+  it("replays notification events with subscription cursors", async () => {
+    const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>();
+    const store = new WorkboardStore(createMemoryStore(), { subscriptions });
+    const card = await store.create({ title: "Notify me", boardId: "ops" });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      cardId: card.id,
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    await store.complete(card.id, { summary: "Done." });
+
+    const preview = await store.notificationEvents({ subscriptionId: subscription.id });
+    expect(preview.events).toEqual([expect.objectContaining({ kind: "completed" })]);
+    const storedPreview = await subscriptions.lookup(subscription.id);
+    expect(storedPreview?.subscription).not.toHaveProperty("lastEventAt");
+    expect(storedPreview?.subscription).not.toHaveProperty("lastEventId");
+
+    const first = await store.advanceNotificationEvents({
+      subscriptionId: subscription.id,
+    });
+    expect(first.events).toEqual([expect.objectContaining({ kind: "completed" })]);
+    const event = first.events[0];
+    if (!event) {
+      throw new Error("expected notification event");
+    }
+    await expect(subscriptions.lookup(subscription.id)).resolves.toMatchObject({
+      subscription: {
+        lastEventAt: event.createdAt,
+        lastEventId: event.id,
+      },
+    });
+    await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
+      subscription: expect.objectContaining({ id: subscription.id }),
+      events: [],
+    });
+    await expect(store.notificationEvents({ subscriptionId: "missing" })).rejects.toThrow(
+      /subscription not found/,
+    );
+    await expect(store.advanceNotificationEvents({ boardId: "ops" })).rejects.toThrow(
+      /subscriptionId is required/,
+    );
+  });
+
+  it("does not skip same-millisecond notification events after cursor advancement", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+    });
+    await store.create({
+      title: "First same-ms event",
+      boardId: "ops",
+      metadata: {
+        notifications: [
+          {
+            id: "z-event",
+            kind: "completed",
+            createdAt: 1234,
+            sequence: 1234000,
+            message: "First",
+          },
+        ],
+      },
+    });
+    await store.create({
+      title: "Second same-ms event",
+      boardId: "ops",
+      metadata: {
+        notifications: [
+          {
+            id: "a-event",
+            kind: "completed",
+            createdAt: 1234,
+            sequence: 1234001,
+            message: "Second",
+          },
+        ],
+      },
+    });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    const first = await store.advanceNotificationEvents({
+      subscriptionId: subscription.id,
+      limit: 1,
+    });
+    expect(first.events).toEqual([expect.objectContaining({ id: "z-event" })]);
+
+    const second = await store.notificationEvents({ subscriptionId: subscription.id });
+    expect(second.events).toEqual([expect.objectContaining({ id: "a-event" })]);
+  });
+
+  it("drains large same-millisecond notification batches without replaying delivered ids", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+    });
+    for (let index = 0; index < 205; index += 1) {
+      await store.create({
+        title: `Same-ms event ${index}`,
+        boardId: "ops",
+        metadata: {
+          notifications: [
+            {
+              id: `event-${index}`,
+              kind: "completed",
+              createdAt: 1234,
+              sequence: 1234000 + index,
+              message: `Event ${index}`,
+            },
+          ],
+        },
+      });
+    }
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    const first = await store.advanceNotificationEvents({
+      subscriptionId: subscription.id,
+      limit: 200,
+    });
+    expect(first.events).toHaveLength(200);
+    const second = await store.advanceNotificationEvents({ subscriptionId: subscription.id });
+    expect(second.events).toHaveLength(5);
+    await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
+      subscription: expect.objectContaining({ id: subscription.id }),
+      events: [],
+    });
+  });
+
+  it("filters replayed notification events by session and run subscriptions", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+    });
+    const matching = await store.create({
+      title: "Matching session",
+      boardId: "ops",
+      sessionKey: "session-1",
+      runId: "run-1",
+    });
+    const unrelated = await store.create({
+      title: "Other session",
+      boardId: "ops",
+      sessionKey: "session-2",
+      runId: "run-2",
+    });
+    await store.create({
+      title: "Card-scoped failed notification",
+      boardId: "ops",
+      sessionKey: "session-1",
+      runId: "run-1",
+      metadata: {
+        notifications: [
+          {
+            id: "card-scoped-failed",
+            kind: "failed",
+            createdAt: 1234,
+            message: "Dispatch failed before stamping event scope.",
+          },
+        ],
+      },
+    });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      sessionKey: "session-1",
+      runId: "run-1",
+      target: "session:operator",
+    });
+
+    await store.complete(unrelated.id, { summary: "Other done." });
+    await store.complete(matching.id, { summary: "Matching done." });
+
+    await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
+      subscription: expect.objectContaining({ id: subscription.id }),
+      events: [
+        expect.objectContaining({ id: "card-scoped-failed" }),
+        expect.objectContaining({ sessionKey: "session-1", runId: "run-1" }),
+      ],
+    });
+  });
+
+  it("replays card-scoped subscriptions without requiring the board id", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+    });
+    const card = await store.create({ title: "Ops card", boardId: "ops" });
+    const subscription = await store.subscribeNotifications({
+      cardId: card.id,
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    await store.complete(card.id, { summary: "Ops done." });
+
+    await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
+      subscription: expect.objectContaining({ id: subscription.id, cardId: card.id }),
+      events: [expect.objectContaining({ kind: "completed" })],
+    });
+  });
+
+  it("replays stale metadata as stale notification events", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+    });
+    await store.create({
+      title: "Stale card",
+      boardId: "ops",
+      metadata: {
+        stale: {
+          detectedAt: 1234,
+          reason: "Session has not reported recent activity.",
+        },
+      },
+    });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["stale"],
+    });
+
+    await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
+      subscription: expect.objectContaining({ id: subscription.id }),
+      events: [
+        expect.objectContaining({
+          id: expect.stringContaining("stale:"),
+          kind: "stale",
+          createdAt: 1234,
+        }),
+      ],
+    });
+  });
+
+  it("marks triage cards as orchestration candidates during dispatch", async () => {
+    const boards = createMemoryStore<PersistedWorkboardBoard>();
+    const store = new WorkboardStore(createMemoryStore(), { boards });
+    await store.upsertBoard({
+      id: "planning",
+      orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
+    });
+    const first = await store.create({
+      title: "Break down import flow",
+      status: "triage",
+      boardId: "planning",
+    });
+    const archived = await store.create({
+      title: "Archived import flow",
+      status: "triage",
+      boardId: "planning",
+    });
+    await store.archive(archived.id, true);
+    const second = await store.create({
+      title: "Break down export flow",
+      status: "triage",
+      boardId: "planning",
+    });
+
+    const dispatch = await store.dispatch(10);
+
+    expect(dispatch.orchestrated).toEqual([
+      expect.objectContaining({ id: first.id, status: "triage" }),
+    ]);
+    expect(dispatch.count).toBe(1);
+    await expect(store.get(first.id)).resolves.toMatchObject({
+      metadata: {
+        workerProtocol: {
+          state: "idle",
+          detail: "Awaiting workboard_specify or workboard_decompose.",
+        },
+        workerLogs: [expect.objectContaining({ level: "info" })],
+      },
+      events: expect.arrayContaining([expect.objectContaining({ kind: "orchestration" })]),
+    });
+    await expect(store.get(second.id)).resolves.not.toMatchObject({
+      metadata: { workerProtocol: expect.any(Object) },
+    });
+    await expect(store.get(archived.id)).resolves.not.toMatchObject({
+      metadata: { workerProtocol: expect.any(Object) },
+    });
+  });
+
+  it("applies auto orchestration dispatch caps per board", async () => {
+    const boards = createMemoryStore<PersistedWorkboardBoard>();
+    const store = new WorkboardStore(createMemoryStore(), { boards });
+    await store.upsertBoard({
+      id: "ops",
+      orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
+    });
+    await store.upsertBoard({
+      id: "product",
+      orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
+    });
+    const ops = await store.create({ title: "Ops rough", status: "triage", boardId: "ops" });
+    const product = await store.create({
+      title: "Product rough",
+      status: "triage",
+      boardId: "product",
+    });
+
+    const dispatch = await store.dispatch(10);
+
+    expect(dispatch.orchestrated.map((card) => card.id).toSorted()).toEqual(
+      [ops.id, product.id].toSorted(),
+    );
   });
 
   it("deletes board notification subscriptions with empty board metadata", async () => {
