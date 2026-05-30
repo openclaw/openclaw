@@ -537,24 +537,40 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     expect(message).toContain("Repaired");
   });
 
-  it("reports leftover findings after partial repair", async () => {
+  it("handles missing blob gracefully without crashing or reporting false findings", async () => {
     const stalePath = path.join(root, "old-runtime", "node_modules", "openclaw", "skills", "doctor", "SKILL.md");
-    const workspacePath = path.join(root, "workspace", "skills", "doctor", "SKILL.md");
     const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
-    await writeSessionStore(storePath, {
-      "agent:main": sessionEntry({
-        skillsSnapshot: {
-          prompt: skillPrompt(stalePath),
-          skills: [{ name: "doctor" }],
-        },
-      }),
-    });
+    const prompt = `${skillPrompt(stalePath)}\n${"padding\n".repeat(200)}`;
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main": sessionEntry({
+          skillsSnapshot: {
+            prompt,
+            skills: [{ name: "doctor" }],
+          },
+        }),
+      },
+      { skipMaintenance: true },
+    );
 
+    const rawBefore = await fs.readFile(storePath, "utf-8");
+    expect(rawBefore).toContain("promptRef");
+
+    // Delete the blob file — simulates corrupted/missing blob state
+    const blobDir = path.join(path.dirname(storePath), "skills-prompts");
+    await fs.rm(blobDir, { recursive: true, force: true });
+
+    // Scanner hydration strips skillsSnapshot for missing blob,
+    // so no findings are reported. Repair should noop gracefully.
     await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
 
-    expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] as [string, string];
-    expect(message).toContain("Repaired");
+    expect(note).not.toHaveBeenCalled();
+
+    // Verify the store is still valid JSON and the session entry is preserved
+    const rawAfter = await fs.readFile(storePath, "utf-8");
+    const parsed = JSON.parse(rawAfter);
+    expect(parsed["agent:main"]).toBeDefined();
   });
 
   it("scoped replacement preserves unrelated content", async () => {
