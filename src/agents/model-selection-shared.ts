@@ -53,6 +53,17 @@ type ModelAliasCandidate = {
   alias: string;
 };
 
+type ExactConfiguredProviderRefParts = {
+  configuredProvider: string;
+  modelRaw: string;
+};
+
+function hasSlashFormModelRef(raw: string): boolean {
+  const trimmed = raw.trim();
+  const slash = trimmed.indexOf("/");
+  return slash > 0 && slash < trimmed.length - 1;
+}
+
 function resolveManifestPluginsForModelIdNormalization(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
@@ -384,7 +395,10 @@ function parseModelRefWithCompatAlias(
   );
 }
 
-function findExactConfiguredProviderRefParts(params: { cfg?: OpenClawConfig; raw: string }) {
+function findExactConfiguredProviderRefParts(params: {
+  cfg?: OpenClawConfig;
+  raw: string;
+}): ExactConfiguredProviderRefParts | null {
   const slash = params.raw.indexOf("/");
   if (slash <= 0 || !params.cfg?.models?.providers) {
     return null;
@@ -411,22 +425,13 @@ function findExactConfiguredProviderRefParts(params: { cfg?: OpenClawConfig; raw
   return { configuredProvider, modelRaw };
 }
 
-function resolveExactConfiguredProviderRef(
+function normalizeExactConfiguredProviderRef(
+  parts: ExactConfiguredProviderRefParts,
   params: {
-    cfg?: OpenClawConfig;
-    raw: string;
     allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
-): ModelRef | null {
-  const exactConfigured = findExactConfiguredProviderRefParts({
-    cfg: params.cfg,
-    raw: params.raw,
-  });
-  if (!exactConfigured) {
-    return null;
-  }
-  const { configuredProvider, modelRaw } = exactConfigured;
+): ModelRef {
+  const { configuredProvider, modelRaw } = parts;
   const provider = normalizeLowercaseStringOrEmpty(configuredProvider);
   return {
     provider,
@@ -442,6 +447,24 @@ function resolveExactConfiguredProviderRef(
       },
     ),
   };
+}
+
+function resolveExactConfiguredProviderRef(
+  params: {
+    cfg?: OpenClawConfig;
+    raw: string;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelRef | null {
+  const exactConfigured = findExactConfiguredProviderRefParts({
+    cfg: params.cfg,
+    raw: params.raw,
+  });
+  if (!exactConfigured) {
+    return null;
+  }
+  return normalizeExactConfiguredProviderRef(exactConfigured, params);
 }
 
 export function resolveAllowlistModelKey(
@@ -698,30 +721,54 @@ export function resolveConfiguredModelRef(
     const trimmed = rawModel.trim();
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
     const manifestPluginContext = createModelManifestPluginContext(params);
-    const exactConfiguredPrimaryRaw = modelWithoutProfile || trimmed;
-    if (
-      findExactConfiguredProviderRefParts({
+    const primaryWithoutProfile = modelWithoutProfile || trimmed;
+    const exactConfiguredPrimary = findExactConfiguredProviderRefParts({
+      cfg: params.cfg,
+      raw: primaryWithoutProfile,
+    });
+    if (exactConfiguredPrimary) {
+      return normalizeExactConfiguredProviderRef(exactConfiguredPrimary, {
+        allowManifestNormalization: params.allowManifestNormalization,
+        manifestPlugins: manifestPluginContext.get(),
+      });
+    }
+    const profileStripped = Boolean(modelWithoutProfile && modelWithoutProfile !== trimmed);
+    const exactAliasCandidate = findModelAliasCandidate(params.cfg, trimmed);
+    if (profileStripped && exactAliasCandidate) {
+      const aliasRef = parseModelRefWithCompatAlias({
         cfg: params.cfg,
-        raw: exactConfiguredPrimaryRaw,
-      })
-    ) {
-      const exactConfiguredPrimary = resolveExactConfiguredProviderRef({
-        cfg: params.cfg,
-        raw: exactConfiguredPrimaryRaw,
+        raw: exactAliasCandidate.keyRaw,
+        defaultProvider: params.defaultProvider,
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
         manifestPlugins: manifestPluginContext.get(),
       });
-      if (exactConfiguredPrimary) {
-        return exactConfiguredPrimary;
+      if (aliasRef) {
+        return aliasRef;
       }
     }
-    const aliasCandidate =
-      findModelAliasCandidate(params.cfg, trimmed) ??
-      (modelWithoutProfile && modelWithoutProfile !== trimmed
-        ? findModelAliasCandidate(params.cfg, modelWithoutProfile)
-        : undefined);
+    const strippedAliasCandidate = profileStripped
+      ? findModelAliasCandidate(params.cfg, modelWithoutProfile)
+      : undefined;
+    const aliasCandidate = exactAliasCandidate ?? strippedAliasCandidate;
     const manifestPlugins = manifestPluginContext.peek();
+    if (
+      aliasCandidate &&
+      hasSlashFormModelRef(primaryWithoutProfile) &&
+      !hasSlashFormModelRef(aliasCandidate.keyRaw)
+    ) {
+      const primaryRef = parseModelRefWithCompatAlias({
+        cfg: params.cfg,
+        raw: primaryWithoutProfile,
+        defaultProvider: params.defaultProvider,
+        allowManifestNormalization: params.allowManifestNormalization,
+        allowPluginNormalization: params.allowPluginNormalization,
+        manifestPlugins: manifestPluginContext.get(),
+      });
+      if (primaryRef) {
+        return primaryRef;
+      }
+    }
     if (aliasCandidate) {
       const aliasRef = parseModelRefWithCompatAlias({
         cfg: params.cfg,

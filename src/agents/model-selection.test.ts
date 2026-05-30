@@ -1888,6 +1888,65 @@ describe("model-selection", () => {
       });
     });
 
+    it("keeps exact configured provider refs before slash-form alias values that point to them", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nemotron-bolt/nemotron-3-super-120b" },
+            models: {
+              "openai/nemotron-bolt/nemotron-3-super-120b": {
+                alias: "nemotron-bolt/nemotron-3-super-120b",
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            "nemotron-bolt": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [{ id: "nemotron-3-super-120b", name: "Nemotron" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nemotron-bolt",
+        model: "nemotron-3-super-120b",
+      });
+    });
+
+    it("keeps built-in provider refs before bare alias values that point to them", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6" },
+            models: {
+              opus: { alias: "anthropic/claude-opus-4-6" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+    });
+
     it("prefers slash-form aliases for configured default models", () => {
       const cfg = {
         agents: {
@@ -1942,6 +2001,29 @@ describe("model-selection", () => {
             models: {
               "openai/gpt-5.5": {
                 alias: "gpt@prod",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
+    });
+
+    it("prefers exact slash-form aliases before stripping auth-profile suffixes", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6@prod" },
+            models: {
+              "openai/gpt-5.5": {
+                alias: "anthropic/claude-opus-4-6@prod",
               },
             },
           },
