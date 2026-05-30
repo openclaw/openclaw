@@ -204,6 +204,7 @@ vi.mock("./agents-utils.ts", () => ({
 function renderQueue(params: {
   queue: ChatQueueItem[];
   canAbort?: boolean;
+  onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
 }) {
   const container = document.createElement("div");
@@ -211,6 +212,7 @@ function renderQueue(params: {
     renderChatQueue({
       queue: params.queue,
       canAbort: params.canAbort ?? true,
+      onQueueRetry: params.onQueueRetry,
       onQueueSteer: params.onQueueSteer,
       onQueueRemove: () => undefined,
     }),
@@ -538,6 +540,38 @@ describe("chat compaction divider", () => {
     button!.click();
 
     expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat goal status", () => {
+  it("renders the active session goal above the composer", () => {
+    const container = renderChatView({
+      sessions: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 2,
+          goal: {
+            schemaVersion: 1,
+            id: "goal-1",
+            objective: "Land the web goal UI",
+            status: "active",
+            createdAt: 1,
+            updatedAt: 2,
+            tokenStart: 100,
+            tokensUsed: 12_400,
+            tokenBudget: 50_000,
+            continuationTurns: 0,
+          },
+        },
+      ]),
+    });
+
+    const goal = container.querySelector(".agent-chat__goal");
+    expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Pursuing goal (12k/50k) Land the web goal UI",
+    );
+    expect(goal?.getAttribute("aria-label")).toBe("Pursuing goal (12k/50k): Land the web goal UI");
   });
 });
 
@@ -1167,6 +1201,34 @@ describe("chat queue", () => {
 
     expect(inactiveContainer.querySelector(".chat-queue__steer")).toBeNull();
   });
+
+  it("renders failed send state with retry and remove affordances", () => {
+    const onQueueRetry = vi.fn();
+    const container = renderQueue({
+      onQueueRetry,
+      queue: [
+        {
+          id: "failed-1",
+          text: "still recoverable",
+          createdAt: 1,
+          sendError: "send blocked by session policy",
+          sendRunId: "run-failed-1",
+          sendState: "failed",
+        },
+      ],
+    });
+
+    expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe("Failed");
+    expect(container.querySelector(".chat-queue__error")?.textContent?.trim()).toBe(
+      "send blocked by session policy",
+    );
+    const retry = container.querySelector<HTMLButtonElement>(".chat-queue__retry");
+    expect(retry?.textContent?.trim()).toBe("Retry");
+
+    retry?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onQueueRetry).toHaveBeenCalledWith("failed-1");
+  });
 });
 
 describe("chat sidebar raw content", () => {
@@ -1431,6 +1493,58 @@ describe("chat session controls", () => {
       limit: 50,
       search: "tele",
     });
+  });
+
+  it("keeps picker options clickable after blurring an empty search input", async () => {
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const rows: GatewaySessionRow[] = [
+      { key: "main", kind: "direct", label: "Main", updatedAt: 2 },
+      { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
+    ];
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    const request = vi.fn((method: string) => {
+      if (method === "sessions.list") {
+        return Promise.resolve(createSessionsResultFromRows(rows));
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const onSwitchSession = vi.fn();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    await vi.waitFor(() => expect(state.chatSessionPickerResult).not.toBeNull());
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+    const pickerResultBefore = state.chatSessionPickerResult;
+    const requestCountBefore = request.mock.calls.length;
+
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-picker-search="true"]',
+    );
+    expect(input!.value).toBe("");
+    input!.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    expect(state.chatSessionPickerResult).toBe(pickerResultBefore);
+    expect(state.chatSessionPickerAppliedQuery).toBe("");
+    expect(state.chatSessionPickerOpen).toBe(true);
+    expect(request).toHaveBeenCalledTimes(requestCountBefore);
+    const options = container.querySelectorAll<HTMLButtonElement>(
+      'button[data-chat-session-picker-option="true"]',
+    );
+    const target = [...options].find(
+      (button) => button.dataset.sessionKey && button.dataset.sessionKey !== state.sessionKey,
+    );
+    if (!target?.dataset.sessionKey) {
+      throw new Error("expected another session option");
+    }
+    const targetSessionKey = target.dataset.sessionKey;
+    target.click();
+
+    expect(onSwitchSession).toHaveBeenCalledWith(state, targetSessionKey);
   });
 
   it("clears applied chat session picker search when the input is cleared", async () => {

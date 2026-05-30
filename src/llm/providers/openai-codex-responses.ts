@@ -20,6 +20,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
   });
 }
 
+import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
@@ -56,6 +57,8 @@ import { buildBaseOptions } from "./simple-options.js";
 const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
+const RETRY_AFTER_HTTP_DATE_RE =
+  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 
@@ -136,7 +139,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 function resolveRequestTimeoutMs(options?: OpenAICodexResponsesOptions): number | undefined {
   const timeoutMs = options?.timeoutMs;
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? Math.floor(timeoutMs)
+    ? resolveTimerTimeoutMs(timeoutMs, 1)
     : undefined;
 }
 
@@ -347,9 +350,9 @@ export const streamOpenAICodexResponses: StreamFunction<
               if (retryAfter) {
                 const trimmedRetryAfter = retryAfter.trim();
                 const seconds = Number(trimmedRetryAfter);
-                if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfter) && Number.isFinite(seconds)) {
+                if (/^\d+$/.test(trimmedRetryAfter) && Number.isFinite(seconds)) {
                   delayMs = Math.max(0, seconds * 1000);
-                } else {
+                } else if (RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
                   const date = Date.parse(trimmedRetryAfter);
                   if (!Number.isNaN(date)) {
                     delayMs = Math.max(0, date - Date.now());
@@ -450,7 +453,12 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+  const reasoningEffort =
+    clampedReasoning === "off"
+      ? undefined
+      : clampedReasoning === "max"
+        ? "xhigh"
+        : clampedReasoning;
 
   return streamOpenAICodexResponses(model, context, {
     ...base,

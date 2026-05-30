@@ -156,12 +156,42 @@ vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: ensureRuntimePluginsLoadedMock,
 }));
 
-vi.mock("./skills-snapshot.runtime.js", () => ({
-  buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
+vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
   canExecRequestNode: vi.fn(() => false),
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
-  getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
-  resolveAgentSkillsFilter: resolveAgentSkillsFilterMock,
+  resolveEffectiveAgentSkillFilter: resolveAgentSkillsFilterMock,
+  resolveReusableWorkspaceSkillSnapshot: (params: {
+    workspaceDir: string;
+    config?: unknown;
+    agentId?: string;
+    existingSnapshot?: { version?: number; skillFilter?: string[] };
+    skillFilter?: string[];
+    eligibility?: unknown;
+  }) => {
+    const normalize = (skillFilter?: string[]) =>
+      Array.from(new Set(skillFilter?.map((entry) => entry.trim()).filter(Boolean))).toSorted();
+    const sameFilter =
+      JSON.stringify(normalize(params.existingSnapshot?.skillFilter)) ===
+      JSON.stringify(normalize(params.skillFilter));
+    const snapshotVersion = getSkillsSnapshotVersionMock(params.workspaceDir);
+    const shouldRefresh =
+      !params.existingSnapshot ||
+      params.existingSnapshot.version !== snapshotVersion ||
+      !sameFilter;
+    return {
+      snapshot: shouldRefresh
+        ? buildWorkspaceSkillSnapshotMock(params.workspaceDir, {
+            config: params.config,
+            agentId: params.agentId,
+            skillFilter: params.skillFilter,
+            eligibility: params.eligibility,
+            snapshotVersion,
+          })
+        : params.existingSnapshot,
+      shouldRefresh,
+      snapshotVersion,
+    };
+  },
 }));
 
 vi.mock("./run-model-selection.runtime.js", () => ({
@@ -211,6 +241,30 @@ vi.mock("./run-execution.runtime.js", () => ({
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
+}));
+
+vi.mock("../../agents/model-runtime-aliases.js", () => ({
+  resolveCliRuntimeExecutionProvider: ({
+    provider,
+    cfg,
+    modelId,
+  }: {
+    provider?: string;
+    cfg?: {
+      agents?: {
+        defaults?: {
+          models?: Record<string, { agentRuntime?: { id?: string } }>;
+        };
+      };
+    };
+    modelId?: string;
+  }) => {
+    const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+    const runtime = key
+      ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
+      : undefined;
+    return runtime || provider;
+  },
 }));
 
 vi.mock("./run-auth-profile.runtime.js", () => ({

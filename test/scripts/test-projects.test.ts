@@ -207,6 +207,20 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes control UI i18n script changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/control-ui-i18n.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/control-ui-i18n.test.ts"],
+    });
+  });
+
+  it("routes Z.AI fallback repro script changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/zai-fallback-repro.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/zai-fallback-repro.test.ts"],
+    });
+  });
+
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -366,6 +380,33 @@ describe("scripts/test-projects changed-target routing", () => {
         forwardedArgs: [],
         includePatterns: ["test/scripts/**/*.test.ts"],
         watchMode: true,
+      },
+    ]);
+  });
+
+  it("preserves post-separator Vitest args without parsing them as targets", () => {
+    for (const [arg, watchMode] of [
+      ["--reporter=verbose", false],
+      ["--watch", true],
+    ] as const) {
+      expect(buildVitestRunPlans(["test/scripts/run-vitest.test.ts", "--", arg])).toEqual([
+        {
+          config: "test/vitest/vitest.tooling.config.ts",
+          forwardedArgs: [arg],
+          includePatterns: ["test/scripts/run-vitest.test.ts"],
+          watchMode,
+        },
+      ]);
+    }
+  });
+
+  it("keeps pnpm-style leading separators out of target routing", () => {
+    expect(buildVitestRunPlans(["--", "test/scripts/run-vitest.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.tooling.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["test/scripts/run-vitest.test.ts"],
+        watchMode: false,
       },
     ]);
   });
@@ -621,6 +662,28 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.extension-qa.config.ts",
         forwardedArgs: [],
         includePatterns: ["extensions/qa-lab/src/scenario-catalog.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes explicit active-memory and Codex extension tests to their shards", () => {
+    expect(
+      buildVitestRunPlans([
+        "extensions/active-memory/index.test.ts",
+        "extensions/codex/index.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.extension-active-memory.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/active-memory/index.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.extension-codex.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/codex/index.test.ts"],
         watchMode: false,
       },
     ]);
@@ -940,6 +1003,19 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/status-overview-values.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes fake-timer unit-fast tests to the serial fake-timer lane", () => {
+    const plans = buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/manager.test.ts"],
         watchMode: false,
       },
     ]);
@@ -1430,6 +1506,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     }
     expect(leafShardPlans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.unit-fast-fake-timers.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
       "test/vitest/vitest.unit-security.config.ts",
       "test/vitest/vitest.unit-ui.config.ts",

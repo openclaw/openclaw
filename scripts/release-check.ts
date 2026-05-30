@@ -60,6 +60,13 @@ export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs"
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
+type ReleaseCheckCommandInvocation = {
+  command: string;
+  args: string[];
+  env?: NodeJS.ProcessEnv;
+  shell?: boolean | string;
+  windowsVerbatimArguments?: boolean;
+};
 
 const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
 const requiredPathGroups = [
@@ -84,6 +91,7 @@ const requiredPathGroups = [
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
+  "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
@@ -135,6 +143,8 @@ const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
+const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES = 100 * 1024 * 1024;
 export const MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES = 2 * 1024 * 1024;
 export const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
   "openclaw/plugin-sdk/core",
@@ -164,6 +174,55 @@ export const PACKED_COMPLETION_SMOKE_ARGS = [
 const PACKED_PLUGIN_SDK_TYPESCRIPT_SMOKE_FIXTURE = resolve(
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
 );
+
+function positiveEnvInt(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (raw === undefined || raw === "" || !/^[0-9]+$/u.test(raw)) {
+    return fallback;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+export function runReleaseCheckCommand(
+  invocation: ReleaseCheckCommandInvocation,
+  options: {
+    cwd?: string;
+    encoding?: BufferEncoding;
+    env?: NodeJS.ProcessEnv;
+    maxBuffer?: number;
+    shell?: boolean | string;
+    stdio: "inherit" | ["ignore", "pipe", "pipe"];
+    timeoutMs?: number;
+  },
+): string {
+  const output = execFileSync(invocation.command, invocation.args, {
+    cwd: options.cwd,
+    encoding: options.encoding,
+    env: invocation.env ?? options.env,
+    killSignal: "SIGKILL",
+    maxBuffer:
+      options.maxBuffer ??
+      positiveEnvInt(
+        "OPENCLAW_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES",
+        DEFAULT_RELEASE_CHECK_COMMAND_MAX_BUFFER_BYTES,
+      ),
+    shell: invocation.shell ?? options.shell,
+    stdio: options.stdio,
+    timeout:
+      options.timeoutMs ??
+      positiveEnvInt(
+        "OPENCLAW_RELEASE_CHECK_COMMAND_TIMEOUT_MS",
+        DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,
+      ),
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  }) as Buffer | string | null;
+  if (output == null) {
+    return "";
+  }
+  return typeof output === "string" ? output : output.toString("utf8");
+}
+
 export function collectSkillShellScriptExecutableErrors(rootDir = resolve(".")): string[] {
   if (process.platform === "win32") {
     return [];
@@ -291,14 +350,7 @@ function execNpm(
   },
 ): string {
   const invocation = resolveReleaseNpmCommand(args, { env: process.env });
-  return execFileSync(invocation.command, invocation.args, {
-    ...options,
-    ...(invocation.env ? { env: invocation.env } : {}),
-    ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
-    ...(invocation.windowsVerbatimArguments !== undefined
-      ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
-      : {}),
-  });
+  return runReleaseCheckCommand(invocation, options);
 }
 
 function runPackDry(): PackResult[] {
@@ -432,11 +484,17 @@ export function createPackedCompletionSmokeEnv(
 }
 
 function runPackedBundledPluginPostinstall(packageRoot: string): void {
-  execFileSync(process.execPath, [join(packageRoot, "scripts/postinstall-bundled-plugins.mjs")], {
-    cwd: packageRoot,
-    stdio: "inherit",
-    env: createPackedBundledPluginPostinstallEnv(),
-  });
+  runReleaseCheckCommand(
+    {
+      command: process.execPath,
+      args: [join(packageRoot, "scripts/postinstall-bundled-plugins.mjs")],
+    },
+    {
+      cwd: packageRoot,
+      stdio: "inherit",
+      env: createPackedBundledPluginPostinstallEnv(),
+    },
+  );
 }
 
 export function collectPackedInstalledPackageVerificationErrors(params: {
@@ -479,12 +537,18 @@ function verifyPackedInstalledPackage(params: {
   tmpRoot: string;
 }): void {
   const invocation = resolveInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
-  const installedBinaryVersion = execFileSync(invocation.command, invocation.args, {
-    cwd: params.tmpRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }).trim();
+  const installedBinaryVersion = runReleaseCheckCommand(
+    {
+      command: invocation.command,
+      args: invocation.args,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    },
+    {
+      cwd: params.tmpRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
@@ -563,10 +627,13 @@ function runPackedPluginSdkTypescriptSmoke(tarballPath: string, tmpRoot: string)
   if (!tscPath) {
     throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
   }
-  execFileSync(process.execPath, [tscPath, "-p", "tsconfig.json", "--pretty", "false"], {
-    cwd: consumerDir,
-    stdio: "inherit",
-  });
+  runReleaseCheckCommand(
+    { command: process.execPath, args: [tscPath, "-p", "tsconfig.json", "--pretty", "false"] },
+    {
+      cwd: consumerDir,
+      stdio: "inherit",
+    },
+  );
 }
 
 export function writePackedBundledPluginActivationConfig(homeDir: string): void {
@@ -620,20 +687,25 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
   });
 
   writePackedBundledPluginActivationConfig(homeDir);
-  execFileSync(
-    process.execPath,
-    [join(packageRoot, "openclaw.mjs"), ...PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS],
+  runReleaseCheckCommand(
+    {
+      command: process.execPath,
+      args: [join(packageRoot, "openclaw.mjs"), ...PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS],
+    },
     {
       cwd: packageRoot,
       stdio: "inherit",
       env,
     },
   );
-  execFileSync(process.execPath, [join(packageRoot, "openclaw.mjs"), "plugins", "doctor"], {
-    cwd: packageRoot,
-    stdio: "inherit",
-    env,
-  });
+  runReleaseCheckCommand(
+    { command: process.execPath, args: [join(packageRoot, "openclaw.mjs"), "plugins", "doctor"] },
+    {
+      cwd: packageRoot,
+      stdio: "inherit",
+      env,
+    },
+  );
 }
 
 function runPackedTaskRegistryControlRuntimeSmoke(packageRoot: string): void {
@@ -654,11 +726,14 @@ if (typeof runtime.killSubagentRunAdmin !== "function") {
   throw new Error("missing killSubagentRunAdmin export");
 }
 `;
-  execFileSync(process.execPath, ["--input-type=module", "--eval", source], {
-    cwd: packageRoot,
-    stdio: "inherit",
-    env: createPackedCliSmokeEnv(process.env),
-  });
+  runReleaseCheckCommand(
+    { command: process.execPath, args: ["--input-type=module", "--eval", source] },
+    {
+      cwd: packageRoot,
+      stdio: "inherit",
+      env: createPackedCliSmokeEnv(process.env),
+    },
+  );
 }
 
 function runPackedCliSmoke(params: {
@@ -678,25 +753,29 @@ function runPackedCliSmoke(params: {
 
   for (const args of PACKED_CLI_SMOKE_COMMANDS) {
     if (process.platform === "win32") {
-      execFileSync(
-        trustedCmdPath,
-        ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
+      runReleaseCheckCommand(
+        {
+          command: trustedCmdPath,
+          args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
+          shell: false,
+          windowsVerbatimArguments: true,
+        },
         {
           cwd: params.cwd,
           stdio: "inherit",
           env,
-          shell: false,
-          windowsVerbatimArguments: true,
         },
       );
       continue;
     }
-    execFileSync(binaryPath, [...args], {
-      cwd: params.cwd,
-      stdio: "inherit",
-      env,
-      shell: false,
-    });
+    runReleaseCheckCommand(
+      { command: binaryPath, args: [...args], shell: false },
+      {
+        cwd: params.cwd,
+        stdio: "inherit",
+        env,
+      },
+    );
   }
 }
 
@@ -739,13 +818,15 @@ function runPackedBundledChannelEntrySmoke(): void {
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
     runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot);
-    execFileSync(
-      process.execPath,
-      [
-        resolve("scripts/test-built-bundled-channel-entry-smoke.mjs"),
-        "--package-root",
-        packageRoot,
-      ],
+    runReleaseCheckCommand(
+      {
+        command: process.execPath,
+        args: [
+          resolve("scripts/test-built-bundled-channel-entry-smoke.mjs"),
+          "--package-root",
+          packageRoot,
+        ],
+      },
       {
         stdio: "inherit",
         env: {
@@ -755,9 +836,11 @@ function runPackedBundledChannelEntrySmoke(): void {
       },
     );
 
-    execFileSync(
-      process.execPath,
-      [join(packageRoot, "openclaw.mjs"), ...PACKED_COMPLETION_SMOKE_ARGS],
+    runReleaseCheckCommand(
+      {
+        command: process.execPath,
+        args: [join(packageRoot, "openclaw.mjs"), ...PACKED_COMPLETION_SMOKE_ARGS],
+      },
       {
         cwd: packageRoot,
         stdio: "inherit",
@@ -1043,10 +1126,13 @@ function runCriticalPluginSdkEntrypointImportSmoke() {
     "  await importModule(specifier);",
     "}",
   ].join("\n");
-  execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
-    cwd: process.cwd(),
-    stdio: "inherit",
-  });
+  runReleaseCheckCommand(
+    { command: process.execPath, args: ["--input-type=module", "--eval", script] },
+    {
+      cwd: process.cwd(),
+      stdio: "inherit",
+    },
+  );
 }
 
 async function main() {

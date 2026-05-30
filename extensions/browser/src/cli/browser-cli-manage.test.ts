@@ -261,6 +261,45 @@ describe("browser manage output", () => {
     expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
 
+  it("rejects non-integer tab indexes without calling browser actions", async () => {
+    const program = createBrowserManageProgram();
+
+    await expect(
+      program.parseAsync(["browser", "tab", "select", "1.9"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
+      "index must be a positive integer",
+    );
+
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+    await expect(
+      program.parseAsync(["browser", "tab", "close", "abc"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.at(-1)).toContain(
+      "index must be a positive integer",
+    );
+    expect(getBrowserManageCallBrowserRequestMock()).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ path: "/tabs/action" }),
+      expect.anything(),
+    );
+  });
+
+  it("accepts signed decimal tab indexes", async () => {
+    const program = createBrowserManageProgram();
+
+    await program.parseAsync(["browser", "tab", "select", "+2"], { from: "user" });
+
+    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        path: "/tabs/action",
+        body: { action: "select", index: 1 },
+      }),
+      expect.anything(),
+    );
+  });
+
   it("prints a readable browser doctor report", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/") {

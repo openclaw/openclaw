@@ -76,7 +76,7 @@ const mockPluginSpecs = [{ name: "tts", description: "Text to speech", acceptsAr
 vi.mock("../../auto-reply/commands-registry.js", () => ({
   listChatCommandsForConfig: vi.fn(() => mockChatCommands),
 }));
-vi.mock("../../auto-reply/skill-commands.js", () => ({
+vi.mock("../../skills/discovery/chat-commands.js", () => ({
   listSkillCommandsForAgents: vi.fn(() => mockSkillCommands),
 }));
 vi.mock("../../plugins/command-specs.js", () => ({
@@ -152,7 +152,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
   }),
 }));
 
-import { ErrorCodes, errorShape } from "../protocol/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   COMMAND_ALIAS_MAX_ITEMS,
   COMMAND_ARG_CHOICES_MAX_ITEMS,
@@ -160,7 +160,7 @@ import {
   COMMAND_DESCRIPTION_MAX_LENGTH,
   COMMAND_LIST_MAX_ITEMS,
   COMMAND_NAME_MAX_LENGTH,
-} from "../protocol/schema/commands.js";
+} from "../../../packages/gateway-protocol/src/schema.js";
 import { commandsHandlers, buildCommandsListResult } from "./commands.js";
 
 function callHandler(params: Record<string, unknown> = {}) {

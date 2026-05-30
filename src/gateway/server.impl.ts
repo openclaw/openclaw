@@ -600,6 +600,9 @@ export async function startGatewayServer(
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
+    ...(startupConfigLoad.pluginMetadataSnapshot
+      ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
+      : {}),
   });
 
   let cfgAtStart: OpenClawConfig;
@@ -676,6 +679,7 @@ export async function startGatewayServer(
       minimalTestGateway,
       log,
       loadRuntimePlugins: false,
+      loadSetupRuntimePlugins: true,
     }),
   );
   const {
@@ -1406,6 +1410,7 @@ export async function startGatewayServer(
           chatDeltaLastBroadcastText: chatRunState.deltaLastBroadcastText,
           agentDeltaSentAt: chatRunState.agentDeltaSentAt,
           bufferedAgentEvents: chatRunState.bufferedAgentEvents,
+          clearChatRunState: chatRunState.clearRun,
           addChatRun,
           removeChatRun,
           subscribeSessionEvents: sessionEventSubscribers.subscribe,

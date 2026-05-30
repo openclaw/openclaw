@@ -77,6 +77,7 @@ import {
   mergeSetupRuntimeChannelPlugin,
   resolveBundledRuntimeChannelRegistration,
   resolveSetupChannelRegistration,
+  shouldDeferConfiguredChannelFullRuntimeMerge,
   shouldLoadChannelPluginInSetupRuntime,
 } from "./loader-channel-setup.js";
 import {
@@ -580,7 +581,77 @@ function rewriteBundledRuntimeArtifactRelativePath(relativePath: string): string
   return relativePath.replace(/\.[^.]+$/u, ".js");
 }
 
-function resolvePreferredBuiltBundledRuntimeArtifact(params: {
+function listPackageLocalRuntimeArtifactOutputExtensions(sourceExt: string): string[] {
+  switch (sourceExt) {
+    case ".mts":
+    case ".mjs":
+      return [".mjs", ".js", ".cjs"];
+    case ".cts":
+    case ".cjs":
+      return [".cjs", ".js", ".mjs"];
+    default:
+      return [".js", ".mjs", ".cjs"];
+  }
+}
+
+function listPackageLocalRuntimeArtifactRelativePathBases(relativePath: string): string[] {
+  const ext = path.extname(relativePath).toLowerCase();
+  const withoutExt = ext ? relativePath.slice(0, -ext.length) : relativePath;
+  if (!withoutExt.startsWith(`src${path.sep}`) && !withoutExt.startsWith("src/")) {
+    return [withoutExt];
+  }
+  return [withoutExt.slice(4), withoutExt];
+}
+
+function listPackageLocalDistRuntimeArtifactRelativePaths(relativePath: string): string[] {
+  const ext = path.extname(relativePath).toLowerCase();
+  const candidates = new Set<string>();
+  for (const base of listPackageLocalRuntimeArtifactRelativePathBases(relativePath)) {
+    for (const outputExt of listPackageLocalRuntimeArtifactOutputExtensions(ext)) {
+      candidates.add(`${base}${outputExt}`);
+    }
+  }
+  return [...candidates];
+}
+
+function shouldPreferPackageLocalDistRuntimeArtifact(source: string): boolean {
+  switch (path.extname(source).toLowerCase()) {
+    case ".ts":
+    case ".tsx":
+    case ".mts":
+    case ".cts":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function resolvePackageLocalDistRuntimeArtifact(params: {
+  source: string;
+  rootDir: string;
+}): string | null {
+  const relativeSource = path.relative(params.rootDir, params.source);
+  if (
+    !shouldPreferPackageLocalDistRuntimeArtifact(relativeSource) ||
+    relativeSource === "" ||
+    relativeSource.startsWith("..") ||
+    path.isAbsolute(relativeSource)
+  ) {
+    return null;
+  }
+  const artifactRoot = path.join(params.rootDir, "dist");
+  for (const artifactRelativePath of listPackageLocalDistRuntimeArtifactRelativePaths(
+    relativeSource,
+  )) {
+    const artifactSource = path.join(artifactRoot, artifactRelativePath);
+    if (fs.existsSync(artifactSource)) {
+      return safeRealpathOrResolve(artifactSource);
+    }
+  }
+  return null;
+}
+
+function resolvePreferredBuiltRuntimeArtifact(params: {
   source: string;
   rootDir: string;
   origin: PluginOrigin;
@@ -588,8 +659,19 @@ function resolvePreferredBuiltBundledRuntimeArtifact(params: {
 }): { source: string; rootDir: string } {
   const rootDir = safeRealpathOrResolve(params.rootDir);
   const source = safeRealpathOrResolve(params.source);
-  if (!params.preferBuiltPluginArtifacts || params.origin !== "bundled") {
+  if (!params.preferBuiltPluginArtifacts) {
     return { source, rootDir };
+  }
+  if (params.origin !== "bundled") {
+    const artifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+    if (artifactSource) {
+      return { source: artifactSource, rootDir };
+    }
+    return { source, rootDir };
+  }
+  const packageLocalArtifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+  if (packageLocalArtifactSource) {
+    return { source: packageLocalArtifactSource, rootDir };
   }
   const extensionsDir = path.dirname(rootDir);
   if (path.basename(extensionsDir) !== "extensions") {
@@ -1924,14 +2006,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         });
       };
       const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
-      const runtimeCandidateEntry = resolvePreferredBuiltBundledRuntimeArtifact({
+      const runtimeCandidateEntry = resolvePreferredBuiltRuntimeArtifact({
         source: candidate.source,
         rootDir: pluginRoot,
         origin: candidate.origin,
         preferBuiltPluginArtifacts,
       });
       const runtimeSetupEntry = manifestRecord.setupSource
-        ? resolvePreferredBuiltBundledRuntimeArtifact({
+        ? resolvePreferredBuiltRuntimeArtifact({
             source: manifestRecord.setupSource,
             rootDir: pluginRoot,
             origin: candidate.origin,
@@ -2221,6 +2303,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           if (
             registrationPlan.loadSetupRuntimeEntry &&
             setupRegistration.usesBundledSetupContract &&
+            !shouldDeferConfiguredChannelFullRuntimeMerge({
+              manifestChannels: manifestRecord.channels,
+              startupDeferConfiguredChannelFullLoadUntilAfterListen:
+                manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
+              cfg,
+              env,
+              preferSetupRuntimeForChannelPlugins,
+            }) &&
             resolveCanonicalDistRuntimeSource(runtimeCandidateEntry.source) !== safeSource
           ) {
             const runtimeModuleSource = resolveCanonicalDistRuntimeSource(
@@ -2363,6 +2453,34 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 diagnosticMessagePrefix: "failed to apply setup channel runtime: ",
               });
               continue;
+            }
+          }
+          if (registrationMode === "setup-runtime") {
+            const registerSetupRuntime = mergedSetupRegistration.registerSetupRuntime;
+            if (registerSetupRuntime) {
+              const registrySnapshot = snapshotPluginRegistry(registry);
+              try {
+                runPluginRegisterSync(
+                  (registrationApi) => registerSetupRuntime(registrationApi),
+                  api,
+                );
+              } catch (err) {
+                restorePluginRegistry(registry, registrySnapshot);
+                recordPluginError({
+                  logger,
+                  registry,
+                  record,
+                  seenIds,
+                  pluginId,
+                  origin: candidate.origin,
+                  phase: "register",
+                  error: err,
+                  logPrefix: `[plugins] ${record.id} failed to register setup-runtime channel side effects from ${record.source}: `,
+                  diagnosticMessagePrefix:
+                    "failed to register setup-runtime channel side effects: ",
+                });
+                continue;
+              }
             }
           }
           api.registerChannel(mergedSetupPlugin);

@@ -1,5 +1,7 @@
 profile: openclaw-check
-provider: aws
+# Default OpenClaw runner spend to the Azure-backed Crabbox account.
+# Use `--provider aws` only for AWS-specific runner proof.
+provider: azure
 class: standard
 capacity:
   market: spot
@@ -29,6 +31,11 @@ actions:
     - openclaw
   runnerVersion: latest
   ephemeral: true
+blacksmith:
+  org: openclaw
+  workflow: .github/workflows/ci-check-testbox.yml
+  job: check
+  ref: main
 aws:
   region: eu-west-1
   rootGB: 400

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   applyCodeModeCatalog,
@@ -93,7 +93,12 @@ async function runUntilCompleted(params: {
 }
 
 describe("Code Mode", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
     testing.setTypescriptRuntimeForTest(null);
@@ -441,7 +446,7 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
+          timeoutMs: 1_000,
         },
       },
     } as never;
@@ -887,6 +892,32 @@ describe("Code Mode", () => {
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("timeout exceeded");
     expect(details.code).toBe("timeout");
+  });
+
+  it("normalizes QuickJS interrupt timeout errors", () => {
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "timeout",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "timeout",
+      error: "code mode timeout exceeded",
+    });
+
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "internal_error",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "internal_error",
+      error: "interrupted",
+    });
   });
 
   it("classifies missing worker runtime as unavailable", async () => {
