@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import {
   findPreferredDmConversationByUserId,
@@ -84,6 +85,28 @@ function normalizeLegacyStore(value: ConversationStoreData): ConversationStoreDa
   return value;
 }
 
+function buildConversationStateKey(conversationId: string): string {
+  return crypto.createHash("sha256").update(conversationId).digest("hex");
+}
+
+function prepareConversationReferenceForStorage(
+  conversationId: string,
+  reference: StoredConversationReference,
+): StoredConversationReference {
+  return {
+    ...reference,
+    conversation: {
+      ...reference.conversation,
+      id: conversationId,
+    },
+  };
+}
+
+function getStoredConversationId(reference: StoredConversationReference): string | null {
+  const rawId = reference.conversation?.id;
+  return rawId ? normalizeStoredConversationId(rawId) : null;
+}
+
 export function createMSTeamsConversationStoreState(
   params?: MSTeamsConversationStoreStateOptions,
 ): MSTeamsConversationStore {
@@ -134,7 +157,10 @@ export function createMSTeamsConversationStoreState(
       if (!conversationId) {
         continue;
       }
-      await conversationStore.registerIfAbsent(conversationId, toPluginJsonValue(reference));
+      await conversationStore.registerIfAbsent(
+        buildConversationStateKey(conversationId),
+        toPluginJsonValue(prepareConversationReferenceForStorage(conversationId, reference)),
+      );
     }
     await migrationStore.register(LEGACY_JSON_MIGRATION_KEY, {
       importedAt: new Date().toISOString(),
@@ -155,7 +181,7 @@ export function createMSTeamsConversationStoreState(
     conversationId: string,
   ): Promise<StoredConversationReference | null> => {
     const normalizedId = normalizeStoredConversationId(conversationId);
-    const value = await conversationStore.lookup(normalizedId);
+    const value = await conversationStore.lookup(buildConversationStateKey(normalizedId));
     if (!value) {
       return null;
     }
@@ -173,7 +199,10 @@ export function createMSTeamsConversationStoreState(
       if (isExpired(row.value)) {
         continue;
       }
-      kept.push([row.key, row.value]);
+      const conversationId = getStoredConversationId(row.value);
+      if (conversationId) {
+        kept.push([conversationId, row.value]);
+      }
     }
     return kept;
   };
@@ -187,7 +216,11 @@ export function createMSTeamsConversationStoreState(
     conversationId: string,
     reference: StoredConversationReference,
   ): Promise<void> => {
-    await conversationStore.register(conversationId, toPluginJsonValue(reference));
+    const normalizedId = normalizeStoredConversationId(conversationId);
+    await conversationStore.register(
+      buildConversationStateKey(normalizedId),
+      toPluginJsonValue(prepareConversationReferenceForStorage(normalizedId, reference)),
+    );
     const rows = [];
     for (const row of await conversationStore.entries()) {
       if (isExpired(row.value)) {
@@ -202,7 +235,9 @@ export function createMSTeamsConversationStoreState(
     const sorted = rows.toSorted((a, b) => {
       const aTs = parseStoredConversationTimestamp(a.value.lastSeenAt) ?? 0;
       const bTs = parseStoredConversationTimestamp(b.value.lastSeenAt) ?? 0;
-      return aTs - bTs || a.key.localeCompare(b.key);
+      const aId = getStoredConversationId(a.value) ?? a.key;
+      const bId = getStoredConversationId(b.value) ?? b.key;
+      return aTs - bTs || aId.localeCompare(bId);
     });
     for (const row of sorted.slice(0, rows.length - MAX_CONVERSATIONS)) {
       await conversationStore.delete(row.key);
@@ -246,7 +281,7 @@ export function createMSTeamsConversationStoreState(
     const normalizedId = normalizeStoredConversationId(conversationId);
     return await withMSTeamsSqliteMutationLock(params, CONVERSATION_LOCK_FILENAME, async () => {
       await importLegacyStore();
-      return await conversationStore.delete(normalizedId);
+      return await conversationStore.delete(buildConversationStateKey(normalizedId));
     });
   };
 

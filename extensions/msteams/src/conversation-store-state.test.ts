@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,10 @@ import { createMSTeamsConversationStoreState } from "./conversation-store-state.
 import type { StoredConversationReference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+
+function conversationStateKey(conversationId: string): string {
+  return crypto.createHash("sha256").update(conversationId).digest("hex");
+}
 
 describe("msteams conversation store (plugin state)", () => {
   beforeEach(() => {
@@ -116,10 +121,46 @@ describe("msteams conversation store (plugin state)", () => {
         env,
       },
     );
-    await sqliteStore.register("conv-current", ref);
+    await sqliteStore.register(conversationStateKey("conv-current"), ref);
 
     const store = createMSTeamsConversationStoreState({ env });
     await expect(store.get("conv-current")).resolves.toEqual(ref);
+  });
+
+  it("hashes external conversation ids before using plugin-state keys", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const longConversationId = `a:${"x".repeat(900)}`;
+    const filePath = path.join(stateDir, "msteams-conversations.json");
+    await fs.promises.writeFile(
+      filePath,
+      `${JSON.stringify({
+        version: 1,
+        conversations: {
+          [longConversationId]: {
+            channelId: "msteams",
+            serviceUrl: "https://service.example.com",
+            user: { id: "long-user" },
+          } satisfies StoredConversationReference,
+        },
+      })}\n`,
+    );
+
+    const store = createMSTeamsConversationStoreState({ stateDir });
+
+    await expect(store.get(longConversationId)).resolves.toMatchObject({
+      conversation: { id: longConversationId },
+      user: { id: "long-user" },
+    });
+    await store.upsert(`${longConversationId}-new`, {
+      conversation: { conversationType: "personal" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "long-user-new" },
+    });
+    await expect(store.get(`${longConversationId}-new`)).resolves.toMatchObject({
+      conversation: { id: `${longConversationId}-new` },
+      user: { id: "long-user-new" },
+    });
   });
 
   it("serializes concurrent upserts so sparse activities do not drop preserved fields", async () => {
