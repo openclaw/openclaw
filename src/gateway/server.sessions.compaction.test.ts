@@ -89,6 +89,10 @@ function expectMainCompactionResult(
   expect(compacted.payload?.compacted).toBe(expectedCompacted);
 }
 
+async function canonicalizeExpectedExistingPath(filePath: string): Promise<string> {
+  return path.join(await fs.realpath(path.dirname(filePath)), path.basename(filePath));
+}
+
 test("sessions.compaction.* lists checkpoints and branches or restores from compacted transcripts", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
@@ -403,8 +407,8 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
   await fs.copyFile(preCompactionSessionFile, checkpointFile);
   await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
   const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
-  const expectedCheckpointFile = await fs.realpath(checkpointFile);
-  const expectedSessionFile = await fs.realpath(fixture.sessionFile);
+  const expectedCheckpointFile = await canonicalizeExpectedExistingPath(checkpointFile);
+  const expectedSessionFile = await canonicalizeExpectedExistingPath(fixture.sessionFile);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(fixture.sessionId, {
@@ -550,8 +554,8 @@ test("sessions.compaction.* ignores malformed usable-looking stored checkpoint m
   await fs.copyFile(preCompactionSessionFile, checkpointFile);
   await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
   const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
-  const expectedCheckpointFile = await fs.realpath(checkpointFile);
-  const expectedSessionFile = await fs.realpath(fixture.sessionFile);
+  const expectedCheckpointFile = await canonicalizeExpectedExistingPath(checkpointFile);
+  const expectedSessionFile = await canonicalizeExpectedExistingPath(fixture.sessionFile);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(fixture.sessionId, {

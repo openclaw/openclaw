@@ -157,6 +157,10 @@ async function persistMainCheckpoint(
   });
 }
 
+function canonicalizeExpectedExistingPath(filePath: string): string {
+  return path.join(fsSync.realpathSync(path.dirname(filePath)), path.basename(filePath));
+}
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -292,6 +296,8 @@ describe("session-compaction-checkpoints", () => {
     await fs.copyFile(sessionFile, checkpointFile);
     await fs.utimes(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
     const expectedCreatedAt = Math.trunc((await fs.stat(checkpointFile)).mtimeMs);
+    const expectedCheckpointFile = canonicalizeExpectedExistingPath(checkpointFile);
+    const expectedSessionFile = canonicalizeExpectedExistingPath(sessionFile);
 
     const checkpoints = await listSessionCompactionCheckpointsWithFilesAsync({
       entry: {
@@ -312,12 +318,12 @@ describe("session-compaction-checkpoints", () => {
       reason: "manual",
       preCompaction: {
         sessionId: session.getSessionId(),
-        sessionFile: checkpointFile,
+        sessionFile: expectedCheckpointFile,
         leafId,
       },
       postCompaction: {
         sessionId: session.getSessionId(),
-        sessionFile,
+        sessionFile: expectedSessionFile,
       },
     });
   });
