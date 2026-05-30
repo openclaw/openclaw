@@ -4,12 +4,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const noteMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessSpawnSync(spawnSyncMock);
-});
+vi.mock("node:child_process", () => ({
+  spawnSync: spawnSyncMock,
+}));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: noteMock,
 }));
 

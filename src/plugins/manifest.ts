@@ -1,23 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import {
-  normalizeModelCatalog,
-  normalizeModelCatalogProviderId,
-  type ModelCatalog,
-  type ModelCatalogAlias,
-  type ModelCatalogCost,
-  type ModelCatalogDiscovery,
-  type ModelCatalogInput,
-  type ModelCatalogModel,
-  type ModelCatalogProvider,
-  type ModelCatalogStatus,
-  type ModelCatalogSuppression,
-  type ModelCatalogTieredCost,
-} from "../model-catalog/index.js";
+import type {
+  ModelCatalog,
+  ModelCatalogAlias,
+  ModelCatalogCost,
+  ModelCatalogDiscovery,
+  ModelCatalogInput,
+  ModelCatalogModel,
+  ModelCatalogProvider,
+  ModelCatalogStatus,
+  ModelCatalogSuppression,
+  ModelCatalogTieredCost,
+} from "../model-catalog/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
@@ -35,6 +36,12 @@ export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
+const MAX_SECRET_PROVIDER_EXEC_ARGS = 128;
+const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
+const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
+const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
+const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
+const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -152,6 +159,22 @@ export type PluginManifestProviderRequestProvider = {
 
 export type PluginManifestProviderRequest = {
   providers?: Record<string, PluginManifestProviderRequestProvider>;
+};
+
+export type PluginManifestSecretProviderIntegration = {
+  providerAlias?: string;
+  displayName?: string;
+  description?: string;
+  source: "exec";
+  command: "${node}";
+  args?: string[];
+  timeoutMs?: number;
+  noOutputTimeoutMs?: number;
+  maxOutputBytes?: number;
+  jsonOnly?: boolean;
+  env?: Record<string, string>;
+  passEnv?: string[];
+  allowInsecurePath?: boolean;
 };
 
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
@@ -291,6 +314,8 @@ export type PluginManifestConfigContracts = {
 export type PluginManifest = {
   id: string;
   configSchema: JsonSchemaObject;
+  /** Plugin ids that must also be installed for this plugin to have effect. */
+  requiresPlugins?: string[];
   enabledByDefault?: boolean;
   enabledByDefaultOnPlatforms?: PluginManifestDefaultPlatform[];
   /** Legacy plugin ids that should normalize to this plugin id. */
@@ -305,8 +330,6 @@ export type PluginManifest = {
    * auth/catalog discovery. It should not import the full plugin runtime.
    */
   providerCatalogEntry?: string;
-  /** @deprecated Use providerCatalogEntry. */
-  providerDiscoveryEntry?: string;
   /**
    * Cheap model-family ownership metadata used before plugin runtime loads.
    * Use this for shorthand model refs that omit an explicit provider prefix.
@@ -325,6 +348,8 @@ export type PluginManifest = {
   providerEndpoints?: PluginManifestProviderEndpoint[];
   /** Cheap provider request metadata used before provider runtime loads. */
   providerRequest?: PluginManifestProviderRequest;
+  /** Declarative SecretRef provider presets owned by this plugin. */
+  secretProviderIntegrations?: Record<string, PluginManifestSecretProviderIntegration>;
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /**
@@ -408,6 +433,7 @@ export type PluginManifestContracts = {
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
   mediaUnderstandingProviders?: string[];
+  transcriptSourceProviders?: string[];
   documentExtractors?: string[];
   imageGenerationProviders?: string[];
   videoGenerationProviders?: string[];
@@ -427,6 +453,15 @@ export type PluginManifestMediaUnderstandingProviderMetadata = {
   defaultModels?: Partial<Record<PluginManifestMediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<PluginManifestMediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
+  documentModels?: Partial<
+    Record<
+      "pdf",
+      {
+        textExtraction?: string;
+        image?: string | false;
+      }
+    >
+  >;
 };
 
 export type PluginManifestProviderBaseUrlGuard = {
@@ -603,6 +638,26 @@ function normalizeMediaUnderstandingNativeDocumentInputs(value: unknown): Array<
   return values.length > 0 ? values : undefined;
 }
 
+function normalizeMediaUnderstandingDocumentModels(
+  value: unknown,
+): PluginManifestMediaUnderstandingProviderMetadata["documentModels"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const pdfRaw = value.pdf;
+  if (!isRecord(pdfRaw)) {
+    return undefined;
+  }
+  const textExtraction = normalizeOptionalString(pdfRaw.textExtraction);
+  const image: string | false | undefined =
+    pdfRaw.image === false ? false : normalizeOptionalString(pdfRaw.image);
+  const pdf = {
+    ...(textExtraction ? { textExtraction } : {}),
+    ...(image !== undefined ? { image } : {}),
+  };
+  return Object.keys(pdf).length > 0 ? { pdf } : undefined;
+}
+
 function normalizeMediaUnderstandingProviderMetadata(
   value: unknown,
 ): Record<string, PluginManifestMediaUnderstandingProviderMetadata> | undefined {
@@ -622,11 +677,13 @@ function normalizeMediaUnderstandingProviderMetadata(
     const nativeDocumentInputs = normalizeMediaUnderstandingNativeDocumentInputs(
       rawMetadata.nativeDocumentInputs,
     );
+    const documentModels = normalizeMediaUnderstandingDocumentModels(rawMetadata.documentModels);
     const metadata = {
       ...(capabilities ? { capabilities } : {}),
       ...(defaultModels ? { defaultModels } : {}),
       ...(autoPriority ? { autoPriority } : {}),
       ...(nativeDocumentInputs ? { nativeDocumentInputs } : {}),
+      ...(documentModels ? { documentModels } : {}),
     } satisfies PluginManifestMediaUnderstandingProviderMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[providerId] = metadata;
@@ -808,6 +865,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   );
   const realtimeVoiceProviders = normalizeTrimmedStringList(value.realtimeVoiceProviders);
   const mediaUnderstandingProviders = normalizeTrimmedStringList(value.mediaUnderstandingProviders);
+  const transcriptSourceProviders = normalizeTrimmedStringList(value.transcriptSourceProviders);
   const documentExtractors = normalizeTrimmedStringList(value.documentExtractors);
   const imageGenerationProviders = normalizeTrimmedStringList(value.imageGenerationProviders);
   const videoGenerationProviders = normalizeTrimmedStringList(value.videoGenerationProviders);
@@ -828,6 +886,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),
     ...(mediaUnderstandingProviders.length > 0 ? { mediaUnderstandingProviders } : {}),
+    ...(transcriptSourceProviders.length > 0 ? { transcriptSourceProviders } : {}),
     ...(documentExtractors.length > 0 ? { documentExtractors } : {}),
     ...(imageGenerationProviders.length > 0 ? { imageGenerationProviders } : {}),
     ...(videoGenerationProviders.length > 0 ? { videoGenerationProviders } : {}),
@@ -1175,6 +1234,111 @@ function normalizeManifestProviderRequest(
     }
   }
   return Object.keys(providers).length > 0 ? { providers } : undefined;
+}
+
+function normalizeManifestStringArray(
+  value: unknown,
+  options?: { maxItems?: number; maxLength?: number; pattern?: RegExp },
+): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    if (options?.maxLength !== undefined && entry.length > options.maxLength) {
+      continue;
+    }
+    if (options?.pattern && !options.pattern.test(entry)) {
+      continue;
+    }
+    normalized.push(entry);
+    if (options?.maxItems !== undefined && normalized.length >= options.maxItems) {
+      break;
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestTrimmedStringArray(
+  value: unknown,
+  options?: { maxItems?: number; pattern?: RegExp },
+): string[] | undefined {
+  const normalized = normalizeTrimmedStringList(value).filter(
+    (entry) => !options?.pattern || options.pattern.test(entry),
+  );
+  const limited =
+    options?.maxItems !== undefined ? normalized.slice(0, options.maxItems) : normalized;
+  return limited.length > 0 ? limited : undefined;
+}
+
+function normalizeManifestPositiveInteger(value: unknown, max: number): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max
+    ? value
+    : undefined;
+}
+
+function normalizeManifestSecretProviderIntegrations(
+  value: unknown,
+): Record<string, PluginManifestSecretProviderIntegration> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestSecretProviderIntegration> = Object.create(null);
+  for (const [rawId, rawIntegration] of Object.entries(value)) {
+    const id = normalizeOptionalString(rawId) ?? "";
+    if (!id || isBlockedObjectKey(id) || !isRecord(rawIntegration)) {
+      continue;
+    }
+    const command = normalizeOptionalString(rawIntegration.command);
+    if (rawIntegration.source !== "exec" || command !== SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER) {
+      continue;
+    }
+    const providerAlias = normalizeOptionalString(rawIntegration.providerAlias);
+    const displayName = normalizeOptionalString(rawIntegration.displayName);
+    const description = normalizeOptionalString(rawIntegration.description);
+    const args = normalizeManifestStringArray(rawIntegration.args, {
+      maxItems: MAX_SECRET_PROVIDER_EXEC_ARGS,
+      maxLength: MAX_SECRET_PROVIDER_EXEC_ARG_BYTES,
+    });
+    const timeoutMs = normalizeManifestPositiveInteger(
+      rawIntegration.timeoutMs,
+      MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+    );
+    const noOutputTimeoutMs = normalizeManifestPositiveInteger(
+      rawIntegration.noOutputTimeoutMs,
+      MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+    );
+    const maxOutputBytes = normalizeManifestPositiveInteger(
+      rawIntegration.maxOutputBytes,
+      MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES,
+    );
+    const env = normalizeStringRecord(rawIntegration.env);
+    const passEnv = normalizeManifestTrimmedStringArray(rawIntegration.passEnv, {
+      maxItems: MAX_SECRET_PROVIDER_EXEC_PASS_ENV,
+      pattern: ENV_SECRET_REF_ID_RE,
+    });
+    normalized[id] = {
+      ...(providerAlias ? { providerAlias } : {}),
+      ...(displayName ? { displayName } : {}),
+      ...(description ? { description } : {}),
+      source: "exec",
+      command,
+      ...(args ? { args } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
+      ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
+      ...(typeof rawIntegration.jsonOnly === "boolean"
+        ? { jsonOnly: rawIntegration.jsonOnly }
+        : {}),
+      ...(env ? { env } : {}),
+      ...(passEnv ? { passEnv } : {}),
+      ...(rawIntegration.allowInsecurePath === true ? { allowInsecurePath: true } : {}),
+    };
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
@@ -1596,6 +1760,7 @@ export function loadPluginManifest(
     return cacheResult({ ok: false, error: "plugin manifest requires configSchema", manifestPath });
   }
 
+  const requiresPlugins = normalizeTrimmedStringList(raw.requiresPlugins);
   const kind = parsePluginKind(raw.kind);
   const enabledByDefault = raw.enabledByDefault === true;
   const enabledByDefaultOnPlatforms = normalizeManifestDefaultPlatforms(
@@ -1610,11 +1775,11 @@ export function loadPluginManifest(
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
   const providers = normalizeTrimmedStringList(raw.providers);
+  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const providerCatalogEntry = normalizeOptionalString(raw.providerCatalogEntry);
-  const providerDiscoveryEntry = normalizeOptionalString(raw.providerDiscoveryEntry);
   const modelSupport = normalizeManifestModelSupport(raw.modelSupport);
   const modelCatalog = normalizeModelCatalog(raw.modelCatalog, {
-    ownedProviders: new Set(providers),
+    ownedProviders: new Set([...providers, ...cliBackends]),
   });
   const modelPricing = normalizeManifestModelPricing(raw.modelPricing, {
     ownedProviders: new Set(providers),
@@ -1626,7 +1791,9 @@ export function loadPluginManifest(
   const providerRequest = normalizeManifestProviderRequest(raw.providerRequest, {
     ownedProviders: new Set(providers),
   });
-  const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
+  const secretProviderIntegrations = normalizeManifestSecretProviderIntegrations(
+    raw.secretProviderIntegrations,
+  );
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
@@ -1665,6 +1832,7 @@ export function loadPluginManifest(
     manifest: {
       id,
       configSchema,
+      ...(requiresPlugins.length > 0 ? { requiresPlugins } : {}),
       ...(enabledByDefault ? { enabledByDefault } : {}),
       ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
       ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
@@ -1675,13 +1843,13 @@ export function loadPluginManifest(
       channels,
       providers,
       providerCatalogEntry,
-      providerDiscoveryEntry,
       modelSupport,
       modelCatalog,
       modelPricing,
       modelIdNormalization,
       providerEndpoints,
       providerRequest,
+      secretProviderIntegrations,
       cliBackends,
       syntheticAuthRefs,
       nonSecretAuthMarkers,
@@ -1792,6 +1960,10 @@ export type OpenClawPackageSetupFeatures = {
   legacySessionSurfaces?: boolean;
 };
 
+export type OpenClawPackageCompat = {
+  pluginApi?: string;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   runtimeExtensions?: string[];
@@ -1803,6 +1975,7 @@ export type OpenClawPackageManifest = {
     label?: string;
   };
   channel?: PluginPackageChannel;
+  compat?: OpenClawPackageCompat;
   install?: PluginPackageInstall;
   startup?: OpenClawPackageStartup;
 };

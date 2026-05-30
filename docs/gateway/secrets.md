@@ -150,13 +150,13 @@ Use one object shape everywhere:
   </Tab>
   <Tab title="exec">
     ```json5
-    { source: "exec", provider: "vault", id: "providers/openai/apiKey" }
+    { source: "exec", provider: "vault", id: "providers/openai/apiKey#value" }
     ```
 
     Validation:
 
     - `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
-    - `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
+    - `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$` (supports selectors such as `secret#json_key`)
     - `id` must not contain `.` or `..` as slash-delimited path segments (for example `a/../b` is rejected)
 
   </Tab>
@@ -182,6 +182,13 @@ Define providers under `secrets.providers`:
         args: ["--profile", "prod"],
         passEnv: ["PATH", "VAULT_ADDR"],
         jsonOnly: true,
+      },
+      "team-secrets": {
+        source: "exec",
+        pluginIntegration: {
+          pluginId: "acme-secrets",
+          integrationId: "secret-store",
+        },
       },
     },
     defaults: {
@@ -219,6 +226,11 @@ Define providers under `secrets.providers`:
     - Pair `allowSymlinkCommand` with `trustedDirs` for package-manager paths (for example `["/opt/homebrew"]`).
     - Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
     - Windows fail-closed note: if ACL verification is unavailable for the command path, resolution fails. For trusted paths only, set `allowInsecurePath: true` on that provider to bypass path security checks.
+    - Plugin-managed exec providers can use `pluginIntegration` instead of
+      copied `command`/`args`. OpenClaw resolves the current command details
+      from the installed plugin manifest during startup/reload. If the plugin is
+      disabled, removed, untrusted, or no longer declares the integration,
+      active SecretRefs using that provider fail closed.
 
     Request payload (stdin):
 
@@ -310,6 +322,60 @@ the config fields that accept SecretRefs.
       },
     }
     ```
+  </Accordion>
+  <Accordion title="Bitwarden Secrets Manager (`bws`)">
+    Use a resolver wrapper when you want SecretRef ids to map to Bitwarden
+    Secrets Manager item keys. The repository includes
+    `scripts/secrets/openclaw-bws-resolver.mjs`; install or copy it to an absolute
+    trusted path on the host that runs the Gateway.
+
+    Requirements:
+
+    - Bitwarden Secrets Manager CLI (`bws`) installed on the Gateway host.
+    - `BWS_ACCESS_TOKEN` available to the Gateway service.
+    - `PATH` passed to the resolver, or `BWS_BIN` set to the absolute `bws`
+      binary path.
+
+    ```json5
+    {
+      secrets: {
+        providers: {
+          bws: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-bws-resolver.mjs",
+            passEnv: ["BWS_ACCESS_TOKEN", "PATH", "BWS_BIN"],
+            jsonOnly: true,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: {
+              source: "exec",
+              provider: "bws",
+              id: "openclaw/providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The resolver batches requested ids, runs `bws secret list`, and returns
+    values for matching secret `key` fields. Use keys that satisfy the exec
+    SecretRef id contract, such as `openclaw/providers/openai/apiKey`; env-var
+    style keys with underscores are rejected before the resolver runs. If more
+    than one visible Bitwarden secret has the same requested key, the resolver
+    fails that id as ambiguous instead of choosing one. After updating config,
+    verify the resolver path:
+
+    ```bash
+    openclaw secrets audit --allow-exec
+    ```
+
   </Accordion>
   <Accordion title="HashiCorp Vault CLI">
     ```json5

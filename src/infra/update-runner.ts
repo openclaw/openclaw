@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -25,7 +26,6 @@ import {
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
-  isOpenClawSourcePackageInstallSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   type GlobalInstallManager,
@@ -236,7 +236,7 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   if (proc) {
     dirs.push(proc);
   }
-  return Array.from(new Set(dirs));
+  return uniqueStrings(dirs);
 }
 
 function resolvePreflightTempRootPrefix() {
@@ -303,10 +303,7 @@ async function listGitTags(
   if (!res || res.code !== 0) {
     return [];
   }
-  return res.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(res.stdout.split("\n"));
 }
 
 async function resolveChannelTag(
@@ -443,6 +440,11 @@ function looksLikeFullCommitSha(value: string): boolean {
   return /^[0-9a-f]{40}$/i.test(value.trim());
 }
 
+function resolveTagFetchRef(candidate: string): string | null {
+  const ref = candidate.endsWith("^{}") ? candidate.slice(0, -"^{}".length) : candidate;
+  return ref.startsWith("refs/tags/") ? ref : null;
+}
+
 function buildDevTargetRefResolutionCandidates(devTargetRef: string): string[] {
   const trimmed = devTargetRef.trim();
   const candidates: string[] = [];
@@ -574,7 +576,26 @@ function isSupersededInstallFailure(
 }
 
 function findBlockingGitFailure(steps: readonly UpdateStepResult[]): UpdateStepResult | undefined {
-  return steps.find((step) => step.exitCode !== 0 && !isSupersededInstallFailure(step, steps));
+  return steps.find(
+    (step, index) =>
+      step.exitCode !== 0 &&
+      !isSupersededInstallFailure(step, steps) &&
+      !isSupersededTargetRefFailure(step, steps.slice(index + 1)),
+  );
+}
+
+function isSupersededTargetRefFailure(
+  step: UpdateStepResult,
+  followingSteps: readonly UpdateStepResult[],
+): boolean {
+  const isTargetRefProbe = step.name.startsWith("git rev-parse ");
+  const isTargetTagFetch = step.name.startsWith("git fetch ") && step.name.includes(" refs/tags/");
+  if (!isTargetRefProbe && !isTargetTagFetch) {
+    return false;
+  }
+  return followingSteps.some(
+    (candidate) => candidate.name.startsWith("git rev-parse ") && candidate.exitCode === 0,
+  );
 }
 
 function mergeCommandEnvironments(
@@ -877,7 +898,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
       const fetchFailure = await runRequiredGitStep(
         "git fetch",
-        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
         "fetch-failed",
       );
       if (fetchFailure) {
@@ -888,6 +909,32 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       if (devTargetRef) {
         let targetSha: string | null = null;
         for (const targetRefCandidate of buildDevTargetRefResolutionCandidates(devTargetRef)) {
+          const tagFetchRef = resolveTagFetchRef(targetRefCandidate);
+          if (tagFetchRef) {
+            const remoteListStep = await runStep(
+              step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot),
+            );
+            steps.push(remoteListStep);
+            const remotes = normalizeStringEntries((remoteListStep.stdoutTail ?? "").split("\n"));
+            let fetchedTag = false;
+            for (const remote of remotes) {
+              const targetTagFetchStep = await runStep(
+                step(
+                  `git fetch ${remote} ${tagFetchRef}`,
+                  ["git", "-C", gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
+                  gitRoot,
+                ),
+              );
+              steps.push(targetTagFetchStep);
+              if (targetTagFetchStep.exitCode === 0) {
+                fetchedTag = true;
+                break;
+              }
+            }
+            if (remotes.length > 0 && !fetchedTag) {
+              continue;
+            }
+          }
           const targetShaStep = await runStep(
             step(
               `git rev-parse ${targetRefCandidate}`,
@@ -985,10 +1032,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           };
         }
 
-        candidates = (revListStep.stdoutTail ?? "")
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
+        candidates = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
         if (candidates.length === 0) {
           return {
             status: "error",
@@ -1449,30 +1493,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       tag,
       env: globalInstallEnv,
     });
-    if (isOpenClawSourcePackageInstallSpec(spec)) {
-      const durationMs = Date.now() - startedAt;
-      return {
-        status: "error",
-        mode: globalManager,
-        root: pkgRoot,
-        reason: "unsupported-package-target",
-        before: { version: beforeVersion },
-        after: { version: beforeVersion },
-        steps: [
-          {
-            name: "package target validation",
-            command: `validate package target ${spec}`,
-            cwd: pkgRoot,
-            durationMs,
-            exitCode: 1,
-            stdoutTail: null,
-            stderrTail:
-              "OpenClaw package updates use published npm artifacts or built tarballs; use the dev channel for GitHub main.",
-          },
-        ],
-        durationMs,
-      };
-    }
     const packageUpdate = await runGlobalPackageUpdateSteps({
       installTarget,
       installSpec: spec,

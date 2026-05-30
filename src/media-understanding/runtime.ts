@@ -3,12 +3,14 @@ import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { kindFromMime, mimeTypeFromFilePath } from "../media/mime.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
+import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
 } from "./provider-registry.js";
+import { resolveMediaRuntimeTimeoutMs } from "./resolve.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
@@ -213,7 +215,7 @@ export async function describeImageFile(
 }
 
 export async function describeImageFileWithModel(params: DescribeImageFileWithModelParams) {
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
   const image = await readImageDescriptionInput({
@@ -223,11 +225,17 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
     cfg: params.cfg,
     timeoutMs,
   });
-  const describeImage = provider?.describeImage ?? describeImageWithModel;
-  return await describeImage({
+  const normalizedImage = await normalizeImageDescriptionInput({
     buffer: image.buffer,
     fileName: image.fileName,
     mime: image.mime,
+    maxBytes: DEFAULT_MAX_BYTES.image,
+  });
+  const describeImage = provider?.describeImage ?? describeImageWithModel;
+  return await describeImage({
+    buffer: normalizedImage.buffer,
+    fileName: image.fileName,
+    mime: normalizedImage.mime,
     provider: params.provider,
     model: params.model,
     prompt: params.prompt,
@@ -279,7 +287,7 @@ async function readImageDescriptionInput(params: {
 }
 
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   if (!hasStructuredImageInput(params.input)) {
     throw new Error("Structured extraction requires at least one image input.");
   }

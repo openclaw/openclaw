@@ -536,6 +536,20 @@ describe("/session idle and /session max-age", () => {
     );
   });
 
+  it("rejects unsafe bare-hour lifecycle durations", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
+
+    const result = await handleSessionCommand(
+      createThreadCommandParams("/session idle 9999999999999"),
+      true,
+    );
+
+    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toBe(
+      "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)",
+    );
+  });
+
   it("shows active idle timeout when no value is provided", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
@@ -554,6 +568,25 @@ describe("/session idle and /session max-age", () => {
     const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
     expect(result?.reply?.text).toContain("Idle timeout active (2h");
     expect(result?.reply?.text).toContain("2026-02-20T02:00:00.000Z");
+  });
+
+  it("falls back when active idle timeout expiry is Date-invalid", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(
+      createThreadBinding({
+        metadata: {
+          boundBy: "user-1",
+          lastActivityAt: 8_700_000_000_000_000,
+          idleTimeoutMs: 2 * 60 * 60 * 1000,
+          maxAgeMs: 0,
+        },
+      }),
+    );
+
+    const result = await handleSessionCommand(createThreadCommandParams("/session idle"), true);
+    expect(result?.reply?.text).toBe("ℹ️ Idle timeout active (2h, next auto-unfocus at n/a).");
   });
 
   it("sets max age for the focused thread-chat session", async () => {

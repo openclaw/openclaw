@@ -1,10 +1,10 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildManifestBuiltInModelSuppressionResolver,
   resolveManifestBuiltInModelSuppression,
 } from "../plugins/manifest-model-suppression.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 function resolveBuiltInModelSuppressionFromManifest(params: {
   provider?: string | null;

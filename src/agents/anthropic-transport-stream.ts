@@ -1,14 +1,8 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import {
-  calculateCost,
-  getEnvApiKey,
-  parseStreamingJson,
-  type AnthropicOptions,
-  type Context,
-  type Model,
-  type SimpleStreamOptions,
-  type ThinkingLevel,
-} from "@earendil-works/pi-ai";
+import { getEnvApiKey } from "../llm/env-api-keys.js";
+import { calculateCost } from "../llm/model-utils.js";
+import type { AnthropicOptions } from "../llm/providers/anthropic.js";
+import type { Context, Model, SimpleStreamOptions, ThinkingLevel } from "../llm/types.js";
+import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -19,6 +13,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   coerceTransportToolCallArguments,
@@ -60,7 +55,7 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 };
 
 type AnthropicTransportOptions = AnthropicOptions &
-  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets">;
+  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop">;
 type AnthropicAdaptiveEffort = NonNullable<AnthropicOptions["effort"]> | "xhigh";
 type AnthropicMessagesClient = {
   messages: {
@@ -70,6 +65,13 @@ type AnthropicMessagesClient = {
     ): AsyncIterable<Record<string, unknown>>;
   };
 };
+
+function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string {
+  if (isDirectAnthropicModel(model) && /^anthropic\//i.test(model.id)) {
+    return model.id.replace(/^anthropic\//i, "");
+  }
+  return model.id;
+}
 
 type TransportContentBlock =
   | { type: "text"; text: string; index?: number }
@@ -111,8 +113,13 @@ type MutableAssistantOutput = {
 
 const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
 
-function isClaudeOpus47Model(modelId: string): boolean {
-  return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
+function isClaudeOpus47OrNewerModel(modelId: string): boolean {
+  return (
+    modelId.includes("opus-4-8") ||
+    modelId.includes("opus-4.8") ||
+    modelId.includes("opus-4-7") ||
+    modelId.includes("opus-4.7")
+  );
 }
 
 function isClaudeOpus46Model(modelId: string): boolean {
@@ -121,7 +128,7 @@ function isClaudeOpus46Model(modelId: string): boolean {
 
 function supportsAdaptiveThinking(modelId: string): boolean {
   return (
-    isClaudeOpus47Model(modelId) ||
+    isClaudeOpus47OrNewerModel(modelId) ||
     isClaudeOpus46Model(modelId) ||
     modelId.includes("sonnet-4-6") ||
     modelId.includes("sonnet-4.6")
@@ -136,17 +143,19 @@ function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): Anthro
     case "medium":
       return "medium";
     case "xhigh":
-      if (isClaudeOpus47Model(modelId)) {
+      if (isClaudeOpus47OrNewerModel(modelId)) {
         return "xhigh";
       }
       return isClaudeOpus46Model(modelId) ? "max" : "high";
+    case "max":
+      return isClaudeOpus47OrNewerModel(modelId) ? "max" : "high";
     default:
       return "high";
   }
 }
 
 function clampReasoningLevel(level: ThinkingLevel): "minimal" | "low" | "medium" | "high" {
-  return level === "xhigh" ? "high" : level;
+  return level === "xhigh" || level === "max" ? "high" : level;
 }
 
 function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {
@@ -378,7 +387,10 @@ function convertAnthropicMessages(
               text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
-            const thinking = sanitizeTransportPayloadText(block.thinking);
+            const thinking =
+              block.thinkingSignature === "reasoning_content"
+                ? sanitizeTransportPayloadText(block.thinking)
+                : block.thinking;
             if (block.thinkingSignature === "reasoning_content") {
               if (allowReasoningContentReplay) {
                 blocks.push({
@@ -794,7 +806,7 @@ function buildAnthropicParams(
     enableCacheControl: true,
   });
   const params: Record<string, unknown> = {
-    model: model.id,
+    model: resolveAnthropicRequestModelId(model),
     messages: ensureNonEmptyAnthropicMessages(
       convertAnthropicMessages(context.messages, model, isOAuthToken, {
         allowReasoningContentReplay: supportsReasoningContentReplay(model),
@@ -828,6 +840,9 @@ function buildAnthropicParams(
   }
   if (options?.temperature !== undefined && !options.thinkingEnabled) {
     params.temperature = options.temperature;
+  }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop_sequences = options.stop;
   }
   if (context.tools) {
     params.tools = convertAnthropicTools(context.tools, isOAuthToken);
@@ -878,6 +893,7 @@ function resolveAnthropicTransportOptions(
     resolvePositiveAnthropicMaxTokens(model.maxTokens) ?? baseMaxTokens;
   const resolved: AnthropicTransportOptions = {
     temperature: options?.temperature,
+    stop: options?.stop,
     maxTokens: baseMaxTokens,
     signal: options?.signal,
     apiKey,
@@ -954,6 +970,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
+        const signatureDeltaIndexes = new Set<number>();
         const allowReasoningContentReplay = supportsReasoningContentReplay(model);
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
@@ -1119,9 +1136,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             }
             if (contentBlock?.type === "thinking") {
               const thinking =
-                typeof contentBlock.thinking === "string"
-                  ? sanitizeTransportPayloadText(contentBlock.thinking)
-                  : "";
+                typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
               const block: TransportContentBlock = {
                 type: "thinking",
                 thinking,
@@ -1288,7 +1303,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               delta?.type === "signature_delta" &&
               typeof delta.signature === "string"
             ) {
-              block.thinkingSignature = delta.signature;
+              const signatureIndex = eventIndexKey(event.index);
+              if (!signatureDeltaIndexes.has(signatureIndex)) {
+                signatureDeltaIndexes.add(signatureIndex);
+                block.thinkingSignature = "";
+              }
+              block.thinkingSignature = (block.thinkingSignature || "") + delta.signature;
             }
             continue;
           }

@@ -56,6 +56,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
+    resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
+      mockLoadPluginMetadataSnapshot(params.config),
   };
 });
 
@@ -271,6 +273,7 @@ function setExternalFeishuSchema() {
 
 function makeInvalidSnapshot(params: {
   issues: ConfigFileSnapshot["issues"];
+  warnings?: ConfigFileSnapshot["warnings"];
   path?: string;
 }): ConfigFileSnapshot {
   return {
@@ -284,7 +287,7 @@ function makeInvalidSnapshot(params: {
     runtimeConfig: {},
     config: {},
     issues: params.issues,
-    warnings: [],
+    warnings: params.warnings ?? [],
     legacyIssues: [],
   };
 }
@@ -1064,6 +1067,36 @@ describe("config cli", () => {
       expect(mockLog).not.toHaveBeenCalled();
     });
 
+    it("replaces doctor advice for plugin packaging compiled-output failures", async () => {
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          issues: [
+            {
+              path: "plugins.slots.memory",
+              message: "plugin not found: source-only-pack",
+            },
+          ],
+          warnings: [
+            {
+              path: "plugins",
+              message:
+                "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+            },
+          ],
+        }),
+      );
+
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+
+      expectErrorIncludes("plugin not found: source-only-pack");
+      expectErrorIncludes("This is a plugin packaging issue, not a local config problem.");
+      expectErrorIncludes("disable/uninstall the plugin");
+      expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
+        "openclaw doctor --fix",
+      );
+      expect(mockLog).not.toHaveBeenCalled();
+    });
+
     it("returns machine-readable JSON with --json for invalid config", async () => {
       setSnapshotOnce(
         makeInvalidSnapshot({
@@ -1469,6 +1502,25 @@ describe("config cli", () => {
         mode: "json",
         allowInsecurePath: true,
       });
+    });
+
+    it("rejects exponent-style provider builder integer options", async () => {
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "secrets.providers.runner",
+          "--provider-source",
+          "exec",
+          "--provider-command",
+          "op",
+          "--provider-timeout-ms",
+          "1e3",
+        ]),
+      ).rejects.toThrow("--provider-timeout-ms must be a positive integer.");
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
     });
 
     it("runs resolvability checks in builder dry-run mode without writing", async () => {
@@ -2203,6 +2255,185 @@ describe("config cli", () => {
       expect(resolveOptions).toBeTypeOf("object");
     });
 
+    it("dry-runs pluginIntegration provider patches against manifest integration metadata", async () => {
+      const pluginId = "secret-provider-proof";
+      const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-plugin-provider-"));
+      try {
+        fs.writeFileSync(path.join(rootDir, "index.js"), "export default {};\n", "utf8");
+        fs.writeFileSync(path.join(rootDir, "resolve.mjs"), "process.stdin.resume();\n", "utf8");
+        const resolved = {
+          secrets: {
+            providers: {},
+          },
+        } as unknown as OpenClawConfig;
+        mockLoadPluginMetadataSnapshot.mockReturnValue(
+          createPluginMetadataSnapshot({
+            diagnostics: [],
+            plugins: [
+              createPluginManifestRecord({
+                id: pluginId,
+                enabledByDefault: true,
+                origin: "bundled",
+                rootDir,
+                source: path.join(rootDir, "index.js"),
+                manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+                secretProviderIntegrations: {
+                  vault: {
+                    source: "exec",
+                    command: "${node}",
+                    args: ["./resolve.mjs"],
+                  },
+                },
+              }),
+            ],
+          }),
+        );
+
+        setSnapshot(resolved, resolved);
+        const validPatch = writeTempJson5File("openclaw-config-plugin-provider-valid", {
+          secrets: {
+            providers: {
+              team: {
+                source: "exec",
+                pluginIntegration: { pluginId, integrationId: "vault" },
+              },
+            },
+          },
+        });
+        try {
+          await runConfigCommand([
+            "config",
+            "patch",
+            "--file",
+            validPatch,
+            "--dry-run",
+            "--allow-exec",
+            "--json",
+          ]);
+        } finally {
+          fs.rmSync(validPatch, { force: true });
+        }
+        expect(mockWriteConfigFile).not.toHaveBeenCalled();
+
+        setSnapshot(resolved, resolved);
+        const invalidPatch = writeTempJson5File("openclaw-config-plugin-provider-invalid", {
+          secrets: {
+            providers: {
+              team: {
+                source: "exec",
+                pluginIntegration: { pluginId, integrationId: "missing" },
+              },
+            },
+          },
+        });
+        try {
+          await expect(
+            runConfigCommand([
+              "config",
+              "patch",
+              "--file",
+              invalidPatch,
+              "--dry-run",
+              "--allow-exec",
+              "--json",
+            ]),
+          ).rejects.toThrow("__exit__:1");
+        } finally {
+          fs.rmSync(invalidPatch, { force: true });
+        }
+        const invalidPayload = lastMockArg(defaultRuntime.writeJson) as {
+          errors?: Array<{ message?: string }>;
+        };
+        const errorMessages = invalidPayload.errors?.map((error) => error.message ?? "") ?? [];
+        expect(errorMessages.some((message) => message.includes("secrets.providers.team"))).toBe(
+          true,
+        );
+        expect(
+          errorMessages.some((message) =>
+            message.includes(`does not declare secret provider integration "missing"`),
+          ),
+        ).toBe(true);
+      } finally {
+        fs.rmSync(rootDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not revalidate untouched pluginIntegration providers when disabling plugins", async () => {
+      const pluginId = "secret-provider-proof";
+      const resolved = {
+        plugins: {
+          enabled: true,
+          entries: {
+            [pluginId]: { enabled: true },
+          },
+        },
+        secrets: {
+          providers: {
+            team: {
+              source: "exec",
+              pluginIntegration: { pluginId, integrationId: "vault" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const patch = writeTempJson5File("openclaw-config-plugin-disable", {
+        plugins: {
+          entries: {
+            [pluginId]: { enabled: false },
+          },
+        },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", patch]);
+      } finally {
+        fs.rmSync(patch, { force: true });
+      }
+
+      expect(firstWrittenConfig().plugins?.entries?.[pluginId]?.enabled).toBe(false);
+    });
+
+    it("validates pluginIntegration providers referenced by newly assigned SecretRefs", async () => {
+      const pluginId = "secret-provider-proof";
+      const resolved = {
+        gateway: {
+          auth: { mode: "token" },
+        },
+        secrets: {
+          providers: {
+            team: {
+              source: "exec",
+              pluginIntegration: { pluginId, integrationId: "vault" },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const patch = writeTempJson5File("openclaw-config-plugin-provider-ref", {
+        gateway: {
+          auth: {
+            token: { source: "exec", provider: "team", id: "gateway/token" },
+          },
+        },
+      });
+      try {
+        await expect(
+          runConfigCommand(["config", "patch", "--file", patch, "--dry-run", "--json"]),
+        ).rejects.toThrow("__exit__:1");
+      } finally {
+        fs.rmSync(patch, { force: true });
+      }
+
+      const payload = lastMockArg(defaultRuntime.writeJson) as {
+        errors?: Array<{ message?: string }>;
+      };
+      const messages = payload.errors?.map((error) => error.message ?? "") ?? [];
+      expect(messages.some((message) => message.includes("secrets.providers.team"))).toBe(true);
+      expect(messages.some((message) => message.includes(`plugin "${pluginId}"`))).toBe(true);
+    });
+
     it("schema-validates SecretRef-only config patch operations", async () => {
       const resolved = {
         secrets: {
@@ -2770,6 +3001,137 @@ describe("config cli", () => {
 
       expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects impractical array indexes for config set", async () => {
+      const resolved = { agents: { list: [] } } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "agents.list.4294967294.id", '"main"']),
+      ).rejects.toThrow('Expected numeric index for array segment "4294967294"');
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects signed array indexes for config set", async () => {
+      const resolved = { agents: { list: [{ id: "main" }] } } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "agents.list.+0.id", '"other"']),
+      ).rejects.toThrow('Expected numeric index for array segment "+0"');
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects double-dot empty segments for config set instead of writing a different key", async () => {
+      await expect(runConfigCommand(["config", "set", "gateway..port", "23456"])).rejects.toThrow(
+        "Invalid path (empty segment): gateway..port",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects leading-dot empty segments for config get", async () => {
+      await expect(runConfigCommand(["config", "get", ".gateway.port"])).rejects.toThrow(
+        "Invalid path (empty segment): .gateway.port",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects trailing-dot empty segments for config unset", async () => {
+      await expect(runConfigCommand(["config", "unset", "gateway.port."])).rejects.toThrow(
+        "Invalid path (empty segment): gateway.port.",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects whitespace-only segments for config set", async () => {
+      await expect(runConfigCommand(["config", "set", "gateway. .port", "23456"])).rejects.toThrow(
+        "Invalid path (empty segment): gateway. .port",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects an empty segment before a bracket for config set", async () => {
+      await expect(runConfigCommand(["config", "set", "gateway.[port]", "23456"])).rejects.toThrow(
+        "Invalid path (empty segment): gateway.[port]",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects a whitespace-only segment after a bracket before a dot", async () => {
+      await expect(runConfigCommand(["config", "get", "agents.list[0] .id"])).rejects.toThrow(
+        "Invalid path (empty segment): agents.list[0] .id",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects a whitespace-only segment after a bracket before another bracket", async () => {
+      await expect(runConfigCommand(["config", "get", "agents.list[0] [1]"])).rejects.toThrow(
+        "Invalid path (empty segment): agents.list[0] [1]",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("preserves valid bracket path forms", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main" }, { id: "other" }] },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "agents.list[1].id", "renamed"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig();
+      expect(written.agents?.list?.[1]?.id).toBe("renamed");
+      expect(written.agents?.list?.[0]?.id).toBe("main");
+    });
+
+    it("preserves escaped dots inside path segments", async () => {
+      const resolved = {
+        channels: {
+          discord: {
+            guilds: {
+              "prod.guild": { channels: ["alerts"] },
+              staging: { channels: ["chat"] },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.discord.guilds.prod\\.guild.channels",
+        '["alerts","ops"]',
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as {
+        channels?: { discord?: { guilds?: Record<string, { channels?: string[] }> } };
+      };
+      expect(written.channels?.discord?.guilds?.["prod.guild"]?.channels).toEqual([
+        "alerts",
+        "ops",
+      ]);
+      expect(written.channels?.discord?.guilds?.staging?.channels).toEqual(["chat"]);
     });
   });
 

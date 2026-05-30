@@ -7,11 +7,11 @@ import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
-  normalizeFreshness,
-  parseIsoDateRange,
+  MAX_SEARCH_COUNT,
+  parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveCitationRedirectUrl,
@@ -23,6 +23,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveGeminiConfig,
   resolveGeminiBaseUrl,
@@ -59,10 +60,6 @@ type GeminiGroundingResponse = {
     status?: string;
   };
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function throwMalformedGeminiResponse(): never {
   throw new Error("Gemini API error: malformed JSON response");
@@ -116,39 +113,24 @@ function resolveGeminiTimeRangeFilter(
       docs: string;
     } {
   const rawFreshness = readStringParam(args, "freshness");
-  const freshness = rawFreshness
-    ? (normalizeFreshness(rawFreshness, "perplexity") as GeminiFreshness | undefined)
-    : undefined;
-  if (rawFreshness && !freshness) {
-    return {
-      error: "invalid_freshness",
-      message: "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
-
   const rawDateAfter = readStringParam(args, "date_after");
   const rawDateBefore = readStringParam(args, "date_before");
-  if (rawFreshness && (rawDateAfter || rawDateBefore)) {
-    return {
-      error: "conflicting_time_filters",
-      message:
-        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
-
-  const parsedDateRange = parseIsoDateRange({
+  const parsedTimeFilters = parseWebSearchTimeFilters({
     rawDateAfter,
     rawDateBefore,
+    rawFreshness,
+    freshnessProvider: "perplexity",
+    invalidFreshnessMessage:
+      "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
     invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
     invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
     invalidDateRangeMessage: "date_after must be before date_before.",
   });
-  if ("error" in parsedDateRange) {
-    return parsedDateRange;
+  if ("error" in parsedTimeFilters) {
+    return parsedTimeFilters;
   }
 
+  const { freshness, dateAfter, dateBefore } = parsedTimeFilters;
   if (freshness) {
     return {
       timeRangeFilter: {
@@ -158,7 +140,6 @@ function resolveGeminiTimeRangeFilter(
     };
   }
 
-  const { dateAfter, dateBefore } = parsedDateRange;
   if (!dateAfter && !dateBefore) {
     return {};
   }
@@ -321,7 +302,12 @@ export async function executeGeminiSearch(
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const model = resolveGeminiModel(geminiConfig);
   const baseUrl = resolveGeminiBaseUrl(geminiConfig);
   const cacheKey = buildSearchCacheKey([

@@ -15,6 +15,7 @@ import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -256,7 +257,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 
@@ -450,9 +451,11 @@ async function executeCodexDiagnosticsAddon(
     isAuthorizedSender: params.command.isAuthorizedSender,
     senderIsOwner: params.command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry?.sessionFile,
+    authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
     config: params.cfg,
     from: params.command.from,

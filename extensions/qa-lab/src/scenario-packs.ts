@@ -1,3 +1,5 @@
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export type QaScenarioPackDefinition = {
   id: string;
   title: string;
@@ -18,6 +20,11 @@ export const QA_PERSONAL_AGENT_SCENARIO_IDS = [
   "personal-failure-recovery",
 ] as const;
 
+export const QA_OBSERVABILITY_SCENARIO_IDS = [
+  "otel-trace-smoke",
+  "docker-prometheus-smoke",
+] as const;
+
 export const QA_SCENARIO_PACKS = [
   {
     id: "personal-agent",
@@ -26,6 +33,13 @@ export const QA_SCENARIO_PACKS = [
       "Local-only personal assistant workflow scenarios for reminders, channel replies, memory recall, redaction, safe tool followthrough, approval denial, task status honesty, share-safe diagnostics, proof-backed completion claims, and failure recovery.",
     scenarioIds: QA_PERSONAL_AGENT_SCENARIO_IDS,
   },
+  {
+    id: "observability",
+    title: "Observability Smoke Pack",
+    description:
+      "Source-checkout diagnostics smoke scenarios for OpenTelemetry signal export and protected Prometheus scraping.",
+    scenarioIds: QA_OBSERVABILITY_SCENARIO_IDS,
+  },
 ] as const satisfies readonly QaScenarioPackDefinition[];
 
 export function resolveQaScenarioPackScenarioIds(params: {
@@ -33,7 +47,7 @@ export function resolveQaScenarioPackScenarioIds(params: {
   scenarioIds?: string[];
 }): string[] {
   const normalizedPack = params.pack?.trim().toLowerCase();
-  const explicitScenarioIds = [...new Set(params.scenarioIds ?? [])];
+  const explicitScenarioIds = uniqueStrings(params.scenarioIds ?? []);
   if (!normalizedPack) {
     return explicitScenarioIds;
   }
@@ -43,5 +57,5 @@ export function resolveQaScenarioPackScenarioIds(params: {
       `--pack must be one of ${QA_SCENARIO_PACKS.map((candidate) => candidate.id).join(", ")}, got "${params.pack}"`,
     );
   }
-  return [...new Set([...explicitScenarioIds, ...pack.scenarioIds])];
+  return uniqueStrings([...explicitScenarioIds, ...pack.scenarioIds]);
 }

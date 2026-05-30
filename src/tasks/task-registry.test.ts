@@ -61,6 +61,7 @@ import {
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import { DEFAULT_TASK_RETENTION_MS, LOST_TASK_RETENTION_MS } from "./task-retention.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const hoisted = vi.hoisted(() => {
@@ -576,6 +577,147 @@ describe("task-registry", () => {
       expectRecordFields(requireTaskByRunId("run-timeout-then-success"), {
         status: "timed_out",
         endedAt: 200,
+      });
+    });
+  });
+
+  it("uses shared agent terminal precedence for lifecycle task projection", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest();
+
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-hard-timeout-task",
+        task: "Provider timeout should not look cancelled",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-rpc-cancel-task",
+        task: "Caller abort should cancel task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-aborted-task",
+        task: "Aborted runner stop should cancel task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-provider-error-timeout-task",
+        task: "Provider timeout error should time out task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-provider-end-timeout-task",
+        task: "Provider timeout end metadata should time out task",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-hard-timeout-task",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          aborted: true,
+          stopReason: "rpc",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          endedAt: 200,
+        },
+      });
+      emitAgentEvent({
+        runId: "run-rpc-cancel-task",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          aborted: true,
+          stopReason: "rpc",
+          timeoutPhase: "queue",
+          providerStarted: false,
+          endedAt: 210,
+        },
+      });
+      emitAgentEvent({
+        runId: "run-aborted-task",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          stopReason: "aborted",
+          endedAt: 220,
+        },
+      });
+      emitAgentEvent({
+        runId: "run-provider-error-timeout-task",
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: "provider request timed out",
+          livenessState: "blocked",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          endedAt: 230,
+        },
+      });
+      emitAgentEvent({
+        runId: "run-provider-end-timeout-task",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          endedAt: 240,
+        },
+      });
+
+      expectRecordFields(requireTaskByRunId("run-hard-timeout-task"), {
+        status: "timed_out",
+        endedAt: 200,
+      });
+      expectRecordFields(requireTaskByRunId("run-rpc-cancel-task"), {
+        status: "cancelled",
+        endedAt: 210,
+      });
+      expectRecordFields(requireTaskByRunId("run-aborted-task"), {
+        status: "cancelled",
+        endedAt: 220,
+      });
+      expectRecordFields(requireTaskByRunId("run-provider-error-timeout-task"), {
+        status: "timed_out",
+        endedAt: 230,
+        error: "provider request timed out",
+      });
+      expectRecordFields(requireTaskByRunId("run-provider-end-timeout-task"), {
+        status: "timed_out",
+        endedAt: 240,
       });
     });
   });
@@ -1875,7 +2017,9 @@ describe("task-registry", () => {
         status: "lost",
         error: "backing session missing",
       });
-      expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
+      const lostTask = getTaskById(task.taskId);
+      expect(lostTask?.cleanupAfter).toBeGreaterThan(now);
+      expect((lostTask?.cleanupAfter ?? 0) - (lostTask?.endedAt ?? 0)).toBe(LOST_TASK_RETENTION_MS);
       const summary = getInspectableTaskAuditSummary();
       expectRecordFields(summary, {
         errors: 0,
@@ -2602,6 +2746,41 @@ describe("task-registry", () => {
       status: "succeeded",
       cleanupAfter: now + 60_000,
     });
+  });
+
+  it("prunes retained lost tasks once the shorter lost retention window expires", async () => {
+    const now = Date.now();
+    const endedAt = now - LOST_TASK_RETENTION_MS - 1;
+    const snapshotTask = createTaskRecord({
+      runtime: "cli",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:main",
+      runId: "run-old-lost-cleanup",
+      task: "Old lost task",
+      status: "lost",
+      deliveryStatus: "not_applicable",
+      startedAt: endedAt - 1,
+    });
+    const staleTask = {
+      ...snapshotTask,
+      endedAt,
+      lastEventAt: endedAt,
+      cleanupAfter: endedAt + DEFAULT_TASK_RETENTION_MS,
+    };
+    const currentTasks = new Map([[snapshotTask.taskId, staleTask]]);
+    configureTaskRegistryMaintenanceRuntimeForTest({
+      currentTasks,
+      snapshotTasks: [staleTask],
+    });
+
+    expect(await sweepTaskRegistry()).toEqual({
+      reconciled: 0,
+      recovered: 0,
+      cleanupStamped: 0,
+      pruned: 1,
+    });
+    expect(currentTasks.has(snapshotTask.taskId)).toBe(false);
   });
 
   it("backdates createdAt when a task is created with an earlier startedAt", async () => {

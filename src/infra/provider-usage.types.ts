@@ -24,4 +24,5 @@ export type UsageProviderId =
   | "minimax"
   | "openai-codex"
   | "xiaomi"
+  | "xiaomi-token-plan"
   | "zai";

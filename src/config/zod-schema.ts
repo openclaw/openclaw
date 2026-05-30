@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -274,6 +275,8 @@ const TalkRealtimeSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     model: z.string().optional(),
+    speakerVoice: z.string().optional(),
+    speakerVoiceId: z.string().optional(),
     voice: z.string().optional(),
     instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
@@ -354,6 +357,13 @@ const McpServerSchema = z
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
       .optional(),
+    toolFilter: z
+      .object({
+        include: z.array(z.string().trim().min(1)).min(1).optional(),
+        exclude: z.array(z.string().trim().min(1)).min(1).optional(),
+      })
+      .strict()
+      .optional(),
     codex: z
       .object({
         agents: z
@@ -414,14 +424,17 @@ export const OpenClawSchema = z
         lastTouchedAt: z
           .union([
             z.string(),
-            z.number().transform((n, ctx) => {
-              const d = new Date(n);
-              if (Number.isNaN(d.getTime())) {
-                ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
-                return z.NEVER;
-              }
-              return d.toISOString();
-            }),
+            z
+              .number()
+              .transform((n, ctx) => {
+                const d = new Date(n);
+                if (Number.isNaN(d.getTime())) {
+                  ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
+                  return z.NEVER;
+                }
+                return d.toISOString();
+              })
+              .pipe(z.string()),
           ])
           .optional(),
       })
@@ -483,6 +496,7 @@ export const OpenClawSchema = z
                     toolInputs: z.boolean().optional(),
                     toolOutputs: z.boolean().optional(),
                     systemPrompt: z.boolean().optional(),
+                    toolDefinitions: z.boolean().optional(),
                   })
                   .strict(),
               ])
@@ -815,6 +829,28 @@ export const OpenClawSchema = z
           }
         }
       })
+      .optional(),
+    transcripts: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxUtterances: z.number().int().min(1).max(10_000).optional(),
+        autoStart: z
+          .array(
+            z
+              .object({
+                providerId: z.string().min(1),
+                sessionId: z.string().min(1).optional(),
+                title: z.string().min(1).optional(),
+                accountId: z.string().min(1).optional(),
+                guildId: z.string().min(1).optional(),
+                channelId: z.string().min(1).optional(),
+                meetingUrl: z.string().min(1).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
       .optional(),
     commitments: CommitmentsSchema,
     hooks: z
@@ -1155,6 +1191,20 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        workshop: z
+          .object({
+            autonomous: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
+            maxPending: z.number().int().min(1).optional(),
+            maxSkillBytes: z.number().int().min(1).optional(),
+          })
+          .strict()
+          .optional(),
         entries: z.record(z.string(), SkillEntrySchema).optional(),
       })
       .strict()
@@ -1202,6 +1252,28 @@ export const OpenClawSchema = z
       return;
     }
     const agentIds = new Set(agents.map((agent) => agent.id));
+    const effectiveAgentIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
+
+    // Bindings referencing a missing agent id silently misroute at gateway
+    // load time. Match routing's normalized id semantics; otherwise valid
+    // configured routes like "Team Ops" -> "team-ops" would fail at load.
+    const bindings = cfg.bindings;
+    if (Array.isArray(bindings)) {
+      for (let idx = 0; idx < bindings.length; idx += 1) {
+        const binding = bindings[idx];
+        if (!binding || typeof binding !== "object") {
+          continue;
+        }
+        const agentId = (binding as { agentId?: unknown }).agentId;
+        if (typeof agentId === "string" && !effectiveAgentIds.has(normalizeAgentId(agentId))) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["bindings", idx, "agentId"],
+            message: `Unknown agent id "${agentId}" (not in agents.list).`,
+          });
+        }
+      }
+    }
 
     const broadcast = cfg.broadcast;
     if (!broadcast) {

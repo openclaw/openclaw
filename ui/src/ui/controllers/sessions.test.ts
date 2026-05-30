@@ -1,14 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isSessionRunActive } from "../session-run-state.ts";
 import {
   applySessionsChangedEvent,
+  branchSessionFromCheckpoint,
   createSessionAndRefresh,
   deleteSessionsAndRefresh,
   loadSessions,
+  patchSession,
+  parseSessionsFilterInteger,
+  restoreSessionFromCheckpoint,
   subscribeSessions,
+  syncSelectedSessionMessageSubscription,
+  toggleSessionCompactionCheckpoints,
   type SessionsState,
 } from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+
+function createDeferred<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
 
 if (!("window" in globalThis)) {
   Object.assign(globalThis, {
@@ -52,6 +72,233 @@ describe("subscribeSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
     expect(state.sessionsError).toBeNull();
+  });
+});
+
+describe("parseSessionsFilterInteger", () => {
+  it("accepts safe decimal integer filters only", () => {
+    expect(parseSessionsFilterInteger("120")).toBe(120);
+    expect(parseSessionsFilterInteger(" 50 ")).toBe(50);
+    expect(parseSessionsFilterInteger("1e3")).toBe(0);
+    expect(parseSessionsFilterInteger("0x1000")).toBe(0);
+    expect(parseSessionsFilterInteger("1.5")).toBe(0);
+    expect(parseSessionsFilterInteger("9007199254740993")).toBe(0);
+  });
+});
+
+describe("syncSelectedSessionMessageSubscription", () => {
+  it("subscribes to the selected session message stream", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:main" }));
+    const state = createState(request, { sessionKey: "agent:main:main" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "agent:main:main",
+    });
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:main");
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:main");
+  });
+
+  it("unsubscribes the previous selected session before switching streams", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:next" }));
+    const state = createState(request, {
+      sessionKey: "agent:main:next",
+      chatSessionMessageSubscriptionKey: "agent:main:previous",
+    } as Partial<SessionsState & { sessionKey: string }>) as SessionsState & {
+      sessionKey: string;
+    };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.unsubscribe", {
+      key: "agent:main:previous",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      key: "agent:main:next",
+    });
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:next");
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:next");
+  });
+
+  it("does not churn when the selected alias resolves to a canonical key", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:main" }));
+    const state = createState(request, { sessionKey: "main" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", { key: "main" });
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("main");
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:main");
+  });
+
+  it("subscribes selected global message streams with the selected agent", async () => {
+    const request = vi.fn(async () => ({ key: "global" }));
+    const state = createState(request, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+    } as Partial<SessionsState & { sessionKey: string }>) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "global",
+      agentId: "work",
+    });
+    expect(state.chatSessionMessageSubscriptionAgentId).toBe("work");
+  });
+
+  it("keeps agent-scoped global alias subscriptions scoped for unsubscribe", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "sessions.messages.subscribe" ? { key: "global" } : { subscribed: false },
+    );
+    const state = createState(request, {
+      sessionKey: "agent:work:main",
+      assistantAgentId: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "/tmp/sessions.json",
+        count: 2,
+        sessions: [
+          { key: "agent:work:main", kind: "global", updatedAt: 2 },
+          { key: "agent:ops:main", kind: "global", updatedAt: 1 },
+        ],
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        totalCount: 2,
+        limit: 50,
+        offset: 0,
+        hasMore: false,
+      },
+    } as Partial<SessionsState & { sessionKey: string }>) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+    state.sessionKey = "agent:ops:main";
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.subscribe", {
+      key: "agent:work:main",
+      agentId: "work",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.unsubscribe", {
+      key: "global",
+      agentId: "work",
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.messages.subscribe", {
+      key: "agent:ops:main",
+      agentId: "ops",
+    });
+    expect(state.chatSessionMessageSubscriptionAgentId).toBe("ops");
+  });
+
+  it("uses the hello default agent for global subscriptions before agents load", async () => {
+    const request = vi.fn(async () => ({ key: "global" }));
+    const state = createState(request, {
+      sessionKey: "global",
+      hello: { snapshot: { sessionDefaults: { defaultAgentId: "ops" } } },
+    } as Partial<SessionsState & { sessionKey: string }>) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "global",
+      agentId: "ops",
+    });
+    expect(state.chatSessionMessageSubscriptionAgentId).toBe("ops");
+  });
+
+  it("ignores stale subscription completions after the selected session changes", async () => {
+    const firstSubscribe = createDeferred<{ key: string }>();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      const key = (params as { key?: string } | undefined)?.key;
+      if (method === "sessions.messages.subscribe" && key === "agent:main:first") {
+        return await firstSubscribe.promise;
+      }
+      if (method === "sessions.messages.subscribe" && key === "agent:main:second") {
+        return { key: "agent:main:second" };
+      }
+      if (method === "sessions.messages.unsubscribe") {
+        return { subscribed: false, key };
+      }
+      throw new Error(`unexpected request: ${method} ${String(key)}`);
+    });
+    const state = createState(request, { sessionKey: "agent:main:first" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    const firstSync = syncSelectedSessionMessageSubscription(state);
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "agent:main:first",
+    });
+
+    state.sessionKey = "agent:main:second";
+    await syncSelectedSessionMessageSubscription(state);
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:second");
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:second");
+
+    firstSubscribe.resolve({ key: "agent:main:first" });
+    await firstSync;
+
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:second");
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:second");
+    expect(request).toHaveBeenCalledWith("sessions.messages.unsubscribe", {
+      key: "agent:main:first",
+    });
+  });
+
+  it("cleans up stale selected-global subscriptions when only the selected agent changes", async () => {
+    const firstSubscribe = createDeferred<{ key: string }>();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      const record = params as { key?: string; agentId?: string } | undefined;
+      if (
+        method === "sessions.messages.subscribe" &&
+        record?.key === "global" &&
+        record.agentId === "work"
+      ) {
+        return await firstSubscribe.promise;
+      }
+      if (
+        method === "sessions.messages.subscribe" &&
+        record?.key === "global" &&
+        record.agentId === "main"
+      ) {
+        return { key: "global" };
+      }
+      if (method === "sessions.messages.unsubscribe") {
+        return { subscribed: false, key: record?.key };
+      }
+      throw new Error(`unexpected request: ${method} ${String(record?.key)} ${record?.agentId}`);
+    });
+    const state = createState(request, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+    } as Partial<SessionsState & { sessionKey: string }>) as SessionsState & { sessionKey: string };
+
+    const firstSync = syncSelectedSessionMessageSubscription(state);
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "global",
+      agentId: "work",
+    });
+
+    state.assistantAgentId = "main";
+    await syncSelectedSessionMessageSubscription(state);
+    expect(state.chatSessionMessageSubscriptionKey).toBe("global");
+    expect(state.chatSessionMessageSubscriptionAgentId).toBe("main");
+
+    firstSubscribe.resolve({ key: "global" });
+    await firstSync;
+
+    expect(state.chatSessionMessageSubscriptionKey).toBe("global");
+    expect(state.chatSessionMessageSubscriptionAgentId).toBe("main");
+    expect(request).toHaveBeenCalledWith("sessions.messages.unsubscribe", {
+      key: "global",
+      agentId: "work",
+    });
   });
 });
 
@@ -156,6 +403,38 @@ describe("deleteSessionsAndRefresh", () => {
     expect(state.sessionsLoading).toBe(false);
   });
 
+  it("passes selected agent scope for global deletes", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        return { ok: true };
+      }
+      if (method === "sessions.list") {
+        return undefined;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const deleted = await deleteSessionsAndRefresh(state, ["global"]);
+
+    expect(deleted).toEqual(["global"]);
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.delete", {
+      key: "global",
+      agentId: "work",
+      deleteTranscript: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "work",
+    });
+  });
+
   it("returns empty array when user cancels", async () => {
     const request = vi.fn(async () => undefined);
     const state = createState(request);
@@ -249,6 +528,30 @@ describe("deleteSessionsAndRefresh", () => {
       configuredAgentsOnly: true,
     });
     expect(state.sessionsLoading).toBe(false);
+  });
+});
+
+describe("patchSession", () => {
+  it("passes selected agent scope for global patches", async () => {
+    const request = vi.fn(async () => ({ ok: true }));
+    const state = createState(request, {
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    await patchSession(state, "global", { fastMode: true });
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.patch", {
+      key: "global",
+      agentId: "work",
+      fastMode: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "work",
+    });
   });
 });
 
@@ -422,6 +725,57 @@ describe("loadSessions", () => {
     }
   });
 
+  it("keeps stale running session list rows idle when no live run remains", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 2,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            hasActiveRun: false,
+            status: "running",
+          },
+        ],
+      };
+    });
+    const state = createState(request, {
+      sessionKey: "main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    } as Partial<SessionsState & { sessionKey: string }>);
+
+    await loadSessions(state);
+
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "main",
+      hasActiveRun: false,
+      status: "running",
+    });
+    expect(isSessionRunActive(current!)).toBe(false);
+  });
+
   it("omits the active-window cutoff when archived sessions are shown", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -475,6 +829,63 @@ describe("loadSessions", () => {
     expect(request).toHaveBeenCalledWith("sessions.list", {
       activeMinutes: 120,
       limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("ignores non-decimal and unsafe sessions filter numbers", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request, {
+      sessionsFilterActive: "1e3",
+      sessionsFilterLimit: "9007199254740993",
+      sessionsShowArchived: false,
+    });
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("ignores unsafe numeric session filter overrides", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, {
+      activeMinutes: Number.MAX_SAFE_INTEGER + 1,
+      limit: Number.MAX_SAFE_INTEGER + 1,
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -744,6 +1155,72 @@ describe("loadSessions", () => {
       state.sessionsCheckpointItemsByKey["agent:main:main"]?.map((item) => item.checkpointId),
     ).toEqual(["checkpoint-new"]);
   });
+
+  it("requests selected global checkpoints with the selected agent", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.compaction.list") {
+        return { ok: true, key: "global", checkpoints: [] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+    } as Partial<SessionsState & { sessionKey: string }>);
+
+    await toggleSessionCompactionCheckpoints(state, "global");
+
+    expect(request).toHaveBeenCalledWith("sessions.compaction.list", {
+      key: "global",
+      agentId: "work",
+    });
+  });
+
+  it("sends selected global agent scope for checkpoint branch and restore", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return { ts: 1, path: "(multiple)", count: 0, defaults: {}, sessions: [] };
+      }
+      if (method === "sessions.compaction.branch") {
+        return { ok: true, sourceKey: "global", key: "agent:work:dashboard:1" };
+      }
+      if (method === "sessions.compaction.restore") {
+        return { ok: true, key: "global" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+    } as Partial<SessionsState & { sessionKey: string }>);
+
+    await branchSessionFromCheckpoint(state, "global", "checkpoint-1");
+    await restoreSessionFromCheckpoint(state, "global", "checkpoint-1");
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.compaction.branch", {
+      key: "global",
+      agentId: "work",
+      checkpointId: "checkpoint-1",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "work",
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.compaction.restore", {
+      key: "global",
+      agentId: "work",
+      checkpointId: "checkpoint-1",
+    });
+    expect(request).toHaveBeenNthCalledWith(4, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "work",
+    });
+  });
 });
 
 describe("applySessionsChangedEvent", () => {
@@ -816,6 +1293,132 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.sessions).toEqual([
       { key: "agent:main:main", kind: "direct", updatedAt: 1 },
     ]);
+  });
+
+  it("ignores selected-global session events for another agent", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "global", kind: "global", updatedAt: 1, status: "done" }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "global",
+      agentId: "main",
+      reason: "send",
+      ts: 2,
+      status: "running",
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions).toEqual([
+      { key: "global", kind: "global", updatedAt: 1, status: "done" },
+    ]);
+  });
+
+  it("applies selected-global session events for the current agent", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "global", kind: "global", updatedAt: 1, status: "done" }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "global",
+      agentId: "work",
+      reason: "send",
+      ts: 2,
+      status: "running",
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toEqual(
+      expect.objectContaining({ key: "global", status: "running" }),
+    );
+  });
+
+  it("applies goal updates from partial events to existing rows", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      reason: "goal",
+      goal: {
+        objective: "Land the web goal UI",
+        status: "active",
+        usage: { totalTokens: 12_345 },
+        tokenBudget: 50_000,
+      },
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]?.goal).toMatchObject({
+      objective: "Land the web goal UI",
+      status: "active",
+      tokenBudget: 50_000,
+    });
+  });
+
+  it("clears goal updates from partial events with explicit null goals", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            goal: {
+              schemaVersion: 1,
+              id: "goal-1",
+              objective: "Land the web goal UI",
+              status: "active",
+              createdAt: 1,
+              updatedAt: 1,
+              tokenStart: 0,
+              tokensUsed: 10,
+              continuationTurns: 0,
+            },
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      reason: "goal",
+      goal: null,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]?.goal).toBeUndefined();
   });
 
   it("drops rows that become explicitly archived while archived sessions are hidden", () => {
@@ -907,6 +1510,7 @@ describe("applySessionsChangedEvent", () => {
       chatRunId: string | null;
       chatStream: string | null;
       chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
       requestUpdate: () => void;
     } = {
       ...createState(async () => undefined, {
@@ -943,10 +1547,20 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toEqual({ applied: true, change: "updated", clearedChatRun: true });
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
     expect(requestUpdate).toHaveBeenCalled();
   });
 
@@ -957,6 +1571,7 @@ describe("applySessionsChangedEvent", () => {
       chatRunId: string | null;
       chatStream: string | null;
       chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
       requestUpdate: () => void;
     } = {
       ...createState(async () => undefined, {
@@ -994,10 +1609,20 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toEqual({ applied: true, change: "updated", clearedChatRun: true });
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "done",
+        runId: "client-run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
     expect(requestUpdate).toHaveBeenCalled();
   });
 
@@ -1199,6 +1824,83 @@ describe("applySessionsChangedEvent", () => {
     expect(state.chatStream).toBe("");
     expect(state.chatStreamStartedAt).toBe(3);
     expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps stale running session events idle after a local terminal reconcile", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:super:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      phase: "message",
+      status: "running",
+      updatedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "agent:super:main",
+      hasActiveRun: false,
+      status: "running",
+    });
+    expect(isSessionRunActive(current!)).toBe(false);
+  });
+
+  it("revives active state when a new lifecycle start follows stale idle state", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:super:main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: false,
+            status: "done",
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      phase: "start",
+      status: "running",
+      startedAt: 2,
+      updatedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    const current = state.sessionsResult?.sessions[0];
+    expect(current).toMatchObject({
+      key: "agent:super:main",
+      hasActiveRun: true,
+      status: "running",
+    });
+    expect(isSessionRunActive(current!)).toBe(true);
   });
 
   it("updates fresh context usage from websocket event payloads", () => {

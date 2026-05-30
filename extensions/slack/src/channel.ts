@@ -8,7 +8,8 @@ import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAttachedChannelResultAdapter,
@@ -19,7 +20,6 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -232,7 +232,7 @@ async function resolveSlackSendContext(params: {
   return { send, threadTsValue, tokenOverride };
 }
 
-function parseSlackExplicitTarget(raw: string) {
+function resolveSlackRouteTarget(raw: string) {
   const target = parseSlackTarget(raw, { defaultKind: "channel" });
   if (!target) {
     return null;
@@ -584,8 +584,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           : { to: normalizeSlackMessagingTarget(`channel:${child}`) };
       },
       resolveSessionTarget: ({ id }) => normalizeSlackMessagingTarget(`channel:${id}`),
-      parseExplicitTarget: ({ raw }) => parseSlackExplicitTarget(raw),
-      inferTargetChatType: ({ to }) => parseSlackExplicitTarget(to)?.chatType,
+      inferTargetChatType: ({ to }) => resolveSlackRouteTarget(to)?.chatType,
       resolveOutboundSessionRoute: async (params) => await resolveSlackOutboundSessionRoute(params),
       transformReplyPayload: ({ payload, cfg, accountId }) =>
         isSlackInteractiveRepliesEnabled({ cfg, accountId })
@@ -604,7 +603,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         looksLikeId: looksLikeSlackTargetId,
         hint: "<channelId|user:ID|channel:ID>",
         resolveTarget: async ({ input }) => {
-          const parsed = parseSlackExplicitTarget(input);
+          const parsed = resolveSlackRouteTarget(input);
           if (!parsed) {
             return null;
           }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 
 type AuthRunCall = {
   agentDir?: string;
@@ -10,7 +11,6 @@ type AuthRunCall = {
 
 type ResolvePluginProvidersCall = {
   activate?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   config?: unknown;
   includeUntrustedWorkspacePlugins?: boolean;
@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => ({
   clackCancel: vi.fn(),
   clackConfirm: vi.fn(),
   clackIsCancel: vi.fn((value: unknown) => value === Symbol.for("clack:cancel")),
+  clackPassword: vi.fn(),
   clackSelect: vi.fn(),
   clackText: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
@@ -54,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
   isRemoteEnvironment: vi.fn(() => false),
+  validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
@@ -108,6 +110,7 @@ vi.mock("@clack/prompts", () => ({
   cancel: mocks.clackCancel,
   confirm: mocks.clackConfirm,
   isCancel: mocks.clackIsCancel,
+  password: mocks.clackPassword,
   select: mocks.clackSelect,
   text: mocks.clackText,
 }));
@@ -168,7 +171,7 @@ vi.mock("../../plugins/provider-oauth-flow.js", () => ({
 }));
 
 vi.mock("../auth-token.js", () => ({
-  validateAnthropicSetupToken: vi.fn(() => undefined),
+  validateAnthropicSetupToken: mocks.validateAnthropicSetupToken,
 }));
 
 vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) => {
@@ -256,6 +259,7 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) 
 const {
   modelsAuthAddCommand,
   modelsAuthLoginCommand,
+  modelsAuthPasteApiKeyCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
 } = await import("./auth.js");
@@ -283,6 +287,34 @@ function withInteractiveStdin() {
     } else if (!hadOwnIsTTY) {
       delete (stdin as { isTTY?: boolean }).isTTY;
     }
+  };
+}
+
+function withPipedStdin(input: string) {
+  const stdin = process.stdin as NodeJS.ReadStream & { isTTY?: boolean };
+  const restoreInteractive = withInteractiveStdin();
+  const previousAsyncIteratorDescriptor = Object.getOwnPropertyDescriptor(
+    stdin,
+    Symbol.asyncIterator,
+  );
+  Object.defineProperty(stdin, "isTTY", {
+    configurable: true,
+    enumerable: true,
+    get: () => false,
+  });
+  Object.defineProperty(stdin, Symbol.asyncIterator, {
+    configurable: true,
+    value: async function* () {
+      yield input;
+    },
+  });
+  return () => {
+    if (previousAsyncIteratorDescriptor) {
+      Object.defineProperty(stdin, Symbol.asyncIterator, previousAsyncIteratorDescriptor);
+    } else {
+      Reflect.deleteProperty(stdin, Symbol.asyncIterator);
+    }
+    restoreInteractive();
   };
 }
 
@@ -322,8 +354,11 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackIsCancel.mockImplementation(
       (value: unknown) => value === Symbol.for("clack:cancel"),
     );
+    mocks.clackPassword.mockReset();
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
+    mocks.validateAnthropicSetupToken.mockReset();
+    mocks.validateAnthropicSetupToken.mockReturnValue(undefined);
     mocks.upsertAuthProfileWithLock.mockReset();
     mocks.upsertAuthProfileWithLock.mockResolvedValue({ version: 1, profiles: {} });
     mocks.promoteAuthProfileInOrder.mockReset();
@@ -458,9 +493,6 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai-codex/gpt-5.5 (use --set-default to apply)",
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
     );
   });
 
@@ -788,7 +820,6 @@ describe("modelsAuthLoginCommand", () => {
     ) as ResolvePluginProvidersCall;
     expect(providerResolutionCall.config).toEqual({});
     expect(providerResolutionCall.workspaceDir).toBe("/tmp/openclaw/workspace");
-    expect(providerResolutionCall.bundledProviderAllowlistCompat).toBe(true);
     expect(providerResolutionCall.bundledProviderVitestCompat).toBe(true);
     expect(providerResolutionCall.includeUntrustedWorkspacePlugins).toBe(false);
     expect(providerResolutionCall.providerRefs).toEqual(["anthropic"]);
@@ -1179,6 +1210,171 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/coder",
     });
+  });
+
+  it("rejects pasted token expiries that cannot fit in the Date timestamp range", async () => {
+    const runtime = createRuntime();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    mocks.clackText.mockResolvedValue("openai-token");
+    try {
+      await expect(
+        modelsAuthPasteTokenCommand({ provider: "openai", expiresIn: "1ms" }, runtime),
+      ).rejects.toThrow("resulting token expiry is outside Date range");
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects OpenAI API keys pasted as OpenAI Codex token material", async () => {
+    const runtime = createRuntime();
+    const validateMessages: string[] = [];
+    mocks.clackText.mockImplementation(
+      async (params: { validate?: (value: string) => string | undefined }) => {
+        const message = params.validate?.("sk-openai-codex-api-key-value");
+        if (message) {
+          validateMessages.push(message);
+          throw new Error(message);
+        }
+        return "sk-openai-codex-api-key-value";
+      },
+    );
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-api-key --provider openai");
+
+    expect(validateMessages).toEqual([
+      "That looks like an OpenAI API key. Use openclaw models auth paste-api-key --provider openai for API-key auth.",
+    ]);
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects piped OpenAI API keys as OpenAI Codex token material", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-codex-api-key-value\n");
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-api-key --provider openai");
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("rejects line-wrapped piped OpenAI API keys as OpenAI Codex token material", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-\ncodex-api-key-value\n");
+
+    await expect(
+      modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-api-key --provider openai");
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("writes pasted API keys to the requested agent store", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    mocks.clackPassword.mockResolvedValue("sk-openai-codex-api-key-value");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex", agent: "coder" }, runtime);
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-codex-api-key-value",
+      },
+      agentDir: "/tmp/openclaw/agents/coder",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
+      provider: "openai",
+      mode: "api_key",
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
+  });
+
+  it("writes piped OpenAI Codex API keys to API-key profiles", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-codex-api-key-value\n");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.clackPassword).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-codex-api-key-value",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
+      provider: "openai",
+      mode: "api_key",
+    });
+  });
+
+  it("normalizes line-wrapped piped OpenAI Codex API keys before storing", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    restoreStdin = withPipedStdin("sk-openai-\ncodex-api-key-value\n");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime);
+
+    expect(mocks.clackPassword).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "api_key",
+        provider: "openai",
+        key: "sk-openai-codex-api-key-value",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
+      provider: "openai",
+      mode: "api_key",
+    });
+  });
+
+  it("rejects token material pasted into the OpenAI Codex API-key command", async () => {
+    const runtime = createRuntime();
+    const jwtLikeToken = ["eyJhbGciOiJub25l", "eyJzdWIiOiJjb2RleCJ9", "signature123456"].join(".");
+    const validateMessages: string[] = [];
+    mocks.clackPassword.mockImplementation(
+      async (params: { validate?: (value: string) => string | undefined }) => {
+        const message = params.validate?.(jwtLikeToken);
+        if (message) {
+          validateMessages.push(message);
+          throw new Error(message);
+        }
+        return jwtLikeToken;
+      },
+    );
+
+    await expect(
+      modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime),
+    ).rejects.toThrow("paste-token --provider openai");
+
+    expect(validateMessages).toEqual([
+      "That looks like token or OAuth material, not an OpenAI API key. Use openclaw models auth paste-token --provider openai for token auth material.",
+    ]);
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown agent before prompting for pasted tokens", async () => {

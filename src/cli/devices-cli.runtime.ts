@@ -1,15 +1,21 @@
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  readConnectPairingRequiredMessage,
+  type ConnectPairingRequiredDetails,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import {
   buildGatewayConnectionDetails,
   callGateway,
   formatGatewayTransportErrorJson,
 } from "../gateway/call.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
-import {
-  readConnectPairingRequiredMessage,
-  type ConnectPairingRequiredDetails,
-} from "../gateway/protocol/connect-error-details.js";
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
@@ -30,10 +36,9 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { formatCliCommand } from "./command-format.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -126,7 +131,7 @@ const callGatewayCli = async (
         password: opts.password,
         method,
         params,
-        timeoutMs: Number(opts.timeout ?? DEFAULT_DEVICES_TIMEOUT_MS),
+        timeoutMs: parseTimeoutMsWithFallback(opts.timeout, DEFAULT_DEVICES_TIMEOUT_MS),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
         scopes: callOpts?.scopes,
@@ -403,7 +408,7 @@ function resolveOriginalReplacementScopes(
 ): string[] {
   const requestedScopes = normalizeDeviceAuthScopes(original.scopes);
   const inferredOperatorScopes = resolvePendingOperatorApprovalScopes(original, paired);
-  return [...new Set([...requestedScopes, ...inferredOperatorScopes])];
+  return uniqueStrings([...requestedScopes, ...inferredOperatorScopes]);
 }
 
 function replacementScopesCoverOriginal(

@@ -102,6 +102,11 @@ on:
           - beta
           - stable
           - full
+      use_github_hosted_runners:
+        description: Use GitHub-hosted runners instead of Blacksmith runners
+        required: false
+        default: false
+        type: boolean
       advisory:
         description: Treat failures as advisory for the caller
         required: false
@@ -208,6 +213,11 @@ on:
         required: false
         default: stable
         type: string
+      use_github_hosted_runners:
+        description: Use GitHub-hosted runners instead of Blacksmith runners
+        required: false
+        default: true
+        type: boolean
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -218,6 +228,8 @@ on:
       ANTHROPIC_API_KEY_OLD:
         required: false
       ANTHROPIC_API_TOKEN:
+        required: false
+      FACTORY_API_KEY:
         required: false
       BYTEPLUS_API_KEY:
         required: false
@@ -468,11 +480,40 @@ jobs:
           fi
           exit 1
 
+  plan_release_workflow_matrices:
+    needs: validate_selected_ref
+    runs-on: ubuntu-24.04
+    outputs:
+      docker_e2e_count: ${{ steps.plan.outputs.docker_e2e_count }}
+      docker_e2e_matrix: ${{ steps.plan.outputs.docker_e2e_matrix }}
+      docker_e2e_omitted_json: ${{ steps.plan.outputs.docker_e2e_omitted_json }}
+      live_models_count: ${{ steps.plan.outputs.live_models_count }}
+      live_models_matrix: ${{ steps.plan.outputs.live_models_matrix }}
+      live_models_omitted_json: ${{ steps.plan.outputs.live_models_omitted_json }}
+    steps:
+      - name: Checkout trusted release harness
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Plan release workflow matrices
+        id: plan
+        env:
+          DOCKER_LANES: ${{ inputs.docker_lanes }}
+          INCLUDE_LIVE_SUITES: ${{ inputs.include_live_suites }}
+          INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
+          LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
+        run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
+
   validate_release_live_cache:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -522,7 +563,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     env:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
@@ -554,7 +595,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -624,78 +665,22 @@ jobs:
         run: ${{ matrix.command }}
 
   validate_docker_e2e:
-    needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.include_release_path_suites && inputs.docker_lanes == ''
+    needs: [validate_selected_ref, prepare_docker_e2e_image, plan_release_workflow_matrices]
+    if: inputs.include_release_path_suites && inputs.docker_lanes == '' && needs.plan_release_workflow_matrices.outputs.docker_e2e_count != '0'
     name: Docker E2E (${{ matrix.label }})
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - chunk_id: core
-            label: core
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: package-update-openai
-            label: package/update OpenAI install
-            timeout_minutes: 45
-            profiles: beta minimum stable full
-          - chunk_id: package-update-anthropic
-            label: package/update Anthropic install
-            timeout_minutes: 60
-            profiles: beta minimum stable full
-          - chunk_id: package-update-core
-            label: package/update core
-            timeout_minutes: 60
-            profiles: beta minimum stable full
-          - chunk_id: plugins-runtime-plugins
-            label: plugins/runtime plugins
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-services
-            label: plugins/runtime services
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-a
-            label: plugins/runtime install A
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-b
-            label: plugins/runtime install B
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-c
-            label: plugins/runtime install C
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-d
-            label: plugins/runtime install D
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-e
-            label: plugins/runtime install E
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-f
-            label: plugins/runtime install F
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-g
-            label: plugins/runtime install G
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-h
-            label: plugins/runtime install H
-            timeout_minutes: 60
-            profiles: stable full
+      matrix: ${{ fromJson(needs.plan_release_workflow_matrices.outputs.docker_e2e_matrix) }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
@@ -756,6 +741,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
@@ -763,17 +749,17 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile)
@@ -841,15 +827,35 @@ jobs:
         run: |
           set -euo pipefail
           credentials=",$CREDENTIALS,"
-          if [[ "$credentials" == *",openai,"* ]]; then
-            [[ -n "${OPENAI_API_KEY:-}" ]] || {
-              echo "OPENAI_API_KEY is required for selected Docker E2E lanes." >&2
-              exit 1
-            }
-          fi
-          if [[ "$credentials" == *",anthropic,"* && -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-            echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for selected Docker E2E lanes." >&2
+          require_any() {
+            local label="$1"
+            shift
+            local key
+            for key in "$@"; do
+              if [[ -n "${!key:-}" ]]; then
+                return 0
+              fi
+            done
+            echo "Missing credential for ${label}: expected one of $*" >&2
             exit 1
+          }
+          if [[ "$credentials" == *",openai,"* ]]; then
+            require_any OpenAI OPENAI_API_KEY
+          fi
+          if [[ "$credentials" == *",codex,"* ]]; then
+            require_any Codex OPENCLAW_CODEX_AUTH_JSON
+          fi
+          if [[ "$credentials" == *",anthropic,"* ]]; then
+            require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
+          fi
+          if [[ "$credentials" == *",factory,"* ]]; then
+            require_any Factory FACTORY_API_KEY
+          fi
+          if [[ "$credentials" == *",gemini,"* ]]; then
+            require_any Gemini GEMINI_API_KEY GOOGLE_API_KEY OPENCLAW_GEMINI_SETTINGS_JSON
+          fi
+          if [[ "$credentials" == *",opencode,"* ]]; then
+            require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY
           fi
 
       - name: Run Docker E2E chunk
@@ -897,7 +903,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.docker_lanes != ''
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     outputs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
@@ -905,6 +911,7 @@ jobs:
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
 
@@ -925,7 +932,7 @@ jobs:
     if: inputs.docker_lanes != ''
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -937,6 +944,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
@@ -995,22 +1003,23 @@ jobs:
       - name: Checkout selected ref
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1078,15 +1087,35 @@ jobs:
         run: |
           set -euo pipefail
           credentials=",$CREDENTIALS,"
-          if [[ "$credentials" == *",openai,"* ]]; then
-            [[ -n "${OPENAI_API_KEY:-}" ]] || {
-              echo "OPENAI_API_KEY is required for selected Docker E2E lanes." >&2
-              exit 1
-            }
-          fi
-          if [[ "$credentials" == *",anthropic,"* && -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-            echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for selected Docker E2E lanes." >&2
+          require_any() {
+            local label="$1"
+            shift
+            local key
+            for key in "$@"; do
+              if [[ -n "${!key:-}" ]]; then
+                return 0
+              fi
+            done
+            echo "Missing credential for ${label}: expected one of $*" >&2
             exit 1
+          }
+          if [[ "$credentials" == *",openai,"* ]]; then
+            require_any OpenAI OPENAI_API_KEY
+          fi
+          if [[ "$credentials" == *",codex,"* ]]; then
+            require_any Codex OPENCLAW_CODEX_AUTH_JSON
+          fi
+          if [[ "$credentials" == *",anthropic,"* ]]; then
+            require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
+          fi
+          if [[ "$credentials" == *",factory,"* ]]; then
+            require_any Factory FACTORY_API_KEY
+          fi
+          if [[ "$credentials" == *",gemini,"* ]]; then
+            require_any Gemini GEMINI_API_KEY GOOGLE_API_KEY OPENCLAW_GEMINI_SETTINGS_JSON
+          fi
+          if [[ "$credentials" == *",opencode,"* ]]; then
+            require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY
           fi
 
       - name: Run targeted Docker E2E lanes
@@ -1135,7 +1164,7 @@ jobs:
     if: inputs.include_openwebui && !inputs.include_release_path_suites && inputs.docker_lanes == ''
     name: Docker E2E (openwebui)
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1162,11 +1191,10 @@ jobs:
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -1262,7 +1290,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     permissions:
       actions: read
@@ -1421,11 +1449,10 @@ jobs:
 
       - name: Log in to GHCR
         if: steps.plan.outputs.needs_e2e_image == '1'
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Check existing shared Docker E2E images
         id: image_exists
@@ -1506,7 +1533,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1536,11 +1563,10 @@ jobs:
           echo "Shared live-test image: \`${live_image}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Check existing shared live-test image
         id: image_exists
@@ -1577,42 +1603,14 @@ jobs:
 
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})
-    needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
+    needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
+    if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - provider_label: Anthropic
-            providers: anthropic
-            profiles: stable full
-          - provider_label: Google
-            providers: google
-            profiles: stable full
-          - provider_label: MiniMax
-            providers: minimax
-            profiles: stable full
-          - provider_label: OpenAI
-            providers: openai
-            profiles: beta minimum stable full
-          - provider_label: OpenCode
-            providers: opencode-go
-            profiles: full
-          - provider_label: OpenRouter
-            providers: openrouter
-            profiles: full
-          - provider_label: xAI
-            providers: xai
-            profiles: full
-          - provider_label: Z.ai
-            providers: zai
-            profiles: full
-          - provider_label: Fireworks
-            providers: fireworks
-            profiles: full
+      matrix: ${{ fromJson(needs.plan_release_workflow_matrices.outputs.live_models_matrix) }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -1682,15 +1680,16 @@ jobs:
 
       - name: Log in to GHCR
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Validate provider credential
         if: contains(matrix.profiles, inputs.release_test_profile)
         shell: bash
+        env:
+          LIVE_MODEL_PROVIDERS: ${{ matrix.providers }}
         run: |
           set -euo pipefail
 
@@ -1707,7 +1706,7 @@ jobs:
             exit 1
           }
 
-          case "${{ matrix.providers }}" in
+          case "${LIVE_MODEL_PROVIDERS}" in
             anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
             google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
             minimax) require_any MiniMax MINIMAX_API_KEY ;;
@@ -1718,7 +1717,7 @@ jobs:
             zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
             fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
             *)
-              echo "Unhandled live model provider shard: ${{ matrix.providers }}" >&2
+              echo "Unhandled live model provider shard: ${LIVE_MODEL_PROVIDERS}" >&2
               exit 1
               ;;
           esac
@@ -1732,7 +1731,7 @@ jobs:
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1804,7 +1803,6 @@ jobs:
           normalize_provider() {
             local value="${1,,}"
             case "$value" in
-              z.ai|z-ai) echo "zai" ;;
               opencode|opencode-go) echo "opencode-go" ;;
               open-router|openrouter) echo "openrouter" ;;
               *) echo "$value" ;;
@@ -1857,11 +1855,10 @@ jobs:
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Validate provider credentials
         shell: bash
@@ -1907,7 +1904,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -1935,7 +1932,7 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-anthropic-opus
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic Opus
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-7 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-8 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             advisory: true
@@ -1943,26 +1940,26 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic Sonnet/Haiku
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview,google/gemini-3-flash-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-minimax
             label: Native live gateway profiles MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-openai
             label: Native live gateway profiles OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
@@ -2209,6 +2206,7 @@ jobs:
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        shell: bash
         run: |
           set +e
           bash .release-harness/scripts/ci-live-command-retry.sh
@@ -2228,7 +2226,7 @@ jobs:
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -2236,49 +2234,49 @@ jobs:
         include:
           - suite_id: live-gateway-docker
             label: Docker live gateway OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             profiles: beta minimum stable full
           - suite_id: live-gateway-anthropic-docker
             label: Docker live gateway Anthropic
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
           - suite_id: live-gateway-google-docker
             label: Docker live gateway Google
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview,google/gemini-3-flash-preview OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
           - suite_id: live-gateway-minimax-docker
             label: Docker live gateway MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
           - suite_id: live-gateway-advisory-docker-deepseek-fireworks
             suite_group: live-gateway-advisory-docker
             label: Docker live gateway advisory DeepSeek/Fireworks
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             advisory: true
             profiles: full
           - suite_id: live-gateway-advisory-docker-opencode-openrouter
             suite_group: live-gateway-advisory-docker
             label: Docker live gateway advisory OpenCode/OpenRouter
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             advisory: true
             profiles: full
           - suite_id: live-gateway-advisory-docker-xai-zai
             suite_group: live-gateway-advisory-docker
             label: Docker live gateway advisory xAI/Z.ai
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             advisory: true
             profiles: full
@@ -2386,11 +2384,10 @@ jobs:
 
       - name: Log in to GHCR
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Configure suite-specific env
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
@@ -2428,6 +2425,7 @@ jobs:
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        shell: bash
         run: |
           set +e
           bash .release-harness/scripts/ci-live-command-retry.sh
@@ -2447,7 +2445,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
     continue-on-error: ${{ inputs.advisory }}
-    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
       credentials:
@@ -2615,6 +2613,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         env:
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        shell: bash
         run: |
           set +e
           ${{ matrix.command }}

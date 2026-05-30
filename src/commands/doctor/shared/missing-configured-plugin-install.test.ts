@@ -62,6 +62,16 @@ const mocks = vi.hoisted(() => ({
   ),
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
   resolveDefaultPluginNpmDir: vi.fn(() => "/tmp/openclaw-npm"),
+  resolvePluginNpmPackageDir: vi.fn(
+    ({ npmDir, packageName }: { npmDir?: string; packageName: string }) =>
+      path.join(
+        npmDir ?? "/tmp/openclaw-npm",
+        "projects",
+        packageName.replace(/[^a-zA-Z0-9._-]+/g, "-"),
+        "node_modules",
+        ...packageName.split("/"),
+      ),
+  ),
   resolvePluginInstallDir: vi.fn(
     (pluginId: string, extensionsDir = "/tmp/openclaw-plugins") => `${extensionsDir}/${pluginId}`,
   ),
@@ -114,6 +124,7 @@ vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => 
 vi.mock("../../../plugins/install-paths.js", () => ({
   resolveDefaultPluginExtensionsDir: mocks.resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir: mocks.resolveDefaultPluginNpmDir,
+  resolvePluginNpmPackageDir: mocks.resolvePluginNpmPackageDir,
   resolvePluginInstallDir: mocks.resolvePluginInstallDir,
   validatePluginId: mocks.validatePluginId,
 }));
@@ -134,6 +145,7 @@ vi.mock("../../../plugins/clawhub.js", () => ({
 
 vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
 vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
@@ -1743,6 +1755,292 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       `Installed missing configured plugin "codex" from ${expectedNpmInstallSpec("@openclaw/codex")}.`,
     ]);
     expect(result.warnings).toStrictEqual([]);
+  });
+
+  it("refreshes a stale managed Codex runtime plugin selected by the OpenAI Codex route", async () => {
+    const installDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(installDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: "2026.5.6" }),
+    );
+    const records = {
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex",
+        resolvedName: "@openclaw/codex",
+        resolvedSpec: "@openclaw/codex@2026.5.6",
+        resolvedVersion: "2026.5.6",
+        version: "2026.5.6",
+        integrity: "sha512-old-codex",
+        installPath: installDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "codex",
+          packageVersion: "2026.5.6",
+          providers: ["codex"],
+        },
+      ],
+      diagnostics: [],
+      byPluginId: new Map([
+        [
+          "codex",
+          {
+            id: "codex",
+            packageVersion: "2026.5.6",
+            providers: ["codex"],
+          },
+        ],
+      ]),
+    });
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "codex",
+      targetDir: "/tmp/openclaw-plugins/codex",
+      version: VERSION,
+      npmResolution: {
+        name: "@openclaw/codex",
+        version: VERSION,
+        resolvedSpec: `@openclaw/codex@${VERSION}`,
+        integrity: "sha512-new-codex",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "codex",
+        label: "Codex",
+        install: {
+          npmSpec: "@openclaw/codex",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      spec: expectedNpmInstallSpec("@openclaw/codex"),
+      expectedPluginId: "codex",
+      trustedSourceLinkedOfficialInstall: true,
+      mode: "update",
+    });
+    expect(result.changes).toEqual([
+      `Refreshed stale configured plugin "codex" from ${expectedNpmInstallSpec("@openclaw/codex")}.`,
+    ]);
+    expectRecordFields(result.records.codex, {
+      source: "npm",
+      spec: "@openclaw/codex",
+      installPath: "/tmp/openclaw-plugins/codex",
+      version: VERSION,
+      resolvedName: "@openclaw/codex",
+      resolvedVersion: VERSION,
+      resolvedSpec: `@openclaw/codex@${VERSION}`,
+    });
+  });
+
+  it("does not refresh a converged beta Codex runtime plugin on the second doctor pass", async () => {
+    const installDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(installDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: "2026.5.6" }),
+    );
+    const records = {
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex",
+        resolvedName: "@openclaw/codex",
+        resolvedSpec: "@openclaw/codex@2026.5.6",
+        resolvedVersion: "2026.5.6",
+        version: "2026.5.6",
+        integrity: "sha512-old-codex",
+        installPath: installDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "codex",
+          packageVersion: "2026.5.6",
+          providers: ["codex"],
+        },
+      ],
+      diagnostics: [],
+      byPluginId: new Map([
+        [
+          "codex",
+          {
+            id: "codex",
+            packageVersion: "2026.5.6",
+            providers: ["codex"],
+          },
+        ],
+      ]),
+    });
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "codex",
+      targetDir: installDir,
+      version: `${VERSION}-beta.4`,
+      npmResolution: {
+        name: "@openclaw/codex",
+        version: `${VERSION}-beta.4`,
+        resolvedSpec: `@openclaw/codex@${VERSION}-beta.4`,
+        integrity: "sha512-new-codex-beta",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "codex",
+        label: "Codex",
+        install: {
+          npmSpec: "@openclaw/codex",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const cfg = {
+      update: { channel: "beta" as const },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const firstPass = await repairMissingConfiguredPluginInstalls({
+      cfg,
+      env: {},
+    });
+
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      spec: "@openclaw/codex@beta",
+      expectedPluginId: "codex",
+      trustedSourceLinkedOfficialInstall: true,
+      mode: "update",
+    });
+    expect(firstPass.changes).toEqual([
+      'Refreshed stale configured plugin "codex" from @openclaw/codex@beta.',
+    ]);
+    expectRecordFields(firstPass.records.codex, {
+      source: "npm",
+      spec: "@openclaw/codex",
+      installPath: installDir,
+      version: `${VERSION}-beta.4`,
+      resolvedName: "@openclaw/codex",
+      resolvedVersion: `${VERSION}-beta.4`,
+      resolvedSpec: `@openclaw/codex@${VERSION}-beta.4`,
+    });
+
+    mocks.installPluginFromNpmSpec.mockClear();
+    mocks.writePersistedInstalledPluginIndexInstallRecords.mockClear();
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(firstPass.records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "codex",
+          packageVersion: `${VERSION}-beta.4`,
+          providers: ["codex"],
+        },
+      ],
+      diagnostics: [],
+      byPluginId: new Map([
+        [
+          "codex",
+          {
+            id: "codex",
+            packageVersion: `${VERSION}-beta.4`,
+            providers: ["codex"],
+          },
+        ],
+      ]),
+    });
+
+    const secondPass = await repairMissingConfiguredPluginInstalls({
+      cfg,
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(secondPass).toEqual({ changes: [], warnings: [], records: firstPass.records });
+  });
+
+  it("does not downgrade a newer managed Codex runtime plugin", async () => {
+    const installDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(installDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/codex", version: "9999.1.1" }),
+    );
+    const records = {
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex",
+        resolvedName: "@openclaw/codex",
+        resolvedSpec: "@openclaw/codex@9999.1.1",
+        resolvedVersion: "9999.1.1",
+        version: "9999.1.1",
+        integrity: "sha512-newer-codex",
+        installPath: installDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "codex",
+          packageVersion: "9999.1.1",
+          providers: ["codex", "openai-codex", "openai"],
+        },
+      ],
+      diagnostics: [],
+      byPluginId: new Map([
+        [
+          "codex",
+          {
+            id: "codex",
+            packageVersion: "9999.1.1",
+            providers: ["codex", "openai-codex", "openai"],
+          },
+        ],
+      ]),
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.5",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result).toEqual({ changes: [], warnings: [], records });
   });
 
   it.each([

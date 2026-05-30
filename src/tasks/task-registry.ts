@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
+import {
+  buildAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../agents/agent-run-terminal-outcome.js";
 import { shouldRouteCompletionThroughRequesterSession } from "../auto-reply/reply/completion-delivery-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
@@ -9,6 +13,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
@@ -51,9 +56,9 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
+import { resolveTaskCleanupAfter } from "./task-retention.js";
 
 const log = createSubsystemLogger("tasks/registry");
-const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 const taskRegistryProcessState = getTaskRegistryProcessState();
 const tasks = taskRegistryProcessState.tasks;
@@ -275,7 +280,17 @@ function persistTaskUpsert(task: TaskRecord) {
     return;
   }
   if (store.upsertTask) {
+    if (deliveryState && !store.upsertDeliveryState) {
+      store.saveSnapshot({
+        tasks,
+        deliveryStates: taskDeliveryStates,
+      });
+      return;
+    }
     store.upsertTask(task);
+    if (deliveryState && store.upsertDeliveryState) {
+      store.upsertDeliveryState(deliveryState);
+    }
     return;
   }
   store.saveSnapshot({
@@ -441,6 +456,48 @@ function resolveTaskTerminalOutcome(params: {
   return params.status === "succeeded" ? "succeeded" : undefined;
 }
 
+function mapAgentRunTerminalOutcomeToTaskStatus(
+  outcome: AgentRunTerminalOutcome,
+): Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled"> {
+  switch (outcome.reason) {
+    case "completed":
+      return "succeeded";
+    case "hard_timeout":
+    case "timed_out":
+      return "timed_out";
+    case "cancelled":
+    case "aborted":
+      return "cancelled";
+    case "blocked":
+    case "failed":
+      return "failed";
+    default:
+      return outcome.reason satisfies never;
+  }
+}
+
+function buildTaskLifecycleTerminalOutcome(params: {
+  phase: "end" | "error";
+  data?: Record<string, unknown>;
+  startedAt?: number;
+  endedAt?: number;
+}): AgentRunTerminalOutcome {
+  const status =
+    params.phase === "error" ? "error" : params.data?.aborted === true ? "timeout" : "ok";
+  // Lifecycle events carry runner/provider terminal facts. Keep the precedence
+  // centralized so task projections match agent.wait and gateway snapshots.
+  return buildAgentRunTerminalOutcome({
+    status,
+    error: params.data?.error,
+    stopReason: params.data?.stopReason,
+    livenessState: params.data?.livenessState,
+    timeoutPhase: params.data?.timeoutPhase,
+    providerStarted: params.data?.providerStarted,
+    startedAt: params.startedAt,
+    endedAt: params.endedAt,
+  });
+}
+
 function appendTaskEvent(event: {
   at: number;
   kind: TaskEventKind;
@@ -521,14 +578,11 @@ function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: 
 }
 
 function getTaskRelatedSessionIndexKeys(task: Pick<TaskRecord, "ownerKey" | "childSessionKey">) {
-  return [
-    ...new Set(
-      [
-        normalizeOptionalString(task.ownerKey),
-        normalizeOptionalString(task.childSessionKey),
-      ].filter(Boolean) as string[],
-    ),
-  ];
+  return uniqueStrings(
+    [normalizeOptionalString(task.ownerKey), normalizeOptionalString(task.childSessionKey)].filter(
+      Boolean,
+    ) as string[],
+  );
 }
 
 function addOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
@@ -986,8 +1040,10 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   }
   const next = normalizeTaskTimestamps({ ...current, ...patch });
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
-    const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
-    next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
+    next.cleanupAfter = resolveTaskCleanupAfter({
+      ...next,
+      createdAt: next.createdAt ?? Date.now(),
+    });
   }
   const sessionIndexChanged =
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
@@ -1457,12 +1513,27 @@ function ensureListener() {
         if (phase === "start") {
           patch.status = "running";
         } else if (phase === "end") {
-          patch.status = evt.data?.aborted === true ? "timed_out" : "succeeded";
-          patch.endedAt = endedAt ?? now;
+          const terminal = buildTaskLifecycleTerminalOutcome({
+            phase,
+            data: evt.data,
+            startedAt,
+            endedAt: endedAt ?? now,
+          });
+          patch.status = mapAgentRunTerminalOutcomeToTaskStatus(terminal);
+          patch.endedAt = terminal.endedAt ?? now;
+          if (terminal.error) {
+            patch.error = terminal.error;
+          }
         } else if (phase === "error") {
-          patch.status = "failed";
-          patch.endedAt = endedAt ?? now;
-          patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
+          const terminal = buildTaskLifecycleTerminalOutcome({
+            phase,
+            data: evt.data,
+            startedAt,
+            endedAt: endedAt ?? now,
+          });
+          patch.status = mapAgentRunTerminalOutcomeToTaskStatus(terminal);
+          patch.endedAt = terminal.endedAt ?? now;
+          patch.error = terminal.error ?? current.error;
         }
       } else if (evt.stream === "error") {
         patch.error = typeof evt.data?.error === "string" ? evt.data.error : current.error;
@@ -1598,14 +1669,16 @@ export function createTaskRecord(params: {
     }),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
-    record.cleanupAfter =
-      (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
+    record.cleanupAfter = resolveTaskCleanupAfter(record);
   }
   tasks.set(taskId, record);
-  upsertTaskDeliveryState({
-    taskId,
-    requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
-  });
+  const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  if (requesterOrigin) {
+    taskDeliveryStates.set(taskId, {
+      taskId,
+      requesterOrigin,
+    });
+  }
   addRunIdIndex(taskId, record.runId);
   addOwnerKeyIndex(taskId, record);
   addParentFlowIdIndex(taskId, record);

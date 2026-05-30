@@ -338,7 +338,7 @@ jobs:
           ref: ${{ steps.workflow_ref.outputs.value }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Checkout public source ref
         if: inputs.candidate_artifact_name == ''
@@ -348,7 +348,7 @@ jobs:
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
           submodules: recursive
 
       - name: Setup Node.js
@@ -451,7 +451,7 @@ jobs:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline
         run: |
           mkdir -p "${OUTPUT_DIR}"
-          npm pack --ignore-scripts --json "${BASELINE_SPEC}" --pack-destination "${OUTPUT_DIR}" > "${OUTPUT_DIR}/pack.json"
+          timeout --preserve-status 300s npm pack --ignore-scripts --json "${BASELINE_SPEC}" --pack-destination "${OUTPUT_DIR}" > "${OUTPUT_DIR}/pack.json"
 
       - name: Capture candidate metadata
         id: candidate_metadata
@@ -537,7 +537,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.workflow_ref }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -553,6 +553,15 @@ jobs:
           use-actions-cache: "false"
 
       - name: Download candidate artifact
+        id: download_candidate
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
+
+      - name: Retry candidate artifact download
+        if: ${{ steps.download_candidate.outcome == 'failure' }}
         uses: actions/download-artifact@v8
         with:
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
@@ -560,10 +569,37 @@ jobs:
 
       - name: Download baseline artifact
         if: ${{ matrix.suite == 'packaged-upgrade' }}
+        id: download_baseline
+        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
+
+      - name: Retry baseline artifact download
+        if: ${{ matrix.suite == 'packaged-upgrade' && steps.download_baseline.outcome == 'failure' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
+
+      - name: Verify release-check inputs
+        shell: bash
+        env:
+          CANDIDATE_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}
+          BASELINE_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}
+          OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
+          SUITE: ${{ matrix.suite }}
+        run: |
+          mkdir -p "${OUTPUT_DIR}"
+          if [[ ! -f "${CANDIDATE_TGZ}" ]]; then
+            echo "::error::candidate artifact missing: ${CANDIDATE_TGZ}"
+            exit 1
+          fi
+          if [[ "${SUITE}" == "packaged-upgrade" ]] && [[ ! -f "${BASELINE_TGZ}" ]]; then
+            echo "::error::baseline artifact missing: ${BASELINE_TGZ}"
+            exit 1
+          fi
 
       - name: Run cross-OS release checks
         shell: bash
@@ -615,7 +651,8 @@ jobs:
           if [[ -f "${SUMMARY_PATH}" ]]; then
             cat "${SUMMARY_PATH}" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No summary generated." >> "$GITHUB_STEP_SUMMARY"
+            mkdir -p "$(dirname "${SUMMARY_PATH}")"
+            echo "No summary generated." | tee "${SUMMARY_PATH}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload release-check artifacts

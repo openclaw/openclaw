@@ -1,9 +1,10 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createAllowlistProviderRestrictSendersWarningCollector } from "../channels/plugins/group-policy-warnings.js";
 import type { ChannelSecurityAdapter } from "../channels/plugins/types.adapters.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import type { GroupPolicy } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { createScopedDmSecurityResolver } from "./channel-config-helpers.js";
 /** Shared policy warnings and DM/group policy helpers for channel plugins. */
 export type {
@@ -62,7 +63,7 @@ export function normalizeAllowFromList(list: Array<string | number> | undefined 
   if (!Array.isArray(list)) {
     return [];
   }
-  return list.map((value) => String(value).trim()).filter(Boolean);
+  return normalizeStringEntries(list);
 }
 
 export function coerceNativeSetting(value: unknown): boolean | "auto" | undefined {
@@ -95,7 +96,7 @@ function collectMutableAllowlistWarningLines(
     .map((hit) => `- ${sanitizeForLog(hit.path)}: ${sanitizeForLog(hit.entry)}`);
   const remaining =
     hits.length > 8 ? `- +${hits.length - 8} more mutable allowlist entries.` : null;
-  const flagPaths = Array.from(new Set(hits.map((hit) => hit.dangerousFlagPath)));
+  const flagPaths = uniqueStrings(hits.map((hit) => hit.dangerousFlagPath));
   const flagHint =
     flagPaths.length === 1
       ? sanitizeForLog(flagPaths[0] ?? "")

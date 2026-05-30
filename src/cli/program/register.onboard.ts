@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
@@ -12,9 +14,8 @@ import type {
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { parsePort } from "../shared/parse-port.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -167,6 +168,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
+    .option("--suppress-gateway-token-output", "Suppress token-bearing Gateway/UI output")
     .option("--skip-hooks", "Skip hook setup")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--import-from <provider>", "Migration provider to run during onboarding")
@@ -190,8 +192,7 @@ export function registerOnboardCommand(program: Command): void {
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),
       });
-      const gatewayPort =
-        typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
+      const gatewayPort = parsePort(opts.gatewayPort);
       const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
         opts as Record<string, unknown>,
       );
@@ -223,10 +224,7 @@ export function registerOnboardCommand(program: Command): void {
               : opts.customImageInput === true
                 ? true
                 : undefined,
-          gatewayPort:
-            typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
-              ? gatewayPort
-              : undefined,
+          gatewayPort: gatewayPort ?? undefined,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,
@@ -246,6 +244,7 @@ export function registerOnboardCommand(program: Command): void {
           skipSearch: Boolean(opts.skipSearch),
           skipHealth: Boolean(opts.skipHealth),
           skipUi: Boolean(opts.skipUi),
+          suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
           skipHooks: Boolean(opts.skipHooks),
           nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
           importFrom: opts.importFrom as string | undefined,

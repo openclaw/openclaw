@@ -1,6 +1,26 @@
 import { createHash } from "node:crypto";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
+import {
+  asBoolean as readBoolean,
+  isRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { POLICY_TOOL_GROUPS } from "./tool-policy-conformance.js";
+
+// Mirrors the sandbox browser config default without importing core internals into the policy plugin.
+const DEFAULT_POLICY_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
+const ALLOWLIST_DEFAULT_INGRESS_GROUP_POLICY_CHANNELS = new Set([
+  "googlechat",
+  "irc",
+  "line",
+  "mattermost",
+  "matrix",
+  "msteams",
+  "nextcloud-talk",
+  "signal",
+]);
+const OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS = new Set(["feishu", "qa-channel"]);
 
 export type PolicyAttestation = {
   readonly checkedAt: string;
@@ -19,11 +39,15 @@ export type PolicyAttestation = {
 export type PolicyEvidence = {
   readonly channels: readonly PolicyChannelEvidence[];
   readonly tools?: readonly PolicyToolEvidence[];
+  readonly toolPosture?: readonly PolicyToolPostureEvidence[];
+  readonly sandboxPosture?: readonly PolicySandboxPostureEvidence[];
   readonly mcpServers: readonly PolicyMcpServerEvidence[];
   readonly modelProviders: readonly PolicyModelProviderEvidence[];
   readonly modelRefs: readonly PolicyModelRefEvidence[];
   readonly network: readonly PolicyNetworkEvidence[];
+  readonly ingress?: readonly PolicyIngressEvidence[];
   readonly gatewayExposure?: readonly PolicyGatewayExposureEvidence[];
+  readonly agentWorkspace?: readonly PolicyAgentWorkspaceEvidence[];
   readonly secrets?: readonly PolicySecretEvidence[];
   readonly authProfiles?: readonly PolicyAuthProfileEvidence[];
 };
@@ -53,6 +77,49 @@ export type PolicyToolEvidence = {
   readonly capabilities?: readonly string[];
 };
 
+export type PolicyToolPostureEvidence = {
+  readonly id: string;
+  readonly kind:
+    | "allow"
+    | "alsoAllow"
+    | "deny"
+    | "elevatedAllowFrom"
+    | "elevatedEnabled"
+    | "execAsk"
+    | "execHost"
+    | "execSecurity"
+    | "fsWorkspaceOnly"
+    | "profile";
+  readonly source: string;
+  readonly scope: "global" | "agent";
+  readonly agentId?: string;
+  readonly value?: boolean | string;
+  readonly entries?: readonly string[];
+  readonly explicit?: boolean;
+};
+
+export type PolicySandboxPostureEvidence = {
+  readonly id: string;
+  readonly kind:
+    | "backend"
+    | "browserCdpSourceRange"
+    | "containerMount"
+    | "containerNetwork"
+    | "containerSecurityProfile"
+    | "mode";
+  readonly source: string;
+  readonly scope: "defaults" | "agent";
+  readonly agentId?: string;
+  readonly value?: boolean | string;
+  readonly bind?: string;
+  readonly bindMode?: string;
+  readonly bindHost?: string;
+  readonly bindSurface?: "browser" | "docker";
+  readonly networkSurface?: "browser" | "docker";
+  readonly profile?: "apparmor" | "seccomp";
+  readonly explicit?: boolean;
+};
+
 export type PolicyModelProviderEvidence = {
   readonly id: string;
   readonly source: string;
@@ -69,6 +136,21 @@ export type PolicyNetworkEvidence = {
   readonly id: string;
   readonly source: string;
   readonly value: boolean;
+};
+
+export type PolicyIngressEvidence = {
+  readonly id: string;
+  readonly kind:
+    | "channelDmPolicy"
+    | "channelGroupPolicy"
+    | "channelRequireMention"
+    | "sessionDmScope";
+  readonly source: string;
+  readonly channel?: string;
+  readonly accountId?: string;
+  readonly groupId?: string;
+  readonly value?: boolean | string;
+  readonly explicit?: boolean;
 };
 
 export type PolicyGatewayExposureEvidence = {
@@ -88,6 +170,21 @@ export type PolicyGatewayExposureEvidence = {
   readonly explicit?: boolean;
   readonly endpoint?: string;
   readonly hasAllowlist?: boolean;
+};
+
+export type PolicyAgentWorkspaceEvidence = {
+  readonly id: string;
+  readonly kind: "workspaceAccess" | "toolDeny";
+  readonly source: string;
+  readonly scope: "defaults" | "agent";
+  readonly agentId?: string;
+  readonly value?: string;
+  readonly sandboxMode?: string;
+  readonly sandboxModeSource?: string;
+  readonly sandboxEnabled?: boolean;
+  readonly tool?: string;
+  readonly denied?: boolean;
+  readonly explicit?: boolean;
 };
 
 export type PolicySecretEvidence = {
@@ -180,7 +277,11 @@ export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
   options?: {
     readonly toolsRaw?: undefined;
+    readonly includeIngress?: boolean;
     readonly includeGatewayExposure?: boolean;
+    readonly includeAgentWorkspace?: boolean;
+    readonly includeToolPosture?: boolean;
+    readonly includeSandboxPosture?: boolean;
     readonly includeSecrets?: boolean;
     readonly includeAuthProfiles?: boolean;
   },
@@ -189,7 +290,11 @@ export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
   options: {
     readonly toolsRaw: string;
+    readonly includeIngress?: boolean;
     readonly includeGatewayExposure?: boolean;
+    readonly includeAgentWorkspace?: boolean;
+    readonly includeToolPosture?: boolean;
+    readonly includeSandboxPosture?: boolean;
     readonly includeSecrets?: boolean;
     readonly includeAuthProfiles?: boolean;
   },
@@ -198,7 +303,11 @@ export function collectPolicyEvidence(
   cfg: Record<string, unknown>,
   options: {
     readonly toolsRaw?: string;
+    readonly includeIngress?: boolean;
     readonly includeGatewayExposure?: boolean;
+    readonly includeAgentWorkspace?: boolean;
+    readonly includeToolPosture?: boolean;
+    readonly includeSandboxPosture?: boolean;
     readonly includeSecrets?: boolean;
     readonly includeAuthProfiles?: boolean;
   } = {},
@@ -209,9 +318,17 @@ export function collectPolicyEvidence(
     modelProviders: scanPolicyModelProviders(cfg),
     modelRefs: scanPolicyModelRefs(cfg),
     network: scanPolicyNetwork(cfg),
+    ...(options.includeIngress === false ? {} : { ingress: scanPolicyIngress(cfg) }),
     ...(options.includeGatewayExposure === false
       ? {}
       : { gatewayExposure: scanPolicyGatewayExposure(cfg) }),
+    ...(options.includeAgentWorkspace === false
+      ? {}
+      : { agentWorkspace: scanPolicyAgentWorkspace(cfg) }),
+    ...(options.includeToolPosture === false ? {} : { toolPosture: scanPolicyToolPosture(cfg) }),
+    ...(options.includeSandboxPosture === false
+      ? {}
+      : { sandboxPosture: scanPolicySandboxPosture(cfg) }),
     ...(options.includeSecrets === false ? {} : { secrets: scanPolicySecrets(cfg) }),
     ...(options.includeAuthProfiles === false ? {} : { authProfiles: scanPolicyAuthProfiles(cfg) }),
   };
@@ -337,6 +454,60 @@ export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly Policy
   ].filter((entry): entry is PolicyNetworkEvidence => entry !== undefined);
 }
 
+export function scanPolicyIngress(cfg: Record<string, unknown>): readonly PolicyIngressEvidence[] {
+  const channels = configuredChannels(cfg);
+  const channelDefaults = isRecord(channels.defaults) ? channels.defaults : {};
+  const inheritedChannelDefaults = pickSupportedIngressDefaults(channelDefaults);
+  const channelDefaultsSource = "oc://openclaw.config/channels/defaults";
+  const entries: PolicyIngressEvidence[] = [];
+  const session = isRecord(cfg.session) ? cfg.session : {};
+  const dmScope = readString(session.dmScope)?.toLowerCase();
+  entries.push({
+    id: "session-dm-scope",
+    kind: "sessionDmScope",
+    source: "oc://openclaw.config/session/dmScope",
+    value: dmScope ?? "main",
+    explicit: dmScope !== undefined,
+  });
+
+  for (const [channel, value] of Object.entries(channels)) {
+    if (RESERVED_CHANNEL_CONFIG_KEYS.has(channel) || !isRecord(value) || value.enabled === false) {
+      continue;
+    }
+    const channelSource = `oc://openclaw.config/channels/${ocPathSegment(channel)}`;
+    const accounts = isRecord(value.accounts) ? value.accounts : {};
+    const configuredAccounts = Object.entries(accounts).filter(
+      (entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]),
+    );
+    const activeAccounts = configuredAccounts.filter(([, account]) => account.enabled !== false);
+    if (configuredAccounts.length === 0 || hasImplicitDefaultAccountConfig(channel, value)) {
+      pushChannelIngress(entries, {
+        channel,
+        config: value,
+        inheritedConfig: inheritedChannelDefaults,
+        sourceBase: channelSource,
+        inheritedSourceBase: channelDefaultsSource,
+        fallbackSourceBase: channelSource,
+      });
+    }
+    for (const [accountId, account] of activeAccounts) {
+      const inheritsNestedContainers = channel !== "telegram" || configuredAccounts.length <= 1;
+      pushChannelIngress(entries, {
+        channel,
+        accountId,
+        config: account,
+        inheritedConfig: value,
+        inheritNestedContainers: inheritsNestedContainers,
+        sourceBase: `${channelSource}/accounts/${ocPathSegment(accountId)}`,
+        inheritedSourceBase: channelSource,
+        fallbackConfig: inheritedChannelDefaults,
+        fallbackSourceBase: channelDefaultsSource,
+      });
+    }
+  }
+  return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
+}
+
 export function scanPolicyGatewayExposure(
   cfg: Record<string, unknown>,
 ): readonly PolicyGatewayExposureEvidence[] {
@@ -457,6 +628,134 @@ export function scanPolicyGatewayExposure(
   pushGatewayHttpEndpointEvidence(entries, endpoints, "chatCompletions");
   pushGatewayHttpEndpointEvidence(entries, endpoints, "responses");
   return entries.toSorted((a, b) => a.source.localeCompare(b.source));
+}
+
+export function scanPolicyAgentWorkspace(
+  cfg: Record<string, unknown>,
+): readonly PolicyAgentWorkspaceEvidence[] {
+  const agents = isRecord(cfg.agents) ? cfg.agents : {};
+  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
+  const defaultSandbox = isRecord(defaults.sandbox) ? defaults.sandbox : {};
+  const defaultTools = isRecord(cfg.tools) ? cfg.tools : {};
+  const entries: PolicyAgentWorkspaceEvidence[] = [];
+  pushAgentWorkspaceEvidence(entries, {
+    id: "agents-defaults",
+    scope: "defaults",
+    sandbox: defaultSandbox,
+    inheritedSandbox: {},
+    tools: defaultTools,
+    inheritedTools: {},
+    workspaceSourceBase: "oc://openclaw.config/agents/defaults",
+    inheritedWorkspaceSourceBase: "oc://openclaw.config/agents/defaults",
+    toolsSourceBase: "oc://openclaw.config/tools",
+    inheritedToolsSourceBase: "oc://openclaw.config/tools",
+  });
+
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  list.forEach((agent, index) => {
+    if (!isRecord(agent)) {
+      return;
+    }
+    const agentId =
+      typeof agent.id === "string" && agent.id.trim() !== "" ? agent.id.trim() : undefined;
+    const sandbox = isRecord(agent.sandbox) ? agent.sandbox : {};
+    const tools = isRecord(agent.tools) ? agent.tools : {};
+    pushAgentWorkspaceEvidence(entries, {
+      id: agentId ?? `agent-${index}`,
+      scope: "agent",
+      agentId,
+      sandbox,
+      inheritedSandbox: defaultSandbox,
+      tools,
+      inheritedTools: defaultTools,
+      workspaceSourceBase: `oc://openclaw.config/agents/list/#${index}`,
+      inheritedWorkspaceSourceBase: "oc://openclaw.config/agents/defaults",
+      toolsSourceBase: `oc://openclaw.config/agents/list/#${index}/tools`,
+      inheritedToolsSourceBase: "oc://openclaw.config/tools",
+    });
+  });
+  return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
+}
+
+export function scanPolicySandboxPosture(
+  cfg: Record<string, unknown>,
+): readonly PolicySandboxPostureEvidence[] {
+  const agents = isRecord(cfg.agents) ? cfg.agents : {};
+  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
+  const defaultSandbox = isRecord(defaults.sandbox) ? defaults.sandbox : {};
+  const entries: PolicySandboxPostureEvidence[] = [];
+  pushSandboxPostureEvidence(entries, {
+    id: "agents-defaults",
+    scope: "defaults",
+    sandbox: defaultSandbox,
+    inheritedSandbox: {},
+    sourceBase: "oc://openclaw.config/agents/defaults/sandbox",
+    inheritedSourceBase: "oc://openclaw.config/agents/defaults/sandbox",
+  });
+
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  list.forEach((agent, index) => {
+    if (!isRecord(agent)) {
+      return;
+    }
+    const agentId =
+      typeof agent.id === "string" && agent.id.trim() !== "" ? agent.id.trim() : undefined;
+    const sandbox = isRecord(agent.sandbox) ? agent.sandbox : {};
+    pushSandboxPostureEvidence(entries, {
+      id: agentId ?? `agent-${index}`,
+      scope: "agent",
+      agentId,
+      sandbox,
+      inheritedSandbox: defaultSandbox,
+      sharedSandboxScope: sandboxScopeIsShared(sandbox, defaultSandbox),
+      sourceBase: `oc://openclaw.config/agents/list/#${index}/sandbox`,
+      inheritedSourceBase: "oc://openclaw.config/agents/defaults/sandbox",
+    });
+  });
+
+  return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
+}
+
+export function scanPolicyToolPosture(
+  cfg: Record<string, unknown>,
+): readonly PolicyToolPostureEvidence[] {
+  const globalTools = isRecord(cfg.tools) ? cfg.tools : {};
+  const agents = isRecord(cfg.agents) ? cfg.agents : {};
+  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
+  const defaultSandbox = isRecord(defaults.sandbox) ? defaults.sandbox : {};
+  const entries: PolicyToolPostureEvidence[] = [];
+  pushToolPostureEvidence(entries, {
+    id: "tools",
+    scope: "global",
+    tools: globalTools,
+    inheritedTools: {},
+    sandbox: defaultSandbox,
+    inheritedSandbox: {},
+    sourceBase: "oc://openclaw.config/tools",
+    inheritedSourceBase: "oc://openclaw.config/tools",
+  });
+
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  list.forEach((agent, index) => {
+    if (!isRecord(agent)) {
+      return;
+    }
+    const agentId =
+      typeof agent.id === "string" && agent.id.trim() !== "" ? agent.id.trim() : undefined;
+    pushToolPostureEvidence(entries, {
+      id: agentId ?? `agent-${index}`,
+      scope: "agent",
+      agentId,
+      tools: isRecord(agent.tools) ? agent.tools : {},
+      inheritedTools: globalTools,
+      sandbox: isRecord(agent.sandbox) ? agent.sandbox : {},
+      inheritedSandbox: defaultSandbox,
+      sourceBase: `oc://openclaw.config/agents/list/#${index}/tools`,
+      inheritedSourceBase: "oc://openclaw.config/tools",
+    });
+  });
+
+  return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
 export function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
@@ -607,6 +906,685 @@ function isMediaConfiguredProviderRequestSecretPath(path: readonly string[]): bo
     isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video"]) ||
     isConfiguredProviderRequestSecretPath(path, ["tools", "media", "video", "models", "#"])
   );
+}
+
+function pushAgentWorkspaceEvidence(
+  entries: PolicyAgentWorkspaceEvidence[],
+  params: {
+    readonly id: string;
+    readonly scope: "defaults" | "agent";
+    readonly agentId?: string;
+    readonly sandbox: Record<string, unknown>;
+    readonly inheritedSandbox: Record<string, unknown>;
+    readonly tools: Record<string, unknown>;
+    readonly inheritedTools: Record<string, unknown>;
+    readonly workspaceSourceBase: string;
+    readonly inheritedWorkspaceSourceBase: string;
+    readonly toolsSourceBase: string;
+    readonly inheritedToolsSourceBase: string;
+  },
+): void {
+  const explicitSandboxMode = readString(params.sandbox.mode);
+  const inheritedSandboxMode = readString(params.inheritedSandbox.mode);
+  const sandboxMode = explicitSandboxMode ?? inheritedSandboxMode ?? "off";
+  const sandboxModeCoversAgentMain = sandboxMode === "all";
+  const sandboxModeSource =
+    explicitSandboxMode !== undefined
+      ? `${params.workspaceSourceBase}/sandbox/mode`
+      : inheritedSandboxMode !== undefined
+        ? `${params.inheritedWorkspaceSourceBase}/sandbox/mode`
+        : "oc://openclaw.config/agents/defaults/sandbox/mode";
+  const explicitWorkspaceAccess = readString(params.sandbox.workspaceAccess);
+  const inheritedWorkspaceAccess = readString(params.inheritedSandbox.workspaceAccess);
+  entries.push({
+    id: `${params.id}-workspace-access`,
+    kind: "workspaceAccess",
+    source:
+      explicitWorkspaceAccess !== undefined
+        ? `${params.workspaceSourceBase}/sandbox/workspaceAccess`
+        : inheritedWorkspaceAccess !== undefined
+          ? `${params.inheritedWorkspaceSourceBase}/sandbox/workspaceAccess`
+          : "oc://openclaw.config/agents/defaults/sandbox/workspaceAccess",
+    scope: params.scope,
+    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+    value: explicitWorkspaceAccess ?? inheritedWorkspaceAccess ?? "none",
+    sandboxMode,
+    sandboxModeSource,
+    sandboxEnabled: sandboxModeCoversAgentMain,
+    explicit: explicitWorkspaceAccess !== undefined,
+  });
+
+  for (const tool of AGENT_WORKSPACE_POLICY_TOOLS) {
+    const denyEvidence = agentWorkspaceToolDenyEvidence(params, tool, sandboxModeCoversAgentMain);
+    entries.push({
+      id: `${params.id}-tool-${tool}`,
+      kind: "toolDeny",
+      source: denyEvidence.source,
+      scope: params.scope,
+      ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+      tool,
+      denied: denyEvidence.denied,
+      explicit: denyEvidence.denied,
+    });
+  }
+}
+
+function agentWorkspaceToolDenyEvidence(
+  params: {
+    readonly tools: Record<string, unknown>;
+    readonly inheritedTools: Record<string, unknown>;
+    readonly toolsSourceBase: string;
+    readonly inheritedToolsSourceBase: string;
+  },
+  tool: string,
+  sandboxModeCoversAgentMain: boolean,
+): { readonly denied: boolean; readonly source: string } {
+  const localSandboxToolDeny = configuredSandboxToolDenyEntries(params.tools);
+  const inheritedSandboxToolDeny = configuredSandboxToolDenyEntries(params.inheritedTools);
+  const sources = [
+    {
+      entries: readStringArray(params.tools.deny),
+      source: `${params.toolsSourceBase}/deny`,
+    },
+    {
+      entries: readStringArray(params.inheritedTools.deny),
+      source: `${params.inheritedToolsSourceBase}/deny`,
+    },
+    ...(sandboxModeCoversAgentMain
+      ? [
+          localSandboxToolDeny !== undefined
+            ? {
+                entries: localSandboxToolDeny,
+                source: `${params.toolsSourceBase}/sandbox/tools/deny`,
+              }
+            : {
+                entries: inheritedSandboxToolDeny ?? [],
+                source: `${params.inheritedToolsSourceBase}/sandbox/tools/deny`,
+              },
+        ]
+      : []),
+  ];
+  const match = sources.find((entry) => toolListCoversTool(entry.entries, tool));
+  if (match !== undefined) {
+    return { denied: true, source: match.source };
+  }
+  return { denied: false, source: `${params.toolsSourceBase}/deny` };
+}
+
+function configuredSandboxToolDenyEntries(
+  tools: Record<string, unknown>,
+): readonly string[] | undefined {
+  const sandbox = isRecord(tools.sandbox) ? tools.sandbox : {};
+  const sandboxTools = isRecord(sandbox.tools) ? sandbox.tools : {};
+  return Array.isArray(sandboxTools.deny) ? readStringArray(sandboxTools.deny) : undefined;
+}
+
+function pushToolPostureEvidence(
+  entries: PolicyToolPostureEvidence[],
+  params: {
+    readonly id: string;
+    readonly scope: "global" | "agent";
+    readonly agentId?: string;
+    readonly tools: Record<string, unknown>;
+    readonly inheritedTools: Record<string, unknown>;
+    readonly sandbox: Record<string, unknown>;
+    readonly inheritedSandbox: Record<string, unknown>;
+    readonly sourceBase: string;
+    readonly inheritedSourceBase: string;
+  },
+): void {
+  const localProfile = readString(params.tools.profile);
+  const inheritedProfile = readString(params.inheritedTools.profile);
+  pushToolPostureValue(entries, params, {
+    suffix: "profile",
+    kind: "profile",
+    value: localProfile ?? inheritedProfile ?? "full",
+    explicit: localProfile !== undefined || inheritedProfile !== undefined,
+    inherited: localProfile === undefined && inheritedProfile !== undefined,
+  });
+
+  pushToolPostureList(entries, params, "allow");
+  pushToolAlsoAllowPostureList(entries, params);
+  pushToolPostureList(entries, params, "deny");
+  pushToolFsPosture(entries, params);
+  pushToolExecPosture(entries, params);
+  pushToolElevatedPosture(entries, params);
+}
+
+function pushToolFsPosture(entries: PolicyToolPostureEvidence[], params: ToolPostureParams): void {
+  const localFs = isRecord(params.tools.fs) ? params.tools.fs : {};
+  const inheritedFs = isRecord(params.inheritedTools.fs) ? params.inheritedTools.fs : {};
+  const localWorkspaceOnly = readBoolean(localFs.workspaceOnly);
+  const inheritedWorkspaceOnly = readBoolean(inheritedFs.workspaceOnly);
+  pushToolPostureValue(entries, params, {
+    suffix: "fs/workspaceOnly",
+    kind: "fsWorkspaceOnly",
+    value: localWorkspaceOnly ?? inheritedWorkspaceOnly ?? false,
+    explicit: localWorkspaceOnly !== undefined || inheritedWorkspaceOnly !== undefined,
+    inherited: localWorkspaceOnly === undefined && inheritedWorkspaceOnly !== undefined,
+  });
+}
+
+function pushToolExecPosture(
+  entries: PolicyToolPostureEvidence[],
+  params: ToolPostureParams,
+): void {
+  const localExec = isRecord(params.tools.exec) ? params.tools.exec : {};
+  const inheritedExec = isRecord(params.inheritedTools.exec) ? params.inheritedTools.exec : {};
+  const localHost = readString(localExec.host);
+  const inheritedHost = readString(inheritedExec.host);
+  const host = localHost ?? inheritedHost ?? "auto";
+  pushToolPostureValue(entries, params, {
+    suffix: "exec/host",
+    kind: "execHost",
+    value: host,
+    explicit: localHost !== undefined || inheritedHost !== undefined,
+    inherited: localHost === undefined && inheritedHost !== undefined,
+  });
+
+  const localSecurity = readString(localExec.security);
+  const inheritedSecurity = readString(inheritedExec.security);
+  // Config conformance intentionally ignores exec-approvals.json runtime/operator state.
+  const sandboxMode = readString(params.sandbox.mode) ?? readString(params.inheritedSandbox.mode);
+  const sandboxCanApply = sandboxMode === "all";
+  pushToolPostureValue(entries, params, {
+    suffix: "exec/security",
+    kind: "execSecurity",
+    value:
+      localSecurity ??
+      inheritedSecurity ??
+      (host === "sandbox" || (host === "auto" && sandboxCanApply) ? "deny" : "full"),
+    explicit: localSecurity !== undefined || inheritedSecurity !== undefined,
+    inherited: localSecurity === undefined && inheritedSecurity !== undefined,
+  });
+
+  const localAsk = readString(localExec.ask);
+  const inheritedAsk = readString(inheritedExec.ask);
+  pushToolPostureValue(entries, params, {
+    suffix: "exec/ask",
+    kind: "execAsk",
+    value: localAsk ?? inheritedAsk ?? "off",
+    explicit: localAsk !== undefined || inheritedAsk !== undefined,
+    inherited: localAsk === undefined && inheritedAsk !== undefined,
+  });
+}
+
+function pushToolElevatedPosture(
+  entries: PolicyToolPostureEvidence[],
+  params: ToolPostureParams,
+): void {
+  const localElevated = isRecord(params.tools.elevated) ? params.tools.elevated : {};
+  const inheritedElevated = isRecord(params.inheritedTools.elevated)
+    ? params.inheritedTools.elevated
+    : {};
+  const localEnabled = readBoolean(localElevated.enabled);
+  const inheritedEnabled = readBoolean(inheritedElevated.enabled);
+  const effectiveEnabled =
+    inheritedEnabled === false ? false : (localEnabled ?? inheritedEnabled ?? true);
+  pushToolPostureValue(entries, params, {
+    suffix: "elevated/enabled",
+    kind: "elevatedEnabled",
+    value: effectiveEnabled,
+    explicit: localEnabled !== undefined || inheritedEnabled !== undefined,
+    inherited:
+      (inheritedEnabled === false && localEnabled !== false) ||
+      (localEnabled === undefined && inheritedEnabled !== undefined),
+  });
+
+  const localAllowFrom = isRecord(localElevated.allowFrom) ? localElevated.allowFrom : {};
+  const inheritedAllowFrom = isRecord(inheritedElevated.allowFrom)
+    ? inheritedElevated.allowFrom
+    : {};
+  const providers = [
+    ...new Set([...Object.keys(inheritedAllowFrom), ...Object.keys(localAllowFrom)]),
+  ].toSorted((a, b) => a.localeCompare(b));
+  for (const provider of providers) {
+    const localEntries = readStringOrNumberArray(localAllowFrom[provider]);
+    const inheritedEntries = readStringOrNumberArray(inheritedAllowFrom[provider]);
+    const inherited = localEntries.length === 0 && inheritedEntries.length > 0;
+    entries.push({
+      id: `${params.id}-elevated-allow-from-${ocPathSegment(provider)}`,
+      kind: "elevatedAllowFrom",
+      source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
+      scope: params.scope,
+      ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+      entries: localEntries.length > 0 ? localEntries : inheritedEntries,
+      explicit: localEntries.length > 0 || inheritedEntries.length > 0,
+    });
+  }
+}
+
+type SandboxPostureParams = {
+  readonly id: string;
+  readonly scope: "defaults" | "agent";
+  readonly agentId?: string;
+  readonly effectiveBackend?: string;
+  readonly sandbox: Record<string, unknown>;
+  readonly inheritedSandbox: Record<string, unknown>;
+  readonly sharedSandboxScope?: boolean;
+  readonly sourceBase: string;
+  readonly inheritedSourceBase: string;
+};
+
+function pushSandboxPostureEvidence(
+  entries: PolicySandboxPostureEvidence[],
+  params: SandboxPostureParams,
+): void {
+  const localMode = readString(params.sandbox.mode);
+  const inheritedMode = readString(params.inheritedSandbox.mode);
+  pushSandboxPostureValue(entries, params, {
+    suffix: "mode",
+    kind: "mode",
+    value: localMode ?? inheritedMode ?? "off",
+    explicit: localMode !== undefined || inheritedMode !== undefined,
+    inherited: localMode === undefined && inheritedMode !== undefined,
+  });
+
+  const localBackend = readString(params.sandbox.backend);
+  const inheritedBackend = readString(params.inheritedSandbox.backend);
+  const effectiveBackend = (localBackend ?? inheritedBackend ?? "docker").toLowerCase();
+  const effectiveParams = { ...params, effectiveBackend };
+  pushSandboxPostureValue(entries, params, {
+    suffix: "backend",
+    kind: "backend",
+    value: effectiveBackend,
+    explicit: localBackend !== undefined || inheritedBackend !== undefined,
+    inherited: localBackend === undefined && inheritedBackend !== undefined,
+  });
+
+  if (effectiveBackend === "docker") {
+    pushSandboxDockerPosture(entries, effectiveParams);
+  }
+  pushSandboxBrowserPosture(entries, effectiveParams);
+}
+
+function pushSandboxDockerPosture(
+  entries: PolicySandboxPostureEvidence[],
+  params: SandboxPostureParams,
+): void {
+  const localDocker =
+    !params.sharedSandboxScope && isRecord(params.sandbox.docker) ? params.sandbox.docker : {};
+  const inheritedDocker = isRecord(params.inheritedSandbox.docker)
+    ? params.inheritedSandbox.docker
+    : {};
+  const localNetwork = readString(localDocker.network);
+  const inheritedNetwork = readString(inheritedDocker.network);
+  pushSandboxPostureValue(entries, params, {
+    suffix: "docker/network",
+    kind: "containerNetwork",
+    value: localNetwork ?? inheritedNetwork ?? "none",
+    networkSurface: "docker",
+    explicit: localNetwork !== undefined || inheritedNetwork !== undefined,
+    inherited: localNetwork === undefined && inheritedNetwork !== undefined,
+  });
+
+  pushSandboxDockerProfilePosture(entries, params, localDocker, inheritedDocker, "seccomp");
+  pushSandboxDockerProfilePosture(entries, params, localDocker, inheritedDocker, "apparmor");
+
+  pushSandboxBindPosture(entries, params, {
+    inheritedBinds: readStringArray(inheritedDocker.binds),
+    localBinds: readStringArray(localDocker.binds),
+    sourceSuffix: "docker/binds",
+    surface: "docker",
+  });
+}
+
+function pushSandboxBindPosture(
+  entries: PolicySandboxPostureEvidence[],
+  params: SandboxPostureParams,
+  bindParams: {
+    readonly inheritedBinds: readonly string[];
+    readonly localBinds: readonly string[];
+    readonly sourceSuffix: string;
+    readonly surface: "browser" | "docker";
+  },
+): void {
+  const { inheritedBinds, localBinds } = bindParams;
+  for (const [index, bind] of [...inheritedBinds, ...localBinds].entries()) {
+    const inherited = index < inheritedBinds.length;
+    const parsed = splitPolicyBindSpec(bind);
+    entries.push({
+      id: `${params.id}-${bindParams.surface}-bind-${index}`,
+      kind: "containerMount",
+      source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/${bindParams.sourceSuffix}/#${
+        inherited ? index : index - inheritedBinds.length
+      }`,
+      scope: params.scope,
+      ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+      bind,
+      bindHost: parsed?.host,
+      bindMode: parsed?.mode ?? "rw",
+      bindSurface: bindParams.surface,
+      explicit: true,
+    });
+  }
+}
+
+function pushSandboxDockerProfilePosture(
+  entries: PolicySandboxPostureEvidence[],
+  params: SandboxPostureParams,
+  localDocker: Record<string, unknown>,
+  inheritedDocker: Record<string, unknown>,
+  profile: "apparmor" | "seccomp",
+): void {
+  const key = profile === "apparmor" ? "apparmorProfile" : "seccompProfile";
+  const localValue = readString(localDocker[key]);
+  const inheritedValue = readString(inheritedDocker[key]);
+  const inherited = localValue === undefined && inheritedValue !== undefined;
+  const value = localValue ?? inheritedValue;
+  entries.push({
+    id: `${params.id}-docker-${profile}-profile`,
+    kind: "containerSecurityProfile",
+    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/docker/${key}`,
+    scope: params.scope,
+    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+    profile,
+    ...(value === undefined ? {} : { value }),
+    explicit: value !== undefined,
+  });
+}
+
+function pushSandboxBrowserPosture(
+  entries: PolicySandboxPostureEvidence[],
+  params: SandboxPostureParams,
+): void {
+  const localBrowser =
+    !params.sharedSandboxScope && isRecord(params.sandbox.browser) ? params.sandbox.browser : {};
+  const inheritedBrowser = isRecord(params.inheritedSandbox.browser)
+    ? params.inheritedSandbox.browser
+    : {};
+  const localEnabled = readBoolean(localBrowser.enabled);
+  const inheritedEnabled = readBoolean(inheritedBrowser.enabled);
+  const enabled = localEnabled ?? inheritedEnabled ?? false;
+  if (!enabled) {
+    const disabledInherited = localEnabled === undefined && inheritedEnabled !== undefined;
+    if (localEnabled !== undefined || inheritedEnabled !== undefined) {
+      entries.push({
+        id: `${params.id}-browser-cdp-source-range`,
+        kind: "browserCdpSourceRange",
+        source: `${disabledInherited ? params.inheritedSourceBase : params.sourceBase}/browser/enabled`,
+        scope: params.scope,
+        ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+        value: false,
+        explicit: true,
+      });
+    }
+    return;
+  }
+  const hasLocalRange = Object.hasOwn(localBrowser, "cdpSourceRange");
+  const localRange = readString(localBrowser.cdpSourceRange);
+  const inheritedRange = readString(inheritedBrowser.cdpSourceRange);
+  const inherited = !hasLocalRange && inheritedRange !== undefined;
+  const value = hasLocalRange ? localRange : inheritedRange;
+  entries.push({
+    id: `${params.id}-browser-cdp-source-range`,
+    kind: "browserCdpSourceRange",
+    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/browser/cdpSourceRange`,
+    scope: params.scope,
+    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+    ...(value === undefined ? {} : { value }),
+    explicit: value !== undefined,
+  });
+
+  const localNetwork = readString(localBrowser.network);
+  const inheritedNetwork = readString(inheritedBrowser.network);
+  pushSandboxPostureValue(entries, params, {
+    suffix: "browser/network",
+    kind: "containerNetwork",
+    value: localNetwork ?? inheritedNetwork ?? DEFAULT_POLICY_SANDBOX_BROWSER_NETWORK,
+    networkSurface: "browser",
+    explicit: localNetwork !== undefined || inheritedNetwork !== undefined,
+    inherited: localNetwork === undefined && inheritedNetwork !== undefined,
+  });
+
+  const browserBindsConfigured =
+    inheritedBrowser.binds !== undefined || localBrowser.binds !== undefined;
+  if (browserBindsConfigured) {
+    pushSandboxBindPosture(entries, params, {
+      inheritedBinds: readStringArray(inheritedBrowser.binds),
+      localBinds: readStringArray(localBrowser.binds),
+      sourceSuffix: "browser/binds",
+      surface: "browser",
+    });
+  } else if (params.effectiveBackend !== "docker") {
+    const localDocker =
+      !params.sharedSandboxScope && isRecord(params.sandbox.docker) ? params.sandbox.docker : {};
+    const inheritedDocker = isRecord(params.inheritedSandbox.docker)
+      ? params.inheritedSandbox.docker
+      : {};
+    pushSandboxBindPosture(entries, params, {
+      inheritedBinds: readStringArray(inheritedDocker.binds),
+      localBinds: readStringArray(localDocker.binds),
+      sourceSuffix: "docker/binds",
+      surface: "browser",
+    });
+  }
+}
+
+function sandboxScopeIsShared(
+  sandbox: Record<string, unknown>,
+  inheritedSandbox: Record<string, unknown>,
+): boolean {
+  const localScope = readString(sandbox.scope);
+  const inheritedScope = readString(inheritedSandbox.scope);
+  const configuredScope = localScope ?? inheritedScope;
+  if (configuredScope !== undefined) {
+    return configuredScope === "shared";
+  }
+  const localPerSession = readBoolean(sandbox.perSession);
+  const inheritedPerSession = readBoolean(inheritedSandbox.perSession);
+  return (localPerSession ?? inheritedPerSession) === false;
+}
+
+function pushSandboxPostureValue(
+  entries: PolicySandboxPostureEvidence[],
+  params: SandboxPostureParams,
+  entry: {
+    readonly suffix: string;
+    readonly kind: PolicySandboxPostureEvidence["kind"];
+    readonly value: string | undefined;
+    readonly networkSurface?: "browser" | "docker";
+    readonly explicit: boolean;
+    readonly inherited: boolean;
+  },
+): void {
+  entries.push({
+    id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
+    kind: entry.kind,
+    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.suffix}`,
+    scope: params.scope,
+    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+    ...(entry.value === undefined ? {} : { value: entry.value }),
+    ...(entry.networkSurface === undefined ? {} : { networkSurface: entry.networkSurface }),
+    explicit: entry.explicit,
+  });
+}
+
+function splitPolicyBindSpec(
+  value: string,
+): { readonly host: string; readonly mode: string } | undefined {
+  const separator = policyBindSeparatorIndex(value);
+  if (separator < 0) {
+    return undefined;
+  }
+  const host = value.slice(0, separator);
+  const rest = value.slice(separator + 1);
+  const optionsStart = policyBindOptionsSeparatorIndex(rest);
+  const options = optionsStart < 0 ? "" : rest.slice(optionsStart + 1);
+  const mode = options
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .includes("ro")
+    ? "ro"
+    : "rw";
+  return { host, mode };
+}
+
+function policyBindSeparatorIndex(value: string): number {
+  const hasDriveLetterPrefix = /^[A-Za-z]:[\\/]/.test(value);
+  for (let index = hasDriveLetterPrefix ? 2 : 0; index < value.length; index += 1) {
+    if (value[index] === ":") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function policyBindOptionsSeparatorIndex(value: string): number {
+  const hasDriveLetterPrefix = /^[A-Za-z]:[\\/]/.test(value);
+  for (let index = hasDriveLetterPrefix ? 2 : 0; index < value.length; index += 1) {
+    if (value[index] === ":") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+type ToolPostureParams = {
+  readonly id: string;
+  readonly scope: "global" | "agent";
+  readonly agentId?: string;
+  readonly tools: Record<string, unknown>;
+  readonly inheritedTools: Record<string, unknown>;
+  readonly sandbox: Record<string, unknown>;
+  readonly inheritedSandbox: Record<string, unknown>;
+  readonly sourceBase: string;
+  readonly inheritedSourceBase: string;
+};
+
+function pushToolPostureValue(
+  entries: PolicyToolPostureEvidence[],
+  params: ToolPostureParams,
+  entry: {
+    readonly suffix: string;
+    readonly kind: PolicyToolPostureEvidence["kind"];
+    readonly value: boolean | string | undefined;
+    readonly explicit: boolean;
+    readonly inherited: boolean;
+  },
+): void {
+  entries.push({
+    id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
+    kind: entry.kind,
+    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.suffix}`,
+    scope: params.scope,
+    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+    ...(entry.value === undefined ? {} : { value: entry.value }),
+    explicit: entry.explicit,
+  });
+}
+
+function pushToolPostureList(
+  entries: PolicyToolPostureEvidence[],
+  params: ToolPostureParams,
+  key: "allow" | "deny",
+): void {
+  const localEntries = readStringArray(params.tools[key]);
+  const inheritedEntries = readStringArray(params.inheritedTools[key]);
+  const inherited = localEntries.length === 0 && inheritedEntries.length > 0;
+  entries.push({
+    id: `${params.id}-${key}`,
+    kind: key,
+    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/${key}`,
+    scope: params.scope,
+    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+    entries: [...inheritedEntries, ...localEntries],
+    explicit: localEntries.length > 0 || inheritedEntries.length > 0,
+  });
+}
+
+function pushToolAlsoAllowPostureList(
+  entries: PolicyToolPostureEvidence[],
+  params: ToolPostureParams,
+): void {
+  const localValue = params.tools.alsoAllow;
+  const inheritedValue = params.inheritedTools.alsoAllow;
+  const localConfigured = Array.isArray(localValue);
+  const inheritedConfigured = Array.isArray(inheritedValue);
+  const localEntries = localConfigured ? readStringArray(localValue) : [];
+  const inheritedEntries = inheritedConfigured ? readStringArray(inheritedValue) : [];
+  const inherited = !localConfigured && inheritedConfigured;
+  entries.push({
+    id: `${params.id}-alsoAllow`,
+    kind: "alsoAllow",
+    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/alsoAllow`,
+    scope: params.scope,
+    ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+    entries: inherited ? inheritedEntries : localEntries,
+    explicit: localConfigured || inheritedConfigured,
+  });
+}
+
+const AGENT_WORKSPACE_POLICY_TOOLS = ["exec", "process", "write", "edit", "apply_patch"] as const;
+const IMPLICIT_DEFAULT_ACCOUNT_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  discord: ["token"],
+  googlechat: ["serviceAccount", "serviceAccountRef", "serviceAccountFile"],
+  imessage: ["cliPath", "dbPath"],
+  "qa-channel": ["baseUrl"],
+  qqbot: ["appId", "clientSecret", "clientSecretFile"],
+  signal: ["account"],
+  slack: ["appToken", "botToken", "signingSecret"],
+  "synology-chat": ["token"],
+  telegram: ["botToken", "tokenFile"],
+  tlon: ["ship"],
+  twitch: ["username"],
+  whatsapp: ["authDir"],
+  zalo: ["botToken", "tokenFile"],
+  zalouser: ["profile"],
+};
+
+function readStringArray(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+}
+
+function readStringOrNumberArray(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: string[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string" && entry.trim() !== "") {
+      entries.push(entry.trim());
+    } else if (typeof entry === "number" && Number.isFinite(entry)) {
+      entries.push(String(entry));
+    }
+  }
+  return entries;
+}
+
+function normalizePolicyToolName(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "bash") {
+    return "exec";
+  }
+  if (normalized === "apply-patch") {
+    return "apply_patch";
+  }
+  return normalized;
+}
+
+function policyToolGlobMatches(tool: string, pattern: string): boolean {
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`).test(tool);
+}
+
+function toolListCoversTool(list: readonly string[], tool: string): boolean {
+  for (const entry of list) {
+    const normalized = normalizePolicyToolName(entry);
+    if (normalized === "*" || normalized === tool) {
+      return true;
+    }
+    if (POLICY_TOOL_GROUPS[normalized]?.includes(tool)) {
+      return true;
+    }
+    if (normalized.includes("*") && policyToolGlobMatches(tool, normalized)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function isConfiguredProviderRequestSecretPath(
@@ -934,6 +1912,356 @@ function networkBooleanEvidence(
   return value === undefined ? undefined : { id, source, value };
 }
 
+function pickSupportedIngressDefaults(config: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  if (config.groupPolicy !== undefined) {
+    result.groupPolicy = config.groupPolicy;
+  }
+  return result;
+}
+
+function hasImplicitDefaultAccountConfig(
+  channel: string,
+  config: Record<string, unknown>,
+): boolean {
+  switch (channel) {
+    case "clickclack":
+      return (
+        hasConfiguredAccountValue(config.baseUrl) &&
+        hasConfiguredAccountValue(config.workspace) &&
+        hasConfiguredAccountValue(config.token)
+      );
+    case "feishu":
+      return hasConfiguredAccountValue(config.appId) && hasConfiguredAccountValue(config.appSecret);
+    case "irc":
+      return hasConfiguredAccountValue(config.host) && hasConfiguredAccountValue(config.nick);
+    case "line":
+      return (
+        hasConfiguredAccountValue(config.channelAccessToken) ||
+        hasConfiguredAccountValue(config.tokenFile)
+      );
+    case "matrix":
+      return (
+        hasConfiguredAccountValue(config.homeserver) &&
+        (hasConfiguredAccountValue(config.accessToken) ||
+          (hasConfiguredAccountValue(config.userId) && hasConfiguredAccountValue(config.password)))
+      );
+    case "mattermost":
+      return (
+        hasConfiguredAccountValue(config.baseUrl) && hasConfiguredAccountValue(config.botToken)
+      );
+    case "nextcloud-talk":
+      return (
+        hasConfiguredAccountValue(config.baseUrl) &&
+        (hasConfiguredAccountValue(config.botSecret) ||
+          hasConfiguredAccountValue(config.botSecretFile))
+      );
+    default:
+      return (IMPLICIT_DEFAULT_ACCOUNT_FIELDS[channel] ?? []).some((field) =>
+        hasConfiguredAccountValue(config[field]),
+      );
+  }
+}
+
+function hasConfiguredAccountValue(value: unknown): boolean {
+  return typeof value === "string"
+    ? value.trim().length > 0
+    : value !== undefined && value !== null;
+}
+
+type ChannelIngressParams = {
+  readonly channel: string;
+  readonly accountId?: string;
+  readonly config: Record<string, unknown>;
+  readonly inheritedConfig: Record<string, unknown>;
+  readonly inheritNestedContainers?: boolean;
+  readonly sourceBase: string;
+  readonly inheritedSourceBase: string;
+  readonly fallbackConfig?: Record<string, unknown>;
+  readonly fallbackSourceBase: string;
+};
+
+function pushChannelIngress(entries: PolicyIngressEvidence[], params: ChannelIngressParams): void {
+  const localDmPolicy = channelDmPolicy(params.config);
+  const inheritedDmPolicy = channelDmPolicy(params.inheritedConfig);
+  const fallbackDmPolicy = channelDmPolicy(params.fallbackConfig ?? {});
+  const effectiveDmPolicy =
+    localDmPolicy.disabledByEnabled === true
+      ? localDmPolicy
+      : localDmPolicy.value !== undefined
+        ? localDmPolicy
+        : inheritedDmPolicy.disabledByEnabled === true
+          ? inheritedDmPolicy
+          : inheritedDmPolicy.value !== undefined
+            ? inheritedDmPolicy
+            : fallbackDmPolicy.disabledByEnabled === true || fallbackDmPolicy.value !== undefined
+              ? fallbackDmPolicy
+              : undefined;
+  const dmPolicySource =
+    effectiveDmPolicy?.sourceSuffix === undefined
+      ? `${params.fallbackSourceBase}/dmPolicy`
+      : effectiveDmPolicy === localDmPolicy
+        ? `${params.sourceBase}/${effectiveDmPolicy.sourceSuffix}`
+        : effectiveDmPolicy === inheritedDmPolicy
+          ? `${params.inheritedSourceBase}/${effectiveDmPolicy.sourceSuffix}`
+          : `${params.fallbackSourceBase}/${effectiveDmPolicy.sourceSuffix}`;
+  entries.push({
+    id: channelIngressId(params, "dm-policy"),
+    kind: "channelDmPolicy",
+    source: dmPolicySource,
+    channel: params.channel,
+    ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
+    value: effectiveDmPolicy?.value ?? "pairing",
+    explicit: effectiveDmPolicy !== undefined,
+  });
+
+  const localGroupPolicy = readString(params.config.groupPolicy);
+  const inheritedGroupPolicy = readString(params.inheritedConfig.groupPolicy);
+  const fallbackGroupPolicy = readString(params.fallbackConfig?.groupPolicy);
+  const implicitGroupPolicy = channelImplicitGroupPolicy(params);
+  entries.push({
+    id: channelIngressId(params, "group-policy"),
+    kind: "channelGroupPolicy",
+    source:
+      localGroupPolicy !== undefined
+        ? `${params.sourceBase}/groupPolicy`
+        : inheritedGroupPolicy !== undefined
+          ? `${params.inheritedSourceBase}/groupPolicy`
+          : fallbackGroupPolicy !== undefined
+            ? `${params.fallbackSourceBase}/groupPolicy`
+            : implicitGroupPolicy.source,
+    channel: params.channel,
+    ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
+    value:
+      localGroupPolicy ?? inheritedGroupPolicy ?? fallbackGroupPolicy ?? implicitGroupPolicy.value,
+    explicit:
+      localGroupPolicy !== undefined ||
+      inheritedGroupPolicy !== undefined ||
+      fallbackGroupPolicy !== undefined,
+  });
+
+  pushChannelRequireMentionIngress(entries, params);
+}
+
+function channelImplicitGroupPolicy(params: ChannelIngressParams): {
+  readonly source: string;
+  readonly value: "allowlist" | "open";
+} {
+  for (const [config, sourceBase] of [
+    [params.config, params.sourceBase],
+    ...(params.inheritNestedContainers === true
+      ? ([[params.inheritedConfig, params.inheritedSourceBase]] as const)
+      : []),
+    [params.fallbackConfig, params.fallbackSourceBase],
+  ] as const) {
+    if (config === undefined || sourceBase === undefined) {
+      continue;
+    }
+    for (const key of ["groups"] as const) {
+      const container = isRecord(config[key]) ? config[key] : undefined;
+      if (container !== undefined && Object.keys(container).length > 0) {
+        return { source: `${sourceBase}/${key}`, value: "allowlist" };
+      }
+    }
+  }
+  return {
+    source: `${params.sourceBase}/groupPolicy`,
+    value: ALLOWLIST_DEFAULT_INGRESS_GROUP_POLICY_CHANNELS.has(params.channel)
+      ? "allowlist"
+      : "open",
+  };
+}
+
+function pushChannelRequireMentionIngress(
+  entries: PolicyIngressEvidence[],
+  params: ChannelIngressParams,
+): void {
+  const localRequireMention = readBoolean(params.config.requireMention);
+  const inheritedRequireMention = readBoolean(params.inheritedConfig.requireMention);
+  const fallbackRequireMention = readBoolean(params.fallbackConfig?.requireMention);
+  const wildcardRequireMention = channelWildcardRequireMention(params);
+  const defaultRequireMention = channelDefaultRequireMention(params);
+  entries.push({
+    id: channelIngressId(params, "require-mention"),
+    kind: "channelRequireMention",
+    source:
+      wildcardRequireMention !== undefined
+        ? wildcardRequireMention.source
+        : localRequireMention !== undefined
+          ? `${params.sourceBase}/requireMention`
+          : inheritedRequireMention !== undefined
+            ? `${params.inheritedSourceBase}/requireMention`
+            : fallbackRequireMention !== undefined
+              ? `${params.fallbackSourceBase}/requireMention`
+              : `${params.sourceBase}/requireMention`,
+    channel: params.channel,
+    ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
+    value:
+      wildcardRequireMention?.value ??
+      localRequireMention ??
+      inheritedRequireMention ??
+      fallbackRequireMention ??
+      defaultRequireMention,
+    explicit:
+      wildcardRequireMention !== undefined ||
+      localRequireMention !== undefined ||
+      inheritedRequireMention !== undefined ||
+      fallbackRequireMention !== undefined,
+  });
+
+  const containers = nestedIngressContainers(params);
+  for (const { containerKey, container, sourceBase } of containers) {
+    for (const [groupId, groupConfig] of Object.entries(container)) {
+      if (!isRecord(groupConfig)) {
+        continue;
+      }
+      pushNestedRequireMentionIngress(
+        entries,
+        params,
+        containerKey,
+        groupId,
+        groupConfig,
+        sourceBase,
+      );
+    }
+  }
+}
+
+function channelDefaultRequireMention(params: ChannelIngressParams): boolean {
+  const groupPolicy =
+    readString(params.config.groupPolicy) ??
+    readString(params.inheritedConfig.groupPolicy) ??
+    readString(params.fallbackConfig?.groupPolicy) ??
+    channelImplicitGroupPolicy(params).value;
+  return !(
+    groupPolicy === "open" && OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS.has(params.channel)
+  );
+}
+
+function channelWildcardRequireMention(
+  params: ChannelIngressParams,
+): { readonly source: string; readonly value: boolean } | undefined {
+  for (const [config, sourceBase] of [
+    [params.config, params.sourceBase],
+    [params.inheritedConfig, params.inheritedSourceBase],
+    [params.fallbackConfig, params.fallbackSourceBase],
+  ] as const) {
+    if (config === undefined || sourceBase === undefined) {
+      continue;
+    }
+    for (const key of ["groups", "guilds", "channels", "rooms", "teams"] as const) {
+      const container = isRecord(config[key]) ? config[key] : undefined;
+      const wildcard = isRecord(container?.["*"]) ? container["*"] : undefined;
+      const requireMention = readBoolean(wildcard?.requireMention);
+      if (wildcard?.enabled !== false && requireMention !== undefined) {
+        return {
+          source: `${sourceBase}/${key}/${ocPathSegment("*")}/requireMention`,
+          value: requireMention,
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+function nestedIngressContainers(params: ChannelIngressParams): readonly {
+  readonly containerKey: string;
+  readonly container: Record<string, unknown>;
+  readonly sourceBase: string;
+}[] {
+  const containers: {
+    readonly containerKey: string;
+    readonly container: Record<string, unknown>;
+    readonly sourceBase: string;
+  }[] = [];
+  for (const key of ["groups", "guilds", "channels", "rooms", "teams"] as const) {
+    const local = isRecord(params.config[key]) ? params.config[key] : undefined;
+    const inherited = isRecord(params.inheritedConfig[key])
+      ? params.inheritedConfig[key]
+      : undefined;
+    if (local !== undefined) {
+      if (Object.keys(local).length > 0) {
+        containers.push({ containerKey: key, container: local, sourceBase: params.sourceBase });
+      }
+    } else if (params.inheritNestedContainers === true && inherited !== undefined) {
+      containers.push({
+        containerKey: key,
+        container: inherited,
+        sourceBase: params.inheritedSourceBase,
+      });
+    }
+  }
+  return containers;
+}
+
+function pushNestedRequireMentionIngress(
+  entries: PolicyIngressEvidence[],
+  params: ChannelIngressParams,
+  containerKey: string,
+  groupId: string,
+  config: Record<string, unknown>,
+  parentSourceBase: string,
+): void {
+  if (config.enabled === false) {
+    return;
+  }
+  const sourceBase = `${parentSourceBase}/${containerKey}/${ocPathSegment(groupId)}`;
+  const requireMention = readBoolean(config.requireMention);
+  if (requireMention !== undefined) {
+    entries.push({
+      id: `${channelIngressId(params, `${containerKey}-${ocPathSegment(groupId)}`)}-require-mention`,
+      kind: "channelRequireMention",
+      source: `${sourceBase}/requireMention`,
+      channel: params.channel,
+      ...(params.accountId === undefined ? {} : { accountId: params.accountId }),
+      groupId,
+      value: requireMention ?? true,
+      explicit: requireMention !== undefined,
+    });
+  }
+  for (const nestedKey of ["channels", "topics"] as const) {
+    const nested = config[nestedKey];
+    if (!isRecord(nested)) {
+      continue;
+    }
+    for (const [nestedId, nestedConfig] of Object.entries(nested)) {
+      if (isRecord(nestedConfig)) {
+        pushNestedRequireMentionIngress(
+          entries,
+          params,
+          `${containerKey}/${ocPathSegment(groupId)}/${nestedKey}`,
+          nestedId,
+          nestedConfig,
+          parentSourceBase,
+        );
+      }
+    }
+  }
+}
+
+function channelDmPolicy(config: Record<string, unknown>): {
+  readonly value?: string;
+  readonly sourceSuffix?: string;
+  readonly disabledByEnabled?: boolean;
+} {
+  const dm = isRecord(config.dm) ? config.dm : {};
+  if (dm.enabled === false) {
+    return { value: "disabled", sourceSuffix: "dm/enabled", disabledByEnabled: true };
+  }
+  const direct = readString(config.dmPolicy);
+  if (direct !== undefined) {
+    return { value: direct, sourceSuffix: "dmPolicy" };
+  }
+  const legacy = readString(dm.policy);
+  return legacy === undefined ? {} : { value: legacy, sourceSuffix: "dm/policy" };
+}
+
+function channelIngressId(params: ChannelIngressParams, suffix: string): string {
+  return params.accountId === undefined
+    ? `${params.channel}-${suffix}`
+    : `${params.channel}-${params.accountId}-${suffix}`;
+}
+
 function pushGatewayBooleanEvidence(
   entries: PolicyGatewayExposureEvidence[],
   id: string,
@@ -1177,8 +2505,4 @@ function stableJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

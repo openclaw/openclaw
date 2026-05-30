@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto";
+import {
+  ErrorCodes,
+  type ErrorShape,
+  errorShape,
+  type SessionsPatchParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
 } from "../agents/inherited-tool-deny.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   resolveAllowedModelRef,
   resolveDefaultModelForAgent,
@@ -44,12 +51,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import {
-  ErrorCodes,
-  type ErrorShape,
-  errorShape,
-  type SessionsPatchParams,
-} from "./protocol/index.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -132,13 +133,16 @@ export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   storeKey: string;
+  agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
-  const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
+  const sessionAgentId = normalizeAgentId(
+    params.agentId ?? parsedAgent?.agentId ?? resolveDefaultAgentId(cfg),
+  );
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
@@ -212,6 +216,27 @@ export async function applySessionsPatchToStore(params: {
         return invalid("spawnedWorkspaceDir cannot be changed once set");
       }
       next.spawnedWorkspaceDir = trimmed;
+    }
+  }
+
+  if ("spawnedCwd" in patch) {
+    const raw = patch.spawnedCwd;
+    if (raw === null) {
+      if (existing?.spawnedCwd) {
+        return invalid("spawnedCwd cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedCwd is only supported for subagent:* or acp:* sessions");
+      }
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid spawnedCwd: empty");
+      }
+      if (existing?.spawnedCwd && existing.spawnedCwd !== trimmed) {
+        return invalid("spawnedCwd cannot be changed once set");
+      }
+      next.spawnedCwd = trimmed;
     }
   }
 
@@ -525,10 +550,12 @@ export async function applySessionsPatchToStore(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
+      const { model: modelWithoutProfile, profile: trailingProfile } =
+        splitTrailingAuthProfile(trimmed);
       const resolved = resolveAllowedModelRef({
         cfg,
         catalog,
-        raw: trimmed,
+        raw: modelWithoutProfile,
         defaultProvider: resolvedDefault.provider,
         defaultModel: subagentModelHint ?? resolvedDefault.model,
       });
@@ -545,6 +572,7 @@ export async function applySessionsPatchToStore(params: {
           model: resolved.ref.model,
           isDefault,
         },
+        profileOverride: trailingProfile || undefined,
         preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
           cfg,
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,

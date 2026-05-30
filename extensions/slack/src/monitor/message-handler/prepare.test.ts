@@ -167,6 +167,42 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
+  it("prepares wildcard open-policy account DMs", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            accounts: {
+              soltea: {
+                dmPolicy: "open",
+                dm: { enabled: true, policy: "open" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+    ctx.accountId = "soltea";
+    ctx.allowFrom = ["*"];
+    ctx.dmPolicy = "open";
+    ctx.resolveUserName = async () => ({ name: "External User" }) as any;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({
+        dmPolicy: "open",
+        dm: { enabled: true, policy: "open" },
+      }),
+      message: createSlackMessage({ channel: "D999", user: "U123", text: "hello" }),
+      opts: { source: "message" },
+    });
+
+    assertPrepared(prepared, "open-policy Slack DM");
+    expect(prepared.ctxPayload.RawBody).toContain("hello");
+    expect(prepared.ctxPayload.From).toBe("slack:U123");
+  });
+
   it("keeps Slack assistant DM threads in a thread-scoped session with assistant context", async () => {
     const ctx = createDefaultSlackCtx();
     ctx.saveSlackAssistantThreadContext({
@@ -669,6 +705,18 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared);
     expect(prepared?.ackReactionMessageTs).toBeUndefined();
     expect(prepared?.ackReactionPromise).toBeNull();
+  });
+
+  it("does not coerce malformed Slack timestamps into inbound event times", async () => {
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        ts: "0x10",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.Timestamp).toBeUndefined();
+    expect(prepared.ctxPayload.MessageSid).toBe("0x10");
   });
 
   it("primes Slack status reactions when channel replies are message-tool-only", async () => {
@@ -1498,7 +1546,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       messages: [
         { text: "current answer", user: "U1", ts: "300.000" },
         { text: "please choose A or B", bot_id: "B1", ts: "299.000" },
-        { text: "earlier user context", user: "U1", ts: "298.000" },
+        { text: "earlier user context", user: "U1", ts: "0x12a" },
       ],
     });
     const slackCtx = createInboundSlackCtx({
@@ -1536,7 +1584,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       {
         sender: "Alice (user)",
         body: "earlier user context",
-        timestamp: 298000,
+        timestamp: undefined,
       },
       {
         sender: "Assistant (assistant)",

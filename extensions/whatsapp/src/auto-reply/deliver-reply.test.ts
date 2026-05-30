@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -464,6 +464,30 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenCalledWith("aaa", undefined);
     findLoggerContext(replyLogger.info, "auto-reply sent (media)", "replyLogger.info");
     expect(logVerbose).toHaveBeenCalled();
+  });
+
+  it("marks errors visible after accepted media delivery", async () => {
+    const msg = makeMsg();
+    const error = new Error("tail send failed");
+    mockLoadedImageMedia();
+    vi.mocked(msg.reply).mockRejectedValue(error);
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "captiontail", mediaUrl: "http://example.com/img.jpg" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 7,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+    expect(msg.reply).toHaveBeenCalled();
   });
 
   it("preserves leading indentation after trimming only leading blank lines", async () => {

@@ -17,7 +17,7 @@ import {
 } from "../context-engine/registry.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -28,8 +28,10 @@ import {
 } from "../infra/node-commands.js";
 import {
   createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
   type PluginStateKeyedStore,
+  type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -37,6 +39,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueValues } from "../shared/string-normalization.js";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "../shared/string-normalization.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -145,7 +152,9 @@ import {
   normalizePluginToolNames,
 } from "./tool-contracts.js";
 import {
+  DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
+  isDeprecatedPluginHookName,
   isPluginHookName,
   isPromptInjectionHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -170,6 +179,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   MediaUnderstandingProviderPlugin,
+  TranscriptSourceProvider,
   MigrationProviderPlugin,
   OpenClawPluginService,
   OpenClawPluginToolContext,
@@ -194,6 +204,7 @@ export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistrati
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
 const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
+const LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT = getPluginCompatRecord("legacy-subagent-spawning-hook");
 
 function formatLegacyDeactivateHookAliasDiagnostic(): string {
   const removeAfter =
@@ -201,6 +212,22 @@ function formatLegacyDeactivateHookAliasDiagnostic(): string {
   return (
     `typed hook "deactivate" is deprecated (${LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.code}); ` +
     `use "gateway_stop". This compatibility alias will be removed after ${removeAfter}.`
+  );
+}
+
+function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string | undefined {
+  if (!isDeprecatedPluginHookName(hookName) || hookName === "deactivate") {
+    return undefined;
+  }
+  const deprecation = DEPRECATED_PLUGIN_HOOKS[hookName];
+  const compat =
+    hookName === "subagent_spawning" ? LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT : undefined;
+  const removeAfter = compat?.removeAfter ?? deprecation.removeAfter ?? "a future breaking release";
+  const code = compat?.code ?? "deprecated-plugin-hook";
+  return (
+    `typed hook "${hookName}" is deprecated (${code}); ` +
+    `${deprecation.reason} Use ${deprecation.replacement}. ` +
+    `This compatibility hook will be removed after ${removeAfter}.`
   );
 }
 
@@ -333,6 +360,8 @@ type PluginSideEffectGuard = {
 type PluginRegistrationCapabilities = {
   /** Broad registry writes that discovery and live activation both need. */
   capabilityHandlers: boolean;
+  /** Setup-runtime may publish pre-listen gateway surfaces without full activation. */
+  setupRuntimeHandlers: boolean;
   /** Runtime channel registration is suppressed for setup-only and tool discovery loads. */
   runtimeChannel: boolean;
 };
@@ -348,7 +377,22 @@ function resolvePluginRegistrationCapabilities(
   const capabilityHandlers = mode === "full" || mode === "discovery" || mode === "tool-discovery";
   return {
     capabilityHandlers,
+    setupRuntimeHandlers: mode === "setup-runtime",
     runtimeChannel: mode !== "setup-only" && mode !== "tool-discovery",
+  };
+}
+
+function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): GatewayRequestHandler {
+  return async (opts) => {
+    let responded = false;
+    const respond: RespondFn = (ok, payload, error, meta) => {
+      responded = true;
+      opts.respond(ok, payload, error, meta);
+    };
+    const result = (await handler({ ...opts, respond })) as unknown;
+    if (!responded && result !== undefined) {
+      respond(true, result);
+    }
   };
 }
 
@@ -374,6 +418,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerModelCatalogProvider,
     registerSynthesizedTextModelCatalogProvider,
     registerSynthesizedMediaModelCatalogProvider,
+    registerSynthesizedVoiceModelCatalogProvider,
   } = createModelCatalogRegistrationHandlers({
     registry,
     pushDiagnostic,
@@ -522,7 +567,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
-      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
+      existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
       return;
     }
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
@@ -610,8 +655,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     config: OpenClawPluginApi["config"],
     pluginConfig: unknown,
   ) => {
-    const eventList = Array.isArray(events) ? events : [events];
-    const normalizedEvents = eventList.map((event) => event.trim()).filter(Boolean);
+    const normalizedEvents = normalizeStringEntries(Array.isArray(events) ? events : [events]);
     const entry = opts?.entry ?? null;
     const hookName = requireRegistrationValue(
       entry?.hook.name ?? opts?.name?.trim(),
@@ -722,7 +766,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.gatewayHandlers[trimmed] = handler;
+    const wrappedHandler = adaptPluginGatewayMethodHandler(handler);
+    registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
     if (normalizedScope.coercedToReservedAdmin) {
       pushDiagnostic({
@@ -736,7 +781,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       createPluginGatewayMethodDescriptor({
         pluginId: record.id,
         name: trimmed,
-        handler,
+        handler: wrappedHandler,
         scope: normalizedScope.scope,
       }),
     );
@@ -1219,39 +1264,63 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "speech provider",
       registrations: registry.speechProviders,
       ownedIds: record.speechProviderIds,
     });
+    if (registered) {
+      registerSynthesizedVoiceModelCatalogProvider({
+        record,
+        provider,
+        capabilities: { tts: true },
+        modes: ["tts"],
+      });
+    }
   };
 
   const registerRealtimeTranscriptionProvider = (
     record: PluginRecord,
     provider: RealtimeTranscriptionProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "realtime transcription provider",
       registrations: registry.realtimeTranscriptionProviders,
       ownedIds: record.realtimeTranscriptionProviderIds,
     });
+    if (registered) {
+      registerSynthesizedVoiceModelCatalogProvider({
+        record,
+        provider,
+        capabilities: { realtime_transcription: true },
+        modes: ["realtime_transcription"],
+      });
+    }
   };
 
   const registerRealtimeVoiceProvider = (
     record: PluginRecord,
     provider: RealtimeVoiceProviderPlugin,
   ) => {
-    registerUniqueProviderLike({
+    const registered = registerUniqueProviderLike({
       record,
       provider,
       kindLabel: "realtime voice provider",
       registrations: registry.realtimeVoiceProviders,
       ownedIds: record.realtimeVoiceProviderIds,
     });
+    if (registered) {
+      registerSynthesizedVoiceModelCatalogProvider({
+        record,
+        provider,
+        capabilities: { realtime_voice: true },
+        modes: ["realtime_voice"],
+      });
+    }
   };
 
   const registerMediaUnderstandingProvider = (
@@ -1264,6 +1333,19 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       kindLabel: "media provider",
       registrations: registry.mediaUnderstandingProviders,
       ownedIds: record.mediaUnderstandingProviderIds,
+    });
+  };
+
+  const registerTranscriptSourceProvider = (
+    record: PluginRecord,
+    provider: TranscriptSourceProvider,
+  ) => {
+    registerUniqueProviderLike({
+      record,
+      provider,
+      kindLabel: "transcripts source provider",
+      registrations: registry.transcriptSourceProviders,
+      ownedIds: record.transcriptSourceProviderIds,
     });
   };
 
@@ -1456,12 +1538,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ]);
 
   const registerReload = (record: PluginRecord, registration: OpenClawPluginReloadRegistration) => {
-    const normalize = (values?: string[]) =>
-      (values ?? []).map((value) => value.trim()).filter(Boolean);
     const normalized: OpenClawPluginReloadRegistration = {
-      restartPrefixes: normalize(registration.restartPrefixes),
-      hotPrefixes: normalize(registration.hotPrefixes),
-      noopPrefixes: normalize(registration.noopPrefixes),
+      restartPrefixes: normalizeStringEntries(registration.restartPrefixes),
+      hotPrefixes: normalizeStringEntries(registration.hotPrefixes),
+      noopPrefixes: normalizeStringEntries(registration.noopPrefixes),
     };
     if (
       (normalized.restartPrefixes?.length ?? 0) === 0 &&
@@ -1538,9 +1618,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     policy: OpenClawPluginNodeInvokePolicy,
     pluginConfig?: Record<string, unknown>,
   ) => {
-    const commands = Array.isArray(policy.commands)
-      ? policy.commands.map((command) => command.trim()).filter(Boolean)
-      : [];
+    const commands = normalizeUniqueStringEntries(
+      Array.isArray(policy.commands) ? policy.commands : [],
+    );
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",
@@ -1730,6 +1810,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           pluginName: record.name,
           pluginRoot: record.rootDir,
           allowReservedCommandNames,
+          allowOwnerStatusExposure: canClaimReservedCommandOwnership(record),
         },
       );
       if (!result.ok) {
@@ -2382,6 +2463,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: formatLegacyDeactivateHookAliasDiagnostic(),
       });
+    } else {
+      const deprecatedHookDiagnostic = formatDeprecatedTypedHookDiagnostic(hookName);
+      if (deprecatedHookDiagnostic) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: deprecatedHookDiagnostic,
+        });
+      }
     }
     let effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
@@ -2463,6 +2554,32 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const pluginRuntimeById = new Map<string, PluginRuntime>();
   const pluginRuntimeRecordById = new Map<string, PluginRecord>();
 
+  const addPluginRuntimeResolutionContext = (params: {
+    error: unknown;
+    pluginId: string;
+    prop: PropertyKey;
+  }): never => {
+    const { error, pluginId, prop } = params;
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Unable to resolve plugin runtime module") &&
+      !error.message.includes("pluginRuntimeContext=")
+    ) {
+      const record =
+        pluginRuntimeRecordById.get(pluginId) ??
+        registry.plugins.find((entry) => entry.id === pluginId);
+      const propName =
+        typeof prop === "symbol" ? (prop.description ?? prop.toString()) : String(prop);
+      error.message = [
+        error.message,
+        `pluginRuntimeContext=pluginId:${pluginId}`,
+        `property:${propName}`,
+        ...(record?.source ? [`source:${record.source}`] : []),
+      ].join("; ");
+    }
+    throw error;
+  };
+
   const resolvePluginRuntime = (pluginId: string): PluginRuntime => {
     const cached = pluginRuntimeById.get(pluginId);
     if (cached) {
@@ -2478,25 +2595,41 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             ? withPluginRuntimePluginScope({ pluginId, pluginSource: record.source }, run)
             : withPluginRuntimePluginScope({ pluginId }, run);
         };
+        const getRuntimeProperty = () => {
+          try {
+            return Reflect.get(target, prop, receiver);
+          } catch (error) {
+            return addPluginRuntimeResolutionContext({ error, pluginId, prop });
+          }
+        };
         if (prop === "state") {
-          const baseState = Reflect.get(target, prop, receiver);
+          const baseState = getRuntimeProperty();
+          const assertPluginStateAllowed = () => {
+            const record =
+              pluginRuntimeRecordById.get(pluginId) ??
+              registry.plugins.find((entry) => entry.id === pluginId);
+            if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
+              throw new Error(
+                "openKeyedStore is only available for trusted plugins in this release.",
+              );
+            }
+          };
           return {
             ...baseState,
             openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
-              const record =
-                pluginRuntimeRecordById.get(pluginId) ??
-                registry.plugins.find((entry) => entry.id === pluginId);
-              if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
-                throw new Error(
-                  "openKeyedStore is only available for trusted plugins in this release.",
-                );
-              }
+              assertPluginStateAllowed();
               return createPluginStateKeyedStore<T>(pluginId, options);
+            },
+            openSyncKeyedStore: <T>(
+              options: OpenKeyedStoreOptions,
+            ): PluginStateSyncKeyedStore<T> => {
+              assertPluginStateAllowed();
+              return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
           } satisfies PluginRuntime["state"];
         }
         if (prop === "config") {
-          const config: PluginRuntime["config"] = Reflect.get(target, prop, receiver);
+          const config: PluginRuntime["config"] = getRuntimeProperty();
           return {
             ...config,
             current: () => runWithPluginScope(() => config.current()),
@@ -2506,16 +2639,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           } satisfies PluginRuntime["config"];
         }
         if (prop === "llm") {
-          const llm = Reflect.get(target, prop, receiver);
+          const llm = getRuntimeProperty();
           return {
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
         }
         if (prop !== "subagent") {
-          return Reflect.get(target, prop, receiver);
+          return getRuntimeProperty();
         }
-        const subagent = Reflect.get(target, prop, receiver);
+        const subagent = getRuntimeProperty();
         return {
           run: (params) => withPluginRuntimePluginIdScope(pluginId, () => subagent.run(params)),
           waitForRun: (params) =>
@@ -2608,6 +2741,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerRealtimeVoiceProvider(record, provider),
               registerMediaUnderstandingProvider: (provider) =>
                 registerMediaUnderstandingProvider(record, provider),
+              registerTranscriptSourceProvider: (provider) =>
+                registerTranscriptSourceProvider(record, provider),
               registerImageGenerationProvider: (provider) =>
                 registerImageGenerationProvider(record, provider),
               registerVideoGenerationProvider: (provider) =>
@@ -3015,6 +3150,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
             }
           : {}),
+        ...(registrationCapabilities.setupRuntimeHandlers
+          ? {
+              registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
+              registerGatewayMethod: (method, handler, opts) =>
+                registerGatewayMethod(record, method, handler, opts),
+            }
+          : {}),
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
         // without opting into the wider full-registration surface.
         registerCli: (registrar, opts) => registerCli(record, registrar, opts),
@@ -3071,6 +3213,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,
     registerMediaUnderstandingProvider,
+    registerTranscriptSourceProvider,
     registerImageGenerationProvider,
     registerVideoGenerationProvider,
     registerMusicGenerationProvider,

@@ -14,12 +14,23 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import {
+  asDateTimestampMs,
+  parseStrictPositiveInteger,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import {
+  asOptionalRecord as asRecord,
+  normalizeOptionalString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -37,6 +48,7 @@ const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
+const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
@@ -313,11 +325,6 @@ function withToggleStoreLock<T>(statePath: string, task: () => Promise<T>): Prom
   return withLock(task);
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 type ActiveMemoryThinkingLevel =
   | "off"
   | "minimal"
@@ -389,9 +396,9 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseInt(value, 10)
+        ? parseStrictPositiveInteger(value)
         : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -569,10 +576,6 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
   } catch {
     return undefined;
   }
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
@@ -877,9 +880,7 @@ function normalizePluginConfig(
     : [];
   return {
     enabled: raw.enabled !== false,
-    agents: Array.isArray(raw.agents)
-      ? raw.agents.map((agentId) => agentId.trim()).filter(Boolean)
-      : [],
+    agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallback:
       typeof raw.modelFallback === "string" && raw.modelFallback.trim()
@@ -1363,7 +1364,12 @@ function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
   if (!cached) {
     return undefined;
   }
-  if (cached.expiresAt <= Date.now()) {
+  const now = asDateTimestampMs(Date.now());
+  if (
+    now === undefined ||
+    asDateTimestampMs(cached.expiresAt) === undefined ||
+    cached.expiresAt <= now
+  ) {
     activeRecallCache.delete(cacheKey);
     return undefined;
   }
@@ -1371,19 +1377,27 @@ function getCachedResult(cacheKey: string): ActiveRecallResult | undefined {
 }
 
 function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: number): void {
-  const now = Date.now();
+  const rawNow = Date.now();
+  const now = asDateTimestampMs(rawNow);
   if (
     activeRecallCache.size >= DEFAULT_MAX_CACHE_ENTRIES ||
-    now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS
+    (now !== undefined && now - lastActiveRecallCacheSweepAt >= CACHE_SWEEP_INTERVAL_MS)
   ) {
     sweepExpiredCacheEntries(now);
-    lastActiveRecallCacheSweepAt = now;
+    if (now !== undefined) {
+      lastActiveRecallCacheSweepAt = now;
+    }
+  }
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (expiresAt === undefined) {
+    activeRecallCache.delete(cacheKey);
+    return;
   }
   if (activeRecallCache.has(cacheKey)) {
     activeRecallCache.delete(cacheKey);
   }
   activeRecallCache.set(cacheKey, {
-    expiresAt: now + ttlMs,
+    expiresAt,
     result,
   });
   while (activeRecallCache.size > DEFAULT_MAX_CACHE_ENTRIES) {
@@ -1395,9 +1409,13 @@ function setCachedResult(cacheKey: string, result: ActiveRecallResult, ttlMs: nu
   }
 }
 
-function sweepExpiredCacheEntries(now = Date.now()): void {
+function sweepExpiredCacheEntries(now = asDateTimestampMs(Date.now())): void {
+  if (now === undefined) {
+    activeRecallCache.clear();
+    return;
+  }
   for (const [cacheKey, cached] of activeRecallCache.entries()) {
-    if (cached.expiresAt <= now) {
+    if (asDateTimestampMs(cached.expiresAt) === undefined || cached.expiresAt <= now) {
       activeRecallCache.delete(cacheKey);
     }
   }
@@ -1518,11 +1536,11 @@ function buildPluginDebugLine(params: {
     warning && action && !cleaned
       ? `${warning} ${action}`
       : [warning, action && !cleaned ? action : ""]
-          .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
+          .filter((value): value is string => Boolean(value))
           .join(" | ");
-  const messages = [warningAction, cleaned]
-    .filter((value, index, values) => Boolean(value) && values.indexOf(value) === index)
-    .join(" | ");
+  const messages = uniqueStrings(
+    [warningAction, cleaned].filter((value): value is string => Boolean(value)),
+  ).join(" | ");
   const trailing = messages;
   if (prefix && trailing) {
     return `${ACTIVE_MEMORY_DEBUG_PREFIX} ${prefix} | ${trailing}`;
@@ -2531,7 +2549,7 @@ async function runRecallSubagent(params: {
   try {
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
-    const result = await params.api.runtime.agent.runEmbeddedPiAgent({
+    const result = await params.api.runtime.agent.runEmbeddedAgent({
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
       agentId: params.agentId,
@@ -2544,6 +2562,7 @@ async function runRecallSubagent(params: {
       prompt,
       provider: modelRef.provider,
       model: modelRef.model,
+      lane: ACTIVE_MEMORY_RECALL_LANE,
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",

@@ -76,7 +76,6 @@ function makeHandler(
       enabled: false,
       maxChars: 6000,
       includeIdentity: true,
-      includeSystemPrompt: true,
       includeWorkspaceFiles: true,
       files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     },
@@ -332,6 +331,37 @@ describe("RealtimeCallHandler path routing", () => {
           ws.close();
         }
       }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects stream sessions when token expiry would exceed the Date range", async () => {
+    const processEvent = vi.fn();
+    const createBridge = vi.fn(() => makeBridge());
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+      },
+      provider: {
+        name: "telnyx",
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    handler.setPublicUrl("https://public.example/voice/webhook");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const session = handler.issueStreamSession({
+      providerName: "telnyx",
+      callId: "call-overflow",
+      direction: "inbound",
+    });
+    nowSpy.mockRestore();
+    const server = await startStreamSessionServer(handler, session.streamUrl);
+
+    try {
+      await expect(connectWs(server.url)).rejects.toThrow("Unexpected server response: 401");
+      expect(createBridge).not.toHaveBeenCalled();
+      expect(processEvent).not.toHaveBeenCalled();
     } finally {
       await server.close();
     }
@@ -969,9 +999,9 @@ describe("RealtimeCallHandler path routing", () => {
         const [args, callId, context] = requireFirstMockCall(consult.mock.calls, "consult");
         expect(args).toEqual({
           question: "Create a smoke test file for me.",
-          context:
-            "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
         });
+        expect(JSON.stringify(args)).not.toContain("consultPolicy");
+        expect(JSON.stringify(args)).not.toContain("openclaw_agent_consult");
         expect(callId).toBe("call-1");
         expect(context).toEqual({});
         await waitForRealtimeTest(() => {

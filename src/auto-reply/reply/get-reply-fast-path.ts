@@ -15,6 +15,7 @@ import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
+import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { SessionInitResult } from "./session.js";
@@ -215,10 +216,13 @@ export function initFastReplySessionState(params: {
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
     skipCache: true,
+    clone: false,
   });
   const existingEntry = sessionStore[sessionKey];
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
-  const triggerBodyNormalized = stripStructuralPrefixes(commandSource).trim();
+  const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
+    ? commandSource.trim()
+    : stripStructuralPrefixes(commandSource).trim();
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup = normalizedChatType != null && normalizedChatType !== "direct";
   const strippedForReset = isGroup

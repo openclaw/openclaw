@@ -93,6 +93,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   realtimeTranscriptionProviders: [],
   realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
+  transcriptSourceProviders: [],
   imageGenerationProviders: [],
   musicGenerationProviders: [],
   videoGenerationProviders: [],
@@ -968,7 +969,7 @@ describe("loadGatewayPlugins", () => {
         }),
       ),
     ).rejects.toThrow(
-      'plugin "voice-call" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/gateway/configuration-reference#plugins and search for: plugins.entries.<id>.subagent.allowModelOverride',
+      'plugin "voice-call" is not trusted for fallback provider/model override requests. See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: plugins.entries.<id>.subagent.allowModelOverride',
     );
   });
 

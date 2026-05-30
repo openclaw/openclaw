@@ -38,6 +38,7 @@ export {
 export { capturePluginRegistration } from "../plugins/captured-registration.js";
 export { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 export { runProviderCatalog } from "../plugins/provider-discovery.js";
+export { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 export {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
@@ -45,6 +46,20 @@ export {
   setProviderWizardProvidersResolverForTest,
 } from "../plugins/provider-wizard.js";
 export { resolveProviderPluginChoice } from "../plugins/provider-auth-choice.runtime.js";
+export {
+  clearEmbeddingProviders,
+  getRegisteredEmbeddingProvider,
+  listRegisteredEmbeddingProviders,
+  registerEmbeddingProvider,
+  restoreRegisteredEmbeddingProviders,
+  type RegisteredEmbeddingProvider,
+} from "../plugins/embedding-providers.js";
+export {
+  clearMemoryEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviders,
+  restoreRegisteredMemoryEmbeddingProviders,
+  type RegisteredMemoryEmbeddingProvider,
+} from "../plugins/memory-embedding-providers.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { PluginHookRegistration } from "../plugins/hook-types.js";
 export type { RuntimeEnv } from "../runtime.js";

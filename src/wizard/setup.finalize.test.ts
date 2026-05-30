@@ -150,7 +150,7 @@ vi.mock("../infra/control-ui-assets.js", () => ({
   ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("../terminal/restore.js", () => ({
+vi.mock("../../packages/terminal-core/src/restore.js", () => ({
   restoreTerminalState,
 }));
 
@@ -592,6 +592,43 @@ describe("finalizeSetupWizard", () => {
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expectFirstOnboardingInstallPlanCallOmitsToken();
     expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses token-bearing onboarding output when requested", async () => {
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "advanced",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: true,
+        suppressGatewayTokenOutput: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    const output = vi
+      .mocked(prompter.note)
+      .mock.calls.map((call) => call.join("\n"))
+      .join("\n");
+    expect(output).toContain("http://127.0.0.1:18789");
+    expect(output).not.toContain("session-token");
+    expect(output).not.toContain("#token=");
   });
 
   it("stops after a scheduled restart instead of reinstalling the service", async () => {

@@ -1,10 +1,13 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
-import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
+import {
+  listPluginSdkDistArtifacts,
+  listPrivateLocalOnlyPluginSdkDistArtifacts,
+} from "../scripts/lib/plugin-sdk-entries.mjs";
 import {
   WORKSPACE_TEMPLATE_PACK_PATHS,
   createWorkspaceBootstrapSmokeEnv,
@@ -17,8 +20,10 @@ import {
   collectForbiddenPackContentPaths,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
+  collectSkillShellScriptExecutableErrors,
   collectPackUnpackedSizeErrors,
   collectPackedInstalledPackageVerificationErrors,
+  createPackedPluginSdkTypescriptSmokeProject,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
@@ -27,7 +32,9 @@ import {
   PACKED_CLI_SMOKE_COMMANDS,
   PACKED_COMPLETION_SMOKE_ARGS,
   packageNameFromSpecifier,
+  resolveReleaseNpmCommand,
   resolveMissingPackBuildHint,
+  runReleaseCheckCommand,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import {
@@ -44,6 +51,7 @@ function makePackResult(filename: string, unpackedSize: number) {
 }
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
+const privateLocalOnlyPluginSdkPackPaths = listPrivateLocalOnlyPluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 describe("collectAppcastSparkleVersionErrors", () => {
@@ -118,12 +126,12 @@ describe("packed CLI smoke", () => {
           : `${dirname(process.execPath)}:/usr/bin:/bin`,
       HOME: "/tmp/smoke-home",
       USERPROFILE: "/tmp/smoke-home",
-      ComSpec: "C:\\Windows/System32/cmd.exe",
-      APPDATA: "/tmp/smoke-home/AppData/Roaming",
-      LOCALAPPDATA: "/tmp/smoke-home/AppData/Local",
+      ComSpec: join("C:\\Windows", "System32", "cmd.exe"),
+      APPDATA: join("/tmp/smoke-home", "AppData", "Roaming"),
+      LOCALAPPDATA: join("/tmp/smoke-home", "AppData", "Local"),
       AWS_EC2_METADATA_DISABLED: "true",
-      AWS_SHARED_CREDENTIALS_FILE: "/tmp/smoke-home/.aws/credentials",
-      AWS_CONFIG_FILE: "/tmp/smoke-home/.aws/config",
+      AWS_SHARED_CREDENTIALS_FILE: join("/tmp/smoke-home", ".aws", "credentials"),
+      AWS_CONFIG_FILE: join("/tmp/smoke-home", ".aws", "config"),
       TMPDIR: "/tmp/original-tmp",
       SystemRoot: "C:\\Windows",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
@@ -157,6 +165,73 @@ describe("packed CLI smoke", () => {
   });
 });
 
+describe("runReleaseCheckCommand", () => {
+  it("returns captured command output", () => {
+    expect(
+      runReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('ok')"] },
+        { stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toBe("ok");
+  });
+
+  it("bounds commands that ignore termination", () => {
+    const startedAt = Date.now();
+
+    expect(() =>
+      runReleaseCheckCommand(
+        {
+          command: process.execPath,
+          args: ["--eval", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+        },
+        { stdio: ["ignore", "pipe", "pipe"], timeoutMs: 100 },
+      ),
+    ).toThrow();
+    expect(Date.now() - startedAt).toBeLessThan(2500);
+  });
+
+  it("bounds captured command output", () => {
+    expect(() =>
+      runReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('x'.repeat(4096))"] },
+        { maxBuffer: 1024, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toThrow();
+  });
+});
+
+describe("resolveReleaseNpmCommand", () => {
+  it("wraps Windows npm.cmd release checks through cmd.exe without shell mode", () => {
+    const nodeDir = "C:\\Program Files\\nodejs";
+    const npmCmdPath = win32.resolve(nodeDir, "npm.cmd");
+
+    expect(
+      resolveReleaseNpmCommand(["pack", "--dry-run", "--json"], {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: { PATH: "C:\\bin" },
+        execPath: win32.join(nodeDir, "node.exe"),
+        existsSync: (candidate) => candidate === npmCmdPath,
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", '""C:\\Program Files\\nodejs\\npm.cmd" pack --dry-run --json"'],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("rejects bare npm fallback on Windows release checks", () => {
+    expect(() =>
+      resolveReleaseNpmCommand(["pack"], {
+        execPath: "C:\\Program Files\\nodejs\\node.exe",
+        existsSync: () => false,
+        platform: "win32",
+      }),
+    ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
+  });
+});
+
 describe("workspace bootstrap smoke", () => {
   it("runs with a sterile env instead of maintainer provider credentials", () => {
     expect(
@@ -185,8 +260,8 @@ describe("workspace bootstrap smoke", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       AWS_EC2_METADATA_DISABLED: "true",
-      AWS_SHARED_CREDENTIALS_FILE: "/tmp/bootstrap-home/.aws/credentials",
-      AWS_CONFIG_FILE: "/tmp/bootstrap-home/.aws/config",
+      AWS_SHARED_CREDENTIALS_FILE: join("/tmp/bootstrap-home", ".aws", "credentials"),
+      AWS_CONFIG_FILE: join("/tmp/bootstrap-home", ".aws", "config"),
     });
   });
 });
@@ -338,6 +413,41 @@ describe("bundled plugin package dependency checks", () => {
   });
 });
 
+// This suite exists both as regression coverage and as an intentional CI touchpoint for executable-bit fixes.
+// Windows doesn't support Unix permission bits; chmod 0o755 is a no-op and
+// statSync().mode never reports execute bits, so these tests are meaningless there.
+describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutableErrors", () => {
+  it("flags non-executable shell scripts under skills/*/scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o644);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([
+        "skill shell script is not executable: skills/openai-whisper-api/scripts/transcribe.sh",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts executable shell scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o755);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("collectForbiddenPackPaths", () => {
   it("blocks all packaged node_modules payloads", () => {
     expect(
@@ -373,6 +483,21 @@ describe("collectForbiddenPackPaths", () => {
     ]);
   });
 
+  it("blocks the old deep plugin SDK declaration tree from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "dist/plugin-sdk/index.d.ts",
+        "dist/plugin-sdk/types-abc123.d.ts",
+        "dist/plugin-sdk/src/channels/plugins/types.public.d.ts",
+        "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
+      ]),
+    ).toEqual([
+      "dist/plugin-sdk/src/channels/plugins/types.public.d.ts",
+      "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
+    ]);
+  });
+
   it("blocks local build metadata from npm pack output", () => {
     expect(
       collectForbiddenPackPaths(["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS]),
@@ -382,6 +507,21 @@ describe("collectForbiddenPackPaths", () => {
   it("keeps local build metadata excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
     for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {
+      expect(pkg.files).toContain(`!${entry}`);
+    }
+    expect(pkg.files).toContain("!dist/plugin-sdk/src/**");
+  });
+
+  it("blocks private local-only plugin SDK artifacts from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths(["dist/index.js", ...privateLocalOnlyPluginSdkPackPaths]),
+    ).toEqual([...privateLocalOnlyPluginSdkPackPaths].toSorted());
+  });
+
+  it("keeps private local-only plugin SDK artifacts excluded by package files", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+
+    for (const entry of privateLocalOnlyPluginSdkPackPaths) {
       expect(pkg.files).toContain(`!${entry}`);
     }
   });
@@ -470,6 +610,25 @@ describe("collectForbiddenPackPaths", () => {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("blocks root plugin SDK declarations that still reference private test helpers", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-private-sdk-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "dist", "plugin-sdk", "testing.d.ts"),
+        "//#region src/plugin-sdk/test-helpers/session.ts\n",
+        "utf8",
+      );
+
+      expect(collectForbiddenPackContentPaths(["dist/plugin-sdk/testing.d.ts"], tempRoot)).toEqual([
+        "dist/plugin-sdk/testing.d.ts",
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("collectMissingPackPaths", () => {
@@ -489,12 +648,15 @@ describe("collectMissingPackPaths", () => {
       PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
       "dist/control-ui/index.html",
       "scripts/npm-runner.mjs",
+      "scripts/prepare-git-hooks.mjs",
       "scripts/preinstall-package-manager-warning.mjs",
       "scripts/lib/official-external-channel-catalog.json",
       "scripts/lib/official-external-plugin-catalog.json",
       "scripts/lib/official-external-provider-catalog.json",
       "scripts/lib/package-dist-imports.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
+      "dist/agents/compaction-planning.worker.js",
+      "dist/agents/model-provider-auth.worker.js",
       "dist/task-registry-control.runtime.js",
       "dist/telegram-ingress-worker.runtime.js",
       bundledDistPluginFile("telegram", "runtime-api.js"),
@@ -519,6 +681,7 @@ describe("collectMissingPackPaths", () => {
         ...requiredPluginSdkPackPaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
+        "scripts/prepare-git-hooks.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/lib/official-external-channel-catalog.json",
         "scripts/lib/official-external-plugin-catalog.json",
@@ -526,6 +689,8 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
+        "dist/agents/compaction-planning.worker.js",
+        "dist/agents/model-provider-auth.worker.js",
         "dist/task-registry-control.runtime.js",
         "dist/telegram-ingress-worker.runtime.js",
         "dist/build-info.json",
@@ -557,6 +722,34 @@ describe("collectMissingPackPaths", () => {
         "installed package is missing required plugin SDK artifact: dist/plugin-sdk/zod.js",
         "installed package root dist file 'typescript-compiler.js' is invalid or exceeds 6291456 bytes.",
       ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects packed plugin SDK root aliases that depend on minified export letters", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-check-packed-root-alias-"));
+    try {
+      const packageRoot = join(root, "openclaw");
+      const pluginSdkDir = join(packageRoot, "dist", "plugin-sdk");
+      mkdirSync(pluginSdkDir, { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,
+      );
+      writeFileSync(
+        join(pluginSdkDir, "root-alias.cjs"),
+        "module.exports = { onDiagnosticEvent: mod.r };\n",
+      );
+
+      expect(
+        collectPackedInstalledPackageVerificationErrors({
+          expectedVersion: "2026.5.14-beta.3",
+          packageRoot,
+        }),
+      ).toContain(
+        "installed package dist/plugin-sdk/root-alias.cjs depends on a single-letter bundled export alias.",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -598,6 +791,46 @@ describe("resolveMissingPackBuildHint", () => {
   });
 });
 
+describe("createPackedPluginSdkTypescriptSmokeProject", () => {
+  it("writes a consumer project that imports representative public SDK subpaths", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-check-plugin-sdk-types-"));
+    try {
+      const consumerDir = join(root, "consumer");
+      const packageRoot = join(root, "openclaw");
+      createPackedPluginSdkTypescriptSmokeProject({
+        consumerDir,
+        packageSpec: `file:${packageRoot}`,
+      });
+
+      const packageJson = JSON.parse(readFileSync(join(consumerDir, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      const tsconfig = JSON.parse(readFileSync(join(consumerDir, "tsconfig.json"), "utf8")) as {
+        compilerOptions?: Record<string, unknown>;
+      };
+      const source = readFileSync(join(consumerDir, "src", "index.ts"), "utf8");
+      const fixtureSource = readFileSync(
+        "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
+        "utf8",
+      );
+
+      expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
+      expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
+      expect(source).toBe(fixtureSource);
+      expect(source).toContain('"openclaw/plugin-sdk"');
+      expect(source).toContain('"openclaw/plugin-sdk/provider-entry"');
+      expect(source).toContain('"openclaw/plugin-sdk/channel-entry-contract"');
+      expect(source).toContain('"openclaw/plugin-sdk/config-contracts"');
+      expect(source).toContain('"openclaw/plugin-sdk/runtime-env"');
+      expect(source).toContain("type PublicPluginSdkModules = [");
+      expect(source).not.toContain("TelegramAccountConfig");
+      expect(source).not.toContain("openclaw/plugin-sdk/channel-contract-testing");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("collectPackUnpackedSizeErrors", () => {
   it("accepts pack results within the unpacked size budget", () => {
     expect(
@@ -626,22 +859,22 @@ describe("collectPackUnpackedSizeErrors", () => {
 });
 
 describe("collectCriticalPluginSdkEntrypointSizeErrors", () => {
-  it("flags oversized plugin SDK test-contract entrypoints before publish", () => {
+  it("flags oversized public plugin SDK entrypoints before publish", () => {
     const root = mkdtempSync(join(tmpdir(), "release-check-critical-sdk-"));
     try {
       const pluginSdkDir = join(root, "dist", "plugin-sdk");
       mkdirSync(pluginSdkDir, { recursive: true });
-      writeFileSync(join(pluginSdkDir, "agent-runtime-test-contracts.js"), "export {};\n");
-      writeFileSync(join(pluginSdkDir, "provider-test-contracts.js"), "export {};\n");
+      writeFileSync(join(pluginSdkDir, "core.js"), "export {};\n");
+      writeFileSync(join(pluginSdkDir, "runtime.js"), "export {};\n");
       writeFileSync(
-        join(pluginSdkDir, "plugin-test-contracts.js"),
+        join(pluginSdkDir, "provider-entry.js"),
         "x".repeat(MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1),
       );
 
       expect(collectCriticalPluginSdkEntrypointSizeErrors(root)).toEqual([
-        `dist/plugin-sdk/plugin-test-contracts.js is ${
+        `dist/plugin-sdk/provider-entry.js is ${
           MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES + 1
-        } bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK test-contract entrypoints lazy and avoid bundling compiler/runtime internals.`,
+        } bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

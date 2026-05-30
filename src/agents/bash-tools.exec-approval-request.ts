@@ -10,7 +10,11 @@ import {
   POSIX_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../infra/shell-wrapper-resolution.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { asDateTimestampMs, resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString as parseString,
+} from "../shared/string-coerce.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -49,6 +53,8 @@ export type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  requireDeliveryRoute?: boolean;
+  suppressDelivery?: boolean;
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -79,6 +85,8 @@ function buildExecApprovalRequestToolParams(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    requireDeliveryRoute: params.requireDeliveryRoute,
+    suppressDelivery: params.suppressDelivery,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
     twoPhase: true,
   };
@@ -99,12 +107,12 @@ function parseDecision(value: unknown): ParsedDecision {
   return { present: true, value: typeof decision === "string" ? decision : null };
 }
 
-function parseString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+function parseExpiresAtMs(value: unknown): number | undefined {
+  return asDateTimestampMs(value);
 }
 
-function parseExpiresAtMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+function resolveDefaultExecApprovalExpiresAtMs(): number {
+  return resolveExpiresAtMsFromDurationMs(DEFAULT_APPROVAL_TIMEOUT_MS) ?? 0;
 }
 
 export type ExecApprovalRegistration = {
@@ -127,7 +135,7 @@ export async function registerExecApprovalRequest(
   const decision = parseDecision(registrationResult);
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
-    parseExpiresAtMs(registrationResult?.expiresAtMs) ?? Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+    parseExpiresAtMs(registrationResult?.expiresAtMs) ?? resolveDefaultExecApprovalExpiresAtMs();
   if (decision.present) {
     return { id, expiresAtMs, finalDecision: decision.value };
   }
@@ -193,6 +201,8 @@ type HostExecApprovalParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  requireDeliveryRoute?: boolean;
+  suppressDelivery?: boolean;
 };
 
 type ExecApprovalRequesterContext = {
@@ -294,6 +304,8 @@ async function buildHostApprovalDecisionParams(
       sessionKey: params.sessionKey,
     }),
     resolvedPath: params.resolvedPath,
+    requireDeliveryRoute: params.requireDeliveryRoute,
+    suppressDelivery: params.suppressDelivery,
     ...buildExecApprovalTurnSourceContext(params),
   };
 }

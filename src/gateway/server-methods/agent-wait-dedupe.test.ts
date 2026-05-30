@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AGENT_RUN_ABORTED_ERROR } from "../../agents/run-termination.js";
 import type { DedupeEntry } from "../server-shared.js";
 import {
   testing,
@@ -146,6 +147,46 @@ describe("agent wait dedupe helper", () => {
     });
   });
 
+  it("keeps hard timeout snapshots stronger than blocked liveness", () => {
+    const dedupe = new Map();
+    const runId = "run-blocked-provider-timeout";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "error",
+        startedAt: 100,
+        endedAt: 200,
+        error: "model timed out",
+        result: {
+          meta: {
+            livenessState: "blocked",
+            timeoutPhase: "provider",
+            providerStarted: true,
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 200,
+      error: "model timed out",
+      livenessState: "blocked",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
   it("normalizes blocked ok agent snapshots to errors", () => {
     const dedupe = new Map();
     const runId = "run-blocked-agent";
@@ -180,6 +221,74 @@ describe("agent wait dedupe helper", () => {
       error: "Context overflow: prompt too large for the model.",
       livenessState: "blocked",
     });
+  });
+
+  it("normalizes aborted ok agent snapshots to errors", () => {
+    const dedupe = new Map();
+    const runId = "run-aborted-agent";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        result: {
+          meta: {
+            stopReason: "aborted",
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "error",
+      startedAt: 100,
+      endedAt: 200,
+      error: AGENT_RUN_ABORTED_ERROR,
+      stopReason: "aborted",
+    });
+  });
+
+  it("unblocks waiters with normalized aborted snapshots", async () => {
+    const dedupe = new Map();
+    const runId = "run-wait-aborted";
+    const waiter = waitForTerminalGatewayDedupe({
+      dedupe,
+      runId,
+      timeoutMs: 1_000,
+    });
+
+    await Promise.resolve();
+    expect(testing.getWaiterCount(runId)).toBe(1);
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        stopReason: "aborted",
+        endedAt: 300,
+      },
+    });
+
+    await expect(waiter).resolves.toEqual({
+      status: "error",
+      endedAt: 300,
+      error: AGENT_RUN_ABORTED_ERROR,
+      stopReason: "aborted",
+    });
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 
   it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
@@ -379,7 +488,14 @@ describe("agent wait dedupe helper", () => {
       kind: "agent",
       runId,
       ts: 100,
-      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+      payload: {
+        runId,
+        status: "timeout",
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+        endedAt: 100,
+      },
     });
     setRunEntry({
       dedupe,
@@ -399,6 +515,129 @@ describe("agent wait dedupe helper", () => {
       endedAt: 100,
       error: undefined,
       stopReason: "rpc",
+      timeoutPhase: "queue",
+      providerStarted: false,
+    });
+  });
+
+  it("preserves an RPC cancel snapshot when a later accepted write reuses the key", () => {
+    const dedupe = new Map();
+    const runId = "run-cancel-wins-over-accepted";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 100,
+      payload: {
+        runId,
+        status: "timeout",
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+        endedAt: 100,
+      },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: { runId, status: "accepted" },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      endedAt: 100,
+      error: undefined,
+      stopReason: "rpc",
+      timeoutPhase: "queue",
+      providerStarted: false,
+    });
+  });
+
+  it("lets an earlier terminal completion correct a provisional timeout snapshot", () => {
+    const dedupe = new Map();
+    const runId = "run-earlier-completion-wins";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: {
+        runId,
+        status: "timeout",
+        timeoutPhase: "provider",
+        startedAt: 100,
+        endedAt: 200,
+      },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 250,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 190,
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 190,
+      error: undefined,
+    });
+  });
+
+  it("does not make bare queue timeouts sticky", () => {
+    const dedupe = new Map();
+    const runId = "run-queue-timeout-replaced";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 100,
+      payload: {
+        runId,
+        status: "timeout",
+        timeoutPhase: "queue",
+        providerStarted: false,
+        endedAt: 100,
+      },
+    });
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      ts: 200,
+      payload: { runId, status: "ok", endedAt: 200 },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "ok",
+      endedAt: 200,
+      error: undefined,
     });
   });
 
@@ -411,7 +650,14 @@ describe("agent wait dedupe helper", () => {
       kind: "chat",
       runId,
       ts: 100,
-      payload: { runId, status: "timeout", stopReason: "rpc", endedAt: 100 },
+      payload: {
+        runId,
+        status: "timeout",
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+        endedAt: 100,
+      },
     });
     setRunEntry({
       dedupe,
@@ -432,6 +678,8 @@ describe("agent wait dedupe helper", () => {
       endedAt: 100,
       error: undefined,
       stopReason: "rpc",
+      timeoutPhase: "queue",
+      providerStarted: false,
     });
   });
 

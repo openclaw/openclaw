@@ -25,7 +25,7 @@ If you want a personal, single-user assistant that feels local, fast, and always
 
 Supported channels include: WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, IRC, Microsoft Teams, Matrix, Feishu, LINE, Mattermost, Nextcloud Talk, Nostr, Synology Chat, Tlon, Twitch, Zalo, Zalo Personal, WeChat, QQ, WebChat.
 
-[Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Onboarding](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
+[Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [Vision](VISION.md) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/help/faq) · [Onboarding](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-openclaw) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
 New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
 
@@ -92,7 +92,7 @@ Works with npm, pnpm, or bun.
 
 - **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
 
-Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
+Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](https://docs.openclaw.ai/start/wizard).
 
 ## Install (recommended)
 
@@ -113,11 +113,23 @@ Runtime: **Node 24 (recommended) or Node 22.19+**.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
+Recommended daemon mode:
+
 ```bash
 openclaw onboard --install-daemon
+openclaw gateway status
+```
 
+Foreground/debug mode:
+
+```bash
+openclaw gateway stop
 openclaw gateway --port 18789 --verbose
+```
 
+Send a test message or ask the assistant after either startup mode is running:
+
+```bash
 # Send a message
 openclaw message send --target +1234567890 --message "Hello from OpenClaw"
 
@@ -294,7 +306,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to s
 AI/vibe-coded PRs welcome! 🤖
 
 Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for
-[pi-mono](https://github.com/badlogic/pi-mono).
+[pi-mono](https://github.com/earendil-works/pi-mono).
 Special thanks to Adam Doppelt for the lobster.bot domain.
 
 Thanks to all clawtributors:

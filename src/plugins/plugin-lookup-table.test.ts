@@ -185,7 +185,10 @@ describe("loadPluginLookUpTable", () => {
       createManifestRecord({
         id: "openai",
         origin: "bundled",
-        providers: ["openai", "openai-codex"],
+        providers: ["openai"],
+        providerAuthAliases: {
+          "openai-codex": "openai",
+        },
         modelCatalog: {
           aliases: {
             "azure-openai-responses": {
@@ -248,6 +251,7 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.channels.get("telegram")).toEqual(["telegram"]);
     expect(table.owners.channelConfigs.get("telegram")).toEqual(["telegram"]);
     expect(table.owners.providers.get("openai")).toEqual(["openai"]);
+    expect(table.owners.providers.get("openai-codex")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("azure-openai-responses")).toEqual(["openai"]);
     expect(table.owners.cliBackends.get("codex-cli")).toBeUndefined();
@@ -306,6 +310,55 @@ describe("loadPluginLookUpTable", () => {
     expect(table.metrics.totalMs).toBe(
       metadataSnapshot.metrics.totalMs + table.metrics.startupPlanMs,
     );
+  });
+
+  it("reuses lookup tables prepared from the same metadata snapshot and activation config", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const config = {
+      channels: {
+        telegram: { token: "configured" },
+      },
+    } as OpenClawConfig;
+    const index = {
+      ...createIndex(plugins),
+      policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    };
+    const manifestRegistry: PluginManifestRegistry = {
+      plugins,
+      diagnostics: [],
+    };
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { clearPluginLookUpTableMemoForTest, loadPluginLookUpTable } =
+      await import("./plugin-lookup-table.js");
+    clearPluginLookUpTableMemoForTest();
+
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config,
+      env: {},
+      index,
+    });
+    listPotentialConfiguredChannelIds.mockClear();
+
+    const first = loadPluginLookUpTable({
+      config,
+      env: {},
+      metadataSnapshot,
+    });
+    const second = loadPluginLookUpTable({
+      config,
+      env: {},
+      metadataSnapshot,
+    });
+
+    expect(second).toBe(first);
+    expect(listPotentialConfiguredChannelIds).toHaveBeenCalledOnce();
   });
 
   it("rebuilds when a provided metadata snapshot has a stale plugin policy", async () => {

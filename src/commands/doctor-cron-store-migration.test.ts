@@ -159,15 +159,53 @@ describe("normalizeStoredCronJobs", () => {
         schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
         payload: { kind: "agentTurn", message: ["tick"] },
       }),
+      makeLegacyJob({
+        id: "missing-schedule",
+        schedule: undefined,
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+      makeLegacyJob({
+        id: "missing-payload",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: undefined,
+      }),
+      makeLegacyJob({
+        id: "incomplete-system-payload",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        payload: { kind: "systemEvent" },
+      }),
     ];
 
     const result = normalizeStoredCronJobs(jobs);
 
     expect(result.mutated).toBe(true);
-    expect(result.issues.invalidSchedule).toBe(1);
-    expect(result.issues.invalidPayload).toBe(1);
+    expect(result.issues.invalidSchedule).toBe(2);
+    expect(result.issues.invalidPayload).toBe(3);
     expect(jobs.map((job) => job.id)).toEqual(["valid"]);
     expect(result.jobs.map((job) => job.id)).toEqual(["valid"]);
+  });
+
+  it("does not normalize unsupported payload kinds into runnable cron jobs", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "legacy-command-kind",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "command", command: "echo daily" },
+      }),
+      makeLegacyJob({
+        id: "legacy-agentmessage-kind",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: { kind: "agentmessage", message: "summarize" },
+      }),
+    ];
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidPayload).toBe(2);
+    expect(jobs).toEqual([]);
+    expect(result.jobs).toEqual([]);
   });
 
   it("normalizes whitespace-padded and non-canonical payload kinds", () => {
@@ -246,6 +284,35 @@ describe("normalizeStoredCronJobs", () => {
     const schedule = job.schedule as Record<string, unknown>;
     expect(schedule.kind).toBe("at");
     expect(schedule.at).toBe(new Date(1_700_000_000_000).toISOString());
+    expect(schedule.atMs).toBeUndefined();
+  });
+
+  it("leaves Date-invalid legacy atMs for persisted shape validation", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-invalid-at",
+        schedule: { kind: "at", atMs: 8_700_000_000_000_000 },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidSchedule).toBe(1);
+    expect(job).toBeUndefined();
+  });
+
+  it("drops Date-invalid legacy atMs when canonical at is valid", () => {
+    const at = "2026-04-01T10:00:00.000Z";
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-valid-at-invalid-at-ms",
+        schedule: { kind: "at", at, atMs: 8_700_000_000_000_000 },
+      }),
+    );
+
+    const schedule = job.schedule as Record<string, unknown>;
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidSchedule).toBeUndefined();
+    expect(schedule.at).toBe(at);
     expect(schedule.atMs).toBeUndefined();
   });
 

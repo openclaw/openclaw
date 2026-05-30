@@ -48,6 +48,7 @@ RUN --mount=type=bind,source=packages,target=/tmp/packages,readonly \
 FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_EXTENSIONS
 
 # Copy pinned Bun binary from the official image instead of fetching via curl.
 COPY --from=bun-binary /usr/local/bin/bun /usr/local/bin/bun
@@ -60,7 +61,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY openclaw.mjs ./
 COPY ui/package.json ./ui/package.json
 COPY patches ./patches
-COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs ./scripts/
+COPY scripts/postinstall-bundled-plugins.mjs scripts/preinstall-package-manager-warning.mjs scripts/npm-runner.mjs scripts/windows-cmd-helpers.mjs scripts/prepare-git-hooks.mjs ./scripts/
 COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs
 
 COPY --from=workspace-deps /out/packages/ ./packages/
@@ -77,7 +78,12 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
 # pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
 # paths. Matrix's native downloader can hit transient release CDN errors while
 # still exiting successfully, so retry the package downloader before failing.
+# Skip the entire check when matrix is not a bundled extension (e.g. msteams-only builds).
 RUN set -eux; \
+    if ! printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' ' | tr ' ' '\n' | grep -qx 'matrix'; then \
+      echo "==> matrix not bundled, skipping matrix-sdk-crypto check"; \
+      exit 0; \
+    fi; \
     echo "==> Verifying critical native addons..."; \
     for attempt in 1 2 3 4 5; do \
       if find /app/node_modules -name "matrix-sdk-crypto*.node" 2>/dev/null | grep -q .; then \
@@ -178,6 +184,7 @@ COPY --from=runtime-assets --chown=node:node /app/package.json .
 COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .
 COPY --from=runtime-assets --chown=node:node /app/patches ./patches
 COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
+COPY --from=runtime-assets --chown=node:node /app/src/agents/templates ./src/agents/templates
 COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
@@ -287,12 +294,17 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 
 # Pre-create default named-volume mount points so first-run Docker volumes copy
 # node ownership from the image instead of starting as root-owned directories.
-RUN install -d -m 0700 -o node -g node \
+# NOTE: /home/node/.config must be created with node ownership first so that
+# the leaf /home/node/.config/openclaw inherits the correct parent permissions.
+# Without this, install -d leaves /home/node/.config as root:root (issue #85968).
+RUN install -d -m 0755 -o node -g node /home/node/.config && \
+    install -d -m 0700 -o node -g node \
       /home/node/.openclaw \
       /home/node/.openclaw/workspace \
       /home/node/.config/openclaw && \
     stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700' && \
     stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700' && \
+    stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 755' && \
     stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production

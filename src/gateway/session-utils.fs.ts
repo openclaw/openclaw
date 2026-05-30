@@ -4,6 +4,11 @@ import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../ag
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import {
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
+} from "../shared/number-coercion.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
@@ -180,13 +185,24 @@ type TailTranscriptRecord = {
   record: Record<string, unknown>;
 };
 
+function normalizeRecentSessionReadOptions(opts?: Partial<ReadRecentSessionMessagesOptions>) {
+  const maxMessages = resolveNonNegativeIntegerOption(opts?.maxMessages, 0);
+  const maxBytes = resolveIntegerOption(opts?.maxBytes, RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES, {
+    min: 1024,
+  });
+  const maxLines = resolveIntegerOption(opts?.maxLines, maxMessages * 20 + 20, {
+    min: maxMessages,
+  });
+  return { maxMessages, maxBytes, maxLines };
+}
+
 export function readRecentSessionMessages(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
   opts?: ReadRecentSessionMessagesOptions,
 ): unknown[] {
-  const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
+  const { maxMessages, maxBytes, maxLines } = normalizeRecentSessionReadOptions(opts);
   if (maxMessages === 0) {
     return [];
   }
@@ -206,13 +222,8 @@ export function readRecentSessionMessages(
     return [];
   }
 
-  const maxBytes = Math.max(
-    1024,
-    Math.floor(opts?.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
-  );
   const readLen = Math.min(stat.size, maxBytes);
   const readStart = Math.max(0, stat.size - readLen);
-  const maxLines = Math.max(maxMessages, Math.floor(opts?.maxLines ?? maxMessages * 20 + 20));
 
   return (
     withOpenTranscriptFd(filePath, (fd) => {
@@ -238,14 +249,9 @@ async function readRecentTranscriptTailLinesAsync(
   stat: fs.Stats,
   opts: ReadRecentSessionMessagesOptions,
 ): Promise<string[]> {
-  const maxMessages = Math.max(0, Math.floor(opts.maxMessages));
-  const maxBytes = Math.max(
-    1024,
-    Math.floor(opts.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
-  );
+  const { maxBytes, maxLines } = normalizeRecentSessionReadOptions(opts);
   const readLen = Math.min(stat.size, maxBytes);
   const readStart = Math.max(0, stat.size - readLen);
-  const maxLines = Math.max(maxMessages, Math.floor(opts.maxLines ?? maxMessages * 20 + 20));
   const handle = await fs.promises.open(filePath, "r");
   try {
     const buffer = Buffer.alloc(readLen);
@@ -273,7 +279,7 @@ function isOversizedTranscriptLine(line: string): boolean {
 }
 
 function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
-  const match = new RegExp(`"${field}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
+  const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
   if (!match) {
     return undefined;
   }
@@ -289,22 +295,39 @@ function extractJsonNullableStringFieldPrefix(
   prefix: string,
   field: string,
 ): string | null | undefined {
-  if (new RegExp(`"${field}"\\s*:\\s*null`).test(prefix)) {
+  if (new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*null`).test(prefix)) {
     return null;
   }
   return extractJsonStringFieldPrefix(prefix, field);
 }
 
+function extractJsonNumberFieldPrefix(prefix: string, field: string): number | undefined {
+  const match = new RegExp(
+    `"${escapeRegExp(field)}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`,
+  ).exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  const decoded = Number(match[1]);
+  return Number.isFinite(decoded) ? decoded : undefined;
+}
+
 function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
   const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
+  const messageMatch = /"message"\s*:/.exec(prefix);
+  const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
   const id = extractJsonStringFieldPrefix(prefix, "id");
   const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
   const type = extractJsonStringFieldPrefix(prefix, "type");
+  const timestamp =
+    extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
+    extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
   const record: Record<string, unknown> = {
     ...(type ? { type } : {}),
     ...(id ? { id } : {}),
     ...(parentId !== undefined ? { parentId } : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
     message: {
       role,
       content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
@@ -570,13 +593,13 @@ export async function visitSessionMessagesAsync(
   storePath: string | undefined,
   sessionFile: string | undefined,
   visit: (message: unknown, seq: number) => void,
-  _opts: { mode: "full"; reason: string },
+  opts: { mode: "full"; reason: string; cache?: "reuse" | "skip" },
 ): Promise<number> {
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
   if (!filePath) {
     return 0;
   }
-  const index = await readSessionTranscriptIndex(filePath);
+  const index = await readSessionTranscriptIndex(filePath, { cache: opts.cache });
   if (!index) {
     return 0;
   }
@@ -637,7 +660,8 @@ export async function readRecentSessionMessagesAsync(
   sessionFile?: string,
   opts?: ReadRecentSessionMessagesOptions,
 ): Promise<unknown[]> {
-  const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
+  const normalized = normalizeRecentSessionReadOptions(opts);
+  const { maxMessages } = normalized;
   if (maxMessages === 0) {
     return [];
   }
@@ -657,8 +681,7 @@ export async function readRecentSessionMessagesAsync(
     return [];
   }
   const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
-    ...opts,
-    maxMessages,
+    ...normalized,
   });
   return parseRecentTranscriptTailMessages(lines, maxMessages);
 }
@@ -720,8 +743,15 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   }
   const entry = parsed as Record<string, unknown>;
   if (entry.message) {
+    const recordTimestampMs =
+      typeof entry.timestamp === "string"
+        ? Date.parse(entry.timestamp)
+        : typeof entry.timestamp === "number"
+          ? entry.timestamp
+          : Number.NaN;
     return attachOpenClawTranscriptMeta(entry.message, {
       ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+      ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
       seq,
     });
   }

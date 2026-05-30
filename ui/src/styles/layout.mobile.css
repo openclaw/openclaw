@@ -32,6 +32,14 @@
     row-gap: 0;
   }
 
+  .shell--chat-focus .content--chat .content-header {
+    min-height: 0;
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+
   .chat-controls__session-row {
     grid-template-columns:
       minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
@@ -112,7 +120,7 @@
   }
 
   .shell--chat-focus {
-    grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
+    grid-template-rows: 0 minmax(0, 1fr);
   }
 
   .shell-nav,
@@ -511,15 +519,6 @@
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-picker {
     grid-area: session;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px;
-  }
-
-  .chat-mobile-controls-wrapper
-    .chat-controls-dropdown
-    .chat-controls__session-row--session-search-open
-    .chat-controls__session-picker {
-    grid-template-columns: minmax(96px, 0.7fr) minmax(0, 1fr);
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
@@ -536,14 +535,9 @@
     box-shadow: none;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-search input {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
     min-height: 44px;
-    padding-left: 42px;
     font-size: 14px;
-  }
-
-  .chat-controls__session-search input {
-    padding-left: 42px;
   }
 
   .chat-mobile-controls-wrapper
@@ -758,6 +752,33 @@
   .log-stream {
     border-radius: var(--radius-md);
     max-height: 380px;
+  }
+
+  /* Reset the desktop fill-height chain on mobile — single page scroll is
+     more usable on small viewports than a tiny pinned log panel.
+     Selectors are intentionally double-classed so they outrank the
+     desktop rules in components.css / config-quick.css, which are
+     imported AFTER this file (see ui/src/styles.css). */
+  .card--fill-height.card--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
+  }
+
+  .content.content--logs {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .content.content--logs .settings-workspace {
+    display: block;
+    height: auto;
+    flex: initial;
+  }
+
+  .content.content--logs .settings-workspace__body {
+    display: block;
+    flex: initial;
   }
 
   .log-row {
@@ -1041,6 +1062,17 @@
     max-width: 72px;
     gap: 5px;
     padding: 2px 6px;
+  }
+
+  .sessions-table .session-goal-chip {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 72px;
+    gap: 0;
+    padding: 2px 6px;
+  }
+
+  .sessions-table .session-goal-chip__objective {
+    display: none;
   }
 
   .sessions-table .session-compaction-col {

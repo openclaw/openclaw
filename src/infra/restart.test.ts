@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
@@ -7,8 +7,11 @@ const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessSpawnSync(spawnSyncMock);
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
+  };
 });
 
 vi.mock("./ports-lsof.js", () => ({
@@ -23,19 +26,12 @@ vi.mock("../config/paths.js", async () => {
   };
 });
 
-let testing: typeof import("./restart-stale-pids.js").testing;
-let cleanStaleGatewayProcessesSync: typeof import("./restart-stale-pids.js").cleanStaleGatewayProcessesSync;
-let findGatewayPidsOnPortSync: typeof import("./restart-stale-pids.js").findGatewayPidsOnPortSync;
-let triggerOpenClawRestart: typeof import("./restart.js").triggerOpenClawRestart;
+const { testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
+  await import("./restart-stale-pids.js");
+const { triggerOpenClawRestart } = await import("./restart.js");
 
 let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
-
-beforeAll(async () => {
-  ({ testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
-    await import("./restart-stale-pids.js"));
-  ({ triggerOpenClawRestart } = await import("./restart.js"));
-});
 
 beforeEach(() => {
   spawnSyncMock.mockReset();

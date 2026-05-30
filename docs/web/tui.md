@@ -47,14 +47,14 @@ Notes:
 - `openclaw chat` and `openclaw terminal` are aliases for `openclaw tui --local`.
 - `--local` cannot be combined with `--url`, `--token`, or `--password`.
 - Local mode uses the embedded agent runtime directly. Most local tools work, but Gateway-only features are unavailable.
-- `openclaw` and `openclaw crestodian` also use this TUI shell, with Crestodian as the local setup and repair chat backend.
+- After a config file has authored settings, `openclaw` and `openclaw crestodian` also use this TUI shell, with Crestodian as the local setup and repair chat backend.
 
 ## What you see
 
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
-- Footer: connection state + agent + session + model + think/fast/verbose/trace/reasoning + token counts + deliver.
+- Footer: connection state + agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
 
 ## Mental model: agents + sessions
@@ -68,6 +68,9 @@ Notes:
   - `per-sender` (default): each agent has many sessions.
   - `global`: the TUI always uses the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
+- If the session has a [goal](/tools/goal), the footer shows its compact state
+  such as `Pursuing goal`, `Goal paused (/goal resume)`, or
+  `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session for the same gateway, agent, and session scope if that session still exists. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
 
 ## Sending + delivery
@@ -116,6 +119,7 @@ Session controls:
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
 - `/usage <off|tokens|full>`
+- `/goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear`
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
 - `/deliver <on|off>`

@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.5.22",
-  "description": "OpenClaw Microsoft Teams channel plugin",
+  "version": "2026.5.30",
+  "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
@@ -9,20 +9,18 @@
   "type": "module",
   "dependencies": {
     "@azure/identity": "4.13.1",
-    "@microsoft/teams.api": "2.0.11",
-    "@microsoft/teams.apps": "2.0.11",
+    "@microsoft/teams.api": "2.0.12",
+    "@microsoft/teams.apps": "2.0.12",
     "express": "5.2.1",
-    "jsonwebtoken": "9.0.3",
-    "jwks-rsa": "4.0.1",
     "typebox": "1.1.38"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@types/jsonwebtoken": "9.0.10",
+    "jose": "6.2.3",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.22"
+    "openclaw": ">=2026.5.30"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -58,10 +56,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.5.22"
+      "pluginApi": ">=2026.5.30"
     },
     "build": {
-      "openclawVersion": "2026.5.22"
+      "openclawVersion": "2026.5.30"
     },
     "release": {
       "publishToClawHub": true,

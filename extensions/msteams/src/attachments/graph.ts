@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
@@ -102,7 +103,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
         `${GRAPH_ROOT}/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(candidate)}`,
       );
     }
-    return Array.from(new Set(urls));
+    return uniqueStrings(urls);
   }
 
   const chatId = params.conversationId?.trim() || readNestedString(params.channelData, ["chatId"]);
@@ -116,7 +117,7 @@ export function buildMSTeamsGraphMessageUrls(params: {
     (candidate) =>
       `${GRAPH_ROOT}/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(candidate)}`,
   );
-  return Array.from(new Set(urls));
+  return uniqueStrings(urls);
 }
 
 async function fetchGraphCollection(params: {
@@ -286,6 +287,7 @@ export async function downloadMSTeamsGraphMedia(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
@@ -397,6 +399,7 @@ export async function downloadMSTeamsGraphMedia(params: {
                   url: requestUrl,
                   policy,
                   fetchFn,
+                  fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
                   requestInit: {
                     ...init,
                     headers,
@@ -467,6 +470,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       allowHosts: policy.allowHosts,
       authAllowHosts: policy.authAllowHosts,
       fetchFn: params.fetchFn,
+      fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
       resolveFn: params.resolveFn,
       preserveFilenames: params.preserveFilenames,
       logger: params.logger,

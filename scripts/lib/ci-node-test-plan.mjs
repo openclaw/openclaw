@@ -10,6 +10,7 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 ]);
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
+const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
   return listTrackedTestFiles(rootDir);
@@ -70,7 +71,34 @@ function resolveCommandShardName(file) {
     if (name.startsWith("doctor/shared/") || name.startsWith("doctor/")) {
       return "agentic-commands-doctor-shared";
     }
-    return "agentic-commands-doctor";
+    if (name.startsWith("doctor-auth") || name.startsWith("doctor-claude")) {
+      return "agentic-commands-doctor-auth";
+    }
+    if (name.startsWith("doctor-config") || name.startsWith("doctor-legacy-config")) {
+      return "agentic-commands-doctor-config";
+    }
+    if (name.startsWith("doctor-cron")) {
+      return "agentic-commands-doctor-cron";
+    }
+    if (
+      name.startsWith("doctor-gateway") ||
+      name.startsWith("doctor-heartbeat") ||
+      name.startsWith("doctor-memory") ||
+      name.startsWith("doctor-plugin") ||
+      name.startsWith("doctor-session") ||
+      name.startsWith("doctor-state") ||
+      name.startsWith("doctor-workspace")
+    ) {
+      return "agentic-commands-doctor-runtime";
+    }
+    if (
+      name.startsWith("doctor-platform-notes") ||
+      name.startsWith("doctor-sandbox") ||
+      name.startsWith("doctor-whatsapp")
+    ) {
+      return "agentic-commands-doctor-misc-platform";
+    }
+    return "agentic-commands-doctor-misc-core";
   }
   if (
     name.startsWith("auth-choice") ||
@@ -94,7 +122,7 @@ function createAgenticCommandSplitShards() {
   const commandsLightTests = new Set(commandsLightTestFiles);
   const groups = new Map();
   for (const file of listTestFiles("src/commands")) {
-    if (commandsLightTests.has(file)) {
+    if (commandsLightTests.has(file) || file.endsWith(".e2e.test.ts")) {
       continue;
     }
     const shardName = resolveCommandShardName(file);
@@ -103,7 +131,12 @@ function createAgenticCommandSplitShards() {
 
   return [
     "agentic-commands-agent-channel",
-    "agentic-commands-doctor",
+    "agentic-commands-doctor-auth",
+    "agentic-commands-doctor-config",
+    "agentic-commands-doctor-cron",
+    "agentic-commands-doctor-misc-core",
+    "agentic-commands-doctor-misc-platform",
+    "agentic-commands-doctor-runtime",
     "agentic-commands-doctor-shared",
     "agentic-commands-models",
     "agentic-commands-onboard-config",
@@ -113,6 +146,117 @@ function createAgenticCommandSplitShards() {
       configs: ["test/vitest/vitest.commands.config.ts"],
       includePatterns: groups.get(shardName) ?? [],
       requiresDist: false,
+      shardName,
+    }))
+    .filter((shard) => shard.includePatterns.length > 0);
+}
+
+function resolveInfraStateShardName(file) {
+  const name = relative("src/infra", file).replaceAll("\\", "/");
+  if (name.startsWith("approval")) {
+    return "core-runtime-infra-approval";
+  }
+  if (name.startsWith("exec") || name.startsWith("system-run")) {
+    return "core-runtime-infra-exec";
+  }
+  if (name.startsWith("heartbeat")) {
+    return "core-runtime-infra-heartbeat";
+  }
+  if (name.startsWith("outbound/")) {
+    return "core-runtime-infra-outbound";
+  }
+  if (name.startsWith("net/") || name.startsWith("fetch")) {
+    return "core-runtime-infra-network";
+  }
+  if (
+    name.startsWith("device") ||
+    name.startsWith("node-pairing") ||
+    name.startsWith("pairing") ||
+    name.startsWith("push")
+  ) {
+    return "core-runtime-infra-device-push";
+  }
+  if (
+    name.startsWith("install") ||
+    name.startsWith("npm") ||
+    name.startsWith("package") ||
+    name.startsWith("provider-usage") ||
+    name.startsWith("update")
+  ) {
+    return "core-runtime-infra-package-provider";
+  }
+  if (name.startsWith("session") || name.startsWith("state-migrations")) {
+    return "core-runtime-infra-session-state";
+  }
+  if (name < "g") {
+    return "core-runtime-infra-misc-a-f";
+  }
+  if (name.startsWith("gateway")) {
+    return "core-runtime-infra-misc-gateway";
+  }
+  if (name < "m") {
+    return "core-runtime-infra-misc-g-l";
+  }
+  if (name < "p") {
+    return "core-runtime-infra-misc-m-o";
+  }
+  if (
+    name.startsWith("parse") ||
+    name.startsWith("path") ||
+    name.startsWith("plain") ||
+    name.startsWith("plugin") ||
+    name.startsWith("ports") ||
+    name.startsWith("prototype")
+  ) {
+    return "core-runtime-infra-misc-path-ports";
+  }
+  if (
+    name.startsWith("process") ||
+    name.startsWith("replace") ||
+    name.startsWith("resolve") ||
+    name.startsWith("restart") ||
+    name.startsWith("retry") ||
+    name.startsWith("run") ||
+    name.startsWith("runtime")
+  ) {
+    return "core-runtime-infra-misc-process-restart";
+  }
+  if (name < "t") {
+    return "core-runtime-infra-misc-s-system";
+  }
+  return "core-runtime-infra-misc-t-z";
+}
+
+function createInfraStateSplitShards() {
+  const groups = new Map();
+  for (const file of listTestFiles("src/infra")) {
+    const shardName = resolveInfraStateShardName(file);
+    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
+  }
+
+  return [
+    "core-runtime-infra-approval",
+    "core-runtime-infra-device-push",
+    "core-runtime-infra-exec",
+    "core-runtime-infra-heartbeat",
+    "core-runtime-infra-misc-a-f",
+    "core-runtime-infra-misc-g-l",
+    "core-runtime-infra-misc-gateway",
+    "core-runtime-infra-misc-m-o",
+    "core-runtime-infra-misc-path-ports",
+    "core-runtime-infra-misc-process-restart",
+    "core-runtime-infra-misc-s-system",
+    "core-runtime-infra-misc-t-z",
+    "core-runtime-infra-network",
+    "core-runtime-infra-outbound",
+    "core-runtime-infra-package-provider",
+    "core-runtime-infra-session-state",
+  ]
+    .map((shardName) => ({
+      configs: ["test/vitest/vitest.infra.config.ts"],
+      includePatterns: groups.get(shardName) ?? [],
+      requiresDist: false,
+      runner: "blacksmith-4vcpu-ubuntu-2404",
       shardName,
     }))
     .filter((shard) => shard.includePatterns.length > 0);
@@ -249,7 +393,10 @@ const SPLIT_NODE_SHARDS = new Map([
     [
       {
         shardName: "core-unit-fast",
-        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        configs: [
+          "test/vitest/vitest.unit-fast.config.ts",
+          "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        ],
         requiresDist: false,
       },
     ],
@@ -282,13 +429,16 @@ const SPLIT_NODE_SHARDS = new Map([
   [
     "core-runtime",
     [
+      ...createInfraStateSplitShards(),
       {
-        shardName: "core-runtime-infra-state",
-        configs: [
-          "test/vitest/vitest.infra.config.ts",
-          "test/vitest/vitest.hooks.config.ts",
-          "test/vitest/vitest.secrets.config.ts",
-        ],
+        shardName: "core-runtime-hooks",
+        configs: ["test/vitest/vitest.hooks.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+      },
+      {
+        shardName: "core-runtime-secrets",
+        configs: ["test/vitest/vitest.secrets.config.ts"],
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },
@@ -359,13 +509,23 @@ const SPLIT_NODE_SHARDS = new Map([
       },
       ...createAgenticCommandSplitShards(),
       {
-        shardName: "agentic-agents",
-        configs: [
-          "test/vitest/vitest.agents-core.config.ts",
-          "test/vitest/vitest.agents-pi-embedded.config.ts",
-          "test/vitest/vitest.agents-support.config.ts",
-          "test/vitest/vitest.agents-tools.config.ts",
-        ],
+        shardName: "agentic-agents-core",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-agents-embedded",
+        configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-agents-support",
+        configs: ["test/vitest/vitest.agents-support.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-agents-tools",
+        configs: ["test/vitest/vitest.agents-tools.config.ts"],
         requiresDist: false,
       },
       {
@@ -442,7 +602,7 @@ export function createNodeTestShards(options = {}) {
             shardName: splitShard.shardName,
             configs: splitConfigs,
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
-            ...(splitShard.runner ? { runner: splitShard.runner } : {}),
+            runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,
           },
         ];
@@ -454,6 +614,7 @@ export function createNodeTestShards(options = {}) {
         checkName: formatNodeTestShardCheckName(shard.name),
         shardName: shard.name,
         configs,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         requiresDist: DIST_DEPENDENT_NODE_SHARD_NAMES.has(shard.name),
       },
     ];

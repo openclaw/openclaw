@@ -1,5 +1,3 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,25 +5,32 @@ import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl 
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImpl } from "../harness/runtime-plugin.js";
-import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/selection.js";
-import { buildEmbeddedCompactionRuntimeContext } from "../pi-embedded-runner/compaction-runtime-context.js";
+import type { SkillSnapshot } from "../../skills/types.js";
+import { createPreparedEmbeddedAgentSettingsManager as createPreparedEmbeddedAgentSettingsManagerImpl } from "../agent-project-settings.js";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import {
+  applyAgentAutoCompactionGuard as applyAgentAutoCompactionGuardImpl,
+  resolveEffectiveCompactionMode,
+} from "../agent-settings.js";
+import { buildEmbeddedCompactionRuntimeContext } from "../embedded-agent-runner/compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
-} from "../pi-embedded-runner/compaction-safety-timeout.js";
-import { runContextEngineMaintenance as runContextEngineMaintenanceImpl } from "../pi-embedded-runner/context-engine-maintenance.js";
-import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../pi-embedded-runner/run/preemptive-compaction.js";
-import { resolveLiveToolResultMaxChars as resolveLiveToolResultMaxCharsImpl } from "../pi-embedded-runner/tool-result-truncation.js";
-import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
-import { createPreparedEmbeddedPiSettingsManager as createPreparedEmbeddedPiSettingsManagerImpl } from "../pi-project-settings.js";
-import {
-  applyPiAutoCompactionGuard as applyPiAutoCompactionGuardImpl,
-  resolveEffectiveCompactionMode,
-} from "../pi-settings.js";
-import type { SkillSnapshot } from "../skills.js";
+} from "../embedded-agent-runner/compaction-safety-timeout.js";
+import { runContextEngineMaintenance as runContextEngineMaintenanceImpl } from "../embedded-agent-runner/context-engine-maintenance.js";
+import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../embedded-agent-runner/run/preemptive-compaction.js";
+import { resolveLiveToolResultMaxChars as resolveLiveToolResultMaxCharsImpl } from "../embedded-agent-runner/tool-result-truncation.js";
+import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
+import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
+import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImpl } from "../harness/runtime-plugin.js";
+import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/selection.js";
+import type { AgentMessage } from "../runtime/index.js";
+import { SessionManager } from "../sessions/index.js";
 import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
+
+const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON = "codex app-server owns automatic compaction";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SettingsManagerLike = {
@@ -43,13 +48,13 @@ type CliCompactionDeps = {
   openSessionManager: (sessionFile: string) => SessionManagerLike;
   ensureContextEnginesInitialized: () => void;
   resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
-  createPreparedEmbeddedPiSettingsManager: (params: {
+  createPreparedEmbeddedAgentSettingsManager: (params: {
     cwd: string;
     agentDir: string;
     cfg?: OpenClawConfig;
     contextTokenBudget?: number;
   }) => SettingsManagerLike | Promise<SettingsManagerLike>;
-  applyPiAutoCompactionGuard: (params: {
+  applyAgentAutoCompactionGuard: (params: {
     settingsManager: SettingsManagerLike;
     contextEngineInfo?: ContextEngine["info"];
     compactionMode?: AgentCompactionMode;
@@ -64,7 +69,7 @@ type CliCompactionDeps = {
 
 type NativeHarnessCliCompactionOutcome = {
   compacted: boolean;
-  result?: EmbeddedPiCompactResult;
+  result?: EmbeddedAgentCompactResult;
   fallbackToContextEngine?: boolean;
   failureReason?: string;
 };
@@ -77,6 +82,7 @@ type CliCompactionRuntimeContextParams = {
   messageChannel?: string;
   agentAccountId?: string;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   cfg: OpenClawConfig;
   skillsSnapshot?: SkillSnapshot;
@@ -96,8 +102,8 @@ const cliCompactionDeps: CliCompactionDeps = {
   openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
   ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
   resolveContextEngine: resolveContextEngineImpl,
-  createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
-  applyPiAutoCompactionGuard: applyPiAutoCompactionGuardImpl,
+  createPreparedEmbeddedAgentSettingsManager: createPreparedEmbeddedAgentSettingsManagerImpl,
+  applyAgentAutoCompactionGuard: applyAgentAutoCompactionGuardImpl,
   shouldPreemptivelyCompactBeforePrompt: shouldPreemptivelyCompactBeforePromptImpl,
   resolveLiveToolResultMaxChars: resolveLiveToolResultMaxCharsImpl,
   runContextEngineMaintenance: runContextEngineMaintenanceImpl,
@@ -115,8 +121,8 @@ export function resetCliCompactionTestDeps(): void {
     openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
     ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
     resolveContextEngine: resolveContextEngineImpl,
-    createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
-    applyPiAutoCompactionGuard: applyPiAutoCompactionGuardImpl,
+    createPreparedEmbeddedAgentSettingsManager: createPreparedEmbeddedAgentSettingsManagerImpl,
+    applyAgentAutoCompactionGuard: applyAgentAutoCompactionGuardImpl,
     shouldPreemptivelyCompactBeforePrompt: shouldPreemptivelyCompactBeforePromptImpl,
     resolveLiveToolResultMaxChars: resolveLiveToolResultMaxCharsImpl,
     runContextEngineMaintenance: runContextEngineMaintenanceImpl,
@@ -154,7 +160,7 @@ function isNativeHarnessCompactionSession(
   provider: string,
 ): sessionEntry is SessionEntry {
   const harnessId = sessionEntry?.agentHarnessId?.trim().toLowerCase();
-  if (!harnessId || harnessId === "pi") {
+  if (!harnessId || normalizeOptionalAgentRuntimeId(harnessId) === OPENCLAW_AGENT_RUNTIME_ID) {
     return false;
   }
   const providerId = provider.trim().toLowerCase();
@@ -166,18 +172,18 @@ function isNativeHarnessCompactionSession(
 }
 
 function isUnsupportedNativeHarnessCompaction(
-  result: EmbeddedPiCompactResult | undefined,
+  result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
   return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
 }
 
-function isRecoverableNativeHarnessCompactionFailure(
-  result: EmbeddedPiCompactResult | undefined,
+function isIntentionalNativeAutoCompactionSkip(
+  result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
   return (
-    result?.ok === false &&
-    (result.failure?.reason === "missing_thread_binding" ||
-      result.failure?.reason === "stale_thread_binding")
+    result?.ok === true &&
+    !result.compacted &&
+    result.reason === CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON
   );
 }
 
@@ -195,6 +201,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       agentAccountId: params.agentAccountId,
       authProfileId: undefined,
       workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
       agentDir: params.agentDir,
       config: params.cfg,
       skillsSnapshot: params.skillsSnapshot,
@@ -218,6 +225,7 @@ async function compactCliTranscript(params: {
   sessionManager: SessionManagerLike;
   cfg: OpenClawConfig;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   provider: string;
   model: string;
@@ -236,6 +244,7 @@ async function compactCliTranscript(params: {
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
     agentDir: params.agentDir,
     cfg: params.cfg,
     skillsSnapshot: params.skillsSnapshot,
@@ -314,6 +323,7 @@ async function compactNativeHarnessCliTranscript(params: {
   sessionFile: string;
   sessionEntry: SessionEntry;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   provider: string;
   model: string;
@@ -327,7 +337,7 @@ async function compactNativeHarnessCliTranscript(params: {
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }): Promise<NativeHarnessCliCompactionOutcome> {
-  let result: EmbeddedPiCompactResult | undefined;
+  let result: EmbeddedAgentCompactResult | undefined;
   try {
     const sessionAgentId = readAgentIdFromSessionKey(params.sessionKey);
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
@@ -347,6 +357,7 @@ async function compactNativeHarnessCliTranscript(params: {
           sessionKey: params.sessionKey,
           sessionFile: params.sessionFile,
           workspaceDir: params.workspaceDir,
+          cwd: params.cwd,
           agentDir: params.agentDir,
           config: params.cfg,
           skillsSnapshot: params.skillsSnapshot,
@@ -370,6 +381,7 @@ async function compactNativeHarnessCliTranscript(params: {
                   messageChannel: params.messageChannel,
                   agentAccountId: params.agentAccountId,
                   workspaceDir: params.workspaceDir,
+                  cwd: params.cwd,
                   agentDir: params.agentDir,
                   cfg: params.cfg,
                   skillsSnapshot: params.skillsSnapshot,
@@ -400,9 +412,16 @@ async function compactNativeHarnessCliTranscript(params: {
   }
 
   if (!result?.compacted) {
+    if (isIntentionalNativeAutoCompactionSkip(result)) {
+      return {
+        compacted: false,
+        fallbackToContextEngine: true,
+        failureReason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
+      };
+    }
     const fallbackToContextEngine =
       isUnsupportedNativeHarnessCompaction(result) ||
-      isRecoverableNativeHarnessCompactionFailure(result);
+      isRecoverableNativeHarnessBindingFailure(result);
     log.warn(
       `CLI native harness compaction did not reduce context for ${params.provider}/${params.model}: ${result?.reason ?? "nothing to compact"}`,
     );
@@ -425,6 +444,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   storePath?: string;
   sessionAgentId: string;
   workspaceDir: string;
+  cwd?: string;
   agentDir: string;
   provider: string;
   model: string;
@@ -442,8 +462,8 @@ export async function runCliTurnCompactionLifecycle(params: {
   }
 
   const sessionManager = cliCompactionDeps.openSessionManager(sessionFile);
-  const settingsManager = await cliCompactionDeps.createPreparedEmbeddedPiSettingsManager({
-    cwd: params.workspaceDir,
+  const settingsManager = await cliCompactionDeps.createPreparedEmbeddedAgentSettingsManager({
+    cwd: params.cwd ?? params.workspaceDir,
     agentDir: params.agentDir,
     cfg: params.cfg,
     contextTokenBudget,
@@ -473,7 +493,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   }
 
   let compacted = false;
-  let nativeCompactionResult: EmbeddedPiCompactResult | undefined;
+  let nativeCompactionResult: EmbeddedAgentCompactResult | undefined;
   let useContextEngineCompaction = true;
   let nativeFallbackToContextEngine = false;
   let resolvedContextEngine: ContextEngine | undefined;
@@ -483,7 +503,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       return;
     }
     autoCompactionGuardApplied = true;
-    await cliCompactionDeps.applyPiAutoCompactionGuard({
+    await cliCompactionDeps.applyAgentAutoCompactionGuard({
       settingsManager,
       contextEngineInfo: contextEngine.info,
       compactionMode: resolveEffectiveCompactionMode(params.cfg),
@@ -501,6 +521,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       sessionFile,
       sessionEntry: params.sessionEntry,
       workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
       agentDir: params.agentDir,
       provider: params.provider,
       model: params.model,
@@ -545,6 +566,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       sessionManager,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
       agentDir: params.agentDir,
       provider: params.provider,
       model: params.model,

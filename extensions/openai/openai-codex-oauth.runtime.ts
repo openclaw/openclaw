@@ -1,9 +1,11 @@
 import path from "node:path";
-import { loginOpenAICodex, type OAuthCredentials } from "@earendil-works/pi-ai/oauth";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+import { loginOpenAICodex } from "./openai-codex-oauth-flow.runtime.js";
+import type { OAuthCredentials } from "./openai-codex-oauth-types.runtime.js";
 
 const manualInputPromptMessage = "Paste the authorization code (or full redirect URL):";
 const openAICodexOAuthOriginator = "openclaw";
@@ -89,7 +91,7 @@ async function runOpenAIOAuthTlsPreflight(options?: {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }): Promise<OpenAIOAuthTlsPreflightResult> {
-  const timeoutMs = options?.timeoutMs ?? 5000;
+  const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
   const fetchImpl = options?.fetchImpl ?? fetch;
   try {
     await fetchImpl(openAIAuthProbeUrl, {
@@ -108,6 +110,9 @@ async function runOpenAIOAuthTlsPreflight(options?: {
     };
   }
 }
+
+export const testing = { runOpenAIOAuthTlsPreflight };
+export { testing as __testing };
 
 function formatOpenAIOAuthTlsPreflightFix(
   result: Exclude<OpenAIOAuthTlsPreflightResult, { ok: true }>,
@@ -178,7 +183,7 @@ function rewriteOpenAICodexOAuthError(error: unknown): Error {
       "unsupported_region",
       [
         "OpenAI rejected the token exchange for this country, region, or network route.",
-        "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry `openclaw models auth login --provider openai-codex`.",
+        "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry `openclaw models auth login --provider openai`.",
       ].join(" "),
       error,
     );
@@ -256,6 +261,8 @@ export async function loginOpenAICodexOAuth(params: {
   oauth: ProviderAuthContext["oauth"];
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
+  signal?: AbortSignal;
+  onManualCodeInput?: () => Promise<string>;
   localBrowserMessage?: string;
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
@@ -323,16 +330,19 @@ export async function loginOpenAICodexOAuth(params: {
       onAuth,
       onPrompt,
       originator: openAICodexOAuthOriginator,
-      onManualCodeInput: createManualCodeInputHandler({
-        isRemote,
-        onPrompt,
-        runtime,
-        updateProgress,
-        stopProgress,
-        waitForLoginToSettle,
-        hasBrowserAuthStarted: () => browserAuthStarted,
-      }),
+      onManualCodeInput:
+        params.onManualCodeInput ??
+        createManualCodeInputHandler({
+          isRemote,
+          onPrompt,
+          runtime,
+          updateProgress,
+          stopProgress,
+          waitForLoginToSettle,
+          hasBrowserAuthStarted: () => browserAuthStarted,
+        }),
       onProgress: (msg: string) => updateProgress(msg),
+      signal: params.signal,
     });
     stopProgress("OpenAI OAuth complete");
     return creds ?? null;
