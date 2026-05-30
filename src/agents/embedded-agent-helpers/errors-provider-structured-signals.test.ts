@@ -103,4 +103,17 @@ describe("provider failover hook structured signals", () => {
       }),
     ).toBe("billing");
   });
+
+  it("does not promote generic SDK type strings as structured provider descriptors", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue("billing");
+
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "demo-provider",
+        type: "api_error",
+        message: "unclassified provider failure",
+      }),
+    ).toBeNull();
+    expect(providerRuntimeMocks.classifyProviderPluginError).not.toHaveBeenCalled();
+  });
 });

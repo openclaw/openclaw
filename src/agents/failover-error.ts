@@ -169,6 +169,17 @@ function getErrorCode(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectErrorCode);
 }
 
+function isStableProviderErrorType(value: string): boolean {
+  if (
+    /^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
+      value,
+    )
+  ) {
+    return false;
+  }
+  return /^[A-Z][A-Z0-9_:-]*$/.test(value);
+}
+
 function readDirectErrorType(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -189,7 +200,7 @@ function readDirectErrorType(err: unknown): string | undefined {
     if (!trimmed || /^(?:error|exception)$/i.test(trimmed)) {
       return undefined;
     }
-    return trimmed;
+    return isStableProviderErrorType(trimmed) ? trimmed : undefined;
   }
   return undefined;
 }
