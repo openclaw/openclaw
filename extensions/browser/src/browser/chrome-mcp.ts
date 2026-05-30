@@ -908,6 +908,10 @@ async function waitForSharedPendingChromeMcpSession(
     if (!pending.settled) {
       abortPendingChromeMcpSession(pending, signal?.reason);
     } else if (closeIfLastWaiter && leaseSession) {
+      const current = sessions.get(pending.cacheKey);
+      if (current?.transport === leaseSession.transport) {
+        sessions.delete(pending.cacheKey);
+      }
       await closeChromeMcpSessionHandle(leaseSession);
     }
     return true;

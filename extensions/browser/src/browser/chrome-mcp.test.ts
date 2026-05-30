@@ -816,6 +816,54 @@ describe("chrome MCP page parsing", () => {
     await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
   });
 
+  it("starts a fresh session while last-waiter abort cleanup is closing", async () => {
+    let factoryCalls = 0;
+    let releaseFirstClose: (() => void) | undefined;
+    const firstCloseGate = new Promise<void>((resolve) => {
+      releaseFirstClose = resolve;
+    });
+    if (!releaseFirstClose) {
+      throw new Error("Expected Chrome MCP close release callback to be initialized");
+    }
+
+    const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
+    const factory: ChromeMcpSessionFactory = async () => {
+      factoryCalls += 1;
+      const session = createFakeSession();
+      const closeMock =
+        factoryCalls === 1
+          ? vi.fn(async () => {
+              await firstCloseGate;
+            })
+          : vi.fn().mockResolvedValue(undefined);
+      closeMocks.push(closeMock);
+      session.client.close = closeMock as typeof session.client.close;
+      if (factoryCalls === 1) {
+        session.ready = new Promise<void>(() => {});
+      }
+      return session;
+    };
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const ctrl = new AbortController();
+    const abortedTabsPromise = listChromeMcpTabs("chrome-live", undefined, {
+      signal: ctrl.signal,
+    });
+    const abortedTabsExpectation = expect(abortedTabsPromise).rejects.toThrow(/caller cancelled/);
+
+    await vi.waitFor(() => expect(factoryCalls).toBe(1));
+    ctrl.abort(new Error("caller cancelled"));
+    await vi.waitFor(() => expect(closeMocks[0]).toHaveBeenCalledTimes(1));
+
+    const tabsPromise = listChromeMcpTabs("chrome-live");
+    await vi.waitFor(() => expect(factoryCalls).toBe(2));
+    await expect(tabsPromise).resolves.toHaveLength(2);
+    expect(closeMocks[1]).not.toHaveBeenCalled();
+
+    releaseFirstClose();
+    await abortedTabsExpectation;
+  });
+
   it("keeps a ready-pending shared session cached when another waiter remains", async () => {
     let factoryCalls = 0;
     let releaseReady: (() => void) | undefined;
