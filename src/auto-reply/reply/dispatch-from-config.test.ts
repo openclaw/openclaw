@@ -7049,143 +7049,112 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("routes plugin-owned bindings under message-tool-only source delivery", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "binding-message-tool-only",
-      targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "-1001234567890:topic:11",
-        parentConversationId: "-1001234567890",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/tmp/plugin",
-      },
-    } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:-1001234567890",
-      To: "telegram:-1001234567890",
-      AccountId: "default",
-      MessageThreadId: 11,
-      ChatType: "group",
-      GroupSubject: "Dev",
-      Body: "observed message",
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
-
-    expect(result).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-message-tool-only");
-    const claimCall = firstMockCall(
-      hookMocks.runner.runInboundClaimForPluginOutcome,
-      "plugin inbound claim",
-    );
-    expect(claimCall[0]).toBe("openclaw-codex-app-server");
-    expect(claimCall[1]).toMatchObject({
-      channel: "telegram",
-      content: "observed message",
-      threadId: 11,
-    });
-    const claimContext = claimCall[2] as { pluginBinding?: { bindingId?: string } };
-    expect(claimContext.pluginBinding).toMatchObject({ bindingId: "binding-message-tool-only" });
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-  });
-
-  it("delivers plugin-owned binding replies under message-tool-only source delivery", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: { handled: true, reply: { text: "Codex native reply" } },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: "binding-message-tool-reply",
-      targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:reply-test",
-      },
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/tmp/plugin",
-      },
-    } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:reply-test",
-      To: "discord:channel:reply-test",
-      AccountId: "default",
-      ChatType: "channel",
-      Body: "observed message",
-      SessionKey: "agent:main:discord:channel:reply-test",
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: {
-        messages: {
-          groupChat: { visibleReplies: "message_tool" },
+  it.each(
+    [
+      {
+        name: "handled without a plugin reply",
+        bindingId: "binding-message-tool-only",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1001234567890:topic:11",
+          parentConversationId: "-1001234567890",
         },
-      } as OpenClawConfig,
+        ctx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:-1001234567890",
+          To: "telegram:-1001234567890",
+          AccountId: "default",
+          MessageThreadId: 11,
+          ChatType: "group",
+          GroupSubject: "Dev",
+          Body: "observed message",
+        },
+        cfg: emptyConfig,
+        replyOptions: {
+          sourceReplyDeliveryMode: "message_tool_only" as const,
+        },
+        expectedClaim: { channel: "telegram", threadId: 11 },
+      },
+      {
+        name: "handled with a plugin reply",
+        bindingId: "binding-message-tool-reply",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:reply-test",
+        },
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "discord:channel:reply-test",
+          To: "discord:channel:reply-test",
+          AccountId: "default",
+          ChatType: "channel",
+          Body: "observed message",
+          SessionKey: "agent:main:discord:channel:reply-test",
+        },
+        cfg: {
+          messages: {
+            groupChat: { visibleReplies: "message_tool" },
+          },
+        } as OpenClawConfig,
+        expectedClaim: { channel: "discord" },
+        pluginReply: { text: "Codex native reply" },
+      },
+    ] satisfies Array<{
+      name: string;
+      bindingId: string;
+      conversation: SessionBindingRecord["conversation"];
+      ctx: Partial<MsgContext>;
+      cfg: OpenClawConfig;
+      replyOptions?: { sourceReplyDeliveryMode: "message_tool_only" };
+      expectedClaim: Record<string, unknown>;
+      pluginReply?: ReplyPayload;
+    }>,
+  )("routes plugin-owned bindings under message-tool-only source delivery: $name", async (params) => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: params.pluginReply
+        ? { handled: true, reply: params.pluginReply }
+        : { handled: true },
+    });
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: params.bindingId,
+      targetSessionKey: "plugin-binding:codex:abc123",
+      targetKind: "session",
+      conversation: params.conversation,
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/tmp/plugin",
+      },
+    } satisfies SessionBindingRecord);
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx(params.ctx),
+      cfg: params.cfg,
       dispatcher,
       replyResolver,
+      replyOptions: params.replyOptions,
     });
 
     expect(result).toEqual({
@@ -7193,16 +7162,23 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       counts: { tool: 0, block: 0, final: 0 },
       sourceReplyDeliveryMode: "message_tool_only",
     });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-message-tool-reply");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
-      expect.objectContaining({ channel: "discord", content: "observed message" }),
       expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: "binding-message-tool-reply" }),
+        content: "observed message",
+        ...params.expectedClaim,
+      }),
+      expect.objectContaining({
+        pluginBinding: expect.objectContaining({ bindingId: params.bindingId }),
       }),
     );
     expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Codex native reply" });
+    if (params.pluginReply) {
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(params.pluginReply);
+    } else {
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps unmentioned plugin-bound fallback from ordinary group agent dispatch", async () => {
