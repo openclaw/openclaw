@@ -1494,17 +1494,22 @@ function validatePluginConfig(params: {
   schema?: Record<string, unknown>;
   cacheKey?: string;
   value?: unknown;
+  env?: NodeJS.ProcessEnv;
 }): { ok: boolean; value?: Record<string, unknown>; errors?: string[] } {
   // Resolve ${ENV_VAR} references in plugin config before validation and handoff.
   // Depending on the config-delivery path, plugin entry config can reach this
   // point with ${VAR} references unresolved; substitute here so plugins always
-  // receive resolved values (parity with provider config). Missing vars are left
-  // as their literal placeholder rather than throwing, matching read-time config
-  // substitution; this is a no-op when the config is already resolved.
+  // receive resolved values (parity with provider config). Substitute against the
+  // loader's per-load env (the same env used to resolve plugin roots and read-time
+  // config), falling back to process.env, so explicit-env callers are honored.
+  // Missing vars are left as their literal placeholder rather than throwing,
+  // matching read-time config substitution; no-op when config is already resolved.
   const value =
     params.value === undefined
       ? undefined
-      : resolveConfigEnvVars(params.value, process.env, { onMissing: () => undefined });
+      : resolveConfigEnvVars(params.value, params.env ?? process.env, {
+          onMissing: () => undefined,
+        });
   const schema = params.schema;
   if (!schema) {
     return { ok: true, value: value as Record<string, unknown> | undefined };
@@ -2193,6 +2198,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         schema: manifestRecord.configSchema,
         cacheKey: manifestRecord.schemaCacheKey,
         value: entry?.config,
+        env,
       });
 
       if (!validatedConfig.ok) {
@@ -2943,6 +2949,7 @@ export async function loadOpenClawPluginCliRegistry(
       schema: manifestRecord.configSchema,
       cacheKey: manifestRecord.schemaCacheKey,
       value: entry?.config,
+      env,
     });
     if (!validatedConfig.ok) {
       logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);

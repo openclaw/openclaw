@@ -1028,28 +1028,46 @@ describe("loadOpenClawPlugins", () => {
     const plugin = writePlugin({
       id: "env-config-probe",
       filename: "env-config-probe.cjs",
+      // Schema must permit apiKey, otherwise the empty-schema guard rejects the
+      // config before register() runs and the env substitution is never exercised.
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { apiKey: { type: "string" } },
+      },
       body: `module.exports = {
   id: "env-config-probe",
   register(api) {
-    globalThis.__ENV_CONFIG_PROBE = api.pluginConfig;
+    globalThis.envConfigProbeResult = api.pluginConfig;
   },
 };`,
     });
     const probe = globalThis as unknown as Record<string, unknown>;
-    delete probe.__ENV_CONFIG_PROBE;
-    withEnv({ ENV_CONFIG_PROBE_SECRET: "resolved-secret-value" }, () => {
+    const entries = {
+      "env-config-probe": { config: { apiKey: "${ENV_CONFIG_PROBE_SECRET}" } },
+    };
+
+    // Case 1: the referenced variable is present in process.env.
+    delete probe.envConfigProbeResult;
+    withEnv({ ENV_CONFIG_PROBE_SECRET: "process-env-secret" }, () => {
       loadRegistryFromSinglePlugin({
         plugin,
-        pluginConfig: {
-          allow: ["env-config-probe"],
-          entries: {
-            "env-config-probe": { config: { apiKey: "${ENV_CONFIG_PROBE_SECRET}" } },
-          },
-        },
+        pluginConfig: { allow: ["env-config-probe"], entries },
       });
     });
     // Before the fix, the plugin received the literal "${ENV_CONFIG_PROBE_SECRET}".
-    expect(probe.__ENV_CONFIG_PROBE).toMatchObject({ apiKey: "resolved-secret-value" });
+    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "process-env-secret" });
+
+    // Case 2: the referenced variable lives only in the loader's explicit env,
+    // not in process.env — proving the substitution honors the per-load env.
+    delete probe.envConfigProbeResult;
+    expect(process.env.ENV_CONFIG_PROBE_SECRET).toBeUndefined();
+    loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["env-config-probe"], entries },
+      options: { env: { ...process.env, ENV_CONFIG_PROBE_SECRET: "explicit-env-secret" } },
+    });
+    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "explicit-env-secret" });
   });
 
   it("emits loader startup trace failure counts for load and register failures", () => {
