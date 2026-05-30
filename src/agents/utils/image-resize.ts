@@ -107,7 +107,7 @@ export async function resizeImage(
         maxWidth: opts.maxWidth,
         maxHeight: opts.maxHeight,
       },
-      maxBase64Bytes: opts.maxBytes,
+      maxBytes: opts.maxBytes,
       opaque: { format: "jpeg", quality: opts.jpegQuality },
       transparent: { format: "png" },
       search: {
