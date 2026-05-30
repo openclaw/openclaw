@@ -20,6 +20,7 @@ import {
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
+import { isDefaultBrowserPluginEnabledByConfig } from "../config/browser-plugin-enabled.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   snapshotSessionOrigin,
@@ -369,6 +370,9 @@ async function ensureSessionRuntimeCleanup(params: {
   sessionId?: string;
 }) {
   const closeTrackedBrowserTabs = async () => {
+    if (!isDefaultBrowserPluginEnabledByConfig(params.cfg)) {
+      return 0;
+    }
     const closeKeys = new Set<string>([
       params.key,
       params.target.canonicalKey,

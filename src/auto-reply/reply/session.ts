@@ -6,6 +6,7 @@ import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { isDefaultBrowserPluginEnabledByConfig } from "../../config/browser-plugin-enabled.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -870,12 +871,14 @@ export async function initSessionState(params: {
       sessionFile: previousSessionEntry.sessionFile,
       reason: previousSessionEndReason ?? "unknown",
     });
-    void closeTrackedBrowserTabsForSessions({
-      sessionKeys: [previousSessionEntry.sessionId, sessionKey],
-      onWarn: (message) => log.warn(message),
-    }).catch((error) => {
-      log.warn(`browser tab cleanup failed: ${String(error)}`);
-    });
+    if (isDefaultBrowserPluginEnabledByConfig(cfg)) {
+      void closeTrackedBrowserTabsForSessions({
+        sessionKeys: [previousSessionEntry.sessionId, sessionKey],
+        onWarn: (message) => log.warn(message),
+      }).catch((error) => {
+        log.warn(`browser tab cleanup failed: ${String(error)}`);
+      });
+    }
   }
 
   const sessionCtx: TemplateContext = {

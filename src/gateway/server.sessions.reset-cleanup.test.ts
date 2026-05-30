@@ -110,6 +110,34 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   });
 });
 
+test.each([
+  ["root browser.enabled=false", { browser: { enabled: false } }],
+  [
+    "browser plugin entry is disabled",
+    { plugins: { entries: { browser: { enabled: false } } } },
+  ],
+] as const)("sessions.reset skips browser cleanup when %s", async (_name, disabledBrowserConfig) => {
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile(disabledBrowserConfig);
+  try {
+    await seedActiveMainSession();
+    embeddedRunMock.activeIds.add("sess-main");
+    embeddedRunMock.waitResults.set("sess-main", true);
+
+    const reset = await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
+      "sessions.reset",
+      {
+        key: "main",
+      },
+    );
+
+    expect(reset.ok).toBe(true);
+    expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  } finally {
+    await writeConfigFile({});
+  }
+});
+
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
