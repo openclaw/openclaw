@@ -7,7 +7,8 @@ const execFileMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({
   execFile: Object.assign(execFileMock, {
     [Symbol.for("nodejs.util.promisify.custom")]: vi.fn(),
-  }),
+    __promisify__: vi.fn(),
+  }) as typeof import("node:child_process").execFile,
 }));
 
 const originalVitest = process.env.VITEST;
