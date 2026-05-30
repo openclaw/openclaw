@@ -400,11 +400,7 @@ function storeHasUnsafeUntouchedHydratedSkillPrompts(
     if (!ref || !isSessionSkillPromptBlobReadable(storePath, ref)) {
       return true;
     }
-    if (
-      key !== changedSessionKey &&
-      typeof entry.skillsSnapshot?.prompt === "string" &&
-      serializedPromptRefKeys?.has(key)
-    ) {
+    if (serializedPromptRefs?.has(key)) {
       const projected = projectSessionStoreForPersistence({ storePath, store: { [key]: entry } });
       for (const blob of projected.promptBlobs.values()) {
         if (!blob.path) {
