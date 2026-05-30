@@ -1193,6 +1193,7 @@ export function buildConfiguredModelCatalog(params: {
         provider: providerId,
         id,
         name,
+        api: model.api ?? provider.api,
         contextWindow,
         contextTokens,
         reasoning,

@@ -42,7 +42,7 @@ function resolveProviderFilter(rawProvider: string | undefined): {
   if (provider === "openai") {
     return {
       provider,
-      externalCliProvider: "openai-codex",
+      externalCliProvider: "openai",
       matches: (profile) => profile.provider === "openai" || profile.provider === "openai-codex",
     };
   }

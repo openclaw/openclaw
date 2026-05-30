@@ -83,7 +83,9 @@ function hasOpenAICodexOAuthProfile(cfg: OpenClawConfig): boolean {
     return false;
   }
   return Object.values(profiles).some(
-    (profile) => profile.provider === "openai-codex" && profile.mode === "oauth",
+    (profile) =>
+      (profile.provider === "openai" || profile.provider === "openai-codex") &&
+      profile.mode === "oauth",
   );
 }
 

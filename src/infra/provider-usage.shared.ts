@@ -25,11 +25,20 @@ export const usageProviders: UsageProviderId[] = [
   "zai",
 ];
 
-export function resolveUsageProviderId(provider?: string | null): UsageProviderId | undefined {
+export function resolveUsageProviderId(
+  provider?: string | null,
+  options?: { credentialType?: string | null },
+): UsageProviderId | undefined {
   if (!provider) {
     return undefined;
   }
   const normalized = normalizeProviderId(provider);
+  if (
+    normalized === "openai" &&
+    (options?.credentialType === "oauth" || options?.credentialType === "token")
+  ) {
+    return "openai-codex";
+  }
   if (
     normalized === "minimax-portal" ||
     normalized === "minimax-cn" ||
