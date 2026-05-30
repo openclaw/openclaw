@@ -397,6 +397,18 @@ export class GatewayClient {
     if (ws) {
       const stopPromise = this.createPendingStop(ws);
       ws.close();
+      // Unref the underlying socket so the event loop can drain naturally
+      // in CLI contexts (e.g. `openclaw message send`) where the caller exits
+      // after the send completes.  The TCP/unix close-handshake may outlive
+      // `process.exit()`, but we must not let the open socket block a natural
+      // exit (no explicit process.exit) — both cases are covered by unreffing.
+      // The forceTerminateTimer above is already .unref()'d; the socket itself
+      // must be too.
+      try {
+        (ws as unknown as { _socket?: { unref?(): void } })._socket?.unref?.();
+      } catch {
+        // _socket is internal to the `ws` package; ignore if unavailable.
+      }
       const forceTerminateTimer = setTimeout(() => {
         try {
           ws.terminate();

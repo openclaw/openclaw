@@ -32,6 +32,9 @@ class MockWebSocket {
   terminateCalls = 0;
   autoCloseOnClose = true;
   readyState = MockWebSocket.CONNECTING;
+  // Simulate the internal `_socket` exposed by the `ws` package so tests can
+  // assert that beginStop() unrefs it.
+  _socket: { unref: ReturnType<typeof vi.fn> } = { unref: vi.fn() };
 
   constructor(_url: string, _options?: unknown) {
     wsInstances.push(this);
@@ -416,6 +419,32 @@ describe("GatewayClient close handling", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("unrefs the underlying socket on stop so the event loop can drain (issue #88230)", () => {
+    // The CLI `openclaw message send` path calls client.stop() after delivery
+    // and relies on a natural process exit.  If the socket's file descriptor
+    // stays ref'd, Node's event loop never drains and the process hangs
+    // indefinitely.  beginStop() must call _socket.unref() immediately after
+    // ws.close() so both the explicit-process.exit and natural-drain paths
+    // work correctly.
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    // Disable auto-close so the socket stays in CLOSING state, mirroring a
+    // real-world scenario where the remote end hasn't replied to the close
+    // frame yet.
+    ws.autoCloseOnClose = false;
+
+    expect(ws._socket.unref).not.toHaveBeenCalled();
+
+    client.stop();
+
+    expect(ws.closeCalls).toBe(1);
+    expect(ws._socket.unref).toHaveBeenCalledTimes(1);
   });
 
   it("waits for a lingering socket to terminate in stopAndWait", async () => {
