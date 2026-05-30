@@ -1215,6 +1215,56 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("directly delivers direct-message subagent text when the announce agent omits the result", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "TG88042_NO_REOUTPUT" }],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "direct completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "TG88042_CHILD",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "acct-1",
+        to: "dm:U123",
+        content: "TG88042_CHILD",
+        idempotencyKey: "announce-dm-fallback-empty:text-direct",
+      }),
+    );
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
   it("does not directly deliver failed subagent placeholder output", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -4176,14 +4226,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
-  it("keeps automatic final delivery for direct subagent completions", async () => {
+  it("requires message-tool delivery for direct subagent completions", async () => {
     const callGateway = createGatewayMock({
       result: {
-        payloads: [{ text: "The subagent is done." }],
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["The subagent is done: child completion output"],
       },
     });
+    const sendMessage = createSendMessageMock();
     const result = await deliverDiscordDirectMessageCompletion({
       callGateway,
+      sendMessage,
       sourceTool: "subagent_announce",
       internalEvents: [
         {
@@ -4206,12 +4260,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
     });
     expectGatewayAgentParams(callGateway, {
-      deliver: true,
+      deliver: false,
       channel: "discord",
       accountId: "acct-1",
       to: "dm:U123",
       threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("falls back to the external requester route when completion origin is internal", async () => {
