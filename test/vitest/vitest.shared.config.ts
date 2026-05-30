@@ -238,6 +238,54 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "index.ts"),
       },
       {
+        find: "@openclaw/model-catalog-core/configured-model-refs",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "configured-model-refs.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/model-catalog-refs",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "model-catalog-refs.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/provider-id",
+        replacement: path.join(repoRoot, "packages", "model-catalog-core", "src", "provider-id.ts"),
+      },
+      {
+        find: "@openclaw/model-catalog-core/provider-model-id-normalization",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "provider-model-id-normalization.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/provider-model-id-normalize",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "provider-model-id-normalize.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core",
+        replacement: path.join(repoRoot, "packages", "model-catalog-core", "src", "index.ts"),
+      },
+      {
         find: "@openclaw/net-policy/ip",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "ip.ts"),
       },

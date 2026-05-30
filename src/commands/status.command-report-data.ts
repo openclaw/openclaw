@@ -4,6 +4,7 @@ import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { resolveOsSummary } from "../infra/os-summary.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
+import { timestampMsToIsoString } from "../shared/number-coercion.js";
 import type { HealthSummary } from "./health.js";
 import {
   buildStatusChannelsTableRows,
@@ -142,7 +143,7 @@ export async function buildStatusCommandReportData(
   const retainedLostLine =
     (params.opts.deep || params.opts.verbose) && retainedLost && retainedLost.count > 0
       ? params.theme.muted(
-          `${retainedLost.count} lost task${retainedLost.count === 1 ? "" : "s"} retained until ${retainedLost.nextCleanupAfter ? new Date(retainedLost.nextCleanupAfter).toISOString() : "cleanupAfter"}`,
+          `${retainedLost.count} lost task${retainedLost.count === 1 ? "" : "s"} retained until ${timestampMsToIsoString(retainedLost.nextCleanupAfter) ?? "cleanupAfter"}`,
         )
       : null;
 

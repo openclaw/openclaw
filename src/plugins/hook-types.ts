@@ -670,6 +670,10 @@ export type PluginHookSubagentDeliveryTargetResult = {
 
 export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
   runId: string;
+  /** Fully resolved provider/model ref applied to the spawned child session. */
+  resolvedModel?: string;
+  /** Provider prefix parsed from resolvedModel when the ref includes one. */
+  resolvedProvider?: string;
 };
 
 export type PluginHookSubagentEndedEvent = {

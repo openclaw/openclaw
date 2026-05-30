@@ -1,6 +1,7 @@
 import { rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_DATE_TIMESTAMP_MS } from "../shared/number-coercion.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -339,6 +340,31 @@ describe("plugin state keyed store", () => {
       await expect(store.lookup("override")).resolves.toEqual({ value: "override" });
       expect(sweepExpiredPluginStateEntries()).toBe(1);
       expect((await store.entries()).map((entry) => entry.key)).toEqual(["override"]);
+    });
+  });
+
+  it("rejects plugin state ttl when expiry cannot fit in a Date timestamp", async () => {
+    await withPluginStateTestState(async () => {
+      const store = createPluginStateKeyedStore("discord", {
+        namespace: "ttl-bounds",
+        maxEntries: 10,
+      });
+
+      await expectPluginStateStoreError(store.register("huge", true, { ttlMs: Number.MAX_VALUE }), {
+        code: "PLUGIN_STATE_INVALID_INPUT",
+        operation: "register",
+      });
+
+      const nowSpy = vi.spyOn(Date, "now");
+      try {
+        nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+        await expectPluginStateStoreError(store.register("overflow", true, { ttlMs: 60_000 }), {
+          code: "PLUGIN_STATE_INVALID_INPUT",
+          operation: "register",
+        });
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 
@@ -681,6 +707,28 @@ describe("plugin state keyed store", () => {
       const failedSteps = result.steps.filter((step) => !step.ok);
       expect(failedSteps).toStrictEqual([]);
       expect(JSON.stringify(result)).not.toContain("probe-value");
+    });
+  });
+
+  it("reports an unhealthy probe when the clock cannot produce a valid ttl expiry", async () => {
+    await withPluginStateTestState(async () => {
+      const nowSpy = vi.spyOn(Date, "now");
+      nowSpy.mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+
+      try {
+        const result = probePluginStateStore();
+
+        expect(result.ok).toBe(false);
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({
+            name: "probe",
+            ok: false,
+            code: "PLUGIN_STATE_INVALID_INPUT",
+          }),
+        );
+      } finally {
+        nowSpy.mockRestore();
+      }
     });
   });
 });

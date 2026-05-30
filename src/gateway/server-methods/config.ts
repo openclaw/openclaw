@@ -37,6 +37,10 @@ import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
 } from "../../secrets/runtime.js";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "../../shared/number-coercion.js";
 import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { diffConfigPaths } from "../config-diff.js";
@@ -366,16 +370,31 @@ function clearConfigSchemaResponseCache() {
 }
 
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
-  const now = Date.now();
-  if (configSchemaResponseCache && configSchemaResponseCache.expiresAtMs > now) {
+  const now = asDateTimestampMs(Date.now());
+  const cachedExpiresAt =
+    configSchemaResponseCache === null
+      ? undefined
+      : asDateTimestampMs(configSchemaResponseCache.expiresAtMs);
+  if (
+    configSchemaResponseCache &&
+    now !== undefined &&
+    cachedExpiresAt !== undefined &&
+    cachedExpiresAt > now
+  ) {
     return configSchemaResponseCache.response;
+  }
+  if (configSchemaResponseCache) {
+    configSchemaResponseCache = null;
   }
 
   const response = loadGatewayRuntimeConfigSchema();
-  configSchemaResponseCache = {
-    expiresAtMs: Date.now() + CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS,
-    response,
-  };
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(CONFIG_SCHEMA_RESPONSE_CACHE_TTL_MS);
+  if (expiresAtMs !== undefined) {
+    configSchemaResponseCache = {
+      expiresAtMs,
+      response,
+    };
+  }
   return response;
 }
 

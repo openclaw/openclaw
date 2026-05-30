@@ -200,7 +200,7 @@ describe("package acceptance workflow", () => {
     expect(hydrateWindowsFetch.run).not.toContain("StandardError.ReadToEnd()");
     expect(hydrateWindowsFetch.run).toContain("git fetch failed with exit code $($fetch.ExitCode)");
     expect(hydrateWindowsFetch.run).toContain(
-      '--no-tags --no-progress --prune --no-recurse-submodules --depth=50',
+      "--no-tags --no-progress --prune --no-recurse-submodules --depth=50",
     );
     expect(hydrateWindowsFetch.run).toContain('"+refs/heads/main:refs/remotes/origin/main"');
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").shell).toBe("powershell");
@@ -219,6 +219,26 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrateGithub, "Hydrate provider env helper").env?.FACTORY_API_KEY).toBe(
       "${{ secrets.FACTORY_API_KEY }}",
     );
+  });
+
+  it("keeps default Crabbox capacity fail-closed and provider-neutral", () => {
+    const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
+      aws?: { region?: string };
+      capacity?: {
+        availabilityZones?: string[];
+        fallback?: string;
+        market?: string;
+        regions?: string[];
+      };
+      provider?: string;
+    };
+
+    expect(crabboxConfig.provider).toBe("azure");
+    expect(crabboxConfig.capacity?.market).toBe("spot");
+    expect(crabboxConfig.capacity?.fallback).toBe("spot-only");
+    expect(crabboxConfig.capacity?.regions).toBeUndefined();
+    expect(crabboxConfig.capacity?.availabilityZones).toBeUndefined();
+    expect(crabboxConfig.aws?.region).toBe("eu-west-1");
   });
 
   it("resolves candidate package sources before reusing Docker E2E lanes", () => {

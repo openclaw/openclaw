@@ -25,6 +25,18 @@ type PluginInstallActionOptions = {
   marketplace?: string;
 };
 
+function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  let promise: Promise<T> | undefined;
+  return () => (promise ??= load());
+}
+
+const loadPluginsConfigState = createModuleLoader(() => import("../plugins/config-state.js"));
+const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
+const loadPluginsCommandHelpers = createModuleLoader(() => import("./plugins-command-helpers.js"));
+const loadPluginsRegistryRefresh = createModuleLoader(
+  () => import("./plugins-registry-refresh.js"),
+);
+
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
 }
@@ -168,12 +180,10 @@ export async function runPluginsEnableCommand(id: string): Promise<void> {
   assertConfigWriteAllowedInCurrentMode();
 
   const { enablePluginInConfig } = await import("../plugins/enable.js");
-  const { normalizePluginId } = await import("../plugins/config-state.js");
-  const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
-  const { applySlotSelectionForPlugin, logSlotWarnings } =
-    await import("./plugins-command-helpers.js");
-  const { refreshPluginRegistryAfterConfigMutation } =
-    await import("./plugins-registry-refresh.js");
+  const { normalizePluginId } = await loadPluginsConfigState();
+  const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
+  const { applySlotSelectionForPlugin, logSlotWarnings } = await loadPluginsCommandHelpers();
+  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
   const snapshot = await readConfigFileSnapshot();
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const report = buildPluginRegistrySnapshotReport({ config: cfg });
@@ -212,11 +222,10 @@ export async function runPluginsEnableCommand(id: string): Promise<void> {
 export async function runPluginsDisableCommand(id: string): Promise<void> {
   assertConfigWriteAllowedInCurrentMode();
 
-  const { normalizePluginId } = await import("../plugins/config-state.js");
-  const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
+  const { normalizePluginId } = await loadPluginsConfigState();
+  const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
   const { setPluginEnabledInConfig } = await import("./plugins-config.js");
-  const { refreshPluginRegistryAfterConfigMutation } =
-    await import("./plugins-registry-refresh.js");
+  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
   const snapshot = await readConfigFileSnapshot();
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const report = buildPluginRegistrySnapshotReport({ config: cfg });
@@ -313,7 +322,7 @@ export async function runPluginsDoctorCommand(): Promise<void> {
     buildPluginCompatibilityNotices,
     buildPluginDiagnosticsReport,
     formatPluginCompatibilityNotice,
-  } = await import("../plugins/status.js");
+  } = await loadPluginsStatus();
   const {
     collectStalePluginConfigWarnings,
     isStalePluginAutoRepairBlocked,
@@ -428,7 +437,7 @@ export async function runPluginMarketplaceListCommand(
   opts: PluginMarketplaceListOptions,
 ): Promise<void> {
   const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
-  const { createPluginInstallLogger } = await import("./plugins-command-helpers.js");
+  const { createPluginInstallLogger } = await loadPluginsCommandHelpers();
   const result = await listMarketplacePlugins({
     marketplace: source,
     logger: createPluginInstallLogger(),

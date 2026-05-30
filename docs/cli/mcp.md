@@ -348,7 +348,8 @@ For broader testing context, see [Testing](/help/testing).
 
 ## OpenClaw as an MCP client registry
 
-This is the `openclaw mcp list`, `show`, `set`, and `unset` path.
+This is the `openclaw mcp list`, `show`, `status`, `probe`, `set`, `tools`,
+and `unset` path.
 
 These commands do not expose OpenClaw over MCP. They manage OpenClaw-owned MCP server definitions under `mcp.servers` in OpenClaw config.
 
@@ -357,10 +358,15 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 <AccordionGroup>
   <Accordion title="Important behavior">
     - these commands only read or write OpenClaw config
-    - they do not connect to the target MCP server
+    - `status`, `list`, `show`, `set`, `tools`, and `unset` do not connect to the target MCP server
+    - `probe` connects to the selected server or all configured servers, lists tools, and reports capabilities/diagnostics
     - they do not validate whether the command, URL, or remote transport is reachable right now
     - runtime adapters decide which transport shapes they actually support at execution time
     - embedded OpenClaw exposes configured MCP tools in normal `coding` and `messaging` tool profiles; `minimal` still hides them, and `tools.deny: ["bundle-mcp"]` disables them explicitly
+    - per-server `toolFilter.include` and `toolFilter.exclude` filter discovered MCP tools before they become OpenClaw tools
+    - servers that advertise resources or prompts also expose utility tools for listing/reading resources and listing/fetching prompts; those generated utility names (`resources_list`, `resources_read`, `prompts_list`, `prompts_get`) use the same include/exclude filter
+    - dynamic MCP tool-list changes invalidate the cached catalog for that session; the next discovery/use refreshes from the server
+    - repeated MCP tool request/protocol failures pause that server briefly so one broken server does not consume the whole turn
     - session-scoped bundled MCP runtimes are reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10 minutes; set `0` to disable) and one-shot embedded runs clean them up at run end
 
   </Accordion>
@@ -387,14 +393,20 @@ Commands:
 
 - `openclaw mcp list`
 - `openclaw mcp show [name]`
+- `openclaw mcp status`
+- `openclaw mcp probe [name]`
 - `openclaw mcp set <name> <json>`
+- `openclaw mcp tools <name> [--include csv] [--exclude csv] [--clear]`
 - `openclaw mcp unset <name>`
 
 Notes:
 
 - `list` sorts server names.
 - `show` without a name prints the full configured MCP server object.
+- `status` classifies configured transports without connecting.
+- `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
 - `set` expects one JSON object value on the command line.
+- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
 - Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
 - `unset` fails if the named server does not exist.
 
@@ -403,7 +415,10 @@ Examples:
 ```bash
 openclaw mcp list
 openclaw mcp show context7 --json
+openclaw mcp status
+openclaw mcp probe context7 --json
 openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
+openclaw mcp tools context7 --include 'resolve-library-id,get-library-docs'
 openclaw mcp set docs '{"url":"https://mcp.example.com","transport":"streamable-http"}'
 openclaw mcp unset context7
 ```
@@ -420,7 +435,11 @@ Example config shape:
       },
       "docs": {
         "url": "https://mcp.example.com",
-        "transport": "streamable-http"
+        "transport": "streamable-http",
+        "toolFilter": {
+          "include": ["search_*"],
+          "exclude": ["admin_*"]
+        }
       }
     }
   }

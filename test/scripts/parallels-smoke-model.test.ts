@@ -17,6 +17,10 @@ import {
 } from "../../scripts/e2e/parallels/common.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
 import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-server.ts";
+import { parseArgs as parseLinuxSmokeArgs } from "../../scripts/e2e/parallels/linux-smoke.ts";
+import { parseArgs as parseMacosSmokeArgs } from "../../scripts/e2e/parallels/macos-smoke.ts";
+import { parseArgs as parseNpmUpdateSmokeArgs } from "../../scripts/e2e/parallels/npm-update-smoke.ts";
+import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 const WRAPPERS = {
@@ -44,6 +48,7 @@ const TS_PATHS = {
   powershell: "scripts/e2e/parallels/powershell.ts",
   providerAuth: "scripts/e2e/parallels/provider-auth.ts",
   snapshots: "scripts/e2e/parallels/snapshots.ts",
+  smokeCommon: "scripts/e2e/parallels/smoke-common.ts",
   windows: "scripts/e2e/parallels/windows-smoke.ts",
   windowsGit: "scripts/e2e/parallels/windows-git.ts",
 };
@@ -126,6 +131,35 @@ describe("Parallels smoke model selection", () => {
     }
   });
 
+  it("accepts leading package-manager separators and still honors later terminators", () => {
+    expect(parseLinuxSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
+    expect(parseLinuxSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe(
+      "fresh",
+    );
+    expect(parseMacosSmokeArgs(["--", "--mode", "upgrade"]).mode).toBe("upgrade");
+    expect(parseMacosSmokeArgs(["--mode", "fresh", "--", "--mode", "upgrade"]).mode).toBe(
+      "fresh",
+    );
+    expect(
+      parseNpmUpdateSmokeArgs(["--", "--package-spec", "openclaw@2026.5.1"]).packageSpec,
+    ).toBe("openclaw@2026.5.1");
+    expect(
+      parseNpmUpdateSmokeArgs([
+        "--package-spec",
+        "openclaw@2026.5.1",
+        "--",
+        "--package-spec",
+        "openclaw@latest",
+      ]).packageSpec,
+    ).toBe("openclaw@2026.5.1");
+    expect(parseWindowsSmokeArgs(["--", "--upgrade-from-packed-main"]).upgradeFromPackedMain).toBe(
+      true,
+    );
+    expect(parseWindowsSmokeArgs(["--mode", "fresh", "--", "--upgrade-from-packed-main"]).upgradeFromPackedMain).toBe(
+      false,
+    );
+  });
+
   it("keeps provider auth and model defaults in the shared TypeScript helper", () => {
     const providerAuth = readFileSync(TS_PATHS.providerAuth, "utf8");
 
@@ -163,6 +197,7 @@ describe("Parallels smoke model selection", () => {
     const packageArtifact = readFileSync(TS_PATHS.packageArtifact, "utf8");
     const parallelsVm = readFileSync(TS_PATHS.parallelsVm, "utf8");
     const snapshots = readFileSync(TS_PATHS.snapshots, "utf8");
+    const smokeCommon = readFileSync(TS_PATHS.smokeCommon, "utf8");
 
     expect(common).toContain('export * from "./host-command.ts"');
     expect(common).toContain('export * from "./lane-runner.ts"');
@@ -180,12 +215,16 @@ describe("Parallels smoke model selection", () => {
     expect(hostServer).toContain("export async function startHostServer");
     expect(hostServer).toContain("http.server");
     expect(snapshots).toContain("export function resolveSnapshot");
+    expect(smokeCommon).toContain("runSmokeLane");
+    expect(smokeCommon).toContain("abstract class SmokeRunController");
 
     for (const scriptPath of OS_TS_PATHS) {
       const script = readFileSync(scriptPath, "utf8");
 
       expect(script, scriptPath).toContain("resolveSnapshot");
-      expect(script, scriptPath).toContain("runSmokeLane");
+      expect(script, scriptPath).toContain(
+        scriptPath === TS_PATHS.macos ? "runSmokeLane" : "SmokeRunController",
+      );
       expect(script, scriptPath).not.toContain("def aliases(name: str)");
     }
   });
@@ -209,8 +248,9 @@ describe("Parallels smoke model selection", () => {
         `#!/usr/bin/env bash
 set -euo pipefail
 printf 'BEGIN_MARKER\\n' >&2
-head -c 200000 </dev/zero | tr '\\0' x >&2
+head -c 50000 </dev/zero | tr '\\0' x >&2
 printf '\\nTAIL_MARKER\\n' >&2
+head -c 30000 </dev/zero | tr '\\0' x >&2
 exit 42
 `,
       );

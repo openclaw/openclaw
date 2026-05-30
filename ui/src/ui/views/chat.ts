@@ -1249,6 +1249,7 @@ export function renderChat(props: ChatProps) {
               return renderStreamingGroup(
                 item.text,
                 item.startedAt,
+                item.isStreaming,
                 props.onOpenSidebar,
                 assistantIdentity,
                 props.basePath,

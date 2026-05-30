@@ -3,6 +3,7 @@ import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
+import { resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 // Grace period to keep resolved entries for late awaitDecision calls
@@ -56,12 +57,16 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
 
   create(request: TPayload, timeoutMs: number, id?: string | null): ExecApprovalRecord<TPayload> {
     const now = Date.now();
+    const expiresAtMs = resolveExpiresAtMsFromDurationMs(timeoutMs, { nowMs: now });
+    if (expiresAtMs === undefined) {
+      throw new Error("approval expiry is unavailable");
+    }
     const resolvedId = id && id.trim().length > 0 ? id.trim() : randomUUID();
     const record: ExecApprovalRecord<TPayload> = {
       id: resolvedId,
       request,
       createdAtMs: now,
-      expiresAtMs: now + timeoutMs,
+      expiresAtMs,
     };
     return record;
   }

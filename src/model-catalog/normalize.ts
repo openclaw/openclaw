@@ -1,4 +1,9 @@
 import {
+  buildModelCatalogMergeKey,
+  buildModelCatalogRef,
+  normalizeModelCatalogProviderId,
+} from "@openclaw/model-catalog-core/model-catalog-refs";
+import {
   MODEL_APIS,
   isModelThinkingFormat,
   type ModelApi,
@@ -13,11 +18,6 @@ import {
   normalizeTrimmedStringList,
 } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
-import {
-  buildModelCatalogMergeKey,
-  buildModelCatalogRef,
-  normalizeModelCatalogProviderId,
-} from "./refs.js";
 import type {
   ModelCatalog,
   ModelCatalogAlias,

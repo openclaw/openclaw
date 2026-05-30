@@ -87,7 +87,7 @@ import {
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
-  OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
   resolveContextConfigProviderForRuntime,
   resolveSelectedOpenAIRuntimeProvider,
@@ -705,6 +705,7 @@ export async function runEmbeddedAgent(
             // blocking on unrelated provider discovery.
             skipAgentDiscovery: true,
             workspaceDir: resolvedWorkspace,
+            authProfileId: params.authProfileId,
           },
         );
         firstModelResolution ??= candidateResolution;
@@ -729,6 +730,7 @@ export async function runEmbeddedAgent(
             params.config,
             {
               workspaceDir: resolvedWorkspace,
+              authProfileId: params.authProfileId,
             },
           );
           firstModelResolution ??= candidateResolution;
@@ -780,17 +782,17 @@ export async function runEmbeddedAgent(
 
       const pluginHarnessNeedsOpenClawAuthBootstrap =
         pluginHarnessOwnsTransport &&
-        provider === OPENAI_CODEX_PROVIDER_ID &&
+        provider === OPENAI_PROVIDER_ID &&
         effectiveModel.api === "openai-codex-responses";
       const openClawNativeCodexResponsesNeedsAuthBootstrap =
         !pluginHarnessOwnsTransport &&
-        provider === OPENAI_CODEX_PROVIDER_ID &&
+        provider === OPENAI_PROVIDER_ID &&
         effectiveModel.api === "openai-codex-responses";
       let piExternalCliAuthScope = pluginHarnessOwnsTransport
         ? { ignoreAutoPreferredProfile: false }
         : openClawNativeCodexResponsesNeedsAuthBootstrap
           ? {
-              providerIds: [OPENAI_CODEX_PROVIDER_ID],
+              providerIds: [OPENAI_PROVIDER_ID],
               ignoreAutoPreferredProfile: false,
             }
           : resolveExternalCliAuthOverlayScopeFromSelection({
@@ -827,7 +829,7 @@ export async function runEmbeddedAgent(
           ? createEmptyAuthProfileStore()
           : pluginHarnessNeedsOpenClawAuthBootstrap
             ? ensureAuthProfileStore(agentDir, {
-                externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
+                externalCliProviderIds: [OPENAI_PROVIDER_ID],
                 allowKeychainPrompt: false,
               })
             : piExternalCliAuthScope.providerIds

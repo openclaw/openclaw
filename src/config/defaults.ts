@@ -1,10 +1,10 @@
-import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   collectManifestModelIdNormalizationPolicies,
   normalizeConfiguredProviderCatalogModelId,
-} from "../shared/provider-model-id-normalization.js";
+} from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord } from "../shared/record-coerce.js";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,

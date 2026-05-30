@@ -200,6 +200,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   if (!commandResult.shouldContinue) {
     return { handled: true, reply: commandResult.reply };
   }
+  const continuationTriggerBodyNormalized = command.rawBodyNormalized;
 
   const directiveResult = await resolveReplyDirectives({
     ctx: params.ctx,
@@ -216,7 +217,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionScope: sessionState.sessionScope,
     groupResolution: sessionState.groupResolution,
     isGroup: sessionState.isGroup,
-    triggerBodyNormalized: sessionState.triggerBodyNormalized,
+    triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
     commandAuthorized: params.commandAuthorized,
     defaultProvider: params.defaultProvider,

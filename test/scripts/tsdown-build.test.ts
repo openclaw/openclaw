@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
+  parseTsdownBuildArgs,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
   pruneUntrackedGeneratedSourceDeclarations,
@@ -34,6 +36,41 @@ async function expectPathMissing(targetPath: string) {
 }
 
 describe("resolveTsdownBuildInvocation", () => {
+  it("parses wrapper help before any tsdown work", () => {
+    expect(parseTsdownBuildArgs(["--help"])).toEqual({ forwardedArgs: [], help: true });
+    expect(parseTsdownBuildArgs(["--format", "esm"])).toEqual({
+      forwardedArgs: ["--format", "esm"],
+      help: false,
+    });
+  });
+
+  it("prints wrapper help without invoking pnpm or tsdown", () => {
+    const result = spawnSync(process.execPath, ["scripts/tsdown-build.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/tsdown-build.mjs");
+    expect(result.stdout).not.toContain("Scope:");
+    expect(result.stdout).not.toContain("pnpm");
+  });
+
+  it("forwards explicit tsdown args after wrapper args are parsed", () => {
+    const result = resolveTsdownBuildInvocation({
+      args: ["--format", "esm"],
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result.args).toContain("tsdown");
+    expect(result.args).toEqual(expect.arrayContaining(["--config-loader", "unrun", "--no-clean"]));
+    expect(result.args.slice(-2)).toEqual(["--format", "esm"]);
+  });
+
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
     const rootDir = createTempDir("openclaw-pnpm-runner-");
     const npmExecPath = path.join(rootDir, "pnpm.cjs");

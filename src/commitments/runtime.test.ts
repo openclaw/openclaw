@@ -293,6 +293,49 @@ describe("commitment extraction runtime", () => {
     ).toBe(true);
   });
 
+  it("uses the queued item timestamp for terminal failure cooldowns", async () => {
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(async () => {
+      throw new Error("OAuth token refresh failed");
+    });
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+
+    try {
+      await expect(drainCommitmentExtractionQueue()).rejects.toThrow("OAuth token refresh failed");
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs: nowMs + 1,
+          agentId: "main",
+          sessionKey: "agent:main:discord:channel-1",
+          channel: "discord",
+          userText: "The interview is tomorrow.",
+          assistantText: "I hope it goes well.",
+        }),
+      ).toBe(false);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("bounds hidden extraction queue growth before spending extractor tokens", async () => {
     const cfg = await createConfig();
     const extractBatch = vi.fn(

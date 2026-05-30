@@ -1,7 +1,7 @@
+import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   loadOpenClawProviderIndex,
-  normalizeModelCatalogProviderId,
   planProviderIndexModelCatalogRows,
 } from "../../model-catalog/index.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";

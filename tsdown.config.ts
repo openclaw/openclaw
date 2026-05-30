@@ -394,6 +394,22 @@ function buildMediaGenerationCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildMediaUnderstandingCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-understanding-common/src/index.ts",
+    "active-model": "packages/media-understanding-common/src/active-model.ts",
+    defaults: "packages/media-understanding-common/src/defaults.ts",
+    errors: "packages/media-understanding-common/src/errors.ts",
+    format: "packages/media-understanding-common/src/format.ts",
+    "openai-compatible-video": "packages/media-understanding-common/src/openai-compatible-video.ts",
+    "output-extract": "packages/media-understanding-common/src/output-extract.ts",
+    "provider-id": "packages/media-understanding-common/src/provider-id.ts",
+    "provider-supports": "packages/media-understanding-common/src/provider-supports.ts",
+    types: "packages/media-understanding-common/src/types.ts",
+    video: "packages/media-understanding-common/src/video.ts",
+  };
+}
+
 function buildMarkdownCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/markdown-core/src/index.ts",
@@ -447,6 +463,18 @@ function buildLlmCoreDistEntries(): Record<string, string> {
     "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
     "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",
     validation: "packages/llm-core/src/validation.ts",
+  };
+}
+
+function buildModelCatalogCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/model-catalog-core/src/index.ts",
+    "configured-model-refs": "packages/model-catalog-core/src/configured-model-refs.ts",
+    "model-catalog-refs": "packages/model-catalog-core/src/model-catalog-refs.ts",
+    "provider-id": "packages/model-catalog-core/src/provider-id.ts",
+    "provider-model-id-normalization":
+      "packages/model-catalog-core/src/provider-model-id-normalization.ts",
+    "provider-model-id-normalize": "packages/model-catalog-core/src/provider-model-id-normalize.ts",
   };
 }
 
@@ -595,6 +623,12 @@ export default defineConfig([
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaUnderstandingCoreDistEntries(),
+    outDir: "packages/media-understanding-common/dist",
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildMarkdownCoreDistEntries(),
     outDir: "packages/markdown-core/dist",
     deps: {
@@ -627,6 +661,12 @@ export default defineConfig([
     deps: {
       neverBundle: shouldExternalizeLlmCoreDependency,
     },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildModelCatalogCoreDistEntries(),
+    outDir: "packages/model-catalog-core/dist",
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

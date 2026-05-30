@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured-model-refs";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { resolveConfiguredProviderFallback } from "../../../agents/configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
@@ -6,8 +8,6 @@ import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import { openAIProviderUsesCodexRuntimeByDefault } from "../../../agents/openai-codex-routing.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
-import { AGENT_MODEL_CONFIG_KEYS } from "../../../config/model-refs.js";
 import { loadSessionStore, updateSessionStore } from "../../../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
@@ -47,6 +47,7 @@ type SharedDefaultCompactionOverrideConsumers = Record<CompactionOverrideKey, bo
 
 type MutableRecord = Record<string, unknown>;
 const COMPACTION_OVERRIDE_KEYS: readonly CompactionOverrideKey[] = ["model", "provider"];
+const AGENT_MEDIA_MODEL_CONFIG_KEYS = ["imageGenerationModel", "videoGenerationModel"] as const;
 const LOSSLESS_CONTEXT_ENGINE_ID = "lossless-claw";
 type SessionRouteRepairResult = {
   changed: boolean;
@@ -866,6 +867,13 @@ function collectAgentModelRefs(params: {
       path: `${params.path}.${key}`,
       value: agent[key],
       runtime: key === "model" ? params.runtime : undefined,
+    });
+  }
+  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+    collectModelConfigSlot({
+      hits: params.hits,
+      path: `${params.path}.${key}`,
+      value: agent[key],
     });
   }
   collectStringModelSlot({
@@ -1706,6 +1714,14 @@ function rewriteAgentModelRefs(params: {
     key: "model",
     path: `${params.path}.compaction.memoryFlush.model`,
   });
+  for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
+    rewriteModelConfigSlot({
+      hits: params.hits,
+      container: agent,
+      key,
+      path: `${params.path}.${key}`,
+    });
+  }
   if (params.rewriteModelsMap) {
     const start = params.hits.length;
     rewriteModelsMap({

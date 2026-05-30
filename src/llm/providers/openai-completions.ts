@@ -579,15 +579,20 @@ function buildParams(
   }
 
   if (options?.maxTokens) {
+    const maxTokens = clampOpenAICompletionsMaxTokens(model, options.maxTokens);
     if (compat.maxTokensField === "max_tokens") {
-      params.max_tokens = options.maxTokens;
+      params.max_tokens = maxTokens;
     } else {
-      params.max_completion_tokens = options.maxTokens;
+      params.max_completion_tokens = maxTokens;
     }
   }
 
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
+  }
+
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    params.stop = options.stop;
   }
 
   if (context.tools && context.tools.length > 0) {
@@ -675,6 +680,19 @@ function buildParams(
   }
 
   return params;
+}
+
+function clampOpenAICompletionsMaxTokens(
+  model: Model<"openai-completions">,
+  requestedMaxTokens: number,
+): number {
+  const modelMaxTokens =
+    typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens) && model.maxTokens > 0
+      ? Math.floor(model.maxTokens)
+      : undefined;
+  return modelMaxTokens === undefined || requestedMaxTokens <= modelMaxTokens
+    ? requestedMaxTokens
+    : modelMaxTokens;
 }
 
 function getCompatCacheControl(

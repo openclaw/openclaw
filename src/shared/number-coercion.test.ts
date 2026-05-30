@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  asDateTimestampMs,
   asFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
@@ -7,23 +8,28 @@ import {
   clampPositiveTimerTimeoutMs,
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
+  isFutureDateTimestampMs,
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
   nonNegativeSecondsToSafeMilliseconds,
   parseFiniteNumber,
   positiveSecondsToSafeMilliseconds,
   resolveIntegerOption,
+  resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromDurationOrEpoch,
   resolveExpiresAtMsFromEpochSeconds,
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
   resolvePositiveTimerTimeoutMs,
+  resolveDateTimestampMs,
   parseStrictFiniteNumber,
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
+  resolveTimestampMsToIsoString,
+  timestampMsToIsoFileStamp,
   timestampMsToIsoString,
 } from "./number-coercion.js";
 
@@ -119,6 +125,11 @@ describe("number-coercion", () => {
   });
 
   test("timestamp ISO helper rejects Date-invalid timestamps", () => {
+    expect(asDateTimestampMs(0)).toBe(0);
+    expect(asDateTimestampMs(8_640_000_000_000_000)).toBe(8_640_000_000_000_000);
+    expect(asDateTimestampMs(8_640_000_000_000_001)).toBeUndefined();
+    expect(asDateTimestampMs(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(asDateTimestampMs("0")).toBeUndefined();
     expect(timestampMsToIsoString(0)).toBe("1970-01-01T00:00:00.000Z");
     expect(timestampMsToIsoString(8_640_000_000_000_000)).toBe("+275760-09-13T00:00:00.000Z");
     expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();
@@ -126,7 +137,49 @@ describe("number-coercion", () => {
     expect(timestampMsToIsoString("0")).toBeUndefined();
   });
 
+  test("future timestamp helper rejects invalid Date timestamps", () => {
+    expect(isFutureDateTimestampMs(1_001, { nowMs: 1_000 })).toBe(true);
+    expect(isFutureDateTimestampMs(1_000, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(999, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(8_640_000_000_000_001, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(1_001, { nowMs: Number.NaN })).toBe(false);
+  });
+
+  test("timestamp fallback helpers resolve Date-invalid timestamps", () => {
+    expect(resolveDateTimestampMs(1_000)).toBe(1_000);
+    expect(resolveDateTimestampMs(Number.POSITIVE_INFINITY, 1_000)).toBe(1_000);
+    expect(resolveDateTimestampMs(Number.POSITIVE_INFINITY, Number.NaN)).toBe(0);
+    expect(resolveTimestampMsToIsoString(0)).toBe("1970-01-01T00:00:00.000Z");
+    expect(resolveTimestampMsToIsoString(Number.POSITIVE_INFINITY, 1_000)).toBe(
+      "1970-01-01T00:00:01.000Z",
+    );
+    expect(resolveTimestampMsToIsoString(Number.POSITIVE_INFINITY, Number.NaN)).toBe(
+      "1970-01-01T00:00:00.000Z",
+    );
+    expect(timestampMsToIsoFileStamp(Date.parse("2026-02-23T12:34:56.000Z"))).toBe(
+      "2026-02-23T12-34-56.000Z",
+    );
+    expect(timestampMsToIsoFileStamp(9_000_000_000_000_000, 1_000)).toBe(
+      "1970-01-01T00-00-01.000Z",
+    );
+  });
+
   test("expiry helpers resolve safe absolute timestamps", () => {
+    expect(
+      resolveExpiresAtMsFromDurationMs(600_000, {
+        nowMs: 1_000,
+      }),
+    ).toBe(601_000);
+    expect(
+      resolveExpiresAtMsFromDurationMs(600_000, {
+        nowMs: 8_640_000_000_000_000,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveExpiresAtMsFromDurationMs(600_000, {
+        nowMs: 8_640_000_000_000_001,
+      }),
+    ).toBeUndefined();
     expect(
       resolveExpiresAtMsFromDurationSeconds("3600", {
         nowMs: 1_000,
@@ -140,11 +193,17 @@ describe("number-coercion", () => {
         minRemainingMs: 30_000,
       }),
     ).toBe(31_000);
+    expect(
+      resolveExpiresAtMsFromDurationSeconds("3600", {
+        nowMs: 8_640_000_000_000_000,
+      }),
+    ).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationSeconds("1e309", { nowMs: 1_000 })).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds(1234.9)).toBe(1_234_000);
     expect(resolveExpiresAtMsFromEpochSeconds("3600", { bufferMs: 300 })).toBe(3_599_700);
     expect(resolveExpiresAtMsFromEpochSeconds("100", { maxMs: 99_999 })).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds(Number.MAX_SAFE_INTEGER)).toBeUndefined();
+    expect(resolveExpiresAtMsFromEpochSeconds(8_640_000_000_001)).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds("1e309")).toBeUndefined();
   });
 
@@ -154,6 +213,7 @@ describe("number-coercion", () => {
     );
     expect(resolveExpiresAtMsFromDurationOrEpoch(1_700_000_000)).toBe(1_700_000_000_000);
     expect(resolveExpiresAtMsFromDurationOrEpoch(1_700_000_000_000)).toBe(1_700_000_000_000);
+    expect(resolveExpiresAtMsFromDurationOrEpoch(8_640_000_000_000_001)).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationOrEpoch(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationOrEpoch(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
   });

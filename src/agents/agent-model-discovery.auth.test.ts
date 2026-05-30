@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { MAX_DATE_TIMESTAMP_MS } from "../shared/number-coercion.js";
 import { resolveAgentCredentialMapFromStore } from "./agent-auth-credentials.js";
 import {
   addEnvBackedAgentCredentials,
@@ -130,6 +131,30 @@ describe("discoverAuthStorage", () => {
     expect(codexCredential?.type).toBe("oauth");
     expect(codexCredential?.access).toBe("oauth-access");
     expect(codexCredential?.refresh).toBe("oauth-refresh");
+  });
+
+  it("drops runtime auth profiles with out-of-range expiry values", () => {
+    const credentials = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "anthropic:bad-token-expiry": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-runtime",
+          expires: MAX_DATE_TIMESTAMP_MS + 1,
+        },
+        "openai-codex:bad-oauth-expiry": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: MAX_DATE_TIMESTAMP_MS + 1,
+        },
+      },
+    });
+
+    expect(credentials.anthropic).toBeUndefined();
+    expect(credentials["openai-codex"]).toBeUndefined();
   });
 
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {

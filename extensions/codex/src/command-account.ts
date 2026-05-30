@@ -21,7 +21,7 @@ import {
 import type { CodexControlRequestOptions, SafeValue } from "./command-rpc.js";
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = OPENAI_PROVIDER_ID;
 
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
 
