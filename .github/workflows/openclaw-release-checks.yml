@@ -54,6 +54,7 @@ on:
           - install-smoke
           - cross-os
           - live-e2e
+          - dashboard
           - package
           - qa
           - qa-parity
@@ -590,6 +591,67 @@ jobs:
       OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
       OPENCLAW_DISCORD_SMOKE_GUILD_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_GUILD_ID }}
       OPENCLAW_DISCORD_SMOKE_CHANNEL_ID: ${{ secrets.OPENCLAW_DISCORD_SMOKE_CHANNEL_ID }}
+
+  dashboard_smoke_release_checks:
+    name: Run dashboard smoke
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","dashboard"]'), needs.resolve_target.outputs.rerun_group)
+    permissions:
+      contents: read
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 35
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build dashboard runtime
+        run: |
+          pnpm ui:build
+          pnpm build
+
+      - name: Run dashboard smoke suite
+        run: pnpm ui:smoke:dashboard -- --artifact-profile release
+
+      - name: Upload Projects dashboard smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-control-ui-projects-smoke-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/control-ui-projects/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload SNES Studio dashboard smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-control-ui-snes-studio-smoke-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/snes-studio-smoke/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload SNES Studio hardware proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-control-ui-snes-studio-hardware-proof-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/snes-hardware-proof/
+          retention-days: 14
+          if-no-files-found: warn
 
   live_repo_e2e_release_checks:
     name: Run repo/live E2E validation
@@ -1539,6 +1601,7 @@ jobs:
       - prepare_release_package
       - install_smoke_release_checks
       - cross_os_release_checks
+      - dashboard_smoke_release_checks
       - live_repo_e2e_release_checks
       - docker_e2e_release_checks
       - package_acceptance_release_checks
@@ -1571,6 +1634,7 @@ jobs:
             "prepare_release_package=${{ needs.prepare_release_package.result }}" \
             "install_smoke_release_checks=${{ needs.install_smoke_release_checks.result }}" \
             "cross_os_release_checks=${{ needs.cross_os_release_checks.result }}" \
+            "dashboard_smoke_release_checks=${{ needs.dashboard_smoke_release_checks.result }}" \
             "live_repo_e2e_release_checks=${{ needs.live_repo_e2e_release_checks.result }}" \
             "docker_e2e_release_checks=${{ needs.docker_e2e_release_checks.result }}" \
             "package_acceptance_release_checks=${{ needs.package_acceptance_release_checks.result }}" \

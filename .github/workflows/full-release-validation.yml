@@ -53,6 +53,7 @@ on:
           - install-smoke
           - cross-os
           - live-e2e
+          - dashboard
           - package
           - qa
           - qa-parity
@@ -556,7 +557,7 @@ jobs:
   release_checks:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target, docker_runtime_assets_preflight]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","dashboard","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
@@ -1107,7 +1108,16 @@ jobs:
 
   summary:
     name: Verify full validation
-    needs: [resolve_target, docker_runtime_assets_preflight, normal_ci, plugin_prerelease, release_checks, npm_telegram, performance]
+    needs:
+      [
+        resolve_target,
+        docker_runtime_assets_preflight,
+        normal_ci,
+        plugin_prerelease,
+        release_checks,
+        npm_telegram,
+        performance,
+      ]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

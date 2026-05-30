@@ -1653,6 +1653,7 @@
     "rtt": "node --import tsx scripts/rtt.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
+    "snes:hardware-proof": "node --import tsx scripts/dev/snes-studio-hardware-proof.ts",
     "start": "node openclaw.mjs",
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
@@ -1847,6 +1848,9 @@
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
     "ui:install": "node scripts/ui.js install",
+    "ui:smoke:projects": "node --import tsx scripts/dev/control-ui-projects-smoke.ts",
+    "ui:smoke:snes-studio": "node --import tsx scripts/dev/control-ui-snes-studio-smoke.ts",
+    "ui:smoke:dashboard": "node --import tsx scripts/dev/control-ui-dashboard-smoke-suite.ts",
     "verify": "node scripts/verify.mjs"
   },
   "dependencies": {

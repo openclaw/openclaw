@@ -759,6 +759,78 @@ jobs:
           path: .local/gateway-watch-regression/
           retention-days: 7
 
+  dashboard-smoke:
+    permissions:
+      contents: read
+    name: Dashboard smoke
+    needs: [preflight, build-artifacts]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_build_artifacts == 'true' && needs.build-artifacts.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Download built runtime artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-runtime-build
+          path: .
+
+      - name: Extract built runtime artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          compressor=zstd
+          if command -v zstdmt >/dev/null 2>&1; then
+            compressor=zstdmt
+          fi
+          tar --posix -xf dist-runtime-build.tar.zst --use-compress-program "$compressor"
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run dashboard smoke suite
+        run: pnpm ui:smoke:dashboard -- --artifact-profile ci
+
+      - name: Upload Projects dashboard smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: control-ui-projects-smoke-${{ needs.preflight.outputs.checkout_revision }}
+          path: .artifacts/control-ui-projects/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload SNES Studio dashboard smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: control-ui-snes-studio-smoke-${{ needs.preflight.outputs.checkout_revision }}
+          path: .artifacts/snes-studio-smoke/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Upload SNES Studio hardware proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: control-ui-snes-studio-hardware-proof-${{ needs.preflight.outputs.checkout_revision }}
+          path: .artifacts/snes-hardware-proof/
+          retention-days: 14
+          if-no-files-found: warn
+
   checks-fast-core:
     permissions:
       contents: read

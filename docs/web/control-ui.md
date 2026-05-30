@@ -121,6 +121,11 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`).
 
   </Accordion>
+  <Accordion title="Operator dashboards">
+    - Projects groups related chats, instructions, and resources. Active projects remain visible in the Projects dashboard until you use the explicit Archive action; generic project edits cannot archive them. Archived projects stay visible in the Archived Projects recovery section and can be restored from the dashboard.
+    - Maintainer smoke: `pnpm ui:smoke:projects` starts an isolated loopback Gateway with temporary state, creates a browser-only project, adds a note, archives it through the dashboard, restores it, and verifies the final project store has one active project and zero archived projects. `pnpm ui:smoke:dashboard` is the CI/release suite entrypoint; it runs the Projects smoke, SNES Studio smoke, and safe SNES hardware-proof artifact bundle with profile-specific artifact directories. Add `-- --artifact-profile release --dry-run` to preview the release command chain without launching browsers. CI and release checks upload `.artifacts/control-ui-projects/`, `.artifacts/snes-studio-smoke/`, and `.artifacts/snes-hardware-proof/` for screenshots plus `summary.json`.
+
+  </Accordion>
   <Accordion title="Config">
     - View/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`).
     - Apply + restart with validation (`config.apply`) and wake the last active session.
