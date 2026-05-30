@@ -95,6 +95,11 @@ const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
 }));
 
+const contextEngineMocks = vi.hoisted(() => ({
+  resolveContextEngine: vi.fn(),
+  assemble: vi.fn(),
+}));
+
 const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
@@ -198,6 +203,11 @@ vi.mock("../../logging/diagnostic.js", () => ({
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
     transcriptMocks.persistAcpDispatchTranscript(params),
+}));
+
+vi.mock("../../context-engine/registry.js", () => ({
+  resolveContextEngine: (cfg: OpenClawConfig, options: unknown) =>
+    contextEngineMocks.resolveContextEngine(cfg, options),
 }));
 
 const sessionKey = "agent:codex-acp:session-1";
@@ -455,6 +465,18 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     transcriptMocks.persistAcpDispatchTranscript.mockClear();
+    contextEngineMocks.assemble.mockReset();
+    contextEngineMocks.assemble.mockImplementation(async (params: { messages: unknown[] }) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }));
+    contextEngineMocks.resolveContextEngine.mockReset();
+    contextEngineMocks.resolveContextEngine.mockResolvedValue({
+      info: { id: "test-context-engine", name: "Test Context Engine" },
+      assemble: (params: unknown) => contextEngineMocks.assemble(params),
+      ingest: vi.fn(async () => ({ ingested: false })),
+      compact: vi.fn(async () => ({ ok: false, compacted: false })),
+    });
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
@@ -500,6 +522,52 @@ describe("tryDispatchAcpReply", () => {
     expect(transcript.promptText).toBe("reply");
     expect(transcript.finalText).toBe("hello");
     expect(routeCall().mirror).toBe(false);
+  });
+
+  it("assembles ACP prompts through the active context engine before runTurn", async () => {
+    setReadyAcpResolution();
+    mockRoutedTextTurn("hello");
+    contextEngineMocks.assemble.mockResolvedValueOnce({
+      messages: [
+        {
+          role: "user",
+          content: "<openviking-context>\nremembered fact\n</openviking-context>\n\nreply",
+          timestamp: 0,
+        },
+      ],
+      estimatedTokens: 12,
+    });
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      shouldRouteToOriginating: true,
+    });
+
+    expect(contextEngineMocks.resolveContextEngine).toHaveBeenCalledTimes(1);
+    const assembleParams = requireRecord(
+      mockArg(contextEngineMocks.assemble, 0, 0, "context engine assemble call"),
+      "context engine assemble call",
+    );
+    expect(assembleParams.sessionKey).toBe(sessionKey);
+    expect(assembleParams.prompt).toBe("reply");
+    expect(runTurnCall().text).toContain("<openviking-context>");
+    expect(runTurnCall().text).toContain("remembered fact");
+
+    const transcript = requireRecord(
+      mockArg(transcriptMocks.persistAcpDispatchTranscript, 0, 0, "transcript call"),
+      "transcript call",
+    );
+    expect(transcript.promptText).toBe("reply");
+  });
+
+  it("continues ACP dispatch with the original prompt when context engine assemble fails", async () => {
+    setReadyAcpResolution();
+    contextEngineMocks.assemble.mockRejectedValueOnce(new Error("assemble failed"));
+
+    await runDispatch({ bodyForAgent: "reply" });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledTimes(1);
+    expect(runTurnCall().text).toBe("reply");
   });
 
   it("adds source delivery guidance to tool-only ACP turns", async () => {

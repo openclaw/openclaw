@@ -7,8 +7,10 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { resolveContextEngine } from "../../context-engine/registry.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -119,6 +121,64 @@ function resolveAcpTurnText(params: {
     ].join(" "),
   );
   return params.promptText ? `${guidance}\n\n${params.promptText}` : guidance;
+}
+
+function extractUserMessageText(message: AgentMessage | undefined): string | undefined {
+  if (!message || message.role !== "user") {
+    return undefined;
+  }
+
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+
+  const text = message.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n\n")
+    .trim();
+  return text || undefined;
+}
+
+async function assembleAcpTurnPromptText(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+  promptText: string;
+}): Promise<string> {
+  try {
+    const agentDir = resolveAgentDir(params.cfg, params.agentId);
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const contextEngine = await resolveContextEngine(params.cfg, {
+      agentDir,
+      workspaceDir,
+    });
+    const inputMessages: AgentMessage[] = [
+      { role: "user", content: params.promptText, timestamp: Date.now() },
+    ];
+    const assembleParams = {
+      sessionId: params.sessionKey,
+      sessionKey: params.sessionKey,
+      messages: inputMessages,
+      prompt: params.promptText,
+      runtimeContext: {
+        agentId: params.agentId,
+        agentDir,
+        workspaceDir,
+        runtime: "acp",
+      },
+    } as Parameters<typeof contextEngine.assemble>[0] & {
+      runtimeContext: Record<string, unknown>;
+    };
+    const assembled = await contextEngine.assemble(assembleParams);
+    const assembledPromptText = extractUserMessageText(assembled.messages.at(-1));
+    return assembledPromptText ?? params.promptText;
+  } catch (error) {
+    logVerbose(
+      `dispatch-acp: context engine assemble failed, using original prompt: ${formatErrorMessage(error)}`,
+    );
+    return params.promptText;
+  }
 }
 
 async function hasBoundConversationForSession(params: {
@@ -564,6 +624,12 @@ export async function tryDispatchAcpReply(params: {
       params.markIdle("message_completed");
       return { queuedFinal: false, counts };
     }
+    const assembledTurnPromptText = await assembleAcpTurnPromptText({
+      cfg: params.cfg,
+      sessionKey: canonicalSessionKey,
+      agentId: acpAgentId,
+      promptText: turnPromptText,
+    });
 
     try {
       await delivery.startReplyLifecycle();
@@ -575,7 +641,7 @@ export async function tryDispatchAcpReply(params: {
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
       text: resolveAcpTurnText({
-        promptText: turnPromptText,
+        promptText: assembledTurnPromptText,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       }),
       attachments: attachments.length > 0 ? attachments : undefined,
