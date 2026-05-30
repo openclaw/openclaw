@@ -419,6 +419,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const rKey = restartKey(channelId, id);
         if (store.tasks.has(id)) {
           if (recoveryStopTimedOut.has(rKey)) {
+            if (!preserveManualStop) {
+              manuallyStopped.delete(rKey);
+            }
+            if (manuallyStopped.has(rKey)) {
+              return;
+            }
             recoveryStartRequested.add(rKey);
             setRuntime(channelId, id, { accountId: id, restartPending: true });
           }
