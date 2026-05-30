@@ -994,3 +994,91 @@ describe("normalizeCronJobPatch", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 });
+
+describe("local-llamacpp concatenated key recovery", () => {
+  it("recovers namePayload → name + payload", () => {
+    const normalized = normalizeCronJobCreate({
+      enabled: true,
+      namePayload: { kind: "agentTurn", message: "test", timeoutSeconds: 10 },
+      schedule: { everyMs: 999999, kind: "every" },
+      sessionTargetName: "evidence-test",
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.name).toBe("evidence-test");
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "test",
+      timeoutSeconds: 10,
+    });
+    expect(normalized.namePayload).toBeUndefined();
+  });
+
+  it("recovers scheduleKind → schedule with nested kind", () => {
+    const normalized = normalizeCronJobCreate({
+      enabled: true,
+      name: "test-job",
+      scheduleKind: { everyMs: 999999, kind: "every" },
+      sessionTarget: "isolated",
+      payload: { kind: "systemEvent", text: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("every");
+    expect(schedule.everyMs).toBe(999999);
+    expect(normalized.scheduleKind).toBeUndefined();
+  });
+
+  it("recovers sessionTargetName → name with default sessionTarget", () => {
+    const normalized = normalizeCronJobCreate({
+      enabled: true,
+      namePayload: { kind: "agentTurn", message: "test" },
+      scheduleKind: { expr: "* * * * *", kind: "cron" },
+      sessionTargetName: "my-job",
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.name).toBe("my-job");
+    expect(normalized.sessionTarget).toBe("isolated");
+  });
+
+  it("passes through normal (uncorrupted) input unchanged", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "normal-job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60000 },
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hi" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.name).toBe("normal-job");
+    expect(normalized.schedule).toEqual({ kind: "every", everyMs: 60000 });
+    expect(normalized.payload).toEqual({ kind: "agentTurn", message: "hi" });
+    expect(normalized.sessionTarget).toBe("isolated");
+  });
+
+  it("handles full corruption pattern from issue #88439", () => {
+    const normalized = normalizeCronJobCreate({
+      action: "add",
+      job: {
+        delivery: { mode: "none" },
+        enabled: true,
+        namePayload: { kind: "agentTurn", message: "Evidence test.", timeoutSeconds: 10 },
+        scheduleKind: { everyMs: 999999, kind: "every" },
+        sessionTargetName: "evidence-test",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.name).toBe("evidence-test");
+    expect(normalized.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "Evidence test.",
+      timeoutSeconds: 10,
+    });
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("every");
+    expect(schedule.everyMs).toBe(999999);
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.namePayload).toBeUndefined();
+    expect(normalized.scheduleKind).toBeUndefined();
+    expect(normalized.sessionTargetName).toBeUndefined();
+  });
+});
