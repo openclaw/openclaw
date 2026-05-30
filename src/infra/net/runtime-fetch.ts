@@ -47,6 +47,27 @@ function normalizeRuntimeFormData(
   return next as unknown as BodyInit;
 }
 
+let contentLengthWarningEmitted = false;
+function warnContentLengthStripped(): void {
+  if (contentLengthWarningEmitted) return;
+  contentLengthWarningEmitted = true;
+  console.warn(
+    "[plugins] dropping plugin-supplied Content-Length header — " +
+      "undici computes this from the request body. " +
+      "Manual Content-Length values risk request-smuggling (UND_ERR_INVALID_ARG).",
+  );
+}
+
+function headerHasKey(
+  headers: HeadersInit | undefined,
+  key: string,
+): boolean {
+  if (!headers) return false;
+  if (headers instanceof Headers) return headers.has(key);
+  if (Array.isArray(headers)) return headers.some(([k]) => k.toLowerCase() === key);
+  return Object.keys(headers).some((k) => k.toLowerCase() === key);
+}
+
 function normalizeRuntimeRequestInit(
   init: DispatcherAwareRequestInit | undefined,
   RuntimeFormData: RuntimeFormDataCtor | undefined,
@@ -62,17 +83,30 @@ function normalizeRuntimeRequestInit(
   }
 
   const body = normalizeRuntimeFormData(init.body, RuntimeFormData);
-  if (body === init.body) {
+  const bodyChanged = body !== init.body;
+
+  // Always strip plugin-supplied Content-Length when a body is present.
+  // Node/undici computes Content-Length from the actual transmitted bytes;
+  // manual values risk request-smuggling and cause UND_ERR_INVALID_ARG.
+  const hasManualContentLength = headerHasKey(normalizedHeaders, "content-length");
+
+  if (!bodyChanged && !hasManualContentLength) {
     return initWithNormalizedHeaders;
+  }
+
+  if (hasManualContentLength) {
+    warnContentLengthStripped();
   }
 
   const headers = new Headers(normalizedHeaders);
   headers.delete("content-length");
-  headers.delete("content-type");
+  if (bodyChanged) {
+    headers.delete("content-type");
+  }
   return {
     ...initWithNormalizedHeaders,
     headers,
-    body,
+    body: bodyChanged ? body : init.body,
   };
 }
 
