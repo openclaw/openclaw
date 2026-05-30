@@ -1738,19 +1738,33 @@ export async function runCodexAppServerAttempt(
       );
       try {
         const preRetrySessionFile = activeSessionFile;
-        await clearCodexAppServerBinding(preRetrySessionFile);
-        if (activeSessionFile !== preRetrySessionFile) {
-          await clearCodexAppServerBinding(activeSessionFile);
-        }
-        thread = await restartContextEngineCodexThread();
-        emitCodexAppServerEvent(params, {
-          stream: "codex_app_server.lifecycle",
-          data: { phase: "thread_ready_retry", threadId: thread.threadId },
-        });
-        try {
-          turn = await startCodexTurn();
-        } catch (retryError) {
-          turnStartError = retryError;
+        const clearedPreRetryBinding = await clearCodexAppServerBindingForThread(
+          preRetrySessionFile,
+          thread.threadId,
+        );
+        const clearedActiveBinding =
+          activeSessionFile !== preRetrySessionFile
+            ? await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId)
+            : false;
+        if (!clearedPreRetryBinding && !clearedActiveBinding) {
+          embeddedAgentLog.warn(
+            "codex app-server preserved newer context-engine binding after resume overflow; skipping fresh retry",
+            {
+              threadId: thread.threadId,
+              error: formatErrorMessage(turnStartError),
+            },
+          );
+        } else {
+          thread = await restartContextEngineCodexThread();
+          emitCodexAppServerEvent(params, {
+            stream: "codex_app_server.lifecycle",
+            data: { phase: "thread_ready_retry", threadId: thread.threadId },
+          });
+          try {
+            turn = await startCodexTurn();
+          } catch (retryError) {
+            turnStartError = retryError;
+          }
         }
       } catch (retrySetupError) {
         turnStartError = retrySetupError;
@@ -2046,9 +2060,9 @@ export async function runCodexAppServerAttempt(
         },
       );
       const preClearSessionFile = activeSessionFile;
-      await clearCodexAppServerBinding(preClearSessionFile);
+      await clearCodexAppServerBindingForThread(preClearSessionFile, thread.threadId);
       if (activeSessionFile !== preClearSessionFile) {
-        await clearCodexAppServerBinding(activeSessionFile);
+        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
       }
     }
     const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({

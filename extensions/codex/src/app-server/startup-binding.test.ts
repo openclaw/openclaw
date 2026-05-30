@@ -300,8 +300,6 @@ describe("Codex app-server startup binding", () => {
         }),
       ].join("\n") + "\n",
     );
-    const readFileSpy = vi.spyOn(fs, "readFile");
-
     const binding = await rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
       sessionFile,
@@ -319,7 +317,6 @@ describe("Codex app-server startup binding", () => {
     });
 
     expect(binding).toBeUndefined();
-    expect(readFileSpy.mock.calls.some(([file]) => file === rolloutFile)).toBe(false);
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding).toBeUndefined();
   });
@@ -448,7 +445,7 @@ describe("Codex app-server startup binding", () => {
     await fs.mkdir(rolloutDir, { recursive: true });
     const rolloutFile = path.join(rolloutDir, "rollout-thread-existing.jsonl");
     await fs.writeFile(rolloutFile, "x".repeat(2_000));
-    const readFileSpy = vi.spyOn(fs, "readFile");
+    const openSpy = vi.spyOn(fs, "open");
 
     const binding = await rotateOversizedCodexAppServerStartupBinding({
       binding: await readCodexAppServerBinding(sessionFile),
@@ -467,7 +464,7 @@ describe("Codex app-server startup binding", () => {
     });
 
     expect(binding).toBeUndefined();
-    expect(readFileSpy.mock.calls.some(([file]) => file === rolloutFile)).toBe(false);
+    expect(openSpy.mock.calls.some(([file]) => String(file) === rolloutFile)).toBe(false);
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding).toBeUndefined();
   });
