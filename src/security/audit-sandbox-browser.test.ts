@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectSandboxBrowserHashLabelFindings } from "./audit-extra.async.js";
 import { collectSandboxDangerousConfigFindings } from "./audit-extra.sync.js";
@@ -26,6 +26,14 @@ function requireFinding(
 }
 
 describe("security audit sandbox browser findings", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("warns when sandbox browser containers have missing or stale hash labels", async () => {
     const findings = await collectSandboxBrowserHashLabelFindings({
       execDockerRawFn: async (args: string[]) => {
