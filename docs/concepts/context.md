@@ -126,6 +126,8 @@ Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (de
 
 When truncation occurs, the runtime can inject an in-prompt warning block under Project Context. Configure this with `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`; default `always`).
 
+The default is `always` because the alternative `once` mode injects the warning into the system prompt only on the first turn and suppresses it on subsequent turns. That suppression mutates the cacheable prefix between turns, breaks the provider prompt-cache prefix, and forces a full prefill rewrite on every turn after the first — which is invisible at the surface (the model still answers) but shows up as `cacheRead=0` and elevated token cost. See [Prompt caching → System-prompt cache boundary](/reference/prompt-caching#system-prompt-cache-boundary). If you do flip it back to `once`, OpenClaw emits a structured `prompt-cache` warning the moment the system-prompt digest drifts so you can correlate the regression to the configuration change.
+
 ## Skills: injected vs loaded on-demand
 
 The system prompt includes a compact **skills list** (name + description + location). This list has real overhead.
