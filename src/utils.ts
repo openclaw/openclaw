@@ -199,8 +199,7 @@ export function shortenHomeInString(input: string): string {
 
     const before = found === 0 ? null : input[found - 1];
     const after = input[found + home.length];
-    const isValidBefore =
-      before === null || before === "/" || before === "\\" || /[\s:;"'<>()[\]{}]/.test(before);
+    const isValidBefore = before === null || /[\s:;"'<>()[\]{}]/.test(before);
     const isValidAfter =
       after === undefined || after === "/" || after === "\\" || /[\s:;"'<>()[\]{}]/.test(after);
 

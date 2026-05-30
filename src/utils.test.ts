@@ -115,6 +115,18 @@ describe("shortenHomeInString", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  it("does not replace home substring that is preceded by a path separator inside another path", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    vi.stubEnv("HOME", "/home/other");
+    try {
+      const home = path.resolve("/srv/openclaw-home");
+      const input = `foo${path.sep}${home}${path.sep}.openclaw${path.sep}openclaw.json`;
+      expect(shortenHomeInString(input)).toBe(input);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
 
 describe("resolveUserPath", () => {
