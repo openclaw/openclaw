@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --import tsx
 import { performance } from "node:perf_hooks";
 import { Type } from "typebox";
 import type { Model } from "../../packages/agent-core/src/llm.js";
