@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SkillSnapshot } from "../../skills/types.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {
   clearFastTestEnv,
@@ -99,7 +99,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
     expect(args.requireExplicitMessageTarget).toBe(false);
     expect(args.disableMessageTool).toBe(false);
-    expect(args.forceMessageTool).toBe(true);
+    expect(args.forceMessageTool).toBe(false);
     expect(args.agentAccountId).toBe("acct-1");
     expect(args.messageThreadId).toBe("thread-99");
   });
@@ -253,7 +253,7 @@ describe("executeCronRun sourceDelivery guard", () => {
     restoreFastTestEnv(previousFastTestEnv);
   });
 
-  it("preserves legacy sourceReplyDeliveryMode: message_tool_only through executeCronRun", async () => {
+  it("maps legacy sourceReplyDeliveryMode: message_tool_only to direct_fallback owner", async () => {
     mockRunCronFallbackPassthrough();
     await executeCronRun(
       makeExecuteCronRunParams({
@@ -270,7 +270,7 @@ describe("executeCronRun sourceDelivery guard", () => {
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
-    expect(args.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(args.sourceReplyDeliveryMode).toBeUndefined();
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(true);
   });
@@ -307,7 +307,7 @@ describe("executeCronRun sourceDelivery guard", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.requireExplicitMessageTarget).toBe(true);
-    expect(args.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(args.sourceReplyDeliveryMode).toBeUndefined();
   });
 
   it("passes requireExplicitMessageTarget=false by default when legacy toolPolicy omits it", async () => {

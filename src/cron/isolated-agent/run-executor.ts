@@ -212,7 +212,7 @@ export function createCronPromptExecutor(params: {
           threadId: params.resolvedDelivery.threadId,
         },
         messageToolEnabled: legacyToolPolicy ? !legacyToolPolicy.disableMessageTool : true,
-        messageToolForced: legacyToolPolicy?.forceMessageTool ?? true,
+        messageToolForced: legacyToolPolicy?.forceMessageTool ?? false,
         requireExplicitMessageTarget: legacyToolPolicy?.requireExplicitMessageTarget ?? false,
         directFallback: false,
       });
@@ -489,11 +489,11 @@ export async function executeCronRun(params: {
         rawReplyMode === "automatic" || rawReplyMode === "message_tool_only"
           ? rawReplyMode
           : undefined;
-      const owner = legacyReplyMode === "message_tool_only" ? "message_tool" : "none";
+      const owner = legacyReplyMode === "message_tool_only" ? "direct_fallback" : "none";
 
       return createSourceDeliveryPlan({
         owner,
-        reason: owner === "message_tool" ? "cron_announce" : "cron_none",
+        reason: owner === "direct_fallback" ? "cron_announce" : "cron_none",
         target: {
           channel: legacyMessageChannel ?? params.resolvedDelivery.channel,
           to: params.resolvedDelivery.to,
@@ -501,7 +501,7 @@ export async function executeCronRun(params: {
           threadId: params.resolvedDelivery.threadId,
         },
         messageToolEnabled: legacyToolPolicy ? !legacyToolPolicy.disableMessageTool : true,
-        messageToolForced: legacyToolPolicy?.forceMessageTool ?? true,
+        messageToolForced: legacyToolPolicy?.forceMessageTool ?? false,
         requireExplicitMessageTarget: legacyToolPolicy?.requireExplicitMessageTarget ?? false,
         directFallback: false,
       });
