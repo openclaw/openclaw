@@ -231,8 +231,6 @@ export const nl: TranslationMap = {
     statusTimeout: "Time-out",
     model: "Model",
     provider: "Provider",
-    goal: "Goal",
-    goalNote: "Goal note",
     runtime: "Runtime",
     surface: "Oppervlak",
     subject: "Onderwerp",

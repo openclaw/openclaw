@@ -232,8 +232,6 @@ export const ja_JP: TranslationMap = {
     statusTimeout: "タイムアウトしました",
     model: "モデル",
     provider: "プロバイダー",
-    goal: "Goal",
-    goalNote: "Goal note",
     runtime: "ランタイム",
     surface: "サーフェス",
     subject: "件名",

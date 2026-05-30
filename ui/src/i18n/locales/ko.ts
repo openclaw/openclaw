@@ -228,8 +228,6 @@ export const ko: TranslationMap = {
     statusTimeout: "시간 초과",
     model: "모델",
     provider: "제공업체",
-    goal: "Goal",
-    goalNote: "Goal note",
     runtime: "런타임",
     surface: "표면",
     subject: "제목",

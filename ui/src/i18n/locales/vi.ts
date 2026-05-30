@@ -229,8 +229,6 @@ export const vi: TranslationMap = {
     statusTimeout: "Đã hết thời gian chờ",
     model: "Mô hình",
     provider: "Nhà cung cấp",
-    goal: "Goal",
-    goalNote: "Goal note",
     runtime: "Runtime",
     surface: "Bề mặt",
     subject: "Chủ đề",

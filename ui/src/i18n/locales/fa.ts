@@ -230,8 +230,6 @@ export const fa: TranslationMap = {
     statusTimeout: "زمان به پایان رسید",
     model: "مدل",
     provider: "ارائه‌دهنده",
-    goal: "Goal",
-    goalNote: "Goal note",
     runtime: "زمان اجرا",
     surface: "سطح",
     subject: "موضوع",

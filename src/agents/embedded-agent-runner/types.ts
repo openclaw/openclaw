@@ -155,7 +155,8 @@ export type EmbeddedAgentRunMeta = {
       | "role_ordering"
       | "image_size"
       | "retry_limit"
-      | "hook_block";
+      | "hook_block"
+      | "tool_loop";
     message: string;
   };
   failureSignal?: EmbeddedRunFailureSignal;

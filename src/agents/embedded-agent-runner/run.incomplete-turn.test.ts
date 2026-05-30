@@ -2723,7 +2723,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       }),
     );
 
-    const result = await runEmbeddedPiAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       runId: "run-terminal-search-loop-generic-summary",
     });

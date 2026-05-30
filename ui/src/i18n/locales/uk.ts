@@ -230,8 +230,6 @@ export const uk: TranslationMap = {
     statusTimeout: "Час очікування минув",
     model: "Модель",
     provider: "Провайдер",
-    goal: "Goal",
-    goalNote: "Goal note",
     runtime: "Середовище виконання",
     surface: "Поверхня",
     subject: "Тема",

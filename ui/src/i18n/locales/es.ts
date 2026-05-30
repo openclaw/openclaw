@@ -229,8 +229,6 @@ export const es: TranslationMap = {
     statusTimeout: "Tiempo agotado",
     model: "Modelo",
     provider: "Proveedor",
-    goal: "Goal",
-    goalNote: "Goal note",
     runtime: "Tiempo de ejecución",
     surface: "Superficie",
     subject: "Asunto",
