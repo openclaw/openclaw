@@ -1841,7 +1841,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       mode: "update",
     });
     expect(result.changes).toEqual([
-      `Installed missing configured plugin "codex" from ${expectedNpmInstallSpec("@openclaw/codex")}.`,
+      `Refreshed stale configured plugin "codex" from ${expectedNpmInstallSpec("@openclaw/codex")}.`,
     ]);
     expectRecordFields(result.records.codex, {
       source: "npm",
@@ -1939,7 +1939,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       mode: "update",
     });
     expect(firstPass.changes).toEqual([
-      'Installed missing configured plugin "codex" from @openclaw/codex@beta.',
+      'Refreshed stale configured plugin "codex" from @openclaw/codex@beta.',
     ]);
     expectRecordFields(firstPass.records.codex, {
       source: "npm",

@@ -852,6 +852,18 @@ function recordClawHubPackageName(value: string | undefined): string | undefined
   return parseClawHubPluginSpec(trimmed)?.name ?? trimmed;
 }
 
+type InstallCandidateRepairReason = "stale-version-bound-runtime";
+
+function formatInstalledConfiguredPluginChange(params: {
+  pluginId: string;
+  installSpec: string;
+  repairReason?: InstallCandidateRepairReason;
+}): string {
+  return params.repairReason === "stale-version-bound-runtime"
+    ? `Refreshed stale configured plugin "${params.pluginId}" from ${params.installSpec}.`
+    : `Installed missing configured plugin "${params.pluginId}" from ${params.installSpec}.`;
+}
+
 async function installCandidate(params: {
   candidate: DownloadableInstallCandidate;
   records: Record<string, PluginInstallRecord>;
@@ -859,6 +871,7 @@ async function installCandidate(params: {
   updateChannel?: UpdateChannel;
   mode?: "install" | "update";
   preferNpm?: boolean;
+  repairReason?: InstallCandidateRepairReason;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
@@ -936,7 +949,13 @@ async function installCandidate(params: {
             installedAt: new Date().toISOString(),
           },
         },
-        changes: [`Installed missing configured plugin "${pluginId}" from ${clawhubInstallSpec}.`],
+        changes: [
+          formatInstalledConfiguredPluginChange({
+            pluginId,
+            installSpec: clawhubInstallSpec,
+            repairReason: params.repairReason,
+          }),
+        ],
         warnings: [],
       };
     }
@@ -1017,7 +1036,11 @@ async function installCandidate(params: {
     },
     changes: [
       ...changes,
-      `Installed missing configured plugin "${pluginId}" from ${npmInstallSpec}.`,
+      formatInstalledConfiguredPluginChange({
+        pluginId,
+        installSpec: npmInstallSpec,
+        repairReason: params.repairReason,
+      }),
     ],
     warnings: [],
   };
@@ -1339,9 +1362,11 @@ async function repairMissingPluginInstalls(params: {
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
         changes.push(
-          installedPluginIdsWithRepairablePackages.has(outcome.pluginId)
-            ? `Repaired broken installed plugin "${outcome.pluginId}".`
-            : `Repaired missing configured plugin "${outcome.pluginId}".`,
+          installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
+            ? `Refreshed stale configured plugin "${outcome.pluginId}".`
+            : installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId)
+              ? `Repaired broken installed plugin "${outcome.pluginId}".`
+              : `Repaired missing configured plugin "${outcome.pluginId}".`,
         );
       } else if (outcome.status === "error") {
         warnings.push(outcome.message);
@@ -1421,6 +1446,9 @@ async function repairMissingPluginInstalls(params: {
       updateChannel,
       mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
       preferNpm: preferNpmInstalls,
+      ...(installedPluginIdsWithStaleVersionBoundRuntimePackages.has(candidate.pluginId)
+        ? { repairReason: "stale-version-bound-runtime" as const }
+        : {}),
     });
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];
