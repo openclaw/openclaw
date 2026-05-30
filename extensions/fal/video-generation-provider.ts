@@ -1,6 +1,11 @@
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { assertOkOrThrowHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
+  type ProviderOperationDeadline,
+} from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
@@ -472,13 +477,17 @@ async function waitForFalQueueResult(params: {
   statusUrl: string;
   responseUrl: string;
   headers: Headers;
-  timeoutMs: number;
+  deadline: ProviderOperationDeadline;
   policy: SsrFPolicy | undefined;
   dispatcherPolicy: Parameters<typeof fetchWithSsrFGuard>[0]["dispatcherPolicy"];
 }): Promise<FalQueueResponse> {
-  const deadline = Date.now() + params.timeoutMs;
   let lastStatus = "unknown";
-  while (Date.now() < deadline) {
+  for (;;) {
+    const requestTimeoutMs = resolveFalQueueRemainingMs(
+      params.deadline,
+      lastStatus,
+      DEFAULT_HTTP_TIMEOUT_MS,
+    );
     const payload = readFalQueueResponse(
       await fetchFalJson({
         url: params.statusUrl,
@@ -486,7 +495,7 @@ async function waitForFalQueueResult(params: {
           method: "GET",
           headers: params.headers,
         },
-        timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+        timeoutMs: requestTimeoutMs,
         policy: params.policy,
         dispatcherPolicy: params.dispatcherPolicy,
         auditContext: "fal-video-status",
@@ -506,7 +515,11 @@ async function waitForFalQueueResult(params: {
             method: "GET",
             headers: params.headers,
           },
-          timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
+          timeoutMs: resolveFalQueueRemainingMs(
+            params.deadline,
+            lastStatus,
+            DEFAULT_HTTP_TIMEOUT_MS,
+          ),
           policy: params.policy,
           dispatcherPolicy: params.dispatcherPolicy,
           auditContext: "fal-video-result",
@@ -524,9 +537,25 @@ async function waitForFalQueueResult(params: {
     if (!FAL_VIDEO_PENDING_STATUSES.has(status)) {
       throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
     }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    const pollDelayMs = resolveFalQueueRemainingMs(params.deadline, lastStatus, POLL_INTERVAL_MS);
+    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
   }
-  throw new Error(`fal video generation did not finish in time (last status: ${lastStatus})`);
+}
+
+function resolveFalQueueRemainingMs(
+  deadline: ProviderOperationDeadline,
+  lastStatus: string,
+  defaultTimeoutMs: number,
+): number {
+  const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
+  if (typeof deadline.deadlineAtMs !== "number") {
+    return defaultMs;
+  }
+  const remainingMs = deadline.deadlineAtMs - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`fal video generation did not finish in time (last status: ${lastStatus})`);
+  }
+  return Math.max(1, Math.min(defaultMs, remainingMs));
 }
 
 function extractFalVideoPayload(payload: FalQueueResponse): FalVideoResponse {
@@ -624,11 +653,19 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       if (!statusUrl || !responseUrl) {
         throw new Error("fal video generation response missing queue URLs");
       }
+      const operationTimeoutMs = resolvePositiveTimerTimeoutMs(
+        req.timeoutMs,
+        DEFAULT_OPERATION_TIMEOUT_MS,
+      );
+      const operationDeadline = createProviderOperationDeadline({
+        timeoutMs: operationTimeoutMs,
+        label: "fal video generation",
+      });
       const payload = await waitForFalQueueResult({
         statusUrl,
         responseUrl,
         headers,
-        timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
+        deadline: operationDeadline,
         policy,
         dispatcherPolicy,
       });

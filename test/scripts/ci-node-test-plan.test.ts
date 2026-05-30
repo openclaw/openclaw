@@ -117,7 +117,10 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
     expect(coreUnitShards).toEqual([
       {
-        configs: ["test/vitest/vitest.unit-fast.config.ts"],
+        configs: [
+          "test/vitest/vitest.unit-fast.config.ts",
+          "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        ],
         requiresDist: false,
         shardName: "core-unit-fast",
       },

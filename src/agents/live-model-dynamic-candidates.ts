@@ -5,25 +5,31 @@ import type {
   runProviderDynamicModel,
 } from "../plugins/provider-runtime.js";
 import type { ProviderResolveDynamicModelContext } from "../plugins/types.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { listPrioritizedHighSignalLiveModelRefs } from "./live-model-filter.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
+type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 type DynamicModelResolver = typeof runProviderDynamicModel;
 type DynamicModelPreparer = typeof prepareProviderDynamicModel;
 type DynamicModelNormalizer = (model: Model, agentDir: string) => Model | Promise<Model>;
 
+const providerRuntimeLoader = createLazyImportLoader<ProviderRuntimeModule>(
+  () => import("../plugins/provider-runtime.js"),
+);
+
 async function prepareProviderDynamicModelDefault(
   params: Parameters<DynamicModelPreparer>[0],
 ): Promise<void> {
-  const { prepareProviderDynamicModel } = await import("../plugins/provider-runtime.js");
+  const { prepareProviderDynamicModel } = await providerRuntimeLoader.load();
   await prepareProviderDynamicModel(params);
 }
 
 async function runProviderDynamicModelDefault(
   params: Parameters<DynamicModelResolver>[0],
 ): Promise<ReturnType<DynamicModelResolver>> {
-  const { runProviderDynamicModel } = await import("../plugins/provider-runtime.js");
+  const { runProviderDynamicModel } = await providerRuntimeLoader.load();
   return runProviderDynamicModel(params);
 }
 

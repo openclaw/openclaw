@@ -26,6 +26,16 @@ export type AgentWaitTerminalSnapshot = {
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
 
+function normalizeTerminalOutcomeForWaitSnapshot(outcome: AgentRunTerminalOutcome): {
+  status: AgentWaitTerminalSnapshot["status"];
+  error?: string;
+} {
+  if (outcome.reason === "hard_timeout") {
+    return { status: outcome.status, error: outcome.error };
+  }
+  return normalizeBlockedLivenessWaitStatus(outcome);
+}
+
 function parseRunIdFromDedupeKey(key: string): string | null {
   if (key.startsWith("agent:")) {
     return key.slice("agent:".length) || null;
@@ -126,7 +136,7 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
       startedAt,
       endedAt,
     });
-    const normalized = normalizeBlockedLivenessWaitStatus(terminalOutcome);
+    const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
     return {
       status: normalized.status,
       startedAt,
@@ -157,11 +167,17 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
       startedAt,
       endedAt,
     });
+    const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
     return {
-      status: "error",
+      status: normalized.status,
       startedAt,
       endedAt,
-      error: terminalOutcome.error,
+      error:
+        normalized.status === "error"
+          ? normalized.error
+          : normalized.status === "timeout"
+            ? terminalOutcome.error
+            : undefined,
       stopReason,
       livenessState,
       ...(yielded ? { yielded } : {}),

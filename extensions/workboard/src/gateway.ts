@@ -71,10 +71,10 @@ export function registerWorkboardGatewayMethods(params: {
 
   api.registerGatewayMethod(
     "workboard.cards.list",
-    async ({ respond }) => {
+    async ({ params: requestParams, respond }) => {
       try {
         respond(true, {
-          cards: (await store.list()).map(redactClaimToken),
+          cards: (await store.list({ boardId: requestParams.boardId })).map(redactClaimToken),
           statuses: WORKBOARD_STATUSES,
         });
       } catch (error) {
@@ -169,6 +169,25 @@ export function registerWorkboardGatewayMethods(params: {
   );
 
   api.registerGatewayMethod(
+    "workboard.cards.linkDependency",
+    async ({ params: requestParams, respond }) => {
+      try {
+        const parentId = requestParams.parentId;
+        const childId = requestParams.childId;
+        if (typeof parentId !== "string" || typeof childId !== "string") {
+          throw new Error("parentId and childId are required.");
+        }
+        respond(true, {
+          card: redactClaimToken(await store.linkCards(parentId, childId)),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
     "workboard.cards.proof",
     async ({ params: requestParams, respond }) => {
       try {
@@ -238,6 +257,76 @@ export function registerWorkboardGatewayMethods(params: {
   );
 
   api.registerGatewayMethod(
+    "workboard.cards.promote",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, {
+          card: redactClaimToken(await store.promote(readId(requestParams), requestParams, null)),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.reassign",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, {
+          card: redactClaimToken(await store.reassign(readId(requestParams), requestParams, null)),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.reclaim",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, {
+          card: redactClaimToken(await store.reclaim(readId(requestParams), requestParams, null)),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.complete",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, {
+          card: redactClaimToken(await store.complete(readId(requestParams), requestParams, null)),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.block",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, {
+          card: redactClaimToken(await store.block(readId(requestParams), requestParams, null)),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
     "workboard.cards.unblock",
     async ({ params: requestParams, respond }) => {
       try {
@@ -286,6 +375,48 @@ export function registerWorkboardGatewayMethods(params: {
       }
     },
     { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.dispatch",
+    async ({ respond }) => {
+      try {
+        const result = await store.dispatch();
+        respond(true, {
+          ...result,
+          promoted: result.promoted.map(redactClaimToken),
+          reclaimed: result.reclaimed.map(redactClaimToken),
+          blocked: result.blocked.map(redactClaimToken),
+        });
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: WRITE_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.boards.list",
+    async ({ respond }) => {
+      try {
+        respond(true, await store.listBoards());
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
+  );
+
+  api.registerGatewayMethod(
+    "workboard.cards.stats",
+    async ({ params: requestParams, respond }) => {
+      try {
+        respond(true, await store.stats({ boardId: requestParams.boardId }));
+      } catch (error) {
+        respondError(respond, error);
+      }
+    },
+    { scope: READ_SCOPE },
   );
 
   api.registerGatewayMethod(

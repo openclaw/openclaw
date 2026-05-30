@@ -95,10 +95,15 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
   const existingSessionId = normalizeOptionalString(params.existingSessionId);
   const agentMeta = params.result.meta.agentMeta;
   const returnedSessionId = normalizeOptionalString(agentMeta?.cliSessionBinding?.sessionId);
-  if (agentMeta === undefined || (existingSessionId && returnedSessionId === existingSessionId)) {
+  const shouldClearStoredSession = agentMeta?.clearCliSessionBinding === true;
+  if (
+    agentMeta === undefined ||
+    (!shouldClearStoredSession && existingSessionId === undefined) ||
+    returnedSessionId === existingSessionId
+  ) {
     return params.result;
   }
-  if (returnedSessionId) {
+  if (returnedSessionId || shouldClearStoredSession) {
     params.onDroppedReplacement?.();
   }
   return {
@@ -109,6 +114,7 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
         ...agentMeta,
         sessionId: "",
         cliSessionBinding: undefined,
+        clearCliSessionBinding: undefined,
       },
     },
   };

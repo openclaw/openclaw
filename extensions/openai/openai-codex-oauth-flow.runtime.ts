@@ -5,7 +5,11 @@
  * It is only intended for CLI use, not browser environments.
  */
 
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseOAuthAuthorizationInput,
+  resolveOAuthTokenExpiresAt,
+  resolveOAuthTokenLifetimeMs,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import {
@@ -113,38 +117,6 @@ function waitForManualPromptFallback(signal?: AbortSignal): Promise<null> {
   });
 }
 
-function parseAuthorizationInput(input: string): { code?: string; state?: string } {
-  const value = input.trim();
-  if (!value) {
-    return {};
-  }
-
-  try {
-    const url = new URL(value);
-    return {
-      code: url.searchParams.get("code") ?? undefined,
-      state: url.searchParams.get("state") ?? undefined,
-    };
-  } catch {
-    // not a URL
-  }
-
-  if (value.includes("#")) {
-    const [code, state] = value.split("#", 2);
-    return { code, state };
-  }
-
-  if (value.includes("code=")) {
-    const params = new URLSearchParams(value);
-    return {
-      code: params.get("code") ?? undefined,
-      state: params.get("state") ?? undefined,
-    };
-  }
-
-  return { code: value };
-}
-
 async function promptForAuthorizationCode(
   onPrompt: (prompt: OAuthPrompt) => Promise<string>,
   state: string,
@@ -152,7 +124,7 @@ async function promptForAuthorizationCode(
   const input = await onPrompt({
     message: "Paste the authorization code (or full redirect URL):",
   });
-  const parsed = parseAuthorizationInput(input);
+  const parsed = parseOAuthAuthorizationInput(input);
   if (parsed.state && parsed.state !== state) {
     throw new Error("State mismatch");
   }
@@ -167,15 +139,10 @@ function formatMissingTokenResponseFields(json: TokenResponseJson): string {
   if (!json.refresh_token) {
     missing.push("refresh_token");
   }
-  if (parseStrictPositiveInteger(json.expires_in) === undefined) {
+  if (resolveOAuthTokenLifetimeMs(json.expires_in) === undefined) {
     missing.push("expires_in");
   }
   return missing.join(", ");
-}
-
-function resolveTokenExpiresAt(expiresIn: unknown, nowMs = Date.now()): number | undefined {
-  const seconds = parseStrictPositiveInteger(expiresIn);
-  return seconds === undefined ? undefined : nowMs + seconds * 1000;
 }
 
 function formatTokenRequestError(
@@ -259,7 +226,7 @@ async function exchangeAuthorizationCode(
 
   const json = (await response.json()) as TokenResponseJson;
 
-  const expires = resolveTokenExpiresAt(json.expires_in);
+  const expires = resolveOAuthTokenExpiresAt(json.expires_in);
   if (!json.access_token || !json.refresh_token || expires === undefined) {
     return {
       type: "failed",
@@ -301,7 +268,7 @@ async function refreshAccessToken(
 
     const json = (await response.json()) as TokenResponseJson;
 
-    const expires = resolveTokenExpiresAt(json.expires_in);
+    const expires = resolveOAuthTokenExpiresAt(json.expires_in);
     if (!json.access_token || !json.refresh_token || expires === undefined) {
       return {
         type: "failed",
@@ -502,7 +469,7 @@ export async function loginOpenAICodex(options: {
         code = result.code;
       } else if (manualCode) {
         // Manual input won (or callback timed out and user had entered code)
-        const parsed = parseAuthorizationInput(manualCode);
+        const parsed = parseOAuthAuthorizationInput(manualCode);
         if (parsed.state && parsed.state !== state) {
           throw new Error("State mismatch");
         }
@@ -516,7 +483,7 @@ export async function loginOpenAICodex(options: {
           throw manualError;
         }
         if (manualCode) {
-          const parsed = parseAuthorizationInput(manualCode);
+          const parsed = parseOAuthAuthorizationInput(manualCode);
           if (parsed.state && parsed.state !== state) {
             throw new Error("State mismatch");
           }

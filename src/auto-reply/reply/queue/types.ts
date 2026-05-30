@@ -75,6 +75,8 @@ export type FollowupRun = {
   originatingAccountId?: string;
   /** Thread id for reply routing (Telegram topic id or Matrix thread event id). */
   originatingThreadId?: string | number;
+  /** Provider reply target for transports that model threads as message replies. */
+  originatingReplyToId?: string;
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {

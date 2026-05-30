@@ -11,6 +11,7 @@ import {
 } from "../../agents/model-auth.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
 } from "../../agents/openai-codex-routing.js";
 import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
@@ -38,6 +39,17 @@ function normalizeAuthProvider(
   aliasMap: Readonly<Record<string, string>>,
 ): string {
   const normalized = normalizeProviderIdForAuth(provider);
+  return aliasMap[normalized] ?? normalized;
+}
+
+function normalizeStoredAuthProvider(
+  provider: string,
+  aliasMap: Readonly<Record<string, string>>,
+): string {
+  const normalized = normalizeProviderIdForAuth(provider);
+  if (normalized === OPENAI_CODEX_PROVIDER_ID) {
+    return normalized;
+  }
   return aliasMap[normalized] ?? normalized;
 }
 
@@ -84,7 +96,7 @@ export function createModelListAuthIndex(
     if (!provider?.trim()) {
       return;
     }
-    authenticatedProviders.add(normalizeAuthProvider(provider, aliasMap));
+    authenticatedProviders.add(normalizeStoredAuthProvider(provider, aliasMap));
   };
   const addSyntheticProvider = (provider: string | undefined) => {
     const normalized = provider?.trim() ? normalizeProviderIdForAuth(provider) : "";
@@ -128,7 +140,7 @@ export function createModelListAuthIndex(
   const primaryModelProvider = resolveAgentModelPrimaryValue(
     params.cfg.agents?.defaults?.model,
   )?.split("/", 1)[0];
-  if (primaryModelProvider === "openai-codex" || primaryModelProvider === "codex") {
+  if (primaryModelProvider === "codex") {
     addSyntheticProvider("codex");
   }
 
@@ -175,7 +187,9 @@ export function createModelListAuthIndex(
       openAIProviderUsesCodexRuntimeByDefault({
         provider: normalizedProvider,
         config: params.cfg,
-      }) && authenticatedProviders.has(OPENAI_CODEX_PROVIDER_ID)
+      }) &&
+      (authenticatedProviders.has(OPENAI_PROVIDER_ID) ||
+        authenticatedProviders.has(OPENAI_CODEX_PROVIDER_ID))
     );
   };
 

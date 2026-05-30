@@ -20,7 +20,7 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
   });
 }
 
-import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
+import { resolveTimerTimeoutMs, clampTimerTimeoutMs } from "../../shared/number-coercion.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
@@ -343,7 +343,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               const trimmedRetryAfterMs = retryAfterMs.trim();
               const millis = Number(trimmedRetryAfterMs);
               if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs) && Number.isFinite(millis)) {
-                delayMs = Math.max(0, millis);
+                delayMs = clampTimerTimeoutMs(millis, 0) ?? delayMs;
               }
             } else {
               const retryAfter = response.headers.get("retry-after");
@@ -351,11 +351,11 @@ export const streamOpenAICodexResponses: StreamFunction<
                 const trimmedRetryAfter = retryAfter.trim();
                 const seconds = Number(trimmedRetryAfter);
                 if (/^\d+$/.test(trimmedRetryAfter) && Number.isFinite(seconds)) {
-                  delayMs = Math.max(0, seconds * 1000);
+                  delayMs = clampTimerTimeoutMs(seconds * 1000, 0) ?? delayMs;
                 } else if (RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
                   const date = Date.parse(trimmedRetryAfter);
                   if (!Number.isNaN(date)) {
-                    delayMs = Math.max(0, date - Date.now());
+                    delayMs = clampTimerTimeoutMs(date - Date.now(), 0) ?? delayMs;
                   }
                 }
               }

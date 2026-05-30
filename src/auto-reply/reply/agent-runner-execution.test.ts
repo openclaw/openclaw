@@ -1933,7 +1933,56 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("keeps new room-event CLI sessions transient when reuse fails", async () => {
+  it("keeps the first CLI session created by a room-event turn", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ambient" }],
+      meta: {
+        agentMeta: {
+          sessionId: "new-cli-session",
+          cliSessionBinding: {
+            sessionId: "new-cli-session",
+            authProfileId: "profile",
+          },
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.currentInboundEventKind = "room_event";
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const sessionEntry = {} as unknown as SessionEntry;
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      currentInboundEventKind: "room_event",
+      cliSessionId: undefined,
+      cliSessionBinding: undefined,
+    });
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("new-cli-session");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toEqual({
+      sessionId: "new-cli-session",
+      authProfileId: "profile",
+    });
+  });
+
+  it("drops replacement room-event CLI sessions when reuse fails", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("codex-cli", "gpt-5.4"),
@@ -1950,6 +1999,7 @@ describe("runAgentTurnWithFallback", () => {
             sessionId: "transient-cli-session",
             authProfileId: "profile",
           },
+          clearCliSessionBinding: true,
         },
       },
     });
@@ -1985,6 +2035,7 @@ describe("runAgentTurnWithFallback", () => {
     }
     expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
     expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+    expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
     expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
   });
 
@@ -2034,6 +2085,54 @@ describe("runAgentTurnWithFallback", () => {
     expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toEqual({
       sessionId: "existing-cli-session",
     });
+  });
+
+  it("clears room-event CLI bindings when an unflushed replacement is dropped", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "handled" }],
+      meta: {
+        agentMeta: {
+          sessionId: "",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          clearCliSessionBinding: true,
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.currentInboundEventKind = "room_event";
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const sessionEntry = {
+      cliSessionBindings: {
+        "codex-cli": { sessionId: "existing-cli-session" },
+      },
+    } as unknown as SessionEntry;
+    const activeSessionStore = { main: sessionEntry };
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      activeSessionStore,
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+    expect(result.runResult.meta?.agentMeta?.clearCliSessionBinding).toBeUndefined();
+    expect(activeSessionStore.main.cliSessionBindings?.["codex-cli"]).toBeUndefined();
   });
 
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {
@@ -3108,7 +3207,7 @@ describe("runAgentTurnWithFallback", () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const failedResult = await params.run("openai-codex", "gpt-5.4");
-      expect(sessionEntry.providerOverride).toBe("openai-codex");
+      expect(sessionEntry.providerOverride).toBe("openai");
       expect(sessionEntry.modelOverride).toBe("gpt-5.4");
       const classification = await params.classifyResult?.({
         result: failedResult as { payloads?: [] },
@@ -5474,7 +5573,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for openai-codex. Re-auth with `openclaw models auth login --provider openai-codex`, then try again.",
+        "⚠️ Model login expired on the gateway for openai. Re-auth with `openclaw models auth login --provider openai`, then try again.",
       );
     }
   });
@@ -5529,7 +5628,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai-codex` or run `openclaw configure`.",
+        "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.",
       );
     }
   });
@@ -6075,12 +6174,12 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-5.4");
     expect(sessionEntry.modelOverrideSource).toBe("auto");
     expect(sessionEntry.authProfileOverride).toBeUndefined();
@@ -6212,7 +6311,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-5.4");
     expect(sessionEntry.modelOverrideSource).toBe("auto");
     expect(sessionEntry.modelOverrideFallbackOriginProvider).toBe("minimax");

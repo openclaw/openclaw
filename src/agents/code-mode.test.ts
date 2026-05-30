@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   applyCodeModeCatalog,
@@ -93,7 +93,12 @@ async function runUntilCompleted(params: {
 }
 
 describe("Code Mode", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
     testing.setTypescriptRuntimeForTest(null);
@@ -495,7 +500,6 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
         },
       },
     } as never;
@@ -538,10 +542,17 @@ describe("Code Mode", () => {
     );
     expect(first.status).toBe("waiting");
     expect(first.pendingToolCalls).toHaveLength(2);
+    const runId = first.runId;
+    expect(typeof runId).toBe("string");
+    if (typeof runId !== "string") {
+      throw new Error("expected code mode run id");
+    }
 
-    const second = resultDetails(
-      await codeModeTools[1].execute("code-wait-timeout", { runId: first.runId }),
-    );
+    const activeRun = testing.activeRuns.get(runId);
+    expect(activeRun).toBeDefined();
+    activeRun!.config.timeoutMs = 100;
+
+    const second = resultDetails(await codeModeTools[1].execute("code-wait-timeout", { runId }));
 
     expect(second.status).toBe("waiting");
     expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "call" })]);

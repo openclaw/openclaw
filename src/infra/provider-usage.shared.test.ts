@@ -14,11 +14,18 @@ describe("provider-usage.shared", () => {
     { value: "minimax-portal", expected: "minimax" },
     { value: "minimax-cn", expected: "minimax" },
     { value: "minimax-portal-cn", expected: "minimax" },
+    { value: " XIAOMI-TOKEN-PLAN ", expected: "xiaomi-token-plan" },
     { value: "unknown-provider", expected: undefined },
     { value: undefined, expected: undefined },
     { value: null, expected: undefined },
   ])("normalizes provider ids for %j", ({ value, expected }) => {
     expect(resolveUsageProviderId(value)).toBe(expected);
+  });
+
+  it("maps canonical OpenAI subscription profiles to Codex usage windows", () => {
+    expect(resolveUsageProviderId("openai", { credentialType: "oauth" })).toBe("openai-codex");
+    expect(resolveUsageProviderId("openai", { credentialType: "token" })).toBe("openai-codex");
+    expect(resolveUsageProviderId("openai", { credentialType: "api_key" })).toBeUndefined();
   });
 
   it.each([

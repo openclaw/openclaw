@@ -42,14 +42,19 @@ view shows a plugin-unavailable state instead of local card data.
 Each card stores:
 
 - title and notes
-- status: `backlog`, `todo`, `running`, `review`, `blocked`, or `done`
+- status: `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`,
+  `review`, `blocked`, or `done`
 - priority: `low`, `normal`, `high`, or `urgent`
 - labels
 - optional agent id
 - optional linked session, run, task, or source URL
 - optional execution metadata for a Codex or Claude session started from the card
-- compact metadata for attempts, comments, links, proof, artifacts, claims, diagnostics, notifications, templates, archive state, and stale-session detection
-- recent card events such as created, moved, linked, claimed, heartbeat, attempt, proof, artifact, diagnostic, notification, archive, stale, or agent-updated changes
+- compact metadata for attempts, comments, links, proof, artifacts, automation,
+  claims, diagnostics, notifications, templates, archive state, and
+  stale-session detection
+- recent card events such as created, moved, linked, claimed, heartbeat,
+  attempt, proof, artifact, diagnostic, notification, dispatch, archive, stale,
+  or agent-updated changes
 
 Cards are stored in the plugin's Gateway state. They are local to the Gateway
 state directory and move with the rest of that Gateway's OpenClaw state.
@@ -84,17 +89,31 @@ and rolling failure count so repeated failures remain visible on the board.
 
 Workboard also exposes optional agent tools for board-aware workflows:
 
-- `workboard_list` lists compact cards with claim and diagnostic state.
+- `workboard_list` lists compact cards with claim and diagnostic state, with an
+  optional board filter.
 - `workboard_read` returns one card plus bounded worker context built from notes,
-  attempts, comments, links, proof, artifacts, and active diagnostics.
-- `workboard_claim` claims a card for the calling agent and moves backlog or todo
-  cards into `running`.
+  attempts, comments, links, proof, artifacts, parent results, recent assignee
+  work, and active diagnostics.
+- `workboard_create` creates a card with optional parents, tenant, skills,
+  board, workspace metadata, idempotency key, runtime limit, and retry budget.
+- `workboard_link` links a parent card to a child card. Children stay in `todo`
+  until every parent reaches `done`; then dispatch promotion moves them to
+  `ready`.
+- `workboard_claim` claims a card for the calling agent and moves backlog, todo,
+  or ready cards into `running`.
 - `workboard_heartbeat` refreshes the claim heartbeat during longer runs.
 - `workboard_release` releases the claim after completion, pause, or handoff and
   can move the card to a next status.
-- `workboard_comment`, `workboard_proof`, and `workboard_unblock` let an agent
-  add handoff notes, attach proof or artifact references, and move blocked work
-  back to `todo`.
+- `workboard_complete` and `workboard_block` are structured lifecycle tools for
+  final summaries, proof, artifacts, created-card manifests, and blocker
+  reasons. Created-card manifests must reference cards linked back to the
+  completed card, which keeps phantom children out of summaries.
+- `workboard_boards`, `workboard_stats`, `workboard_promote`,
+  `workboard_reassign`, `workboard_reclaim`, `workboard_comment`,
+  `workboard_proof`, `workboard_unblock`, and `workboard_dispatch` let an agent
+  inspect board namespaces, view queue stats, recover stuck work, add handoff
+  notes, attach proof or artifact references, move blocked work back to `todo`,
+  and nudge dependency promotion or stale-claim cleanup.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 has the claim token returned by `workboard_claim`. Dashboard operators still use
@@ -104,6 +123,12 @@ Workboard diagnostics are computed from local card metadata. The built-in checks
 flag assigned cards that wait too long, running cards without recent heartbeat,
 blocked cards that need attention, repeated failures, done cards without proof,
 and running cards that only have a loose session link.
+
+Dispatch is intentionally Gateway-local. It does not spawn arbitrary operating
+system processes; normal OpenClaw sessions still own execution. A dispatch nudge
+promotes dependency-ready cards, records dispatch metadata on ready cards, and
+blocks expired claims or timed-out runs so operators can recover them from the
+board.
 
 ## Session lifecycle sync
 
@@ -163,8 +188,9 @@ The plugin registers Gateway RPC methods under the `workboard.*` namespace:
 - `workboard.cards.export` requires `operator.read`
 - `workboard.cards.diagnostics` requires `operator.read`
 - `workboard.cards.diagnostics.refresh` requires `operator.write`
-- create, update, move, delete, comment, link, proof, artifact, claim, heartbeat,
-  release, unblock, bulk, and archive methods require `operator.write`
+- create, update, move, delete, comment, link, dependency link, proof, artifact,
+  claim, heartbeat, release, complete, block, unblock, dispatch, bulk, and
+  archive methods require `operator.write`
 
 Browsers connected with read-only operator access can inspect the board but
 cannot mutate cards.

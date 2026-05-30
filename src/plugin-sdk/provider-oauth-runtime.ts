@@ -1,5 +1,8 @@
 import type { Model } from "../llm/types.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import {
+  positiveSecondsToSafeMilliseconds,
+  resolveTimerTimeoutMs,
+} from "../shared/number-coercion.js";
 
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>`;
 
@@ -19,6 +22,11 @@ export type OAuthPrompt = {
   message: string;
   placeholder?: string;
   allowEmpty?: boolean;
+};
+
+export type OAuthAuthorizationInput = {
+  code?: string;
+  state?: string;
 };
 
 export type OAuthAuthInfo = {
@@ -211,6 +219,55 @@ export function generateOAuthState(): string {
   const stateBytes = new Uint8Array(32);
   crypto.getRandomValues(stateBytes);
   return base64urlEncode(stateBytes);
+}
+
+export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationInput {
+  const value = input.trim();
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const url = new URL(value);
+    return {
+      code: url.searchParams.get("code") ?? undefined,
+      state: url.searchParams.get("state") ?? undefined,
+    };
+  } catch {
+    // Plain pasted code or query-string input.
+  }
+
+  if (value.includes("#")) {
+    const [code, state] = value.split("#", 2);
+    return { code, state };
+  }
+
+  if (value.includes("code=")) {
+    const params = new URLSearchParams(value);
+    return {
+      code: params.get("code") ?? undefined,
+      state: params.get("state") ?? undefined,
+    };
+  }
+
+  return { code: value };
+}
+
+export function resolveOAuthTokenLifetimeMs(value: unknown): number | undefined {
+  return positiveSecondsToSafeMilliseconds(value);
+}
+
+export function resolveOAuthTokenExpiresAt(
+  value: unknown,
+  options: { nowMs?: number; refreshSkewMs?: number } = {},
+): number | undefined {
+  const lifetimeMs = resolveOAuthTokenLifetimeMs(value);
+  if (lifetimeMs === undefined) {
+    return undefined;
+  }
+
+  const expiresAt = (options.nowMs ?? Date.now()) + lifetimeMs - (options.refreshSkewMs ?? 0);
+  return Number.isSafeInteger(expiresAt) ? expiresAt : undefined;
 }
 
 export function createOAuthLoginCancelledError(): Error {

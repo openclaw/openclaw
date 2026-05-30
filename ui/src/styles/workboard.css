@@ -358,7 +358,9 @@
 
 .workboard-board {
   display: grid;
-  grid-template-columns: repeat(6, minmax(220px, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(220px, 1fr);
+  grid-template-columns: none;
   gap: 12px;
   flex: 1;
   min-height: 0;
@@ -658,6 +660,6 @@
   }
 
   .workboard-board {
-    grid-template-columns: repeat(6, minmax(260px, 82vw));
+    grid-auto-columns: minmax(260px, 82vw);
   }
 }

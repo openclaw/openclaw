@@ -1,4 +1,9 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { ValidationError } from "../../../packages/gateway-protocol/src/index.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -42,6 +47,24 @@ type RequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields> = {
   request: TPayload;
   createdAtMs: number;
   expiresAtMs: number;
+};
+
+type PendingApprovalListEntry<TPayload> = {
+  id: string;
+  request: TPayload;
+  createdAtMs: number;
+  expiresAtMs: number;
+};
+
+type ApprovalResolveParams = {
+  id: string;
+  decision: string;
+};
+
+type ApprovalResolveParamsValidator<TParams extends ApprovalResolveParams> = ((
+  params: unknown,
+) => params is TParams) & {
+  errors?: ValidationError[] | null;
 };
 
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
@@ -112,6 +135,93 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   }
 
   return true;
+}
+
+export function listVisiblePendingApprovalRequests<TPayload>(params: {
+  manager: ExecApprovalManager<TPayload>;
+  client?: GatewayClient | null;
+}): PendingApprovalListEntry<TPayload>[] {
+  return params.manager
+    .listPendingRecords()
+    .filter((record) =>
+      isApprovalRecordVisibleToClient({
+        record,
+        client: params.client ?? null,
+      }),
+    )
+    .map((record) => ({
+      id: record.id,
+      request: record.request,
+      createdAtMs: record.createdAtMs,
+      expiresAtMs: record.expiresAtMs,
+    }));
+}
+
+export function bindApprovalRequesterMetadata<TPayload>(params: {
+  record: ExecApprovalRecord<TPayload>;
+  client?: GatewayClient | null;
+}): void {
+  params.record.requestedByConnId = params.client?.connId ?? null;
+  params.record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
+  params.record.requestedByClientId = params.client?.connect?.client?.id ?? null;
+  params.record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
+}
+
+export function registerPendingApprovalRecord<TPayload>(params: {
+  manager: ExecApprovalManager<TPayload>;
+  record: ExecApprovalRecord<TPayload>;
+  timeoutMs: number;
+  respond: RespondFn;
+}): Promise<ExecApprovalDecision | null> | undefined {
+  try {
+    return params.manager.register(params.record, params.timeoutMs);
+  } catch (err) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `registration failed: ${String(err)}`),
+    );
+    return undefined;
+  }
+}
+
+export function buildRequestedApprovalEvent<TPayload extends ApprovalTurnSourceFields>(
+  record: ExecApprovalRecord<TPayload>,
+): RequestedApprovalEvent<TPayload> {
+  return {
+    id: record.id,
+    request: record.request,
+    createdAtMs: record.createdAtMs,
+    expiresAtMs: record.expiresAtMs,
+  };
+}
+
+export function resolveApprovalDecisionParams<TParams extends ApprovalResolveParams>(params: {
+  rawParams: unknown;
+  validate: ApprovalResolveParamsValidator<TParams>;
+  methodName: string;
+  respond: RespondFn;
+}): { inputId: string; decision: ExecApprovalDecision } | null {
+  const rawParams = params.rawParams;
+  if (!params.validate(rawParams)) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `invalid ${params.methodName} params: ${formatValidationErrors(params.validate.errors)}`,
+      ),
+    );
+    return null;
+  }
+  if (!isApprovalDecision(rawParams.decision)) {
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
+    return null;
+  }
+  return {
+    inputId: rawParams.id,
+    decision: rawParams.decision,
+  };
 }
 
 export function resolveApprovalRequestRecipientConnIds<TPayload>(params: {

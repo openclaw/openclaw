@@ -147,6 +147,46 @@ describe("agent wait dedupe helper", () => {
     });
   });
 
+  it("keeps hard timeout snapshots stronger than blocked liveness", () => {
+    const dedupe = new Map();
+    const runId = "run-blocked-provider-timeout";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "error",
+        startedAt: 100,
+        endedAt: 200,
+        error: "model timed out",
+        result: {
+          meta: {
+            livenessState: "blocked",
+            timeoutPhase: "provider",
+            providerStarted: true,
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 200,
+      error: "model timed out",
+      livenessState: "blocked",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
   it("normalizes blocked ok agent snapshots to errors", () => {
     const dedupe = new Map();
     const runId = "run-blocked-agent";

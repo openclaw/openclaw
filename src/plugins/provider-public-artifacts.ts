@@ -91,15 +91,34 @@ function resolveBundledProviderPolicyPluginId(
     if (plugin.origin !== "bundled") {
       continue;
     }
-    const ownsProvider = plugin.providers.some(
-      (provider) => normalizeProviderId(provider) === normalizedProviderId,
-    );
-    if (ownsProvider) {
+    if (pluginOwnsProviderPolicyRef(plugin, normalizedProviderId)) {
       return plugin.id;
     }
   }
 
   return null;
+}
+
+function pluginOwnsProviderPolicyRef(
+  plugin: PluginManifestRegistry["plugins"][number],
+  normalizedProviderId: string,
+): boolean {
+  const ownedProviders = new Set(
+    plugin.providers.map((provider) => normalizeProviderId(provider)).filter(Boolean),
+  );
+  if (ownedProviders.has(normalizedProviderId)) {
+    return true;
+  }
+
+  for (const [rawAlias, rawTarget] of Object.entries(plugin.providerAuthAliases ?? {})) {
+    const alias = normalizeProviderId(rawAlias);
+    const target = normalizeProviderId(rawTarget);
+    if (alias === normalizedProviderId && ownedProviders.has(target)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export function resolveBundledProviderPolicySurface(

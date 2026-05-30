@@ -40,6 +40,17 @@ describe("openclaw state database", () => {
     );
   });
 
+  it("keeps test default state under a worker-sharded temp directory", () => {
+    expect(
+      resolveOpenClawStateSqlitePath({
+        VITEST: "true",
+        VITEST_WORKER_ID: "7",
+      } as NodeJS.ProcessEnv),
+    ).toBe(
+      path.join(os.tmpdir(), "openclaw-test-state", `${process.pid}-7`, "state", "openclaw.sqlite"),
+    );
+  });
+
   it("creates the shared state schema from the committed SQL shape", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

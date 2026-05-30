@@ -189,7 +189,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
     }
     if (isCliProvider(providerUsed, cfg)) {
       const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
-      if (cliSessionBinding?.sessionId?.trim()) {
+      if (result.meta.agentMeta?.clearCliSessionBinding === true) {
+        clearCliSession(next, providerUsed);
+      } else if (cliSessionBinding?.sessionId?.trim()) {
         setCliSessionBinding(next, providerUsed, cliSessionBinding);
       } else {
         const cliSessionId = result.meta.agentMeta?.sessionId?.trim();

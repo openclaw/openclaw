@@ -287,6 +287,35 @@ describe("normalizeStoredCronJobs", () => {
     expect(schedule.atMs).toBeUndefined();
   });
 
+  it("leaves Date-invalid legacy atMs for persisted shape validation", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-invalid-at",
+        schedule: { kind: "at", atMs: 8_700_000_000_000_000 },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidSchedule).toBe(1);
+    expect(job).toBeUndefined();
+  });
+
+  it("drops Date-invalid legacy atMs when canonical at is valid", () => {
+    const at = "2026-04-01T10:00:00.000Z";
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "job-valid-at-invalid-at-ms",
+        schedule: { kind: "at", at, atMs: 8_700_000_000_000_000 },
+      }),
+    );
+
+    const schedule = job.schedule as Record<string, unknown>;
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidSchedule).toBeUndefined();
+    expect(schedule.at).toBe(at);
+    expect(schedule.atMs).toBeUndefined();
+  });
+
   it("preserves stored custom session targets", () => {
     const { job } = normalizeOneJob(
       makeLegacyJob({

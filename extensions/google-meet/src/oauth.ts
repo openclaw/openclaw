@@ -1,4 +1,7 @@
-import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
 import {
   generateOAuthState,
@@ -158,6 +161,7 @@ function shouldUseCachedGoogleMeetAccessToken(params: {
     params.accessToken?.trim() &&
     typeof params.expiresAt === "number" &&
     Number.isFinite(params.expiresAt) &&
+    params.expiresAt <= MAX_DATE_TIMESTAMP_MS &&
     params.expiresAt > now + safetyWindowMs,
   );
 }

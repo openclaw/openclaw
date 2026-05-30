@@ -11,11 +11,11 @@ const manifestAuthChoices = vi.hoisted(() => [
   },
   {
     pluginId: "openai",
-    providerId: "openai-codex",
-    methodId: "cli",
-    choiceId: "openai-codex-cli",
-    choiceLabel: "OpenAI Codex CLI",
-    deprecatedChoiceIds: ["codex-cli"],
+    providerId: "openai",
+    methodId: "oauth",
+    choiceId: "openai",
+    choiceLabel: "ChatGPT Login",
+    deprecatedChoiceIds: ["openai-codex", "codex-cli"],
   },
 ]);
 
@@ -58,6 +58,13 @@ describe("auth choice legacy aliases", () => {
     expect(resolveLegacyAuthChoiceAliasesForCli({ env: authChoiceManifestEnv() })).toEqual([
       "claude-cli",
       "codex-cli",
+      "openai-codex",
     ]);
+  });
+
+  it("maps the old OpenAI Codex setup choice to OpenAI login", () => {
+    expect(normalizeLegacyOnboardAuthChoice("openai-codex", { env: authChoiceManifestEnv() })).toBe(
+      "openai",
+    );
   });
 });

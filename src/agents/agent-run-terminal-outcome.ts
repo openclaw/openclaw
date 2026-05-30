@@ -40,6 +40,10 @@ export type AgentRunTerminalInput = {
   endedAt?: unknown;
 };
 
+export type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
+  status?: unknown;
+};
+
 const HARD_TIMEOUT_PHASES = new Set<AgentRunTimeoutPhase>(["preflight", "provider", "post_turn"]);
 
 function asFiniteTimestamp(value: unknown): number | undefined {
@@ -71,6 +75,12 @@ function isCancellationStopReason(value: string | undefined): boolean {
   return value === "rpc" || value === "stop";
 }
 
+function asAgentRunWaitStatus(value: unknown): AgentRunWaitStatus | "pending" | undefined {
+  return value === "ok" || value === "timeout" || value === "error" || value === "pending"
+    ? value
+    : undefined;
+}
+
 export function buildAgentRunTerminalOutcome(
   input: AgentRunTerminalInput,
 ): AgentRunTerminalOutcome {
@@ -79,25 +89,27 @@ export function buildAgentRunTerminalOutcome(
   const timeoutPhase = normalizeAgentRunTimeoutPhase(input.timeoutPhase);
   const providerStarted = normalizeProviderStarted(input.providerStarted);
   const rawError = asNonEmptyString(input.error);
-  // Queue and gateway-draining timeouts are wait-layer uncertainty. Only
-  // provider-started or provider-phase timeouts are sticky child-run facts.
+  // Queue and gateway-draining timeouts are wait-layer uncertainty. Provider
+  // errors need explicit timeout attribution; providerStarted only proves reach.
   const hardTimeout =
-    input.status === "timeout" &&
-    (isHardAgentRunTimeoutPhase(timeoutPhase) || providerStarted === true);
+    isHardAgentRunTimeoutPhase(timeoutPhase) ||
+    (input.status === "timeout" && providerStarted === true);
   const aborted = isAbortedAgentStopReason(stopReason);
   // ACP/model `stop` can be a normal successful finish. Treat rpc/stop as
   // cancellation only for non-success terminal payloads from abort paths.
   const cancelled = input.status !== "ok" && isCancellationStopReason(stopReason);
   const blocked = isBlockedLivenessState(livenessState);
-  const error = blocked
-    ? formatBlockedLivenessError(rawError)
-    : aborted && !rawError
-      ? AGENT_RUN_ABORTED_ERROR
-      : rawError;
-  const reason: AgentRunTerminalReason = blocked
-    ? "blocked"
-    : hardTimeout
-      ? "hard_timeout"
+  const error = hardTimeout
+    ? rawError
+    : blocked
+      ? formatBlockedLivenessError(rawError)
+      : aborted && !rawError
+        ? AGENT_RUN_ABORTED_ERROR
+        : rawError;
+  const reason: AgentRunTerminalReason = hardTimeout
+    ? "hard_timeout"
+    : blocked
+      ? "blocked"
       : aborted
         ? "aborted"
         : cancelled
@@ -112,8 +124,8 @@ export function buildAgentRunTerminalOutcome(
     status:
       reason === "completed"
         ? "ok"
-        : input.status === "timeout" &&
-            (reason === "hard_timeout" || reason === "timed_out" || reason === "cancelled")
+        : reason === "hard_timeout" ||
+            (input.status === "timeout" && (reason === "timed_out" || reason === "cancelled"))
           ? "timeout"
           : "error",
     ...(error ? { error } : {}),
@@ -128,6 +140,25 @@ export function buildAgentRunTerminalOutcome(
       ? { endedAt: asFiniteTimestamp(input.endedAt) }
       : {}),
   };
+}
+
+export function buildAgentRunTerminalOutcomeFromWaitResult(
+  wait: AgentRunTerminalWaitInput | undefined,
+): AgentRunTerminalOutcome | undefined {
+  const status = asAgentRunWaitStatus(wait?.status);
+  if (!status || status === "pending") {
+    return undefined;
+  }
+  return buildAgentRunTerminalOutcome({
+    status,
+    error: wait?.error,
+    stopReason: wait?.stopReason,
+    livenessState: wait?.livenessState,
+    timeoutPhase: wait?.timeoutPhase,
+    providerStarted: wait?.providerStarted,
+    startedAt: wait?.startedAt,
+    endedAt: wait?.endedAt,
+  });
 }
 
 function completedBeforeOrAtTimeout(params: {

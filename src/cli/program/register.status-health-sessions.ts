@@ -1,8 +1,8 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 import { parsePositiveIntOrUndefined, parseStrictPositiveIntOrUndefined } from "./helpers.js";
@@ -20,6 +20,15 @@ type SessionsListCliOptions = {
   active?: string;
   limit?: string;
 };
+
+function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
+  let promise: Promise<T> | undefined;
+  return () => (promise ??= load());
+}
+
+const loadCommitmentsCommands = createModuleLoader(() => import("../../commands/commitments.js"));
+const loadTasksCommands = createModuleLoader(() => import("../../commands/tasks.js"));
+const loadFlowsCommands = createModuleLoader(() => import("../../commands/flows.js"));
 
 function addSessionsListOptions(command: Command): Command {
   return command
@@ -331,7 +340,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { commitmentsListCommand } = await import("../../commands/commitments.js");
+        const { commitmentsListCommand } = await loadCommitmentsCommands();
         await commitmentsListCommand(
           {
             json: Boolean(opts.json),
@@ -357,7 +366,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         | { json?: boolean; agent?: string; status?: string; all?: boolean }
         | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { commitmentsListCommand } = await import("../../commands/commitments.js");
+        const { commitmentsListCommand } = await loadCommitmentsCommands();
         await commitmentsListCommand(
           {
             json: Boolean(opts.json || parentOpts?.json),
@@ -377,7 +386,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (ids: string[], opts, command) => {
       const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { commitmentsDismissCommand } = await import("../../commands/commitments.js");
+        const { commitmentsDismissCommand } = await loadCommitmentsCommands();
         await commitmentsDismissCommand(
           {
             ids,
@@ -399,7 +408,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksListCommand } = await import("../../commands/tasks.js");
+        const { tasksListCommand } = await loadTasksCommands();
         await tasksListCommand(
           {
             json: Boolean(opts.json),
@@ -430,7 +439,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           }
         | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksListCommand } = await import("../../commands/tasks.js");
+        const { tasksListCommand } = await loadTasksCommands();
         await tasksListCommand(
           {
             json: Boolean(opts.json || parentOpts?.json),
@@ -459,7 +468,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         return;
       }
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksAuditCommand } = await import("../../commands/tasks.js");
+        const { tasksAuditCommand } = await loadTasksCommands();
         await tasksAuditCommand(
           {
             json: Boolean(opts.json || parentOpts?.json),
@@ -493,7 +502,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksMaintenanceCommand } = await import("../../commands/tasks.js");
+        const { tasksMaintenanceCommand } = await loadTasksCommands();
         await tasksMaintenanceCommand(
           {
             json: Boolean(opts.json || parentOpts?.json),
@@ -512,7 +521,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .action(async (lookup, opts, command) => {
       const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksShowCommand } = await import("../../commands/tasks.js");
+        const { tasksShowCommand } = await loadTasksCommands();
         await tasksShowCommand(
           {
             lookup,
@@ -530,7 +539,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
     .action(async (lookup, notify) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksNotifyCommand } = await import("../../commands/tasks.js");
+        const { tasksNotifyCommand } = await loadTasksCommands();
         await tasksNotifyCommand(
           {
             lookup,
@@ -547,7 +556,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .argument("<lookup>", "Task id, run id, or session key")
     .action(async (lookup) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { tasksCancelCommand } = await import("../../commands/tasks.js");
+        const { tasksCancelCommand } = await loadTasksCommands();
         await tasksCancelCommand(
           {
             lookup,
@@ -571,7 +580,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { flowsListCommand } = await import("../../commands/flows.js");
+        const { flowsListCommand } = await loadFlowsCommands();
         await flowsListCommand(
           {
             json: Boolean(opts.json),
@@ -589,7 +598,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (lookup, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { flowsShowCommand } = await import("../../commands/flows.js");
+        const { flowsShowCommand } = await loadFlowsCommands();
         await flowsShowCommand(
           {
             lookup,
@@ -606,7 +615,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .argument("<lookup>", "Flow id or owner key")
     .action(async (lookup) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { flowsCancelCommand } = await import("../../commands/flows.js");
+        const { flowsCancelCommand } = await loadFlowsCommands();
         await flowsCancelCommand(
           {
             lookup,

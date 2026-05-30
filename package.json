@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.28",
+  "version": "2026.5.30",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -925,6 +925,10 @@
       "types": "./dist/plugin-sdk/runtime-fetch.d.ts",
       "default": "./dist/plugin-sdk/runtime-fetch.js"
     },
+    "./plugin-sdk/inline-image-data-url-runtime": {
+      "types": "./dist/plugin-sdk/inline-image-data-url-runtime.d.ts",
+      "default": "./dist/plugin-sdk/inline-image-data-url-runtime.js"
+    },
     "./plugin-sdk/response-limit-runtime": {
       "types": "./dist/plugin-sdk/response-limit-runtime.d.ts",
       "default": "./dist/plugin-sdk/response-limit-runtime.js"
@@ -1603,6 +1607,7 @@
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "plugins:sync:check": "node --import tsx scripts/sync-plugin-versions.ts --check",
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
+    "postpack": "node scripts/package-changelog.mjs restore",
     "preinstall": "node scripts/preinstall-package-manager-warning.mjs",
     "prepack": "node --import tsx scripts/openclaw-prepack.ts",
     "prepare": "node scripts/prepare-git-hooks.mjs",
@@ -1881,7 +1886,6 @@
     "jszip": "3.10.1",
     "kysely": "0.29.2",
     "linkedom": "0.18.12",
-    "markdown-it": "14.2.0",
     "minimatch": "10.2.5",
     "node-edge-tts": "1.2.10",
     "openai": "6.39.0",
@@ -1937,7 +1941,6 @@
     "vitest": "4.1.7"
   },
   "optionalDependencies": {
-    "sharp": "0.34.5",
     "sqlite-vec": "0.1.9"
   },
   "overrides": {

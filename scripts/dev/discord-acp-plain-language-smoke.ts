@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -15,7 +16,6 @@ import {
   redactForDevToolLog,
   redactHomePath,
 } from "../lib/dev-tooling-safety.ts";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -543,7 +543,14 @@ async function requestDiscordJson<T>(params: {
         onTimeout: () => controller.abort(),
       })) as { retry_after?: number };
       const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
-      await sleepImpl(Math.min(Math.ceil(waitSeconds * 1000), remainingTimeoutMs(deadlineMs)));
+      const waitMs = Math.ceil(waitSeconds * 1000);
+      const remainingMs = remainingTimeoutMs(deadlineMs);
+      if (waitMs >= remainingMs) {
+        throw new Error(
+          `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} exceeded total timeout before retry.`,
+        );
+      }
+      await sleepImpl(waitMs);
       continue;
     }
 

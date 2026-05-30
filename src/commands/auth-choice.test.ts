@@ -511,6 +511,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       flagName: "--openai-api-key",
       envVar: "OPENAI_API_KEY",
       promptMessage: "Enter OpenAI API key",
+      profileId: "openai:api-key",
       defaultModel: "openai/gpt-5.5",
     }),
     await createApiKeyProvider({
@@ -1181,11 +1182,11 @@ describe("applyAuthChoice", () => {
     expect(providerResolveInput.mode).toBe("setup");
     expectPromptMessageContaining(confirm, "OPENAI_API_KEY");
     expect(text).not.toHaveBeenCalled();
-    expectAuthProfileConfig(result, "openai:default", {
+    expectAuthProfileConfig(result, "openai:api-key", {
       provider: "openai",
       mode: "api_key",
     });
-    expect((await readAuthProfile("openai:default"))?.key).toBe("sk-openai-explicit");
+    expect((await readAuthProfile("openai:api-key"))?.key).toBe("sk-openai-explicit");
   });
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {

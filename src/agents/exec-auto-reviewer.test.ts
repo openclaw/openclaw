@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createModelExecAutoReviewer, parseExecAutoReviewResponse } from "./exec-auto-reviewer.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import {
+  createModelExecAutoReviewer,
+  parseExecAutoReviewResponse,
+  resolveExecReviewerTimeoutMs,
+} from "./exec-auto-reviewer.js";
 
 const input = {
   command: "git status",
@@ -302,6 +307,12 @@ describe("createModelExecAutoReviewer", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("caps oversized reviewer timeouts before scheduling timers", () => {
+    expect(resolveExecReviewerTimeoutMs({ timeoutMs: Number.MAX_SAFE_INTEGER })).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
   });
 
   it("gives reviewer completion a fresh timeout after slow model preparation", async () => {

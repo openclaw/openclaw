@@ -31,7 +31,8 @@ const unitFastCandidateGlobs = [
   "src/interactive/**/*.test.ts",
   "src/link-understanding/**/*.test.ts",
   "src/logging/**/*.test.ts",
-  "src/markdown/**/*.test.ts",
+  "packages/markdown-core/src/**/*.test.ts",
+  "packages/terminal-core/src/**/*.test.ts",
   "src/media/**/*.test.ts",
   "src/media-generation/**/*.test.ts",
   "src/media-understanding/**/*.test.ts",
@@ -48,7 +49,6 @@ const unitFastCandidateGlobs = [
   "src/routing/**/*.test.ts",
   "src/sessions/**/*.test.ts",
   "src/shared/**/*.test.ts",
-  "src/terminal/**/*.test.ts",
   "src/test-utils/**/*.test.ts",
   "src/tasks/**/*.test.ts",
   "src/tts/**/*.test.ts",
@@ -190,8 +190,8 @@ export const forcedUnitFastTestFiles = [
   "src/tts/status-config.test.ts",
   "src/tts/tts-config.test.ts",
   "src/ui-app-settings.agents-files-refresh.test.ts",
-  "src/terminal/restore.test.ts",
-  "src/terminal/table.test.ts",
+  "packages/terminal-core/src/restore.test.ts",
+  "packages/terminal-core/src/table.test.ts",
   "src/test-helpers/state-dir-env.test.ts",
   "src/test-utils/env.test.ts",
   "src/test-utils/openclaw-test-state.test.ts",
@@ -425,6 +425,8 @@ export function collectUnitFastTestFileAnalysis(cwd = process.cwd(), options = {
 
 let cachedUnitFastTestFiles = null;
 let cachedUnitFastTestFileSet = null;
+let cachedUnitFastTimerTestFiles = null;
+let cachedUnitFastTimerTestFileSet = null;
 const cachedSingleUnitFastTestFileResults = new Map();
 
 export function getUnitFastTestFiles() {
@@ -437,12 +439,30 @@ export function getUnitFastTestFiles() {
   return cachedUnitFastTestFiles;
 }
 
+export function getUnitFastTimerTestFiles() {
+  if (cachedUnitFastTimerTestFiles !== null) {
+    return cachedUnitFastTimerTestFiles;
+  }
+  cachedUnitFastTimerTestFiles = collectUnitFastTestFileAnalysis()
+    .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))
+    .map((entry) => entry.file);
+  return cachedUnitFastTimerTestFiles;
+}
+
 function getUnitFastTestFileSet() {
   if (cachedUnitFastTestFileSet !== null) {
     return cachedUnitFastTestFileSet;
   }
   cachedUnitFastTestFileSet = new Set(getUnitFastTestFiles());
   return cachedUnitFastTestFileSet;
+}
+
+function getUnitFastTimerTestFileSet() {
+  if (cachedUnitFastTimerTestFileSet !== null) {
+    return cachedUnitFastTimerTestFileSet;
+  }
+  cachedUnitFastTimerTestFileSet = new Set(getUnitFastTimerTestFiles());
+  return cachedUnitFastTimerTestFileSet;
 }
 
 function isUnitFastTestFileOnDemand(file, cwd = process.cwd()) {
@@ -476,12 +496,22 @@ export function isUnitFastTestFile(file) {
   return getUnitFastTestFileSet().has(normalizeRepoPath(file));
 }
 
+export function isUnitFastTimerTestFile(file) {
+  return getUnitFastTimerTestFileSet().has(normalizeRepoPath(file));
+}
+
 export function resolveUnitFastTestIncludePattern(file) {
   const normalized = normalizeRepoPath(file);
+  if (isUnitFastTimerTestFile(normalized)) {
+    return null;
+  }
   if (isUnitFastTestFileOnDemand(normalized)) {
     return normalized;
   }
   const siblingTestFile = normalized.replace(/\.ts$/u, ".test.ts");
+  if (isUnitFastTimerTestFile(siblingTestFile)) {
+    return null;
+  }
   if (isUnitFastTestFileOnDemand(siblingTestFile)) {
     return siblingTestFile;
   }
@@ -490,4 +520,13 @@ export function resolveUnitFastTestIncludePattern(file) {
     return isUnitFastTestFileOnDemand(exactTestFile) ? exactTestFile : null;
   }
   return null;
+}
+
+export function resolveUnitFastTimerTestIncludePattern(file) {
+  const normalized = normalizeRepoPath(file);
+  if (isUnitFastTimerTestFile(normalized)) {
+    return normalized;
+  }
+  const siblingTestFile = normalized.replace(/\.ts$/u, ".test.ts");
+  return isUnitFastTimerTestFile(siblingTestFile) ? siblingTestFile : null;
 }
