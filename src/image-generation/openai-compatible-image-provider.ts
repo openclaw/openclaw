@@ -11,7 +11,9 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { parseOpenAiCompatibleImageResponse } from "./image-assets.js";
+import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "../infra/net/ssrf.js";
+import { resolveConfiguredMediaMaxBytes } from "../media/configured-max-bytes.js";
+import { parseOpenAiCompatibleImageResponseAsync } from "./image-assets.js";
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -99,6 +101,10 @@ function trimTrailingSlash(value: string): string {
 
 function appendImagesPath(baseUrl: string, mode: OpenAiCompatibleImageRequestMode): string {
   return `${trimTrailingSlash(baseUrl)}/images/${mode === "edit" ? "edits" : "generations"}`;
+}
+
+function resolveProviderControlledImageUrlPolicy(baseUrl: string) {
+  return ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
 }
 
 function resolveRequestTimeoutMs(params: {
@@ -260,12 +266,19 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+        const images = await parseOpenAiCompatibleImageResponseAsync(await response.json(), {
           ...options.response,
           malformedResponseError:
             mode === "edit"
               ? `${options.label} image edit response malformed`
               : `${options.label} image generation response malformed`,
+          timeoutMs,
+          ssrfPolicy: resolveProviderControlledImageUrlPolicy(baseUrl),
+          maxBytes: resolveConfiguredMediaMaxBytes(req.cfg),
+          trustedOrigin: baseUrl,
+          trustedOriginHeaders: headers,
+          trustedOriginDispatcherPolicy: dispatcherPolicy,
+          auditContext: `${options.id}.image-url-download`,
         });
         if (images.length === 0) {
           throw new Error(

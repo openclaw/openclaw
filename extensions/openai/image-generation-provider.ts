@@ -6,7 +6,7 @@ import type {
   ImageGenerationResult,
 } from "openclaw/plugin-sdk/image-generation";
 import {
-  parseOpenAiCompatibleImageResponse,
+  parseOpenAiCompatibleImageResponseAsync,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
@@ -26,7 +26,10 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  isPrivateNetworkOptInEnabled,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { canonicalizeCodexResponsesBaseUrl, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
@@ -115,6 +118,14 @@ function resolveOpenAIImageCount(count: number | undefined): number {
   return Math.max(1, Math.min(OPENAI_MAX_IMAGE_RESULTS, Math.trunc(count)));
 }
 
+function resolveConfiguredImageMaxBytes(cfg: OpenClawConfig): number | undefined {
+  const configured = cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return undefined;
+}
+
 function isPublicOpenAIImageBaseUrl(baseUrl: string): boolean {
   const trimmed = baseUrl.trim();
   if (!trimmed) {
@@ -153,6 +164,10 @@ function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
 
 function resolveAzureApiVersion(): string {
   return process.env.AZURE_OPENAI_API_VERSION?.trim() || DEFAULT_AZURE_OPENAI_API_VERSION;
+}
+
+function resolveProviderControlledImageUrlPolicy(baseUrl: string) {
+  return ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
 }
 
 function buildAzureImageUrl(
@@ -1041,12 +1056,21 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
 
         const data = await response.json();
         const output = resolveOutputMime(req.outputFormat);
-        const images = parseOpenAiCompatibleImageResponse(data, {
-          defaultMimeType: output.mimeType,
-          malformedResponseError: isEdit
-            ? "OpenAI image edit response malformed"
-            : "OpenAI image generation response malformed",
-        }).map((image, index) =>
+        const images = (
+          await parseOpenAiCompatibleImageResponseAsync(data, {
+            defaultMimeType: output.mimeType,
+            malformedResponseError: isEdit
+              ? "OpenAI image edit response malformed"
+              : "OpenAI image generation response malformed",
+            timeoutMs,
+            ssrfPolicy: resolveProviderControlledImageUrlPolicy(baseUrl),
+            maxBytes: resolveConfiguredImageMaxBytes(req.cfg),
+            trustedOrigin: baseUrl,
+            trustedOriginHeaders: headers,
+            trustedOriginDispatcherPolicy: dispatcherPolicy,
+            auditContext: "openai.image-url-download",
+          })
+        ).map((image, index) =>
           Object.assign(image, {
             fileName: `image-${index + 1}.${output.extension}`,
           }),

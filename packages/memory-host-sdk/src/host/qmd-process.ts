@@ -59,7 +59,7 @@ export async function checkQmdBinaryAvailability(params: {
       command: params.command,
       args: [],
       env: params.env,
-      packageName: "qmd",
+      packageName: "@tobilu/qmd",
     });
   } catch (err) {
     return { available: false, reason: "binary", error: formatQmdAvailabilityError(err) };

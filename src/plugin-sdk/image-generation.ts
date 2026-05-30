@@ -16,6 +16,7 @@ export {
   imageSourceUploadFileName,
   parseImageDataUrl,
   parseOpenAiCompatibleImageResponse,
+  parseOpenAiCompatibleImageResponseAsync,
   sniffImageMimeType,
   toImageDataUrl,
   type ImageMimeTypeDetection,
