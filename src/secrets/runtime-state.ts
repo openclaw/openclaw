@@ -139,6 +139,22 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
   return snapshot;
 }
 
+// Hot-path readers only need the config pair for availability decisions.
+// Return the active references and keep full snapshot clone isolation on
+// getActiveSecretsRuntimeSnapshot() for callers that need mutable data.
+export function getActiveSecretsRuntimeConfigSnapshot(): Pick<
+  PreparedSecretsRuntimeSnapshot,
+  "config" | "sourceConfig"
+> | null {
+  if (!activeSnapshot) {
+    return null;
+  }
+  return {
+    config: activeSnapshot.config,
+    sourceConfig: activeSnapshot.sourceConfig,
+  };
+}
+
 export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapshot["authStores"] {
   if (!activeSnapshot) {
     return [];
