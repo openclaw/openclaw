@@ -27,7 +27,7 @@ import {
 import { DEFAULT_EXEC_DENYLIST_ENTRIES } from "../infra/exec-denylist.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
-import { handleSystemRunInvoke } from "./invoke-system-run.js";
+import { handleSystemRunInvoke, resolveEffectiveSystemRunExecPolicy } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
 
 vi.mock("../logger.js", () => ({
@@ -430,6 +430,28 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       statSpy.mockRestore();
     }
   }
+
+  it("keeps per-agent legacy exec security overrides above global exec mode", () => {
+    const policy = resolveEffectiveSystemRunExecPolicy({
+      cfg: {
+        tools: { exec: { mode: "full" } },
+        agents: {
+          list: [
+            {
+              id: "locked-down",
+              tools: { exec: { security: "deny" } },
+            },
+          ],
+        },
+      },
+      agentId: "locked-down",
+      defaultSecurity: "full",
+      defaultAsk: "off",
+      requireSocket: false,
+    });
+
+    expect(policy).toEqual({ security: "deny", ask: "off" });
+  });
 
   async function runSystemInvoke(params: {
     preferMacAppExecHost: boolean;

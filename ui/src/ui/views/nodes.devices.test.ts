@@ -254,6 +254,51 @@ describe("nodes exec approvals rendering", () => {
     );
   });
 
+  it("does not re-seed managed default denylist rules after they were removed", () => {
+    const onPatch = vi.fn();
+    const container = renderNodesContainer({
+      execApprovalsSelectedAgent: null,
+      execApprovalsDirty: true,
+      onExecApprovalsPatch: onPatch,
+      execApprovalsSnapshot: {
+        path: "~/.openclaw/exec-approvals.json",
+        exists: true,
+        hash: "hash",
+        file: {
+          version: 1,
+          managedDefaults: { denylistVersion: 1 },
+          defaults: {
+            security: "full",
+          },
+          agents: {
+            "*": {
+              denylist: [],
+            },
+          },
+        },
+      },
+    });
+    const card = getExecApprovalsCard(container);
+    const modeSelect = Array.from(card.querySelectorAll("select")).find((select) =>
+      Array.from(select.options).some((option) => option.value === "denylist"),
+    );
+
+    expect(modeSelect).toBeInstanceOf(HTMLSelectElement);
+    (modeSelect as HTMLSelectElement).value = "denylist";
+    modeSelect?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onPatch).toHaveBeenCalledWith(["defaults", "security"], "denylist");
+    expect(onPatch).not.toHaveBeenCalledWith(["managedDefaults", "denylistVersion"], 1);
+    expect(onPatch).not.toHaveBeenCalledWith(
+      ["agents", "*", "denylist"],
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "default-shell-network-fetch",
+        }),
+      ]),
+    );
+  });
+
   it("renders malformed denylist flags as invalid without crashing", () => {
     const container = renderNodesContainer({
       execApprovalsSelectedAgent: "*",

@@ -224,17 +224,23 @@ export function resolveEffectiveSystemRunExecPolicy(params: {
   requireSocket: boolean;
 }): { security: ExecSecurity; ask: ExecAsk } {
   const agentExec = resolveAgentExecConfig(params.cfg, params.agentId);
-  const configuredSecurity =
-    agentExec?.security ?? params.cfg.tools?.exec?.security ?? params.defaultSecurity;
-  const configuredAsk = agentExec?.ask ?? params.cfg.tools?.exec?.ask ?? params.defaultAsk;
-  const configuredMode = agentExec?.mode ?? params.cfg.tools?.exec?.mode;
-  const configuredPolicy = configuredMode
+  const globalSecurity = params.cfg.tools?.exec?.security ?? params.defaultSecurity;
+  const globalAsk = params.cfg.tools?.exec?.ask ?? params.defaultAsk;
+  const globalPolicy = resolveExecModePolicy({
+    mode: params.cfg.tools?.exec?.mode,
+    security: globalSecurity,
+    ask: globalAsk,
+  });
+  const configuredPolicy = agentExec?.mode
     ? resolveExecModePolicy({
-        mode: configuredMode,
-        security: configuredSecurity,
-        ask: configuredAsk,
+        mode: agentExec.mode,
+        security: agentExec.security ?? globalPolicy.security,
+        ask: agentExec.ask ?? globalPolicy.ask,
       })
-    : { security: configuredSecurity, ask: configuredAsk };
+    : {
+        security: agentExec?.security ?? globalPolicy.security,
+        ask: agentExec?.ask ?? globalPolicy.ask,
+      };
   const approvals = resolveExecApprovals(params.agentId, {
     security: configuredPolicy.security,
     ask: configuredPolicy.ask,
@@ -417,18 +423,23 @@ async function evaluateSystemRunPolicyPhase(
 ): Promise<SystemRunPolicyPhase | null> {
   const cfg = await loadSystemRunConfig(opts);
   const agentExec = resolveAgentExecConfig(cfg, parsed.agentId);
-  const configuredSecurity = opts.resolveExecSecurity(
-    agentExec?.security ?? cfg.tools?.exec?.security,
-  );
-  const configuredAsk = opts.resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask);
-  const configuredMode = agentExec?.mode ?? cfg.tools?.exec?.mode;
-  const configuredPolicy = configuredMode
+  const globalSecurity = opts.resolveExecSecurity(cfg.tools?.exec?.security);
+  const globalAsk = opts.resolveExecAsk(cfg.tools?.exec?.ask);
+  const globalPolicy = resolveExecModePolicy({
+    mode: cfg.tools?.exec?.mode,
+    security: globalSecurity,
+    ask: globalAsk,
+  });
+  const configuredPolicy = agentExec?.mode
     ? resolveExecModePolicy({
-        mode: configuredMode,
-        security: configuredSecurity,
-        ask: configuredAsk,
+        mode: agentExec.mode,
+        security: agentExec.security ?? globalPolicy.security,
+        ask: agentExec.ask ?? globalPolicy.ask,
       })
-    : { security: configuredSecurity, ask: configuredAsk };
+    : {
+        security: agentExec?.security ?? globalPolicy.security,
+        ask: agentExec?.ask ?? globalPolicy.ask,
+      };
   const requestedSecurity =
     opts.params.requestedSecurity == null
       ? null

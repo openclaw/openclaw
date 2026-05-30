@@ -598,6 +598,9 @@ function formHasInvalidDenylistEntries(form: ExecApprovalsFile | null): boolean 
 }
 
 function ensureManagedDefaultDenylistRules(state: ExecApprovalsState): void {
+  if (state.form?.managedDefaults?.denylistVersion != null) {
+    return;
+  }
   state.onPatch(["managedDefaults", "denylistVersion"], DEFAULT_DENYLIST_VERSION);
   const wildcardDenylist = state.form?.agents?.["*"]?.denylist ?? [];
   if (
