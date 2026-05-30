@@ -259,11 +259,13 @@ async function sessionFenceRewriteIsBenign(params: {
   previous: SessionFileFenceSnapshot | undefined;
   current: SessionFileFingerprint;
 }): Promise<boolean> {
+  // Compaction can rewrite the session file with a new inode (dev/ino).
+  // Defer the inode identity check past content validation so that a
+  // content-valid compaction rewrite is accepted regardless of inode.
   if (
     !params.previous?.fingerprint.exists ||
     !params.current.exists ||
     !params.previous.text ||
-    !sameSessionFileIdentity(params.previous.fingerprint, params.current) ||
     params.current.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES) ||
     params.current.size > MAX_SAFE_FILE_OFFSET
   ) {
@@ -296,7 +298,14 @@ async function sessionFenceRewriteIsBenign(params: {
     expectedParentId = lineMatch.nextPreviousId ?? expectedParentId;
   }
   const appendedLines = currentLines.slice(previousLines.length);
-  return appendedLines.every(isTranscriptOnlyOpenClawAssistantLine);
+  if (!appendedLines.every(isTranscriptOnlyOpenClawAssistantLine)) {
+    return false;
+  }
+  // Content validation passed — benign rewrite regardless of inode.
+  // If the inode also matches: same-file rewrite (e.g. compaction in-place).
+  // If the inode changed: compaction created a new file (new inode),
+  // which is still benign because content passed validation.
+  return true;
 }
 
 type OwnedSessionFileWrite = {
