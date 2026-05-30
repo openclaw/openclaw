@@ -126,4 +126,14 @@ describe("exec approvals protocol validators", () => {
       }),
     ).toBe(false);
   });
+
+  it("accepts approval delivery routing flags", () => {
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        requireDeliveryRoute: false,
+        suppressDelivery: true,
+      }),
+    ).toBe(true);
+  });
 });
