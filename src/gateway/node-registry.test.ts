@@ -15,6 +15,8 @@ function makeClient(
   sent: string[] = [],
   opts: {
     clientId?: string;
+    instanceId?: string;
+    resolvedNodeId?: string;
     platform?: string;
     version?: string;
     caps?: string[];
@@ -43,6 +45,7 @@ function makeClient(
       maxProtocol: 1,
       client: {
         id: opts.clientId ?? "openclaw-macos",
+        ...(opts.instanceId !== undefined ? { instanceId: opts.instanceId } : {}),
         version: opts.version ?? "1.0.0",
         platform: opts.platform ?? "darwin",
         mode: "node",
@@ -61,6 +64,7 @@ function makeClient(
       declaredCommands: opts.declaredCommands,
       declaredPermissions: opts.declaredPermissions,
     } as unknown as GatewayWsClient["connect"],
+    ...(opts.resolvedNodeId !== undefined ? { nodeIdentity: { nodeId: opts.resolvedNodeId } } : {}),
   };
 }
 
@@ -135,6 +139,36 @@ describe("gateway/node-registry", () => {
     );
 
     await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
+  });
+
+  it("registers custom node instanceId when provided", () => {
+    const registry = new NodeRegistry();
+    registry.register(
+      makeClient("conn-1", "device-1", [], {
+        clientId: "node-host",
+        instanceId: " custom-node-id ",
+      }),
+      {},
+    );
+
+    expect(registry.get("custom-node-id")).toBeDefined();
+    expect(registry.get("custom-node-id")?.client.connect.client.id).toBe("node-host");
+    expect(registry.get("device-1")).toBeUndefined();
+  });
+
+  it("registers the handshake-resolved node identity before raw instanceId", () => {
+    const registry = new NodeRegistry();
+    registry.register(
+      makeClient("conn-1", "device-1", [], {
+        clientId: "node-host",
+        instanceId: " custom-node-id ",
+        resolvedNodeId: "device-1",
+      }),
+      {},
+    );
+
+    expect(registry.get("device-1")).toBeDefined();
+    expect(registry.get("custom-node-id")).toBeUndefined();
   });
 
   it("reports stale node websocket connectivity before invoke timeout", async () => {

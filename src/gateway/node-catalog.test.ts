@@ -138,6 +138,65 @@ describe("gateway/node-catalog", () => {
     expect(node?.connected).toBe(true);
   });
 
+  it("merges device pairing into a custom node id owned by that device", () => {
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [
+        {
+          deviceId: "device-uuid",
+          publicKey: "public-key",
+          displayName: "Mac",
+          clientId: "node-host",
+          clientMode: "node",
+          role: "node",
+          roles: ["node"],
+          tokens: {
+            node: {
+              token: "current-token",
+              role: "node",
+              scopes: [],
+              createdAtMs: 1,
+            },
+          },
+          createdAtMs: 1,
+          approvedAtMs: 99,
+        },
+      ],
+      pairedNodes: [
+        {
+          nodeId: "custom-node-id",
+          ownerDeviceId: "device-uuid",
+          token: "node-token",
+          platform: "macos",
+          commands: ["system.run"],
+          createdAtMs: 1,
+          approvedAtMs: 100,
+        },
+      ],
+      connectedNodes: [
+        {
+          nodeId: "custom-node-id",
+          connId: "conn-1",
+          client: {} as never,
+          clientId: "node-host",
+          clientMode: "node",
+          platform: "macos",
+          declaredCaps: [],
+          caps: [],
+          declaredCommands: ["system.run"],
+          commands: ["system.run"],
+          connectedAtMs: 123,
+        },
+      ],
+    });
+
+    expect(listKnownNodes(catalog).map((node) => node.nodeId)).toEqual(["custom-node-id"]);
+    const node = getKnownNode(catalog, "custom-node-id");
+    expect(node?.paired).toBe(true);
+    expect(node?.connected).toBe(true);
+    expect(node?.approvedAtMs).toBe(100);
+    expect(getKnownNode(catalog, "device-uuid")).toBeNull();
+  });
+
   it("surfaces node-pair metadata even when the node is offline", () => {
     const catalog = createKnownNodeCatalog({
       pairedDevices: [

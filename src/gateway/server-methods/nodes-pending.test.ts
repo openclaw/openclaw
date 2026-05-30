@@ -92,6 +92,48 @@ describe("node.pending handlers", () => {
     );
   });
 
+  it("drains pending work for a custom node instance identity", async () => {
+    mocks.drainNodePendingWork.mockReturnValue({
+      revision: 3,
+      items: [],
+      hasMore: false,
+    });
+    const respond = vi.fn();
+
+    await nodePendingHandlers["node.pending.drain"]({
+      params: { maxItems: 2 },
+      respond: respond as never,
+      client: {
+        connect: {
+          client: {
+            id: "node-host",
+            mode: "node",
+            instanceId: " custom-node-id ",
+          },
+          device: { id: "device-uuid" },
+        },
+      } as never,
+      context: makeContext() as never,
+      req: { type: "req", id: "req-node-pending-drain-custom", method: "node.pending.drain" },
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.drainNodePendingWork).toHaveBeenCalledWith("custom-node-id", {
+      maxItems: 2,
+      includeDefaultStatus: true,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        nodeId: "custom-node-id",
+        revision: 3,
+        items: [],
+        hasMore: false,
+      },
+      undefined,
+    );
+  });
+
   it("rejects node.pending.drain without a connected device identity", async () => {
     const respond = vi.fn();
 

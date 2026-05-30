@@ -3,6 +3,7 @@ import {
   errorShape,
   validateNodeInvokeResultParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveNodeIdentityId } from "../node-identity.js";
 import { respondInvalidParams } from "./nodes.helpers.js";
 import type { GatewayRequestHandler } from "./types.js";
 
@@ -49,7 +50,7 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
     payloadJSON?: string | null;
     error?: { code?: string; message?: string } | null;
   };
-  const callerNodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
+  const callerNodeId = resolveNodeIdentityId(client);
   if (callerNodeId && callerNodeId !== p.nodeId) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId mismatch"));
     return;

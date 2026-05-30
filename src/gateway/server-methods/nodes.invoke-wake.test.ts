@@ -347,18 +347,26 @@ async function invokeNode(params: {
   return respond;
 }
 
-function createNodeClient(nodeId: string, commands?: string[]) {
+type CreateNodeClientOptions = {
+  deviceId?: string;
+  instanceId?: string;
+};
+
+function createNodeClient(nodeId: string, commands?: string[], options?: CreateNodeClientOptions) {
+  const client = {
+    id: nodeId,
+    mode: "node" as const,
+    name: "ios-test",
+    platform: "iOS 26.4.0",
+    version: "test",
+    ...(options?.instanceId !== undefined ? { instanceId: options.instanceId } : {}),
+  };
   return {
     connect: {
       ...(commands ? { commands } : {}),
       role: "node" as const,
-      client: {
-        id: nodeId,
-        mode: "node" as const,
-        name: "ios-test",
-        platform: "iOS 26.4.0",
-        version: "test",
-      },
+      client,
+      ...(options?.deviceId !== undefined ? { device: { id: options.deviceId } } : {}),
     },
   };
 }
@@ -391,26 +399,35 @@ function createMissingNodeRegistry() {
   };
 }
 
-async function pullPending(nodeId: string, commands?: string[]) {
+async function pullPending(
+  nodeId: string,
+  commands?: string[],
+  options?: CreateNodeClientOptions,
+) {
   const respond = vi.fn();
   await nodeHandlers["node.pending.pull"]({
     params: {},
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
-    client: createNodeClient(nodeId, commands) as never,
+    client: createNodeClient(nodeId, commands, options) as never,
     req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
     isWebchatConnect: () => false,
   });
   return respond;
 }
 
-async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
+async function ackPending(
+  nodeId: string,
+  ids: string[],
+  commands?: string[],
+  options?: CreateNodeClientOptions,
+) {
   const respond = vi.fn();
   await nodeHandlers["node.pending.ack"]({
     params: { ids },
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
-    client: createNodeClient(nodeId, commands) as never,
+    client: createNodeClient(nodeId, commands, options) as never,
     req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
   });
@@ -478,6 +495,94 @@ describe("node.pair.request", () => {
       ts: 1,
     });
     expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+});
+
+describe("node.pending", () => {
+  async function queueForegroundAction(nodeId: string): Promise<string> {
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId,
+        commands: ["canvas.navigate"],
+        platform: "iOS 26.4.0",
+      })),
+      invoke: vi.fn().mockResolvedValue({
+        ok: false,
+        error: {
+          code: "NODE_BACKGROUND_UNAVAILABLE",
+          message: "NODE_BACKGROUND_UNAVAILABLE: canvas commands require foreground",
+        },
+      }),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId,
+        command: "canvas.navigate",
+        params: { url: `http://example.com/${nodeId}` },
+        idempotencyKey: `idem-${nodeId}`,
+      },
+    });
+    const call = firstRespondCall(respond);
+    const error = requireRecord(call[2], "queued action error");
+    const details = requireRecord(error.details, "queued action details");
+    return requireString(details.queuedActionId, "queued action id");
+  }
+
+  it("uses resolved node identity from instanceId for pull", async () => {
+    const queuedActionId = await queueForegroundAction("custom-node-id");
+
+    const respond = await pullPending("device-uuid", undefined, { instanceId: " custom-node-id " });
+    const call = firstRespondCall(respond);
+    expect(call?.[0]).toBe(true);
+    const payload = requireRecord(call?.[1], "pending pull payload");
+    expect(payload.nodeId).toBe("custom-node-id");
+    const actions = payload.actions as Array<{ id: string; command: string }>;
+    expect(actions.map((action) => action.id)).toContain(queuedActionId);
+  });
+
+  it("falls back to device id for pull when instanceId is blank", async () => {
+    const queuedActionId = await queueForegroundAction("device-uuid");
+
+    const respond = await pullPending("node-host", undefined, {
+      deviceId: "device-uuid",
+      instanceId: "  ",
+    });
+    const call = firstRespondCall(respond);
+    expect(call?.[0]).toBe(true);
+    const payload = requireRecord(call?.[1], "pending pull payload");
+    expect(payload.nodeId).toBe("device-uuid");
+    const actions = payload.actions as Array<{ id: string }>;
+    expect(actions.map((action) => action.id)).toContain(queuedActionId);
+  });
+
+  it("uses resolved node identity from instanceId for ack", async () => {
+    const queuedActionId = await queueForegroundAction("custom-node-id");
+
+    const respond = await ackPending("device-uuid", [queuedActionId], undefined, {
+      instanceId: " custom-node-id ",
+    });
+    const call = firstRespondCall(respond);
+    const payload = requireRecord(call?.[1], "pending ack payload");
+    expect(payload.nodeId).toBe("custom-node-id");
+    expect(payload.ackedIds).toEqual([queuedActionId]);
+    expect(payload.remainingCount).toBe(0);
+  });
+
+  it("falls back to device id for ack when instanceId is blank", async () => {
+    const queuedActionId = await queueForegroundAction("device-uuid");
+
+    const respond = await ackPending("node-host", [queuedActionId], undefined, {
+      deviceId: "device-uuid",
+      instanceId: "  ",
+    });
+    const call = firstRespondCall(respond);
+    const payload = requireRecord(call?.[1], "pending ack payload");
+    expect(payload.nodeId).toBe("device-uuid");
+    expect(payload.ackedIds).toEqual([queuedActionId]);
+    expect(payload.remainingCount).toBe(0);
   });
 });
 

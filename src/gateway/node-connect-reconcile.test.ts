@@ -22,6 +22,16 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
   };
 }
 
+function makeDevice(id: string): NonNullable<ConnectParams["device"]> {
+  return {
+    id,
+    publicKey: "public-key",
+    signature: "signature",
+    signedAt: 1,
+    nonce: "nonce",
+  };
+}
+
 function makePairedNode(overrides?: Partial<NodePairingPairedNode>): NodePairingPairedNode {
   return {
     nodeId: "openclaw-ios",
@@ -77,6 +87,110 @@ describe("reconcileNodePairingOnConnect", () => {
     expectNodePairingRequest(requestPairing, {
       permissions: { camera: true, notifications: false },
     });
+  });
+
+  it("uses resolved node identity from instanceId before device id", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-custom", ts: 1 },
+      created: true,
+    }));
+
+    await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "ios",
+          instanceId: " custom-node-id ",
+          mode: "node",
+        },
+        device: {
+          ...makeDevice("device-uuid"),
+        },
+      }),
+      pairedNode: null,
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "custom-node-id",
+      }),
+    );
+  });
+
+  it("does not trust a paired custom node id from a different device owner", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-owner-mismatch", ts: 1 },
+      created: true,
+    }));
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "ios",
+          instanceId: " custom-node-id ",
+          mode: "node",
+        },
+        device: makeDevice("attacker-device"),
+      }),
+      pairedNode: makePairedNode({
+        nodeId: "custom-node-id",
+        ownerDeviceId: "victim-device",
+        commands: ["canvas.snapshot"],
+      }),
+      requestPairing,
+    });
+
+    expect(result.nodeId).toBe("custom-node-id");
+    expect(result.registrationNodeId).toBe("attacker-device");
+    expect(result.effectiveCommands).toEqual([]);
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "custom-node-id",
+        ownerDeviceId: "attacker-device",
+      }),
+    );
+  });
+
+  it("falls back to device id when instanceId was not covered by device auth", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-unsigned-instance", ts: 1 },
+      created: true,
+    }));
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "ios",
+          instanceId: "custom-node-id",
+          mode: "node",
+        },
+        device: makeDevice("device-uuid"),
+      }),
+      pairedNode: null,
+      trustInstanceId: false,
+      requestPairing,
+    });
+
+    expect(result.nodeId).toBe("device-uuid");
+    expect(result.registrationNodeId).toBe("device-uuid");
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "device-uuid",
+        ownerDeviceId: "device-uuid",
+      }),
+    );
   });
 
   it("keeps first-time pending node surfaces declared but not effective", async () => {
@@ -153,6 +267,7 @@ describe("reconcileNodePairingOnConnect", () => {
       connectParams: makeNodeConnectParams({
         caps: ["camera", "screen"],
         commands: [],
+        device: makeDevice("openclaw-ios"),
       }),
       pairedNode: makePairedNode({
         caps: ["camera"],
@@ -178,6 +293,7 @@ describe("reconcileNodePairingOnConnect", () => {
       cfg: {} as never,
       connectParams: makeNodeConnectParams({
         commands: [],
+        device: makeDevice("openclaw-ios"),
         permissions: { camera: true, notifications: false },
       }),
       pairedNode: makePairedNode({
@@ -204,6 +320,7 @@ describe("reconcileNodePairingOnConnect", () => {
       connectParams: makeNodeConnectParams({
         caps: ["camera"],
         commands: [],
+        device: makeDevice("openclaw-ios"),
         permissions: { camera: false },
       }),
       pairedNode: makePairedNode({

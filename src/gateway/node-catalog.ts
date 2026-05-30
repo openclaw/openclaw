@@ -174,14 +174,31 @@ export function createKnownNodeCatalog(params: {
   pairedNodes?: readonly NodePairingPairedNode[];
   connectedNodes: readonly NodeSession[];
 }): KnownNodeCatalog {
-  const devicePairingById = new Map(
-    params.pairedDevices
-      .filter((entry) => hasEffectivePairedDeviceRole(entry, "node"))
-      .map((entry) => [entry.deviceId, buildDevicePairingSource(entry)]),
+  const rawNodeDevicePairings = params.pairedDevices.filter((entry) =>
+    hasEffectivePairedDeviceRole(entry, "node"),
+  );
+  const rawNodeDevicePairingById = new Map(
+    rawNodeDevicePairings.map((entry) => [entry.deviceId, entry]),
   );
   const nodePairingById = new Map(
     (params.pairedNodes ?? []).map((entry) => [entry.nodeId, buildApprovedNodeSource(entry)]),
   );
+  const remappedDeviceIds = new Set<string>();
+  const devicePairingById = new Map<string, ReturnType<typeof buildDevicePairingSource>>();
+  for (const entry of params.pairedNodes ?? []) {
+    const ownerDeviceId = entry.ownerDeviceId?.trim();
+    const pairedDevice = ownerDeviceId ? rawNodeDevicePairingById.get(ownerDeviceId) : undefined;
+    if (!ownerDeviceId || !pairedDevice) {
+      continue;
+    }
+    remappedDeviceIds.add(ownerDeviceId);
+    devicePairingById.set(entry.nodeId, buildDevicePairingSource(pairedDevice));
+  }
+  for (const entry of rawNodeDevicePairings) {
+    if (!remappedDeviceIds.has(entry.deviceId)) {
+      devicePairingById.set(entry.deviceId, buildDevicePairingSource(entry));
+    }
+  }
   const liveById = new Map(params.connectedNodes.map((entry) => [entry.nodeId, entry]));
   const nodeIds = new Set<string>([
     ...devicePairingById.keys(),

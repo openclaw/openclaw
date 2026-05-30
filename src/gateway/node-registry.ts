@@ -6,6 +6,7 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { resolveNodeIdentityId } from "./node-identity.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -164,7 +165,7 @@ export class NodeRegistry {
 
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
-    const nodeId = connect.device?.id ?? connect.client.id;
+    const nodeId = resolveNodeIdentityId(client) ?? connect.client.id;
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
     const declaredCaps = Array.isArray((connect as { declaredCaps?: string[] }).declaredCaps)
       ? ((connect as { declaredCaps?: string[] }).declaredCaps ?? [])

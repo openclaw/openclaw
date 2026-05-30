@@ -100,5 +100,20 @@ describe("runNodeHost", () => {
     expect(mocks.capturedGatewayClientOptions[0]?.deviceFamily).toBe(
       resolveNodeHostGatewayDeviceFamily(process.platform),
     );
+    expect(mocks.capturedGatewayClientOptions[0]?.signInstanceId).toBe(false);
+  });
+
+  it("signs instanceId only for an explicit node id override", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+        nodeId: " custom-node-id ",
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    const opts = mocks.capturedGatewayClientOptions.at(-1);
+    expect(opts?.instanceId).toBe("custom-node-id");
+    expect(opts?.signInstanceId).toBe(true);
   });
 });

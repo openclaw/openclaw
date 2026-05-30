@@ -25,6 +25,14 @@ type DeviceAuthPayloadV3Params = DeviceAuthPayloadParams & {
   deviceFamily?: string | null;
 };
 
+type DeviceAuthPayloadV4Params = DeviceAuthPayloadV3Params & {
+  instanceId?: string | null;
+};
+
+function normalizeDeviceIdentityForAuth(value?: string | null): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string {
   const scopes = params.scopes.join(",");
   const token = params.token ?? "";
@@ -60,5 +68,27 @@ export function buildDeviceAuthPayloadV3(params: DeviceAuthPayloadV3Params): str
     params.nonce,
     platform,
     deviceFamily,
+  ].join("|");
+}
+
+export function buildDeviceAuthPayloadV4(params: DeviceAuthPayloadV4Params): string {
+  const scopes = params.scopes.join(",");
+  const token = params.token ?? "";
+  const platform = normalizeDeviceMetadataForAuth(params.platform);
+  const deviceFamily = normalizeDeviceMetadataForAuth(params.deviceFamily);
+  const instanceId = normalizeDeviceIdentityForAuth(params.instanceId);
+  return [
+    "v4",
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    scopes,
+    String(params.signedAtMs),
+    token,
+    params.nonce,
+    platform,
+    deviceFamily,
+    instanceId,
   ].join("|");
 }

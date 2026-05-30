@@ -67,6 +67,7 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import {
+  adoptPairedNodeIdentity,
   getPairedNode,
   requestNodePairing,
   updatePairedNodeMetadata,
@@ -105,6 +106,7 @@ import {
   resolveClientIp,
 } from "../../net.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
+import { resolveNodeIdentityId } from "../../node-identity.js";
 import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
@@ -718,7 +720,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
         const deviceRaw = connectParams.device;
         let devicePublicKey: string | null = null;
-        let deviceAuthPayloadVersion: "v2" | "v3" | null = null;
+        let deviceAuthPayloadVersion: "v2" | "v3" | "v4" | null = null;
         const hasTokenAuth = Boolean(connectParams.auth?.token);
         const hasPasswordAuth = Boolean(connectParams.auth?.password);
         const hasSharedAuth = hasTokenAuth || hasPasswordAuth;
@@ -1579,11 +1581,28 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
           }
         }
+        let nodeIdentity: GatewayWsClient["nodeIdentity"];
         if (role === "node") {
+          const trustInstanceId = deviceAuthPayloadVersion === "v4";
+          const nodeId =
+            resolveNodeIdentityId({ connect: connectParams }, { trustInstanceId }) ??
+            connectParams.client.id;
+          const deviceNodeId =
+            typeof connectParams.device?.id === "string" ? connectParams.device.id.trim() : "";
+          const pairedNode =
+            (await getPairedNode(nodeId)) ??
+            (deviceNodeId && deviceNodeId !== nodeId
+              ? await adoptPairedNodeIdentity({
+                  fromNodeId: deviceNodeId,
+                  toNodeId: nodeId,
+                  ownerDeviceId: deviceNodeId,
+                })
+              : null);
           const reconciliation = await reconcileNodePairingOnConnect({
             cfg: getRuntimeConfig(),
             connectParams,
-            pairedNode: await getPairedNode(connectParams.device?.id ?? connectParams.client.id),
+            pairedNode,
+            trustInstanceId,
             reportedClientIp,
             requestPairing: async (input) => await requestNodePairing(input),
           });
@@ -1617,6 +1636,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.caps = reconciliation.effectiveCaps;
           connectParams.commands = reconciliation.effectiveCommands;
           connectParams.permissions = reconciliation.effectivePermissions;
+          nodeIdentity = { nodeId: reconciliation.registrationNodeId };
         }
 
         const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
@@ -1673,6 +1693,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
+          ...(nodeIdentity ? { nodeIdentity } : {}),
           ...(isTrustedApprovalRuntime ? { internal: { approvalRuntime: true } } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0

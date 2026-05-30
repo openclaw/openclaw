@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDeviceAuthPayload,
   buildDeviceAuthPayloadV3,
+  buildDeviceAuthPayloadV4,
   normalizeDeviceMetadataForAuth,
 } from "./device-auth.js";
 
@@ -40,6 +41,25 @@ describe("device-auth payload vectors", () => {
         }),
       expected:
         "v3|dev-1|openclaw-macos|ui|operator|operator.admin,operator.read|1700000000000|tok-123|nonce-abc|ios|iphone",
+    },
+    {
+      name: "builds canonical v4 payloads",
+      build: () =>
+        buildDeviceAuthPayloadV4({
+          deviceId: "dev-1",
+          clientId: "node-host",
+          clientMode: "node",
+          role: "node",
+          scopes: [],
+          signedAtMs: 1_700_000_000_002,
+          token: "tok-456",
+          nonce: "nonce-ghi",
+          platform: "  macOS  ",
+          deviceFamily: "  Mac  ",
+          instanceId: " custom-node-id ",
+        }),
+      expected:
+        "v4|dev-1|node-host|node|node||1700000000002|tok-456|nonce-ghi|macos|mac|custom-node-id",
     },
     {
       name: "keeps empty metadata slots in v3 payloads",
