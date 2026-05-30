@@ -116,11 +116,17 @@ export function renderInterleavedMessage(params: {
   maxChars?: number;
 }): string {
   const now = params.now ?? Date.now();
+  let body = params.body.trimEnd();
+  // No content and no running timer: render nothing so the lane never emits a
+  // bare "Thinking" header as a durable message (e.g. a turn that reaches final
+  // delivery before any reasoning/tool/status line was appended).
+  if (body === "" && params.timerStartedAt === undefined) {
+    return "";
+  }
   const timerSuffix =
     params.timerStartedAt !== undefined
       ? `\n_${Math.floor((now - params.timerStartedAt) / 1000)}s — still running_`
       : "";
-  let body = params.body.trimEnd();
   // Safety net: spill-by-offset keeps the visible body small in the normal case,
   // but a single append larger than a whole message could still overflow. Cap
   // the body to the most-recent content (line boundary) so a render NEVER

@@ -1262,6 +1262,15 @@ export const dispatchTelegramMessage = async ({
     if (!interleavedProgressEnabled || !reasoningLane.stream) {
       return false;
     }
+    // Nothing has been appended (no reasoning, tool, or status line) and no
+    // rolling timer is armed — there is nothing to show. Do not render a bare
+    // "Thinking" header and flush it as a durable message: the final-delivery
+    // flush passes through here on every final path, including turns that reach
+    // the answer with no interleaved content, which would otherwise emit an empty
+    // Thinking message above the answer.
+    if (interleavedBody.trim() === "" && interleavedTimerStartedAt === undefined) {
+      return false;
+    }
     reasoningLane.hasStreamedMessage = true;
     reasoningLane.finalized = true;
     // Spill into a fresh continuation message before the current one outgrows

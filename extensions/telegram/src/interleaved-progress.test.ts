@@ -121,6 +121,21 @@ describe("renderInterleavedMessage", () => {
     expect(out).toBe("Thinking\n\n_body_\n_12s — still running_");
   });
 
+  // No-content guard: a turn that reaches final delivery with nothing appended
+  // (no reasoning/tool/status) and no running timer must render NOTHING, so the
+  // lane never flushes a bare "Thinking" header as a durable message.
+  it("renders empty for an empty body with no active timer", () => {
+    expect(renderInterleavedMessage({ body: "" })).toBe("");
+    expect(renderInterleavedMessage({ body: "   \n  " })).toBe("");
+  });
+
+  // A running timer is itself content (a tool is active), so it still renders.
+  it("still renders when a timer is active even if the body is empty", () => {
+    expect(renderInterleavedMessage({ body: "", timerStartedAt: 1_000, now: 4_000 })).toBe(
+      "Thinking\n\n\n_3s — still running_",
+    );
+  });
+
   // Shorter replacement replaces instead of appending stale timer text: once the
   // timer is cleared the rendered text drops the suffix and is a strict prefix
   // of the timer-painted text, so a full-text lane update replaces it.
