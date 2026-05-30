@@ -147,7 +147,7 @@ describe("FeishuStreamingSession", () => {
           create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
         },
       },
-    } as ConstructorParameters<typeof FeishuStreamingSession>[0];
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
     return { authTokens, client };
   }
 

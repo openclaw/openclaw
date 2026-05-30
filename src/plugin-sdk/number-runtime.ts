@@ -1,6 +1,7 @@
 // Numeric coercion helpers for plugin runtime inputs.
 
 export {
+  asDateTimestampMs,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
   parseFiniteNumber,
@@ -25,6 +26,7 @@ export {
   resolveDateTimestampMs,
   resolveTimestampMsToIsoString,
   timestampMsToIsoString,
+  resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromDurationOrEpoch,
   resolveExpiresAtMsFromEpochSeconds,

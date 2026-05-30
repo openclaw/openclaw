@@ -4,9 +4,9 @@
 
 import type { Client } from "@larksuiteoapi/node-sdk";
 import {
+  asDateTimestampMs,
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
-  timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
@@ -52,19 +52,16 @@ const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
-function resolveDateBoundExpiresAtMs(value: unknown, nowMs: number): number | undefined {
-  const expiresAt = resolveExpiresAtMsFromDurationSeconds(value, { nowMs });
-  return timestampMsToIsoString(expiresAt) === undefined ? undefined : expiresAt;
-}
-
 function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
   const now = resolveDateTimestampMs(nowMs);
   if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
     return now;
   }
   return (
-    resolveDateBoundExpiresAtMs(value, now) ??
-    resolveDateBoundExpiresAtMs(FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS, now) ??
+    resolveExpiresAtMsFromDurationSeconds(value, { nowMs: now }) ??
+    resolveExpiresAtMsFromDurationSeconds(FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS, {
+      nowMs: now,
+    }) ??
     now
   );
 }
@@ -97,9 +94,9 @@ async function getToken(creds: Credentials): Promise<string> {
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
   const rawNow = Date.now();
-  const hasValidClock = timestampMsToIsoString(rawNow) !== undefined;
+  const hasValidClock = asDateTimestampMs(rawNow) !== undefined;
   const now = resolveDateTimestampMs(rawNow);
-  const minUsableExpiresAt = resolveDateBoundExpiresAtMs(60, now) ?? now;
+  const minUsableExpiresAt = resolveExpiresAtMsFromDurationSeconds(60, { nowMs: now }) ?? now;
   if (cached && hasValidClock && cached.expiresAt > minUsableExpiresAt) {
     return cached.token;
   }

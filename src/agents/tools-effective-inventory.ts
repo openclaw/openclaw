@@ -198,7 +198,7 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
     modelId,
     cfg: params.cfg,
     workspaceDir,
-  }) as ProviderRuntimeModel | undefined;
+  });
   if (configuredModel) {
     const configuredApi =
       normalizeOptionalString(configuredModel.api) ??

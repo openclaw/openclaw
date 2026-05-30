@@ -14,6 +14,7 @@ import {
   parseFiniteNumber,
   positiveSecondsToSafeMilliseconds,
   resolveIntegerOption,
+  resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromDurationOrEpoch,
   resolveExpiresAtMsFromEpochSeconds,
@@ -156,6 +157,21 @@ describe("number-coercion", () => {
 
   test("expiry helpers resolve safe absolute timestamps", () => {
     expect(
+      resolveExpiresAtMsFromDurationMs(600_000, {
+        nowMs: 1_000,
+      }),
+    ).toBe(601_000);
+    expect(
+      resolveExpiresAtMsFromDurationMs(600_000, {
+        nowMs: 8_640_000_000_000_000,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveExpiresAtMsFromDurationMs(600_000, {
+        nowMs: 8_640_000_000_000_001,
+      }),
+    ).toBeUndefined();
+    expect(
       resolveExpiresAtMsFromDurationSeconds("3600", {
         nowMs: 1_000,
         bufferMs: 300,
@@ -168,6 +184,11 @@ describe("number-coercion", () => {
         minRemainingMs: 30_000,
       }),
     ).toBe(31_000);
+    expect(
+      resolveExpiresAtMsFromDurationSeconds("3600", {
+        nowMs: 8_640_000_000_000_000,
+      }),
+    ).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationSeconds("1e309", { nowMs: 1_000 })).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds(1234.9)).toBe(1_234_000);
     expect(resolveExpiresAtMsFromEpochSeconds("3600", { bufferMs: 300 })).toBe(3_599_700);
