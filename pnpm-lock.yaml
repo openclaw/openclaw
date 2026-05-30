@@ -86,9 +86,6 @@ importers:
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.3.0)
-      '@silvia-odwyer/photon-node':
-        specifier: 0.3.4
-        version: 0.3.4
       chalk:
         specifier: 5.6.2
         version: 5.6.2
@@ -174,8 +171,8 @@ importers:
         specifier: 3.0.0
         version: 3.0.0
       rastermill:
-        specifier: 0.3.0
-        version: 0.3.0
+        specifier: 0.3.1
+        version: 0.3.1
       tar:
         specifier: 7.5.15
         version: 7.5.15
@@ -1832,6 +1829,8 @@ importers:
   packages/media-understanding-common: {}
 
   packages/memory-host-sdk: {}
+
+  packages/model-catalog-core: {}
 
   packages/net-policy:
     dependencies:
@@ -6250,9 +6249,9 @@ packages:
     resolution: {integrity: sha512-Hrgsx+orqoygnmhFbKaHE6c296J+HTAQXoxEF6gNupROmmGJRoyzfG3ccAveqCBrwr/2yxQ5BVd/GTl5agOwSg==}
     engines: {node: '>= 0.6'}
 
-  rastermill@0.3.0:
-    resolution: {integrity: sha512-4g2i0I7M5sba//lFBh19Wi0hDGw8o+isnt/BtEyqQXIZaYclhcNBwL/Fw/6gDCp7aaLwQHADuUvyHCB0Oat5Vw==}
-    engines: {node: '>=20'}
+  rastermill@0.3.1:
+    resolution: {integrity: sha512-CX4nij6+ZLHYIaojJNfLTr7W+AiH/IPJi6E9Aw1br2///1KZL2KBOHd68rkcLedc47MPvb4hhH+fzYeGFa4A/Q==}
+    engines: {node: '>=22'}
 
   raw-body@3.0.2:
     resolution: {integrity: sha512-K5zQjDllxWkf7Z5xJdV0/B0WTNqx6vxG70zJE4N0kBs4LovmEYWJzQGxC9bS9RAKu3bgM40lrd5zoLJ12MQ5BA==}
@@ -12058,7 +12057,7 @@ snapshots:
 
   range-parser@1.2.1: {}
 
-  rastermill@0.3.0:
+  rastermill@0.3.1:
     dependencies:
       '@silvia-odwyer/photon-node': 0.3.4
 

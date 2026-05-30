@@ -565,6 +565,8 @@ export const fa: TranslationMap = {
     eventMoved: "منتقل شد",
     eventMovedTo: "به {status} منتقل شد",
     eventLinked: "نشست پیوند داده شد",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "ادعا شد",
     eventHeartbeat: "ضربان",
     eventExecutionUpdated: "Agent به‌روزرسانی شد",

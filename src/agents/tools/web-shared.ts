@@ -1,4 +1,8 @@
-import { MAX_TIMER_TIMEOUT_SECONDS } from "../../shared/number-coercion.js";
+import {
+  asDateTimestampMs,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  resolveExpiresAtMsFromDurationMs,
+} from "../../shared/number-coercion.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 export type CacheEntry<T> = {
@@ -40,7 +44,8 @@ export function readCache<T>(
   if (!entry) {
     return null;
   }
-  if (Date.now() > entry.expiresAt) {
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined || now > entry.expiresAt) {
     cache.delete(key);
     return null;
   }
@@ -56,6 +61,11 @@ export function writeCache<T>(
   if (ttlMs <= 0) {
     return;
   }
+  const now = Date.now();
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now });
+  if (expiresAt === undefined) {
+    return;
+  }
   if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
     const oldest = cache.keys().next();
     if (!oldest.done) {
@@ -64,8 +74,8 @@ export function writeCache<T>(
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + ttlMs,
-    insertedAt: Date.now(),
+    expiresAt,
+    insertedAt: now,
   });
 }
 

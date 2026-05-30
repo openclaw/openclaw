@@ -1,7 +1,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateSkillsBinsParams,
   validateSkillsDetailParams,
   validateSkillsInstallParams,
@@ -42,6 +41,7 @@ import {
 } from "../../skills/security/clawhub-verdicts.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
   const cfg = context.getRuntimeConfig();
@@ -67,18 +67,29 @@ function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestCon
   };
 }
 
+type ResolvedSkillsWorkspace = Extract<
+  ReturnType<typeof resolveSkillsAgentWorkspace>,
+  { ok: true }
+>;
+
+function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace) {
+  return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+    config: resolved.cfg,
+    eligibility: {
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({
+          cfg: resolved.cfg,
+          agentId: resolved.agentId,
+        }),
+      }),
+    },
+  });
+}
+
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsUploadHandlers,
   "skills.status": ({ params, respond, context }) => {
-    if (!validateSkillsStatusParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.status params: ${formatValidationErrors(validateSkillsStatusParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsStatusParams, "skills.status", respond)) {
       return;
     }
     const resolved = resolveSkillsAgentWorkspace(params, context);
@@ -86,29 +97,18 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, resolved.error);
       return;
     }
-    const report = buildWorkspaceSkillStatus(resolved.workspaceDir, {
-      config: resolved.cfg,
-      eligibility: {
-        remote: getRemoteSkillEligibility({
-          advertiseExecNode: canExecRequestNode({
-            cfg: resolved.cfg,
-            agentId: resolved.agentId,
-          }),
-        }),
-      },
-    });
+    const report = buildRemoteAwareWorkspaceSkillStatus(resolved);
     respond(true, report, undefined);
   },
   "skills.securityVerdicts": async ({ params, respond, context }) => {
-    if (!validateSkillsSecurityVerdictsParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.securityVerdicts params: ${formatValidationErrors(validateSkillsSecurityVerdictsParams.errors)}`,
-        ),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsSecurityVerdictsParams,
+        "skills.securityVerdicts",
+        respond,
+      )
+    ) {
       return;
     }
     const resolved = resolveSkillsAgentWorkspace(params, context);
@@ -117,17 +117,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const report = buildWorkspaceSkillStatus(resolved.workspaceDir, {
-        config: resolved.cfg,
-        eligibility: {
-          remote: getRemoteSkillEligibility({
-            advertiseExecNode: canExecRequestNode({
-              cfg: resolved.cfg,
-              agentId: resolved.agentId,
-            }),
-          }),
-        },
-      });
+      const report = buildRemoteAwareWorkspaceSkillStatus(resolved);
       const targets = collectClawHubVerdictTargets(report);
       if (targets.length === 0) {
         respond(true, { schema: "openclaw.skills.security-verdicts.v1", items: [] }, undefined);
@@ -140,15 +130,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
   },
   "skills.skillCard": ({ params, respond, context }) => {
-    if (!validateSkillsSkillCardParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.skillCard params: ${formatValidationErrors(validateSkillsSkillCardParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsSkillCardParams, "skills.skillCard", respond)) {
       return;
     }
     const resolved = resolveSkillsAgentWorkspace(params, context);
@@ -191,15 +173,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     );
   },
   "skills.bins": ({ params, respond, context }) => {
-    if (!validateSkillsBinsParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.bins params: ${formatValidationErrors(validateSkillsBinsParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsBinsParams, "skills.bins", respond)) {
       return;
     }
     const cfg = context.getRuntimeConfig();
@@ -214,15 +188,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     respond(true, { bins: [...bins].toSorted() }, undefined);
   },
   "skills.search": async ({ params, respond }) => {
-    if (!validateSkillsSearchParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.search params: ${formatValidationErrors(validateSkillsSearchParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsSearchParams, "skills.search", respond)) {
       return;
     }
     try {
@@ -236,15 +202,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
   },
   "skills.detail": async ({ params, respond }) => {
-    if (!validateSkillsDetailParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.detail params: ${formatValidationErrors(validateSkillsDetailParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsDetailParams, "skills.detail", respond)) {
       return;
     }
     try {
@@ -257,15 +215,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
   },
   "skills.install": async ({ params, respond, context }) => {
-    if (!validateSkillsInstallParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.install params: ${formatValidationErrors(validateSkillsInstallParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsInstallParams, "skills.install", respond)) {
       return;
     }
     const cfg = context.getRuntimeConfig();
@@ -359,15 +309,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     );
   },
   "skills.update": async ({ params, respond, context }) => {
-    if (!validateSkillsUpdateParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid skills.update params: ${formatValidationErrors(validateSkillsUpdateParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateSkillsUpdateParams, "skills.update", respond)) {
       return;
     }
     if (params && typeof params === "object" && "source" in params && params.source === "clawhub") {

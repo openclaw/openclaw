@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -37,7 +38,6 @@ import {
   listPluginModelCatalogFiles,
   type PluginModelCatalogMetadataSnapshot,
 } from "./plugin-model-catalog.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
 const AGENT_CUSTOM_MODEL_DEFAULT_CONTEXT_WINDOW = 128_000;

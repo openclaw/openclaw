@@ -1,5 +1,8 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { isRecord } from "../utils.js";
+import { normalizeProviderId } from "./provider-id.js";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export type ConfiguredModelRef = {
   path: string;

@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { registerWorkboardGatewayMethods } from "./gateway.js";
-import type { WorkboardKeyedStore } from "./store.js";
+import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./store.js";
 
-function createMemoryStore(): WorkboardKeyedStore {
-  const entries = new Map<string, Awaited<ReturnType<WorkboardKeyedStore["lookup"]>>>();
+function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
+  const entries = new Map<string, T>();
   return {
     async register(key, value) {
       entries.set(key, value);
@@ -68,7 +68,16 @@ describe("workboard gateway methods", () => {
       "workboard.cards.diagnostics.refresh",
       "workboard.cards.dispatch",
       "workboard.boards.list",
+      "workboard.boards.upsert",
+      "workboard.boards.archive",
+      "workboard.boards.delete",
       "workboard.cards.stats",
+      "workboard.cards.runs",
+      "workboard.cards.specify",
+      "workboard.cards.decompose",
+      "workboard.notifications.subscribe",
+      "workboard.notifications.list",
+      "workboard.notifications.delete",
       "workboard.cards.archive",
       "workboard.cards.export",
     ]);
@@ -79,6 +88,11 @@ describe("workboard gateway methods", () => {
     });
     expect(methods.get("workboard.cards.export")?.opts).toEqual({ scope: "operator.read" });
     expect(methods.get("workboard.cards.create")?.opts).toEqual({ scope: "operator.write" });
+    expect(methods.get("workboard.cards.runs")?.opts).toEqual({ scope: "operator.read" });
+    expect(methods.get("workboard.boards.upsert")?.opts).toEqual({ scope: "operator.write" });
+    expect(methods.get("workboard.notifications.list")?.opts).toEqual({
+      scope: "operator.read",
+    });
 
     const createHandler = methods.get("workboard.cards.create")?.handler;
     const listHandler = methods.get("workboard.cards.list")?.handler;

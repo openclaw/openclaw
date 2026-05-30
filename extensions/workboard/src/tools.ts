@@ -2,7 +2,7 @@ import { jsonResult, readStringParam } from "openclaw/plugin-sdk/core";
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
-import { WorkboardStore, type PersistedWorkboardCard } from "./store.js";
+import { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
 
 function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
@@ -191,9 +191,7 @@ export function createWorkboardTools(params: {
 }): AnyAgentTool[] {
   const store =
     params.store ??
-    WorkboardStore.open((options) =>
-      params.api.runtime.state.openKeyedStore<PersistedWorkboardCard>(options),
-    );
+    WorkboardStore.open((options) => params.api.runtime.state.openKeyedStore(options));
   const ownerId = contextOwner(params.context);
   const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
     const input = readCardToolParams(rawParams, ownerId);
@@ -574,6 +572,60 @@ export function createWorkboardTools(params: {
       execute: async () => jsonResult(await store.listBoards()),
     },
     {
+      name: "workboard_board_create",
+      label: "Workboard Board Create",
+      description: "Create or update a Workboard board namespace with persisted SQLite metadata.",
+      parameters: Type.Object(
+        {
+          id: Type.String({ description: "Board id." }),
+          name: Type.Optional(Type.String({ description: "Display name." })),
+          description: Type.Optional(Type.String({ description: "Board description." })),
+          icon: Type.Optional(Type.String({ description: "Short icon or label." })),
+          color: Type.Optional(Type.String({ description: "Display color token." })),
+          defaultWorkspace: Type.Optional(
+            Type.Object(
+              {
+                kind: Type.String({ description: "scratch, dir, or worktree." }),
+                path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
+                branch: Type.Optional(Type.String({ description: "Suggested branch." })),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) =>
+        jsonResult({ board: await store.upsertBoard(rawParams as Record<string, unknown>) }),
+    },
+    {
+      name: "workboard_board_archive",
+      label: "Workboard Board Archive",
+      description: "Archive or restore persisted Workboard board metadata.",
+      parameters: Type.Object(
+        {
+          id: Type.String({ description: "Board id." }),
+          archived: Type.Optional(Type.Boolean({ description: "Archive when true." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        return jsonResult({ board: await store.archiveBoard(record.id, record.archived) });
+      },
+    },
+    {
+      name: "workboard_board_delete",
+      label: "Workboard Board Delete",
+      description: "Delete an empty non-default Workboard board metadata record.",
+      parameters: Type.Object(
+        { id: Type.String({ description: "Board id." }) },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) =>
+        jsonResult(await store.deleteBoard((rawParams as Record<string, unknown>).id)),
+    },
+    {
       name: "workboard_stats",
       label: "Workboard Stats",
       description: "Summarize Workboard counts by status and assignee for one board or all boards.",
@@ -586,6 +638,171 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         return jsonResult(await store.stats({ boardId: record.boardId }));
+      },
+    },
+    {
+      name: "workboard_runs",
+      label: "Workboard Runs",
+      description: "List persisted Workboard run attempts for one card.",
+      parameters: CardIdSchema,
+      execute: async (_toolCallId, rawParams) => {
+        const id = readStringParam(rawParams as Record<string, unknown>, "id", { required: true });
+        const result = await store.runs(id);
+        return jsonResult({ ...result, card: redactClaimToken(result.card) });
+      },
+    },
+    {
+      name: "workboard_specify",
+      label: "Workboard Specify",
+      description:
+        "Turn a rough triage/backlog Workboard card into a specified todo card after reasoning through the requirements.",
+      parameters: Type.Object(
+        {
+          id: Type.String({ description: "Workboard card id." }),
+          title: Type.Optional(Type.String({ description: "Clarified title." })),
+          notes: Type.Optional(
+            Type.String({ description: "Clarified notes or acceptance criteria." }),
+          ),
+          agentId: Type.Optional(Type.String({ description: "Assigned agent id." })),
+          priority: Type.Optional(Type.String({ description: "low, normal, high, or urgent." })),
+          labels: Type.Optional(Type.Array(Type.String(), { description: "Card labels." })),
+          boardId: Type.Optional(Type.String({ description: "Board id." })),
+          tenant: Type.Optional(Type.String({ description: "Tenant or routing namespace." })),
+          skills: Type.Optional(Type.Array(Type.String(), { description: "Suggested skills." })),
+          workspace: Type.Optional(
+            Type.Object(
+              {
+                kind: Type.String({ description: "scratch, dir, or worktree." }),
+                path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
+                branch: Type.Optional(Type.String({ description: "Suggested branch." })),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+          maxRuntimeSeconds: Type.Optional(Type.Number({ description: "Runtime budget." })),
+          maxRetries: Type.Optional(Type.Number({ description: "Retry budget." })),
+          summary: Type.Optional(Type.String({ description: "Specification summary comment." })),
+          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        const id = readStringParam(record, "id", { required: true });
+        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
+        return jsonResult({
+          card: redactClaimToken(await store.specify(id, record, { ownerId, token: record.token })),
+        });
+      },
+    },
+    {
+      name: "workboard_decompose",
+      label: "Workboard Decompose",
+      description:
+        "Fan out a Workboard card into linked child cards and optionally complete the parent orchestration card.",
+      parameters: Type.Object(
+        {
+          id: Type.String({ description: "Parent Workboard card id." }),
+          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+          summary: Type.Optional(Type.String({ description: "Decomposition summary." })),
+          completeParent: Type.Optional(
+            Type.Boolean({
+              description: "Complete the parent after child creation. Default true.",
+            }),
+          ),
+          children: Type.Array(
+            Type.Object(
+              {
+                title: Type.String({ description: "Child title." }),
+                notes: Type.Optional(Type.String({ description: "Child notes." })),
+                agentId: Type.Optional(Type.String({ description: "Assigned agent id." })),
+                priority: Type.Optional(
+                  Type.String({ description: "low, normal, high, or urgent." }),
+                ),
+                labels: Type.Optional(Type.Array(Type.String())),
+                boardId: Type.Optional(Type.String()),
+                tenant: Type.Optional(Type.String()),
+                skills: Type.Optional(Type.Array(Type.String())),
+                workspace: Type.Optional(
+                  Type.Object(
+                    {
+                      kind: Type.String({ description: "scratch, dir, or worktree." }),
+                      path: Type.Optional(
+                        Type.String({ description: "Absolute dir/worktree path." }),
+                      ),
+                      branch: Type.Optional(Type.String({ description: "Suggested branch." })),
+                    },
+                    { additionalProperties: false },
+                  ),
+                ),
+                maxRuntimeSeconds: Type.Optional(Type.Number()),
+                maxRetries: Type.Optional(Type.Number()),
+                idempotencyKey: Type.Optional(Type.String()),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        const id = readStringParam(record, "id", { required: true });
+        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
+        const result = await store.decompose(id, record, { ownerId, token: record.token });
+        return jsonResult({
+          parent: redactClaimToken(result.parent),
+          children: result.children.map(redactClaimToken),
+        });
+      },
+    },
+    {
+      name: "workboard_notify_subscribe",
+      label: "Workboard Notify Subscribe",
+      description: "Persist a Workboard notification subscription in the plugin SQLite store.",
+      parameters: Type.Object(
+        {
+          boardId: Type.Optional(Type.String({ description: "Board id. Default default." })),
+          cardId: Type.Optional(Type.String({ description: "Card id." })),
+          sessionKey: Type.Optional(Type.String({ description: "Session key." })),
+          runId: Type.Optional(Type.String({ description: "Run id." })),
+          target: Type.Optional(Type.String({ description: "Human-readable target." })),
+          eventKinds: Type.Optional(
+            Type.Array(Type.String(), { description: "completed, failed, stale." }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) =>
+        jsonResult({
+          subscription: await store.subscribeNotifications(rawParams as Record<string, unknown>),
+        }),
+    },
+    {
+      name: "workboard_notify_list",
+      label: "Workboard Notify List",
+      description: "List persisted Workboard notification subscriptions.",
+      parameters: Type.Object(
+        {
+          boardId: Type.Optional(Type.String({ description: "Board id." })),
+          cardId: Type.Optional(Type.String({ description: "Card id." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) =>
+        jsonResult(await store.listNotificationSubscriptions(rawParams as Record<string, unknown>)),
+    },
+    {
+      name: "workboard_notify_unsubscribe",
+      label: "Workboard Notify Unsubscribe",
+      description: "Delete a persisted Workboard notification subscription.",
+      parameters: Type.Object(
+        { id: Type.String({ description: "Subscription id." }) },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const id = readStringParam(rawParams as Record<string, unknown>, "id", { required: true });
+        return jsonResult(await store.deleteNotificationSubscription(id));
       },
     },
     {

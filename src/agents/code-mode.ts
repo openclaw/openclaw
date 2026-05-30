@@ -4,6 +4,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "../shared/number-coercion.js";
 import { isRecord } from "../shared/record-coerce.js";
 import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
@@ -237,11 +241,15 @@ function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
 
 function removeExpiredRuns(now = Date.now()): void {
   for (const [runId, state] of activeRuns) {
-    if (state.expiresAt <= now) {
+    if (!isFutureDateTimestampMs(state.expiresAt, { nowMs: now })) {
       activeRuns.delete(runId);
       resumingRunIds.delete(runId);
     }
   }
+}
+
+function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): number | undefined {
+  return resolveExpiresAtMsFromDurationSeconds(ttlSeconds, { nowMs: now });
 }
 
 function enforceActiveRunLimit(): void {
@@ -654,6 +662,10 @@ function snapshotState(params: {
     return state;
   });
   const now = Date.now();
+  const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
+  if (expiresAt === undefined) {
+    throw new ToolInputError("code mode run expiry is unavailable.");
+  }
   activeRuns.set(runId, {
     runId,
     parentToolCallId: params.parentToolCallId,
@@ -663,7 +675,7 @@ function snapshotState(params: {
     pending,
     output: params.output,
     createdAt: now,
-    expiresAt: now + params.config.snapshotTtlSeconds * 1000,
+    expiresAt,
     runtime: params.runtime,
   });
   return {

@@ -562,6 +562,8 @@ export const th: TranslationMap = {
     eventMoved: "ย้ายแล้ว",
     eventMovedTo: "ย้ายไปยัง {status}",
     eventLinked: "เซสชันที่ลิงก์แล้ว",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "อ้างสิทธิ์แล้ว",
     eventHeartbeat: "ฮาร์ตบีต",
     eventExecutionUpdated: "เอเจนต์อัปเดตแล้ว",

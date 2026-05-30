@@ -1,9 +1,9 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
-import { normalizeProviderId } from "../provider-id.js";
 import {
   CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_SYNC_TTL_MS,

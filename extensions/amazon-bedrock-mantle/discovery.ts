@@ -1,5 +1,9 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -92,9 +96,10 @@ function getCachedIamTokenEntry(
   now: number = Date.now(),
 ): { token: string; expiresAt: number } | undefined {
   const cached = iamTokenCache.get(region);
-  if (cached && cached.expiresAt > now) {
+  if (cached && isFutureDateTimestampMs(cached.expiresAt, { nowMs: now })) {
     return cached;
   }
+  iamTokenCache.delete(region);
   return undefined;
 }
 
@@ -123,7 +128,10 @@ export async function generateBearerTokenFromIam(params: {
       region: params.region,
       expiresInSeconds: 7200, // 2 hours
     })();
-    iamTokenCache.set(params.region, { token, expiresAt: now + IAM_TOKEN_TTL_MS });
+    const expiresAt = resolveExpiresAtMsFromDurationMs(IAM_TOKEN_TTL_MS, { nowMs: now });
+    if (expiresAt !== undefined) {
+      iamTokenCache.set(params.region, { token, expiresAt });
+    }
     return token;
   } catch (error) {
     log.debug?.("Mantle IAM token generation unavailable", {

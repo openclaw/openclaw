@@ -561,6 +561,8 @@ export const zh_CN: TranslationMap = {
     eventMoved: "已移动",
     eventMovedTo: "已移至 {status}",
     eventLinked: "已关联会话",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "已认领",
     eventHeartbeat: "心跳",
     eventExecutionUpdated: "Agent 已更新",

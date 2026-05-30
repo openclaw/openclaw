@@ -25,7 +25,6 @@
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.3.0",
         "@openclaw/proxyline": "0.3.3",
-        "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
         "clawpdf": "0.2.0",
@@ -54,7 +53,7 @@
         "proper-lockfile": "4.1.2",
         "qrcode": "1.5.4",
         "quickjs-wasi": "3.0.0",
-        "rastermill": "0.3.0",
+        "rastermill": "0.3.1",
         "tar": "7.5.15",
         "tree-sitter-bash": "0.25.1",
         "tslog": "4.10.2",
@@ -2616,15 +2615,15 @@
       }
     },
     "node_modules/rastermill": {
-      "version": "0.3.0",
-      "resolved": "https://registry.npmjs.org/rastermill/-/rastermill-0.3.0.tgz",
-      "integrity": "sha512-4g2i0I7M5sba//lFBh19Wi0hDGw8o+isnt/BtEyqQXIZaYclhcNBwL/Fw/6gDCp7aaLwQHADuUvyHCB0Oat5Vw==",
+      "version": "0.3.1",
+      "resolved": "https://registry.npmjs.org/rastermill/-/rastermill-0.3.1.tgz",
+      "integrity": "sha512-CX4nij6+ZLHYIaojJNfLTr7W+AiH/IPJi6E9Aw1br2///1KZL2KBOHd68rkcLedc47MPvb4hhH+fzYeGFa4A/Q==",
       "license": "MIT",
       "dependencies": {
         "@silvia-odwyer/photon-node": "0.3.4"
       },
       "engines": {
-        "node": ">=20"
+        "node": ">=22"
       }
     },
     "node_modules/raw-body": {

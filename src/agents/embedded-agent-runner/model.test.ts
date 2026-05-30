@@ -891,9 +891,11 @@ describe("resolveModel", () => {
     const result = resolveModelForTest("xiaomi-token-plan", "mimo-v2.5-pro", "/tmp/agent", cfg);
     const model = expectResolvedModel(result);
 
-    expect(model.contextWindow).toBe(100_000);
-    expect((model as { contextTokens?: number }).contextTokens).toBe(90_000);
-    expect(model.maxTokens).toBe(512);
+    expectRecordFields(model, {
+      contextWindow: 100_000,
+      contextTokens: 90_000,
+      maxTokens: 512,
+    });
   });
 
   it("does not synthesize unknown models from timeout-only provider overlays", () => {

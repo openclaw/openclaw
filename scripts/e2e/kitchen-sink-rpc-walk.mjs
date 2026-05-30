@@ -59,6 +59,28 @@ const ERROR_LOG_ALLOW_PATTERNS = [
 
 let callGatewayModulePromise;
 
+function usage() {
+  return `Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs
+
+Runs the external Kitchen Sink plugin RPC walk against a built OpenClaw entry.
+
+Environment:
+  OPENCLAW_ENTRY                         Built OpenClaw entrypoint. Defaults to dist/index.mjs or dist/index.js.
+  OPENCLAW_KITCHEN_SINK_NPM_SPEC         Plugin package spec. Default: npm:@openclaw/kitchen-sink@latest.
+  OPENCLAW_KITCHEN_SINK_PLUGIN_ID        Plugin id. Default: openclaw-kitchen-sink-fixture.
+  OPENCLAW_KITCHEN_SINK_RPC_READY_MS     Gateway readiness timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS   OpenClaw command timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS   Plugin install timeout.
+  OPENCLAW_KITCHEN_SINK_RPC_CALL_MS      RPC call timeout.
+  OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB      Gateway RSS ceiling.
+  OPENCLAW_KITCHEN_SINK_KEEP_TMP=1       Preserve the isolated temp home.
+`;
+}
+
+export function shouldPrintHelp(argv) {
+  return argv.some((arg) => arg === "--help" || arg === "-h");
+}
+
 export function readPositiveInt(raw, fallback) {
   const text = String(raw || "").trim();
   if (!/^\d+$/u.test(text)) {
@@ -1526,5 +1548,9 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
+  if (shouldPrintHelp(process.argv.slice(2))) {
+    process.stdout.write(usage());
+  } else {
+    await main();
+  }
 }

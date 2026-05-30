@@ -8,12 +8,14 @@ import {
   clampPositiveTimerTimeoutMs,
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
+  isFutureDateTimestampMs,
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
   nonNegativeSecondsToSafeMilliseconds,
   parseFiniteNumber,
   positiveSecondsToSafeMilliseconds,
   resolveIntegerOption,
+  resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromDurationOrEpoch,
   resolveExpiresAtMsFromEpochSeconds,
@@ -135,6 +137,14 @@ describe("number-coercion", () => {
     expect(timestampMsToIsoString("0")).toBeUndefined();
   });
 
+  test("future timestamp helper rejects invalid Date timestamps", () => {
+    expect(isFutureDateTimestampMs(1_001, { nowMs: 1_000 })).toBe(true);
+    expect(isFutureDateTimestampMs(1_000, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(999, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(8_640_000_000_000_001, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(1_001, { nowMs: Number.NaN })).toBe(false);
+  });
+
   test("timestamp fallback helpers resolve Date-invalid timestamps", () => {
     expect(resolveDateTimestampMs(1_000)).toBe(1_000);
     expect(resolveDateTimestampMs(Number.POSITIVE_INFINITY, 1_000)).toBe(1_000);
@@ -156,6 +166,21 @@ describe("number-coercion", () => {
 
   test("expiry helpers resolve safe absolute timestamps", () => {
     expect(
+      resolveExpiresAtMsFromDurationMs(600_000, {
+        nowMs: 1_000,
+      }),
+    ).toBe(601_000);
+    expect(
+      resolveExpiresAtMsFromDurationMs(600_000, {
+        nowMs: 8_640_000_000_000_000,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveExpiresAtMsFromDurationMs(600_000, {
+        nowMs: 8_640_000_000_000_001,
+      }),
+    ).toBeUndefined();
+    expect(
       resolveExpiresAtMsFromDurationSeconds("3600", {
         nowMs: 1_000,
         bufferMs: 300,
@@ -168,6 +193,11 @@ describe("number-coercion", () => {
         minRemainingMs: 30_000,
       }),
     ).toBe(31_000);
+    expect(
+      resolveExpiresAtMsFromDurationSeconds("3600", {
+        nowMs: 8_640_000_000_000_000,
+      }),
+    ).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationSeconds("1e309", { nowMs: 1_000 })).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds(1234.9)).toBe(1_234_000);
     expect(resolveExpiresAtMsFromEpochSeconds("3600", { bufferMs: 300 })).toBe(3_599_700);

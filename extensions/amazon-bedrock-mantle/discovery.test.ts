@@ -230,6 +230,32 @@ describe("bedrock mantle discovery", () => {
     expect(getCachedIamToken("us-east-1")).toBeUndefined();
   });
 
+  it("does not cache generated IAM tokens when ttl expiry overflows", async () => {
+    const tokenProvider = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("bedrock-overflow-token-1") // pragma: allowlist secret
+      .mockResolvedValueOnce("bedrock-overflow-token-2"); // pragma: allowlist secret
+    const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
+
+    await expect(
+      generateBearerTokenFromIam({
+        region: "us-east-1",
+        now: () => 8_640_000_000_000_000,
+        tokenProviderFactory,
+      }),
+    ).resolves.toBe("bedrock-overflow-token-1");
+    expect(getCachedIamToken("us-east-1")).toBeUndefined();
+
+    await expect(
+      generateBearerTokenFromIam({
+        region: "us-east-1",
+        now: () => 8_640_000_000_000_000,
+        tokenProviderFactory,
+      }),
+    ).resolves.toBe("bedrock-overflow-token-2");
+    expect(tokenProvider).toHaveBeenCalledTimes(2);
+  });
+
   // ---------------------------------------------------------------------------
   // Model discovery
   // ---------------------------------------------------------------------------

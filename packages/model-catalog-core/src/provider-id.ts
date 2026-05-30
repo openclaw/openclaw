@@ -1,4 +1,6 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+export function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 export function normalizeProviderId(provider: string): string {
   return normalizeLowercaseStringOrEmpty(provider);

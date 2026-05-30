@@ -67,6 +67,17 @@ type ApprovalResolveParamsValidator<TParams extends ApprovalResolveParams> = ((
   errors?: ValidationError[] | null;
 };
 
+type ApprovalRecordLookupResult<TPayload> =
+  | {
+      ok: true;
+      approvalId: string;
+      snapshot: ExecApprovalRecord<TPayload>;
+    }
+  | {
+      ok: false;
+      response: PendingApprovalLookupError;
+    };
+
 function isPromiseLike<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof value === "object" && value !== null && "then" in value;
 }
@@ -247,37 +258,8 @@ export function resolvePendingApprovalRecord<TPayload>(params: {
   inputId: string;
   client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
-}):
-  | {
-      ok: true;
-      approvalId: string;
-      snapshot: ExecApprovalRecord<TPayload>;
-    }
-  | {
-      ok: false;
-      response: PendingApprovalLookupError;
-    } {
-  const resolvedId = params.manager.lookupApprovalId(params.inputId, {
-    filter: (record) =>
-      isApprovalRecordVisibleToClient({
-        record,
-        client: params.client ?? null,
-      }),
-  });
-  if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
-    return {
-      ok: false,
-      response: resolvePendingApprovalLookupError({
-        resolvedId,
-        exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
-      }),
-    };
-  }
-  const snapshot = params.manager.getSnapshot(resolvedId.id);
-  if (!snapshot || snapshot.resolvedAtMs !== undefined) {
-    return { ok: false, response: "missing" };
-  }
-  return { ok: true, approvalId: resolvedId.id, snapshot };
+}): ApprovalRecordLookupResult<TPayload> {
+  return resolveApprovalRecordForState(params, "pending");
 }
 
 function resolveResolvedApprovalRecord<TPayload>(params: {
@@ -285,18 +267,21 @@ function resolveResolvedApprovalRecord<TPayload>(params: {
   inputId: string;
   client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
-}):
-  | {
-      ok: true;
-      approvalId: string;
-      snapshot: ExecApprovalRecord<TPayload>;
-    }
-  | {
-      ok: false;
-      response: PendingApprovalLookupError;
-    } {
+}): ApprovalRecordLookupResult<TPayload> {
+  return resolveApprovalRecordForState(params, "resolved");
+}
+
+function resolveApprovalRecordForState<TPayload>(
+  params: {
+    manager: ExecApprovalManager<TPayload>;
+    inputId: string;
+    client?: GatewayClient | null;
+    exposeAmbiguousPrefixError?: boolean;
+  },
+  expectedState: "pending" | "resolved",
+): ApprovalRecordLookupResult<TPayload> {
   const resolvedId = params.manager.lookupApprovalId(params.inputId, {
-    includeResolved: true,
+    includeResolved: expectedState === "resolved",
     filter: (record) =>
       isApprovalRecordVisibleToClient({
         record,
@@ -313,7 +298,8 @@ function resolveResolvedApprovalRecord<TPayload>(params: {
     };
   }
   const snapshot = params.manager.getSnapshot(resolvedId.id);
-  if (!snapshot || snapshot.resolvedAtMs === undefined) {
+  const isResolved = snapshot?.resolvedAtMs !== undefined;
+  if (!snapshot || isResolved !== (expectedState === "resolved")) {
     return { ok: false, response: "missing" };
   }
   return { ok: true, approvalId: resolvedId.id, snapshot };

@@ -19,6 +19,7 @@ import { deriveSessionMetaPatch } from "./metadata.js";
 import { resolveStorePath } from "./paths.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
+  isSessionSkillPromptBlobReadable,
   projectSessionStoreForPersistence,
   type SessionSkillPromptBlobProjection,
 } from "./skill-prompt-blobs.js";
@@ -58,6 +59,7 @@ import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   type SessionEntry,
+  type SessionSkillPromptRef,
 } from "./types.js";
 
 export {
@@ -187,6 +189,7 @@ type SingleEntryPersistencePatch = {
 type SessionEntryWorkflowOptions = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
+  hydrateSkillPromptRefs?: boolean;
   storePath?: string;
 };
 
@@ -210,9 +213,9 @@ function resolveSessionWorkflowStorePath(
 export function getSessionEntry(
   options: SessionEntryWorkflowOptions & { sessionKey: string },
 ): SessionEntry | undefined {
-  const entry = readSessionEntry(resolveSessionWorkflowStorePath(options), options.sessionKey) as
-    | SessionEntry
-    | undefined;
+  const entry = readSessionEntry(resolveSessionWorkflowStorePath(options), options.sessionKey, {
+    hydrateSkillPromptRefs: options.hydrateSkillPromptRefs,
+  }) as SessionEntry | undefined;
   return entry ? cloneSessionEntry(entry) : undefined;
 }
 
@@ -364,12 +367,37 @@ function buildSingleEntrySerializedStore(params: {
   };
 }
 
-function storeHasUntouchedHydratedSkillPrompts(
+function collectSerializedPromptRefs(serialized: string): Map<string, SessionSkillPromptRef> {
+  const refs = new Map<string, SessionSkillPromptRef>();
+  try {
+    const parsed = JSON.parse(serialized) as Record<string, SessionEntry>;
+    for (const [key, entry] of Object.entries(parsed)) {
+      const ref = entry?.skillsSnapshot?.promptRef;
+      if (ref) {
+        refs.set(key, ref);
+      }
+    }
+  } catch {
+    // Malformed serialized cache cannot prove prompt refs are already durable.
+  }
+  return refs;
+}
+
+function storeHasUnsafeUntouchedHydratedSkillPrompts(
+  storePath: string,
   store: Record<string, SessionEntry>,
   changedSessionKey: string,
 ): boolean {
+  const currentSerialized = getSerializedSessionStore(storePath);
+  const serializedPromptRefs = currentSerialized
+    ? collectSerializedPromptRefs(currentSerialized)
+    : undefined;
   for (const [key, entry] of Object.entries(store)) {
-    if (key !== changedSessionKey && typeof entry.skillsSnapshot?.prompt === "string") {
+    if (key === changedSessionKey || typeof entry.skillsSnapshot?.prompt !== "string") {
+      continue;
+    }
+    const ref = serializedPromptRefs?.get(key);
+    if (!ref || !isSessionSkillPromptBlobReadable(storePath, ref)) {
       return true;
     }
   }
@@ -619,7 +647,11 @@ async function saveSessionStoreUnlocked(
   if (
     opts?.singleEntryPersistence &&
     !maintenanceChangedStore &&
-    !storeHasUntouchedHydratedSkillPrompts(store, opts.singleEntryPersistence.sessionKey)
+    !storeHasUnsafeUntouchedHydratedSkillPrompts(
+      storePath,
+      store,
+      opts.singleEntryPersistence.sessionKey,
+    )
   ) {
     const normalizedEntry = store[opts.singleEntryPersistence.sessionKey];
     const singleEntrySerialized = buildSingleEntrySerializedStore({

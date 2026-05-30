@@ -1,8 +1,8 @@
+import { normalizeLowercaseStringOrEmpty } from "./provider-id.js";
 import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
-} from "../plugin-sdk/provider-model-id-normalize.js";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
+} from "./provider-model-id-normalize.js";
 
 export type ManifestModelIdNormalizationProvider = {
   aliases?: Record<string, string>;

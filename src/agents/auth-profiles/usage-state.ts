@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {

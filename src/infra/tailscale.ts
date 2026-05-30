@@ -5,6 +5,7 @@ import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { asDateTimestampMs, resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
 import { asNullableObjectRecord as readRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -540,19 +541,27 @@ function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIde
 }
 
 function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null | undefined {
+  const validNow = asDateTimestampMs(now);
+  if (validNow === undefined) {
+    return undefined;
+  }
   const cached = whoisCache.get(ip);
   if (!cached) {
     return undefined;
   }
-  if (cached.expiresAt <= now) {
+  const expiresAt = asDateTimestampMs(cached.expiresAt);
+  if (expiresAt === undefined || expiresAt <= validNow) {
     whoisCache.delete(ip);
     return undefined;
   }
   return cached.value;
 }
 
-function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlMs: number) {
-  whoisCache.set(ip, { value, expiresAt: Date.now() + ttlMs });
+function writeCachedWhois(ip: string, value: TailscaleWhoisIdentity | null, ttlMs: number): void {
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs);
+  if (expiresAt !== undefined) {
+    whoisCache.set(ip, { value, expiresAt });
+  }
 }
 
 export async function readTailscaleWhoisIdentity(
