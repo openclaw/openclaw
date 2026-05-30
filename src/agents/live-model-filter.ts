@@ -139,6 +139,9 @@ function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
 }
 
 function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean {
+  if (provider === "openai-codex") {
+    return true;
+  }
   if (!isOpenAiFamilyLiveModel(provider, id)) {
     return false;
   }
