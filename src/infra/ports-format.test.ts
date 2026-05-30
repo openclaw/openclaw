@@ -7,6 +7,7 @@ import {
   formatPortListener,
   isDualStackLoopbackGatewayListeners,
   isExpectedGatewayListeners,
+  isExpectedGatewayListenersForPid,
   isSingleExpectedGatewayListener,
 } from "./ports-format.js";
 
@@ -51,6 +52,17 @@ describe("ports-format", () => {
     expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(true);
     expect(isExpectedGatewayListeners(listeners, 18789)).toBe(true);
     expect(buildPortHints(listeners, 18789)).toEqual([]);
+  });
+
+  it("recognizes expected loopback listeners owned by a known gateway service pid", () => {
+    const listeners = [
+      { pid: 73614, command: "node", address: "127.0.0.1:18789" },
+      { pid: 73614, command: "node", address: "[::1]:18789" },
+    ];
+
+    expect(isExpectedGatewayListeners(listeners, 18789)).toBe(false);
+    expect(isExpectedGatewayListenersForPid(listeners, 18789, 73614)).toBe(true);
+    expect(isExpectedGatewayListenersForPid(listeners, 18789, 12345)).toBe(false);
   });
 
   it.each([

@@ -452,6 +452,32 @@ describe("gatherDaemonStatus", () => {
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
 
+  it("suppresses busy-port hints when all listeners belong to the running gateway pid", async () => {
+    serviceReadRuntime.mockResolvedValueOnce({ status: "running", pid: 73614 });
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19001,
+      status: "busy",
+      listeners: [
+        { pid: 73614, command: "node", address: "127.0.0.1:19001" },
+        { pid: 73614, command: "node", address: "[::1]:19001" },
+      ],
+      hints: [
+        "Another process is listening on this port.",
+        "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
+      ],
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.port?.status).toBe("busy");
+    expect(status.port?.listeners).toHaveLength(2);
+    expect(status.port?.hints).toEqual([]);
+  });
+
   it("surfaces recent service restart handoffs only during deep status", async () => {
     readGatewayRestartHandoffSync.mockReturnValueOnce({
       kind: "gateway-supervisor-restart-handoff",

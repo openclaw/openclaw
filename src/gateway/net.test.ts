@@ -1,3 +1,4 @@
+import net from "node:net";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
@@ -21,6 +22,26 @@ import {
 } from "./net.js";
 
 const flyMachineEnvKeys = ["FLY_MACHINE_ID", "FLY_APP_NAME"] as const;
+
+function mockCanBindToHost(bindable: boolean) {
+  vi.spyOn(net, "createServer").mockImplementation(() => {
+    const handlers = new Map<string, () => void>();
+    const server = {
+      once: vi.fn((event: string, handler: () => void) => {
+        handlers.set(event, handler);
+        return server;
+      }),
+      listen: vi.fn(() => {
+        queueMicrotask(() => {
+          handlers.get(bindable ? "listening" : "error")?.();
+        });
+        return server;
+      }),
+      close: vi.fn(),
+    };
+    return server as unknown as net.Server;
+  });
+}
 
 function clearFlyMachineEnvForTest(): () => void {
   const previousEnv = new Map<(typeof flyMachineEnvKeys)[number], string | undefined>();
@@ -673,8 +694,11 @@ describe("resolveGatewayBindHost", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns 127.0.0.1 for loopback mode", async () => {
+  it("returns 127.0.0.1 for loopback mode without probing bind fallback", async () => {
+    const createServer = vi.spyOn(net, "createServer");
+
     expect(await resolveGatewayBindHost("loopback")).toBe("127.0.0.1");
+    expect(createServer).not.toHaveBeenCalled();
   });
 
   it("returns 0.0.0.0 for lan mode", async () => {
@@ -687,6 +711,7 @@ describe("resolveGatewayBindHost", () => {
       throw new Error("ENOENT");
     });
     vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice\n");
+    mockCanBindToHost(true);
     expect(await resolveGatewayBindHost("auto")).toBe("127.0.0.1");
   });
 
