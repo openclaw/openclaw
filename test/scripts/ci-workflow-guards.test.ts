@@ -100,7 +100,7 @@ describe("ci workflow guards", () => {
     expect(workflow).not.toContain("$fetchInfo.RedirectStandardOutput = $true");
     expect(workflow).not.toContain("$fetchInfo.RedirectStandardError = $true");
     expect(workflow).toContain(
-      '--no-tags --no-progress --prune --no-recurse-submodules --depth=50',
+      "--no-tags --no-progress --prune --no-recurse-submodules --depth=50",
     );
     expect(workflow).toContain("$fetch = New-Object System.Diagnostics.Process");
     expect(workflow).toContain("$fetch.StartInfo = $fetchInfo");
@@ -135,6 +135,16 @@ describe("ci workflow guards", () => {
     expect(buildDistStep.run).toBe("pnpm build:ci-artifacts");
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Build Control UI");
     expect(buildArtifactSteps.some((step) => step.run === "pnpm ui:build")).toBe(false);
+  });
+
+  it("gives quiet Node test shards enough no-output runway", () => {
+    const workflow = readCiWorkflow();
+    const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
+
+    expect(nodeTestJob["timeout-minutes"]).toBe(60);
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("900000");
+    expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
   });
 
   it("uploads a CI timing summary after the run lanes finish", () => {
