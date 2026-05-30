@@ -213,6 +213,44 @@ describe("readWebhookBodyOrReject", () => {
   });
 });
 
+describe("createWebhookInFlightLimiter", () => {
+  it("rejects new keys when active key capacity is full", () => {
+    const limiter = createWebhookInFlightLimiter({
+      maxInFlightPerKey: 1,
+      maxTrackedKeys: 1,
+    });
+
+    expect(limiter.tryAcquire("a")).toBe(true);
+    expect(limiter.tryAcquire("b")).toBe(false);
+    expect(limiter.size()).toBe(1);
+    expect(limiter.tryAcquire("a")).toBe(false);
+
+    limiter.release("a");
+
+    expect(limiter.size()).toBe(0);
+    expect(limiter.tryAcquire("b")).toBe(true);
+    limiter.release("b");
+  });
+
+  it("allows existing keys when active key capacity is full", () => {
+    const limiter = createWebhookInFlightLimiter({
+      maxInFlightPerKey: 2,
+      maxTrackedKeys: 1,
+    });
+
+    expect(limiter.tryAcquire("a")).toBe(true);
+    expect(limiter.tryAcquire("a")).toBe(true);
+    expect(limiter.tryAcquire("b")).toBe(false);
+    expect(limiter.tryAcquire("a")).toBe(false);
+
+    limiter.release("a");
+
+    expect(limiter.tryAcquire("a")).toBe(true);
+    limiter.release("a");
+    limiter.release("a");
+  });
+});
+
 describe("beginWebhookRequestPipelineOrReject", () => {
   it("falls back for non-finite in-flight limiter options", () => {
     const limiter = createWebhookInFlightLimiter({

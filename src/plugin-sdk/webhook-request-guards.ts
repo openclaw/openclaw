@@ -6,7 +6,6 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "../infra/http-body.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
@@ -118,8 +117,10 @@ export function createWebhookInFlightLimiter(options?: {
       if (current >= maxInFlightPerKey) {
         return false;
       }
+      if (current === 0 && active.size >= maxTrackedKeys) {
+        return false;
+      }
       active.set(key, current + 1);
-      pruneMapToMaxSize(active, maxTrackedKeys);
       return true;
     },
     release: (key: string) => {
