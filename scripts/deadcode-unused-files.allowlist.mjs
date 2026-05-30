@@ -6,6 +6,9 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   // callers so the schema and scoped cache API can be reviewed together.
   "src/agents/cache/agent-cache-store.sqlite.ts",
   "src/agents/cache/agent-cache-store.ts",
+  // Agent safety regression scenarios are invoked from the report-only release
+  // gate and focused tests, not from production runtime import graphs.
+  "src/security/agent-safety-regression.ts",
   "src/state/openclaw-agent-db.paths.ts",
   "src/state/openclaw-agent-db.ts",
   "src/state/openclaw-agent-schema.generated.ts",

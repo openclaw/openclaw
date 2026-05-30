@@ -1795,6 +1795,8 @@
     "test:perf:profile:main": "node scripts/run-vitest-profile.mjs main",
     "test:perf:profile:runner": "node scripts/run-vitest-profile.mjs runner",
     "test:plugins:gateway-gauntlet": "node scripts/check-plugin-gateway-gauntlet.mjs",
+    "test:agent-safety-regressions": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-security.config.ts src/security/agent-safety-regression.test.ts",
+    "agent-safety:report": "node --import tsx scripts/agent-safety-regression-report.ts",
     "test:plugins:kitchen-sink-live": "bash -lc 'if [ -x \"$HOME/.local/bin/openclaw-testbox-env\" ]; then exec \"$HOME/.local/bin/openclaw-testbox-env\" pnpm openclaw qa suite --provider-mode live-frontier --scenario kitchen-sink-live-openai; fi; exec pnpm openclaw qa suite --provider-mode live-frontier --scenario kitchen-sink-live-openai'",
     "test:plugins:kitchen-sink-rpc": "node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mjs",
     "test:sectriage": "node scripts/run-with-env.mjs OPENCLAW_GATEWAY_PROJECT_SHARDS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",

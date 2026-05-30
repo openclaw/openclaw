@@ -1070,6 +1070,44 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  agent_safety_regression_release_checks:
+    name: Run agent safety regression report
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Run deterministic safety regressions
+        run: pnpm test:agent-safety-regressions
+
+      - name: Generate report-only safety gate artifact
+        if: always()
+        run: pnpm agent-safety:report
+
+      - name: Upload agent safety regression artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-agent-safety-regressions-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/agent-safety-regression/
+          retention-days: 14
+          if-no-files-found: warn
+
   qa_live_matrix_release_checks:
     name: Run QA Lab live Matrix lane
     needs: [resolve_target]
