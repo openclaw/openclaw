@@ -45,13 +45,12 @@ function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function parseJsonValue<T>(raw: string | null): T | undefined {
+function parseJsonValue(raw: string | null): JsonValue | undefined {
   if (!raw?.trim()) {
     return undefined;
   }
   try {
-    return JSON.parse(raw) as T;
+    return JSON.parse(raw) as JsonValue;
   } catch {
     return undefined;
   }
@@ -69,8 +68,8 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
   const endedAt = normalizeNumber(row.ended_at);
   const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
   const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
-  const stateJson = parseJsonValue<JsonValue>(row.state_json);
-  const waitJson = parseJsonValue<JsonValue>(row.wait_json);
+  const stateJson = parseJsonValue(row.state_json);
+  const waitJson = parseJsonValue(row.wait_json);
   return {
     flowId: row.flow_id,
     syncMode: rowToSyncMode(row),
