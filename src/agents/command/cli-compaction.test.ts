@@ -1003,6 +1003,100 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.compactionCount).toBe(1);
   });
 
+  it("clears stale Codex native binding when context-engine fallback is below target", async () => {
+    const sessionKey = "agent:main:codex-stale-binding-under-target";
+    const sessionId = "session-codex-stale-binding-under-target";
+    const sessionFile = path.join(tmpDir, "session-codex-stale-binding-under-target.jsonl");
+    const storePath = path.join(tmpDir, "sessions-codex-stale-binding-under-target.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+      agentHarnessId: "codex",
+      cliSessionBindings: {
+        codex: { sessionId: "thread-1" },
+      },
+      cliSessionIds: {
+        codex: "thread-1",
+      },
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const compactAgentHarnessSession = vi.fn(async () => ({
+      ok: false,
+      compacted: false,
+      reason: "thread not found: thread-1",
+      failure: {
+        reason: "stale_thread_binding",
+      },
+    }));
+    const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const recordCliCompactionInStore = vi.fn();
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => ({
+        ...buildContextEngine({ compactCalls }),
+        async compact(compactParams) {
+          compactCalls.push(compactParams);
+          return {
+            ok: true,
+            compacted: false,
+            reason: "already under target",
+          };
+        },
+      }),
+      ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+      maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: maintenance,
+      recordCliCompactionInStore,
+    });
+
+    const updatedEntry = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+    });
+
+    expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
+    expect(compactCalls).toHaveLength(1);
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(updatedEntry?.compactionCount).toBeUndefined();
+    expect(updatedEntry?.cliSessionBindings?.codex).toBeUndefined();
+    expect(updatedEntry?.cliSessionIds?.codex).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
+  });
+
   it("falls back to context-engine compaction when Codex native compaction returns a raw missing thread reason", async () => {
     const sessionKey = "agent:main:codex-raw-stale-binding";
     const sessionId = "session-codex-raw-stale-binding";
