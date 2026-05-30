@@ -652,6 +652,30 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
   });
 }
 
+async function resolveSkillWorkshopApprovalForFinalParams(params: {
+  toolName: string;
+  params: unknown;
+  approvalMode?: "request" | "report" | "defer";
+  toolCallId?: string;
+  ctx?: HookContext;
+  signal?: AbortSignal;
+}): Promise<HookOutcome | undefined> {
+  const result = resolveSkillWorkshopToolApproval({
+    toolName: params.toolName,
+    toolParams: isPlainObject(params.params) ? params.params : {},
+    ...(params.ctx?.config ? { config: params.ctx.config } : {}),
+  });
+  return await resolveBeforeToolCallApprovalOutcome({
+    result,
+    approvalMode: params.approvalMode,
+    toolName: params.toolName,
+    ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+    ...(params.ctx ? { ctx: params.ctx } : {}),
+    signal: params.signal,
+    baseParams: params.params,
+  });
+}
+
 export function buildBlockedToolResult(params: {
   reason: string;
   deniedReason?: HookBlockedReason;
@@ -960,29 +984,26 @@ export async function runBeforeToolCallHook(args: {
       trustedPolicyResult?.params && isPlainObject(policyAdjustedParams)
         ? deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
         : derivedToolParams;
-    const corePolicyResult = resolveSkillWorkshopToolApproval({
-      toolName,
-      toolParams: isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {},
-      ...(args.ctx?.config ? { config: args.ctx.config } : {}),
-    });
-    const coreApprovalOutcome = await resolveBeforeToolCallApprovalOutcome({
-      result: corePolicyResult,
-      approvalMode: args.approvalMode,
-      toolName,
-      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
-      ...(args.ctx ? { ctx: args.ctx } : {}),
-      signal: args.signal,
-      baseParams: policyAdjustedParams,
-    });
-    if (coreApprovalOutcome) {
-      return coreApprovalOutcome;
-    }
     if (!hasBeforeToolCallHooks) {
-      return {
-        blocked: false,
+      const finalApprovalOutcome = await resolveSkillWorkshopApprovalForFinalParams({
+        toolName,
         params: policyAdjustedParams,
-        ...(trustedApprovalResolution ? { approvalResolution: trustedApprovalResolution } : {}),
+        approvalMode: args.approvalMode,
+        ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+        ...(args.ctx ? { ctx: args.ctx } : {}),
+        signal: args.signal,
+      });
+      if (finalApprovalOutcome) {
+        return finalApprovalOutcome;
+      }
+      const allowed: HookOutcome = {
+        blocked: false as const,
+        params: policyAdjustedParams,
       };
+      if (trustedApprovalResolution) {
+        allowed.approvalResolution = trustedApprovalResolution;
+      }
+      return allowed;
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
     const hookResult = await hookRunner.runBeforeToolCall(
@@ -1009,6 +1030,8 @@ export async function runBeforeToolCallHook(args: {
       };
     }
 
+    let finalParams = policyAdjustedParams;
+    let finalApprovalResolution = trustedApprovalResolution;
     if (hookResult?.requireApproval) {
       const approvalOutcome = await resolveBeforeToolCallApprovalOutcome({
         result: hookResult,
@@ -1020,17 +1043,39 @@ export async function runBeforeToolCallHook(args: {
         baseParams: policyAdjustedParams,
       });
       if (approvalOutcome) {
-        return approvalOutcome;
+        if (approvalOutcome.blocked) {
+          return approvalOutcome;
+        }
+        if (approvalOutcome.deferredApproval) {
+          return approvalOutcome;
+        }
+        finalParams = approvalOutcome.params;
+        finalApprovalResolution = approvalOutcome.approvalResolution ?? finalApprovalResolution;
       }
     }
 
     if (hookResult?.params) {
-      return {
-        blocked: false,
-        params: mergeParamsWithApprovalOverrides(policyAdjustedParams, hookResult.params),
-      };
+      finalParams = mergeParamsWithApprovalOverrides(finalParams, hookResult.params);
     }
-    return { blocked: false, params: policyAdjustedParams };
+    const finalApprovalOutcome = await resolveSkillWorkshopApprovalForFinalParams({
+      toolName,
+      params: finalParams,
+      approvalMode: args.approvalMode,
+      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+      ...(args.ctx ? { ctx: args.ctx } : {}),
+      signal: args.signal,
+    });
+    if (finalApprovalOutcome) {
+      return finalApprovalOutcome;
+    }
+    const allowed: HookOutcome = {
+      blocked: false as const,
+      params: finalParams,
+    };
+    if (finalApprovalResolution) {
+      allowed.approvalResolution = finalApprovalResolution;
+    }
+    return allowed;
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
     const cause = unwrapErrorCause(err);

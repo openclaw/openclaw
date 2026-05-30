@@ -314,7 +314,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   });
 
   it("requires approval before skill_workshop applies a proposal", async () => {
-    (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
     mockCallGatewayTool.mockResolvedValueOnce({
       id: "skill-workshop-approval",
       decision: PluginApprovalResolutions.ALLOW_ONCE,
@@ -352,7 +351,47 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(approvalCall.request.toolName).toBe("skill_workshop");
     expect(approvalCall.request.toolCallId).toBe("call-skill-apply");
-    expect(runBeforeToolCallMock).not.toHaveBeenCalled();
+    expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
+
+    {
+      mockCallGatewayTool.mockReset();
+      runBeforeToolCallMock.mockReset();
+      runBeforeToolCallMock.mockResolvedValue({
+        params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+      });
+      mockCallGatewayTool.mockResolvedValueOnce({
+        id: "skill-workshop-approval",
+        decision: PluginApprovalResolutions.ALLOW_ONCE,
+      });
+
+      const adjustedResult = await runBeforeToolCallHook({
+        toolName: "skill_workshop",
+        params: { action: "inspect", proposal_id: "weather-20260530-a1b2c3d4e5" },
+        toolCallId: "call-skill-hook-apply",
+        ctx: {
+          config: {
+            skills: {
+              workshop: {
+                approvalPolicy: "pending",
+              },
+            },
+          },
+        },
+      });
+
+      expect(adjustedResult).toEqual({
+        blocked: false,
+        params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
+        approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+      });
+      const adjustedApprovalCall = requireApprovalRequestCall(
+        "skill_workshop adjusted approval request",
+      );
+      expect(adjustedApprovalCall.request.title).toBe("Apply workspace skill proposal");
+      expect(adjustedApprovalCall.request.toolName).toBe("skill_workshop");
+      expect(adjustedApprovalCall.request.toolCallId).toBe("call-skill-hook-apply");
+      expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("runs trusted policies before skill_workshop lifecycle approval", async () => {
