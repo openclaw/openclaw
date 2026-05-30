@@ -6,25 +6,19 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
-  };
-});
+vi.mock("node:child_process", () => ({
+  spawnSync: (...args: unknown[]) => spawnSyncMock(...args),
+}));
 
 vi.mock("./ports-lsof.js", () => ({
   resolveLsofCommandSync: (...args: unknown[]) => resolveLsofCommandSyncMock(...args),
 }));
 
-vi.mock("../config/paths.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
-  return {
-    ...actual,
-    resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
-  };
-});
+vi.mock("../config/paths.js", () => ({
+  resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
+  resolveStateDir: (env: NodeJS.ProcessEnv = process.env) =>
+    env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
+}));
 
 const { testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
