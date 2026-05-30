@@ -150,6 +150,30 @@ type McporterState = {
   daemonStarts: Map<string, Promise<void>>;
 };
 
+type McporterConfigMode = "generated" | "external";
+
+type ConfiguredMcporterServer =
+  | { mode: "generated"; server: Record<string, unknown> }
+  | { mode: "external" };
+
+const MCPORTER_REMOTE_AUTH_KEYS = new Set(
+  [
+    "auth",
+    "authProvider",
+    "authProviderEnv",
+    "bearerToken",
+    "bearerTokenEnv",
+    "headers",
+    "oauth",
+    "oauthClientId",
+    "oauthClientSecret",
+    "oauthClientSecretEnv",
+    "refreshToken",
+    "refreshTokenEnv",
+    "tokenCacheDir",
+  ].map(normalizeMcporterConfigKey),
+);
+
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.max(1, Math.floor(value))
@@ -171,6 +195,46 @@ function getMcporterState(): McporterState {
     coldStartWarned: false,
     daemonStarts: new Map(),
   }));
+}
+
+function normalizeMcporterConfigKey(key: string): string {
+  return key.toLowerCase().replace(/[_-]/g, "");
+}
+
+function hasMcporterRemoteAuthMaterial(server: Record<string, unknown>): boolean {
+  if (hasMcporterRemoteUrlCredentials(server)) {
+    return true;
+  }
+  return Object.keys(server).some((key) => {
+    const normalized = normalizeMcporterConfigKey(key);
+    return (
+      MCPORTER_REMOTE_AUTH_KEYS.has(normalized) ||
+      normalized.includes("auth") ||
+      normalized.includes("header") ||
+      normalized.includes("secret") ||
+      normalized.includes("token")
+    );
+  });
+}
+
+function hasMcporterRemoteUrlCredentials(server: Record<string, unknown>): boolean {
+  for (const key of ["baseUrl", "url", "serverUrl"]) {
+    const value = server[key];
+    if (typeof value !== "string" || value.length === 0) {
+      continue;
+    }
+    try {
+      const parsed = new URL(value);
+      if (parsed.username.length > 0 || parsed.password.length > 0) {
+        return true;
+      }
+    } catch {
+      if (/^[a-z][a-z0-9+.-]*:\/\/[^/?#@]+@/i.test(value)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function parseMcporterResponseJson(stdout: string): unknown {
@@ -454,6 +518,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly indexPath: string;
   private readonly mcporterConfigPath: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly mcporterEnv: NodeJS.ProcessEnv;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
@@ -526,6 +591,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       // Point it at the nested qmd config directory so per-agent collections are visible.
       QMD_CONFIG_DIR: path.join(this.xdgConfigHome, "qmd"),
       XDG_CACHE_HOME: this.xdgCacheHome,
+      NO_COLOR: "1",
+    };
+    this.mcporterEnv = {
+      ...process.env,
+      PATH: buildQmdProcessPath(process.env.PATH),
       NO_COLOR: "1",
     };
     this.closeSignal = new Promise<void>((resolve) => {
@@ -2342,7 +2412,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!mcporter.enabled) {
       return;
     }
-    await this.ensureMcporterConfig();
+    const configMode = await this.ensureMcporterConfig();
     const state = getMcporterState();
     if (!mcporter.startDaemon) {
       if (!state.coldStartWarned) {
@@ -2353,12 +2423,15 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       return;
     }
-    const daemonKey = this.mcporterConfigPath;
+    const daemonKey = this.mcporterDaemonKey(configMode);
     let daemonStart = state.daemonStarts.get(daemonKey);
     if (!daemonStart) {
       daemonStart = (async () => {
         try {
-          await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
+          await this.runMcporterCommand(["daemon", "start"], {
+            includeGeneratedConfig: configMode === "generated",
+            timeoutMs: 10_000,
+          });
         } catch (err) {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
           // Allow future searches to retry daemon start on transient failures.
@@ -2370,10 +2443,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     await daemonStart;
   }
 
-  private async ensureMcporterConfig(): Promise<void> {
+  private async ensureMcporterConfig(): Promise<McporterConfigMode> {
     await fs.mkdir(path.dirname(this.mcporterConfigPath), { recursive: true });
-    const server =
-      (await this.resolveConfiguredMcporterServer()) ?? this.buildDefaultMcporterQmdServer();
+    const configured = await this.resolveConfiguredMcporterServer();
+    if (configured?.mode === "external") {
+      return "external";
+    }
+    const server = configured?.server ?? this.buildDefaultMcporterQmdServer();
     const config = {
       imports: [],
       mcpServers: {
@@ -2381,6 +2457,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       },
     };
     await this.writeMcporterConfigIfChanged(`${JSON.stringify(config, null, 2)}\n`);
+    return "generated";
   }
 
   private async writeMcporterConfigIfChanged(contents: string): Promise<void> {
@@ -2405,7 +2482,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     };
   }
 
-  private async resolveConfiguredMcporterServer(): Promise<Record<string, unknown> | null> {
+  private async resolveConfiguredMcporterServer(): Promise<ConfiguredMcporterServer | null> {
     const serverName = this.qmd.mcporter.serverName;
     let result: { stdout: string; stderr: string };
     try {
@@ -2454,7 +2531,7 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private toMcporterRawServerEntry(
     serialized: Record<string, unknown>,
-  ): Record<string, unknown> | null {
+  ): ConfiguredMcporterServer | null {
     const server: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(serialized)) {
       if (key === "name" || key === "source" || value === undefined) {
@@ -2466,10 +2543,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (typeof server.command === "string" && server.command.length > 0) {
       const copiedEnv = asRecord(server.env) ?? {};
       server.env = { ...copiedEnv, ...this.buildMcporterQmdEnv() };
-      if (server.lifecycle === undefined) {
+      // startDaemon=true depends on mcporter treating the configured stdio
+      // server as daemon-warm; without lifecycle, mcporter keeps it ephemeral.
+      if (server.lifecycle === undefined && this.qmd.mcporter.startDaemon) {
         server.lifecycle = { mode: "keep-alive", idleTimeoutMs: 300_000 };
       }
-      return server;
+      return { mode: "generated", server };
     }
 
     const hasRemoteEndpoint =
@@ -2477,9 +2556,13 @@ export class QmdMemoryManager implements MemorySearchManager {
       typeof server.url === "string" ||
       typeof server.serverUrl === "string";
     if (hasRemoteEndpoint) {
-      // The explicit generated mcporter config must contain the selected remote
-      // server entry, including its auth metadata, inside this agent's state dir.
-      return server;
+      // The generated per-agent config is persisted under OpenClaw state. Do not
+      // copy remote auth material from a user's mcporter config into that file;
+      // keep using the original mcporter config for authenticated remotes.
+      if (hasMcporterRemoteAuthMaterial(server)) {
+        return { mode: "external" };
+      }
+      return { mode: "generated", server };
     }
 
     return null;
@@ -2511,11 +2594,20 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private buildMcporterProcessEnv(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...this.env };
-    delete env.XDG_CONFIG_HOME;
-    delete env.QMD_CONFIG_DIR;
-    delete env.XDG_CACHE_HOME;
-    return env;
+    return { ...this.mcporterEnv };
+  }
+
+  private mcporterDaemonKey(configMode: McporterConfigMode): string {
+    if (configMode === "generated") {
+      return this.mcporterConfigPath;
+    }
+    return [
+      "external",
+      this.qmd.mcporter.serverName,
+      this.mcporterEnv.MCPORTER_CONFIG ?? "",
+      this.mcporterEnv.XDG_CONFIG_HOME ?? "",
+      this.workspaceDir,
+    ].join(":");
   }
 
   private async runMcporterCommand(
@@ -2547,8 +2639,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     args: string[],
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
-    await this.ensureMcporterConfig();
-    return await this.runMcporterCommand(args, opts);
+    const configMode = await this.ensureMcporterConfig();
+    return await this.runMcporterCommand(args, {
+      ...opts,
+      includeGeneratedConfig: configMode === "generated",
+    });
   }
 
   private async runQmdSearchViaMcporter(
