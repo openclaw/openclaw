@@ -4,7 +4,12 @@ const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
   startCalls: 0,
-  startMode: "hello" as "hello" | "close" | "connect-error-close" | "startup-retry-then-hello",
+  startMode: "hello" as
+    | "hello"
+    | "close"
+    | "connect-error-close"
+    | "repair-then-hello"
+    | "startup-retry-then-hello",
   close: { code: 1008, reason: "pairing required" },
   helloAuth: {
     role: "operator",
@@ -79,7 +84,11 @@ class MockGatewayClient {
           }
           return;
         }
-        if (gatewayClientState.startMode === "connect-error-close") {
+        if (
+          gatewayClientState.startMode === "connect-error-close" ||
+          (gatewayClientState.startMode === "repair-then-hello" &&
+            gatewayClientState.startCalls === 1)
+        ) {
           const onConnectError = this.opts.onConnectError;
           if (typeof onConnectError === "function") {
             onConnectError(
@@ -608,6 +617,25 @@ describe("probeGateway", () => {
       ok: false,
       error: "scope upgrade pending approval (requestId: req-123)",
       close: { code: 1008, reason: "pairing required" },
+    });
+  });
+
+  it("retries loopback probes without device identity after pairing-pending repair failures", async () => {
+    gatewayClientState.startMode = "repair-then-hello";
+
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 5_000,
+      includeDetails: false,
+    });
+
+    expect(gatewayClientState.startCalls).toBe(2);
+    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    expectProbeResultFields(result, {
+      ok: true,
+      error: null,
+      close: null,
     });
   });
 
