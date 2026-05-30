@@ -117,8 +117,17 @@ export function resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
 }
 
 /** Resolves the long terminal turn idle timeout. */
-export function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {
-  return resolvePositiveIntegerTimeoutMs(value, CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS);
+export function resolveCodexTurnTerminalIdleTimeoutMs(
+  value: number | undefined,
+  effectiveRunTimeoutMs?: number,
+): number {
+  // The terminal watchdog is wrapper-owned; Codex turn options do not carry a
+  // timeout budget. Follow the effective run budget without shortening the floor.
+  const defaultMs =
+    effectiveRunTimeoutMs !== undefined && Number.isFinite(effectiveRunTimeoutMs)
+      ? Math.max(CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS, Math.floor(effectiveRunTimeoutMs))
+      : CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
+  return resolvePositiveIntegerTimeoutMs(value, defaultMs);
 }
 
 /** Adds gateway grace time to a caller timeout without overflowing invalid values. */
