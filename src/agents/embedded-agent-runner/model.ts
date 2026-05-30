@@ -77,6 +77,7 @@ type ProviderRuntimeHooks = {
 type StaticCatalogFallbackModel = Model & {
   compat?: ModelCompatConfig;
   contextTokens?: number;
+  params?: Record<string, unknown>;
   mediaInput?: ModelMediaInputConfig;
 };
 
@@ -1025,7 +1026,7 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     modelId,
     providerParams: providerConfig?.params,
-    configuredParams: configuredModel?.params,
+    configuredParams: metadataModel?.params,
   });
   const fallbackTransport = resolveProviderTransport({
     provider,
