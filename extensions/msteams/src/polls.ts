@@ -75,7 +75,7 @@ const MAX_POLLS = 1000;
 const SQLITE_MAX_POLL_ROWS = MAX_POLLS + 1000;
 // Keep worst-case retained vote buckets below plugin-state's per-plugin live row cap.
 const POLL_VOTE_BUCKET_COUNT = 32;
-const MAX_POLL_VOTE_BUCKET_ROWS = MAX_POLLS * POLL_VOTE_BUCKET_COUNT;
+const MAX_POLL_VOTE_BUCKET_ROWS = (MAX_POLLS + 1) * POLL_VOTE_BUCKET_COUNT;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const POLL_LOCK_FILENAME = "msteams-polls.sqlite.lock";
 
