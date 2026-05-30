@@ -30,7 +30,7 @@ import { isRecord } from "../shared/record-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
-import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
+import { createDeepSeekTextEventFilter, type DeepSeekDsmlKind } from "./deepseek-text-filter.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
 import { supportsModelTools } from "./model-tool-support.js";
 import {
@@ -363,6 +363,69 @@ function summarizeResponsesTools(tools: unknown): string {
   const label = maxNames >= names.length ? "names" : "sample";
   const shown = names.slice(0, maxNames).join(",");
   return `count=${tools.length}${shown ? ` ${label}=${shown}` : ""}`;
+}
+
+function resolveOpenAICompletionsDeepSeekDsmlToolNames(
+  params: Record<string, unknown>,
+): ReadonlySet<string> | undefined {
+  if (params.tool_choice === "none") {
+    return undefined;
+  }
+  const toolNames = readOpenAICompletionsToolNames(params.tools);
+  if (toolNames.size === 0) {
+    return undefined;
+  }
+  if (isRecord(params.tool_choice)) {
+    const chosenToolName = readOpenAICompletionsToolChoiceName(params.tool_choice);
+    return chosenToolName && toolNames.has(chosenToolName) ? new Set([chosenToolName]) : undefined;
+  }
+  return toolNames;
+}
+
+function readOpenAICompletionsToolNames(tools: unknown): Set<string> {
+  const names = new Set<string>();
+  if (!Array.isArray(tools)) {
+    return names;
+  }
+  for (const tool of tools) {
+    const name = readOpenAICompletionsToolName(tool);
+    if (name) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
+function readOpenAICompletionsToolName(tool: unknown): string | undefined {
+  if (!isRecord(tool)) {
+    return undefined;
+  }
+  const fn = tool.function;
+  if (isRecord(fn) && typeof fn.name === "string") {
+    const name = fn.name.trim();
+    return name || undefined;
+  }
+  if (typeof tool.name === "string") {
+    const name = tool.name.trim();
+    return name || undefined;
+  }
+  return undefined;
+}
+
+function readOpenAICompletionsToolChoiceName(toolChoice: unknown): string | undefined {
+  if (!isRecord(toolChoice)) {
+    return undefined;
+  }
+  if (typeof toolChoice.name === "string") {
+    const name = toolChoice.name.trim();
+    return name || undefined;
+  }
+  const fn = toolChoice.function;
+  if (!isRecord(fn) || typeof fn.name !== "string") {
+    return undefined;
+  }
+  const name = fn.name.trim();
+  return name || undefined;
 }
 
 function responsesPayloadToolName(tool: unknown): string | undefined {
@@ -2454,8 +2517,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           buildOpenAISdkRequestOptions(model, options?.signal),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
+        const deepSeekDsmlToolNames = resolveOpenAICompletionsDeepSeekDsmlToolNames(params);
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
+          deepSeekDsmlToolNames,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -2477,14 +2542,15 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: unknown): void },
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; deepSeekDsmlToolNames?: ReadonlySet<string> },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
   const compat = getCompat(model as OpenAIModeModel);
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
-    ? createDeepSeekTextFilter()
+    ? createDeepSeekTextEventFilter()
     : null;
+  const deepSeekDsmlToolNames = options?.deepSeekDsmlToolNames;
   type ToolCallBlock = {
     type: "toolCall";
     id: string;
@@ -2504,6 +2570,15 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
+  type PendingDeepSeekDsmlItem =
+    | { type: "toolCall"; invocation: DeepSeekDsmlToolInvocation }
+    | { type: "delta"; delta: CompletionsReasoningDelta };
+  let pendingDeepSeekDsmlItems: PendingDeepSeekDsmlItem[] = [];
+  let pendingDeepSeekPostDsmlBytes = 0;
+  let pendingDeepSeekDsmlInsertIndex: number | null = null;
+  let syntheticDeepSeekToolCallIndex = 0;
+  let hasSyntheticDeepSeekToolCall = false;
+  let sawNativeToolCalls = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const finishCurrentBlock = () => {
@@ -2595,6 +2670,153 @@ async function processOpenAICompletionsStream(
     }
     isFlushingPendingPostToolCallDeltas = false;
   };
+  const startToolCallBlock = (params: {
+    id: string;
+    name: string;
+    thoughtSignature?: string;
+    insertIndex?: number;
+  }) => {
+    const switchingToolCall = currentBlock?.type === "toolCall";
+    finishCurrentBlock();
+    if (switchingToolCall) {
+      currentBlock = null;
+      flushPendingPostToolCallDeltas();
+    }
+    const block: ToolCallBlock = {
+      type: "toolCall",
+      id: params.id,
+      name: params.name,
+      arguments: {},
+      partialArgs: "",
+      ...(params.thoughtSignature ? { thoughtSignature: params.thoughtSignature } : {}),
+    };
+    if (params.insertIndex !== undefined && params.insertIndex >= 0) {
+      output.content.splice(Math.min(params.insertIndex, output.content.length), 0, block);
+    } else {
+      output.content.push(block);
+    }
+    currentBlock = block;
+    stream.push({
+      type: "toolcall_start",
+      contentIndex: output.content.indexOf(block),
+      partial: output,
+    });
+    return block;
+  };
+  const appendToolCallArgumentDelta = (block: ToolCallBlock, text: string) => {
+    if (!text) {
+      return;
+    }
+    const nextArgumentBytes = measureUtf8Bytes(text);
+    const currentBlockArgBytes = toolCallBlockBytes.get(block) ?? 0;
+    if (currentBlockArgBytes + nextArgumentBytes > MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES) {
+      throw new Error("Exceeded tool-call argument buffer limit");
+    }
+    toolCallBlockBytes.set(block, currentBlockArgBytes + nextArgumentBytes);
+    block.partialArgs += text;
+    block.arguments = parseStreamingJson(block.partialArgs);
+    stream.push({
+      type: "toolcall_delta",
+      contentIndex: output.content.indexOf(block),
+      delta: text,
+      partial: output,
+    });
+  };
+  const markSyntheticDeepSeekToolCall = () => {
+    hasSyntheticDeepSeekToolCall = true;
+    if (output.stopReason !== "error" && output.stopReason !== "length") {
+      output.stopReason = "toolUse";
+    }
+  };
+  const hasPendingDeepSeekDsmlToolCalls = () =>
+    pendingDeepSeekDsmlItems.some((item) => item.type === "toolCall");
+  const queueDeepSeekDsmlToolCalls = (kind: DeepSeekDsmlKind, body: string) => {
+    if (!deepSeekDsmlToolNames?.size) {
+      return false;
+    }
+    const invocations = parseDeepSeekDsmlToolInvocations(kind, body).filter((invocation) =>
+      deepSeekDsmlToolNames.has(invocation.name),
+    );
+    if (invocations.length > 0 && pendingDeepSeekDsmlInsertIndex === null) {
+      pendingDeepSeekDsmlInsertIndex = output.content.length;
+    }
+    pendingDeepSeekDsmlItems.push(
+      ...invocations.map((invocation) => ({ type: "toolCall" as const, invocation })),
+    );
+    return invocations.length > 0;
+  };
+  const queuePendingDeepSeekPostDsmlDelta = (next: CompletionsReasoningDelta) => {
+    const nextBytes = measureUtf8Bytes(next.text);
+    if (pendingDeepSeekPostDsmlBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
+      throw new Error("Exceeded post-DSML-tool-call delta buffer limit");
+    }
+    pendingDeepSeekPostDsmlBytes += nextBytes;
+    pendingDeepSeekDsmlItems.push({ type: "delta", delta: next });
+  };
+  const appendOrQueueDeepSeekPostDsmlText = (text: string, forceQueue = false) => {
+    if (forceQueue || (hasPendingDeepSeekDsmlToolCalls() && !sawNativeToolCalls)) {
+      queuePendingDeepSeekPostDsmlDelta({ kind: "text", text });
+      return;
+    }
+    appendVisibleTextDelta(text);
+  };
+  const dropPendingDeepSeekDsmlInvocations = (options?: { preserveInsertIndex?: boolean }) => {
+    pendingDeepSeekDsmlItems = pendingDeepSeekDsmlItems.filter((item) => item.type !== "toolCall");
+    if (!options?.preserveInsertIndex) {
+      pendingDeepSeekDsmlInsertIndex = null;
+    }
+  };
+  const takePendingDeepSeekDsmlInsertIndex = (): number | null => {
+    const insertIndex = pendingDeepSeekDsmlInsertIndex;
+    pendingDeepSeekDsmlInsertIndex = null;
+    return insertIndex;
+  };
+  const appendQueuedDeepSeekDsmlToolCalls = () => {
+    const items = pendingDeepSeekDsmlItems;
+    pendingDeepSeekDsmlItems = [];
+    pendingDeepSeekPostDsmlBytes = 0;
+    let insertIndex = takePendingDeepSeekDsmlInsertIndex();
+    for (const item of items) {
+      if (item.type === "delta") {
+        if (item.delta.kind === "text") {
+          appendVisibleTextDelta(item.delta.text);
+        } else if (currentBlock?.type === "toolCall") {
+          queuePostToolCallDelta(item.delta);
+        } else {
+          appendThinkingDelta(item.delta);
+        }
+        insertIndex = null;
+        continue;
+      }
+      const invocation = item.invocation;
+      const block = startToolCallBlock({
+        id: `call_deepseek_dsml_${syntheticDeepSeekToolCallIndex++}`,
+        name: invocation.name,
+        ...(insertIndex !== null ? { insertIndex: insertIndex++ } : {}),
+      });
+      markSyntheticDeepSeekToolCall();
+      appendToolCallArgumentDelta(block, JSON.stringify(invocation.arguments));
+    }
+  };
+  const flushPendingDeepSeekPostDsmlDeltas = () => {
+    const bufferedItems = pendingDeepSeekDsmlItems;
+    pendingDeepSeekDsmlItems = [];
+    pendingDeepSeekPostDsmlBytes = 0;
+    pendingDeepSeekDsmlInsertIndex = null;
+    for (const item of bufferedItems) {
+      if (item.type === "toolCall") {
+        continue;
+      }
+      const delta = item.delta;
+      if (delta.kind === "text") {
+        appendVisibleTextDelta(delta.text);
+      } else if (currentBlock?.type === "toolCall") {
+        queuePostToolCallDelta(delta);
+      } else {
+        appendThinkingDelta(delta);
+      }
+    }
+  };
   const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
     flushPendingPostToolCallDeltas();
     appendThinkingDeltaInternal(reasoningDelta);
@@ -2613,19 +2835,51 @@ async function processOpenAICompletionsStream(
       appendTextDelta(text);
     }
   };
-  const appendFilteredVisibleTextDelta = (text: string) => {
-    const parts = deepSeekTextFilter?.push(text) ?? [text];
-    for (const part of parts) {
-      appendVisibleTextDelta(part);
+  const appendFilteredVisibleTextDelta = (
+    text: string,
+    options?: { forceDeepSeekPostDsmlQueue?: boolean; suppressDeepSeekDsmlToolCalls?: boolean },
+  ) => {
+    const events = deepSeekTextFilter?.push(text) ?? [{ type: "text" as const, text }];
+    let queuedDsmlToolCallInBatch = false;
+    const suppressDeepSeekDsmlToolCalls =
+      options?.suppressDeepSeekDsmlToolCalls || sawNativeToolCalls;
+    for (const event of events) {
+      if (event.type === "text") {
+        appendOrQueueDeepSeekPostDsmlText(
+          event.text,
+          options?.forceDeepSeekPostDsmlQueue || queuedDsmlToolCallInBatch,
+        );
+        continue;
+      }
+      if (suppressDeepSeekDsmlToolCalls) {
+        if (
+          options?.suppressDeepSeekDsmlToolCalls &&
+          DEEPSEEK_DSML_TOOL_CALL_KINDS.has(event.kind)
+        ) {
+          queuedDsmlToolCallInBatch = true;
+        }
+        continue;
+      }
+      queuedDsmlToolCallInBatch =
+        queueDeepSeekDsmlToolCalls(event.kind, event.body) || queuedDsmlToolCallInBatch;
     }
+    return queuedDsmlToolCallInBatch;
   };
   const flushDeepSeekTextFilterAtEnd = () => {
-    const parts = deepSeekTextFilter?.flush();
-    if (!parts) {
+    const events = deepSeekTextFilter?.flush();
+    if (!events) {
       return;
     }
-    for (const part of parts) {
-      appendVisibleTextDelta(part);
+    let queuedDsmlToolCallInBatch = false;
+    for (const event of events) {
+      if (event.type === "text") {
+        appendOrQueueDeepSeekPostDsmlText(event.text, queuedDsmlToolCallInBatch);
+        continue;
+      }
+      if (!sawNativeToolCalls) {
+        queuedDsmlToolCallInBatch =
+          queueDeepSeekDsmlToolCalls(event.kind, event.body) || queuedDsmlToolCallInBatch;
+      }
     }
   };
   const cooperativeScheduler = createModelStreamCooperativeScheduler(options?.signal);
@@ -2663,15 +2917,34 @@ async function processOpenAICompletionsStream(
       await cooperativeScheduler.afterEvent();
       continue;
     }
+    const hasNativeToolCalls = Boolean(choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0);
+    const nativeReplacesPendingDeepSeekDsml =
+      hasNativeToolCalls && hasPendingDeepSeekDsmlToolCalls();
+    if (hasNativeToolCalls) {
+      sawNativeToolCalls = true;
+      dropPendingDeepSeekDsmlInvocations({
+        preserveInsertIndex: nativeReplacesPendingDeepSeekDsml,
+      });
+    }
+    let forceDeepSeekPostDsmlQueueForChunk = nativeReplacesPendingDeepSeekDsml;
     if (choiceDelta.content) {
       // Structured content can contain visible text and thinking blocks in the
       // same delta, so route each extracted block through the normal stream path.
       const contentDeltas = getCompletionsContentDeltas(choiceDelta.content);
       for (const contentDelta of contentDeltas) {
         if (contentDelta.kind === "text") {
-          appendFilteredVisibleTextDelta(contentDelta.text);
+          forceDeepSeekPostDsmlQueueForChunk =
+            appendFilteredVisibleTextDelta(contentDelta.text, {
+              forceDeepSeekPostDsmlQueue: forceDeepSeekPostDsmlQueueForChunk,
+              suppressDeepSeekDsmlToolCalls: hasNativeToolCalls,
+            }) || forceDeepSeekPostDsmlQueueForChunk;
         } else if (currentBlock?.type === "toolCall") {
           queuePostToolCallDelta(contentDelta);
+        } else if (
+          forceDeepSeekPostDsmlQueueForChunk ||
+          (hasPendingDeepSeekDsmlToolCalls() && !sawNativeToolCalls)
+        ) {
+          queuePendingDeepSeekPostDsmlDelta(contentDelta);
         } else {
           appendThinkingDelta(contentDelta);
         }
@@ -2686,14 +2959,23 @@ async function processOpenAICompletionsStream(
         queuePostToolCallDelta({ ...reasoningDelta });
         continue;
       }
+      if (
+        forceDeepSeekPostDsmlQueueForChunk ||
+        (hasPendingDeepSeekDsmlToolCalls() && !sawNativeToolCalls)
+      ) {
+        queuePendingDeepSeekPostDsmlDelta({ ...reasoningDelta });
+        continue;
+      }
       if (reasoningDelta.kind === "text") {
         appendTextDelta(reasoningDelta.text);
       } else {
         appendThinkingDelta(reasoningDelta);
       }
     }
-    if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
-      for (const toolCall of choiceDelta.tool_calls) {
+    if (hasNativeToolCalls) {
+      const nativeToolCalls = choiceDelta.tool_calls ?? [];
+      let nativeInsertIndex = takePendingDeepSeekDsmlInsertIndex();
+      for (const toolCall of nativeToolCalls) {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
         let block = streamIndex !== undefined ? toolCallBlocksByIndex.get(streamIndex) : undefined;
         if (!block && toolCall.id) {
@@ -2715,7 +2997,12 @@ async function processOpenAICompletionsStream(
             partialArgs: "",
             ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
-          output.content.push(block);
+          if (nativeInsertIndex !== null) {
+            output.content.splice(Math.min(nativeInsertIndex, output.content.length), 0, block);
+            nativeInsertIndex += 1;
+          } else {
+            output.content.push(block);
+          }
           stream.push({
             type: "toolcall_start",
             contentIndex: output.content.indexOf(block),
@@ -2754,15 +3041,25 @@ async function processOpenAICompletionsStream(
           });
         }
       }
+      flushPendingDeepSeekPostDsmlDeltas();
     }
     flushPendingPostToolCallDeltas();
     await cooperativeScheduler.afterEvent();
   }
   flushDeepSeekTextFilterAtEnd();
+  if (!sawNativeToolCalls) {
+    appendQueuedDeepSeekDsmlToolCalls();
+  } else {
+    dropPendingDeepSeekDsmlInvocations();
+  }
+  flushPendingDeepSeekPostDsmlDeltas();
   finishAllToolCallBlocks();
   currentBlock = null;
   flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
+  if (hasSyntheticDeepSeekToolCall && hasToolCalls && output.stopReason === "stop") {
+    output.stopReason = "toolUse";
+  }
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
@@ -2781,6 +3078,146 @@ type CompletionsReasoningDelta =
 
 function shouldFilterDeepSeekDsmlText(compat: ReturnType<typeof getCompat>) {
   return compat.thinkingFormat === "deepseek";
+}
+
+const DEEPSEEK_DSML_TOOL_CALL_KINDS = new Set<DeepSeekDsmlKind>([
+  "tool_calls",
+  "tool_call",
+  "function_calls",
+]);
+
+type DeepSeekDsmlToolInvocation = {
+  name: string;
+  arguments: Record<string, unknown>;
+};
+
+const DEEPSEEK_DSML_INVALID_PARAMETER = Symbol("deepseek-dsml-invalid-parameter");
+
+function parseDeepSeekDsmlToolInvocations(
+  kind: DeepSeekDsmlKind,
+  body: string,
+): DeepSeekDsmlToolInvocation[] {
+  if (!DEEPSEEK_DSML_TOOL_CALL_KINDS.has(kind)) {
+    return [];
+  }
+  const invocations: DeepSeekDsmlToolInvocation[] = [];
+  let offset = 0;
+  const invokePattern = /<[|｜]DSML[|｜]invoke\b([^>]*)>([\s\S]*?)<\/[|｜]DSML[|｜]invoke>/g;
+  for (const match of body.matchAll(invokePattern)) {
+    const matchIndex = match.index ?? 0;
+    if (body.slice(offset, matchIndex).trim() !== "") {
+      return [];
+    }
+    offset = matchIndex + match[0].length;
+    const attributes = parseDeepSeekDsmlAttributes(match[1] ?? "");
+    const name = attributes.name?.trim();
+    if (!name) {
+      continue;
+    }
+    const args = parseDeepSeekDsmlToolArguments(match[2] ?? "");
+    if (!args) {
+      continue;
+    }
+    invocations.push({ name, arguments: args });
+  }
+  return body.slice(offset).trim() === "" ? invocations : [];
+}
+
+function parseDeepSeekDsmlToolArguments(body: string): Record<string, unknown> | null {
+  const args: Record<string, unknown> = {};
+  let hasParameter = false;
+  let offset = 0;
+  const parameterPattern =
+    /<[|｜]DSML[|｜]parameter\b([^>]*)>([\s\S]*?)<\/[|｜]DSML[|｜]parameter>/g;
+  for (const match of body.matchAll(parameterPattern)) {
+    const matchIndex = match.index ?? 0;
+    if (body.slice(offset, matchIndex).trim() !== "") {
+      return null;
+    }
+    offset = matchIndex + match[0].length;
+    const attributes = parseDeepSeekDsmlAttributes(match[1] ?? "");
+    const name = attributes.name?.trim();
+    if (!name) {
+      return null;
+    }
+    hasParameter = true;
+    const value = parseDeepSeekDsmlParameterValue(attributes, match[2] ?? "");
+    if (value === DEEPSEEK_DSML_INVALID_PARAMETER) {
+      return null;
+    }
+    args[name] = value;
+  }
+  if (hasParameter) {
+    if (body.slice(offset).trim() !== "") {
+      return null;
+    }
+    return args;
+  }
+  const trimmed = decodeDeepSeekDsmlText(body).trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseDeepSeekDsmlParameterValue(
+  attributes: Record<string, string>,
+  rawValue: string,
+): unknown {
+  const text = decodeDeepSeekDsmlText(rawValue);
+  const trimmed = text.trim();
+  if (attributes.string === "false" || attributes.json === "true") {
+    try {
+      return JSON.parse(trimmed) as unknown;
+    } catch {
+      return DEEPSEEK_DSML_INVALID_PARAMETER;
+    }
+  }
+  if (attributes.boolean === "true") {
+    const lowerText = trimmed.toLowerCase();
+    if (lowerText === "true") {
+      return true;
+    }
+    if (lowerText === "false") {
+      return false;
+    }
+    return DEEPSEEK_DSML_INVALID_PARAMETER;
+  }
+  if (attributes.number === "true") {
+    if (!trimmed) {
+      return DEEPSEEK_DSML_INVALID_PARAMETER;
+    }
+    const value = Number(trimmed);
+    return Number.isFinite(value) ? value : DEEPSEEK_DSML_INVALID_PARAMETER;
+  }
+  return text;
+}
+
+function parseDeepSeekDsmlAttributes(text: string): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const attributePattern = /([A-Za-z_][\w:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+  for (const match of text.matchAll(attributePattern)) {
+    const name = match[1];
+    if (!name) {
+      continue;
+    }
+    attributes[name] = decodeDeepSeekDsmlText(match[2] ?? match[3] ?? "");
+  }
+  return attributes;
+}
+
+function decodeDeepSeekDsmlText(text: string): string {
+  return text
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
 }
 
 function getCompletionsContentDeltas(content: unknown): CompletionsReasoningDelta[] {
@@ -3767,6 +4204,7 @@ export const testing = {
   enforceCodeModeResponsesToolSurface,
   sanitizeOpenAICodexResponsesParams,
   buildOpenAICompletionsClientConfig,
+  resolveOpenAICompletionsDeepSeekDsmlToolNames,
   processOpenAICompletionsStream,
   processResponsesStream,
   formatModelTransportDebugBaseUrl,

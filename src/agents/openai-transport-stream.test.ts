@@ -61,6 +61,10 @@ function createAssistantOutput(model: Model<"openai-completions">): OpenAIComple
   };
 }
 
+function withDeepSeekDsmlToolNames(...names: string[]) {
+  return { deepSeekDsmlToolNames: new Set(names) };
+}
+
 function createResponsesAssistantOutput(
   model: Model<"azure-openai-responses">,
 ): OpenAIResponsesOutput {
@@ -1649,6 +1653,7 @@ describe("openai transport stream", () => {
       output,
       model,
       { push: (event) => events.push(event as CapturedStreamEvent) },
+      withDeepSeekDsmlToolNames("read"),
     );
 
     expect(output.content).toEqual([
@@ -1662,6 +1667,728 @@ describe("openai transport stream", () => {
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("recovers observed DeepSeek DSML parameter tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  'before <｜DSML｜tool_calls><｜DSML｜invoke name="session_status"><｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+      withDeepSeekDsmlToolNames("session_status"),
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "before " },
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_0",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("preserves DeepSeek DSML string flag argument semantics", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-parameter-flags",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="write"><|DSML|parameter name="count" string="false">5</|DSML|parameter><|DSML|parameter name="body" string="true">  keep whitespace\n</|DSML|parameter></|DSML|invoke></|DSML|tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("write"),
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_0",
+        name: "write",
+        arguments: { count: 5, body: "  keep whitespace\n" },
+        partialArgs: '{"count":5,"body":"  keep whitespace\\n"}',
+      },
+    ]);
+  });
+
+  it("recovers split DeepSeek DSML JSON tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: '<|DSML|tool_calls><|DSML|invoke name="read">',
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: '{"path":"/tmp/repro.md"}</|DSML|invoke></|DSML|tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("read"),
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_0",
+        name: "read",
+        arguments: { path: "/tmp/repro.md" },
+        partialArgs: '{"path":"/tmp/repro.md"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
+  it("keeps visible text between multiple recovered DeepSeek DSML tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-tool-text-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/one.md"}</|DSML|invoke></|DSML|tool_calls> between <|DSML|tool_calls><|DSML|invoke name="write">{"path":"/tmp/two.md"}</|DSML|invoke></|DSML|tool_calls> after',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("read", "write"),
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_0",
+        name: "read",
+        arguments: { path: "/tmp/one.md" },
+        partialArgs: '{"path":"/tmp/one.md"}',
+      },
+      { type: "text", text: " between " },
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "write",
+        arguments: { path: "/tmp/two.md" },
+        partialArgs: '{"path":"/tmp/two.md"}',
+      },
+      { type: "text", text: " after" },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
+  it("keeps structured thinking after recovered DeepSeek DSML tool calls ordered after the tool", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-tool-thinking",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: [
+                  '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/repro.md"}</|DSML|invoke></|DSML|tool_calls>',
+                  { type: "thinking", text: "considering" },
+                  { type: "text", text: " after" },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("read"),
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_0",
+        name: "read",
+        arguments: { path: "/tmp/repro.md" },
+        partialArgs: '{"path":"/tmp/repro.md"}',
+      },
+      { type: "thinking", thinking: "considering", thinkingSignature: "content" },
+      { type: "text", text: " after" },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
+  it("recovers DeepSeek DSML tool-call wrapper spelling variants", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-tool-call-variant",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_call><|DSML|invoke name="read">{"path":"/tmp/repro.md"}</|DSML|invoke></|DSML|tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("read"),
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_0",
+        name: "read",
+        arguments: { path: "/tmp/repro.md" },
+        partialArgs: '{"path":"/tmp/repro.md"}',
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
+  it("does not recover DeepSeek DSML wrappers with noisy non-invoke text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-noisy-wrapper",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  'before <|DSML|tool_calls>noise <|DSML|invoke name="read">{"path":"/tmp/repro.md"}</|DSML|invoke> trailing</|DSML|tool_calls> after',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("read"),
+    );
+
+    expect(output.content).toEqual([{ type: "text", text: "before  after" }]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("strips DeepSeek DSML tool calls without recovery when tools are disabled", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-tool-no-tools",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  'before <|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/repro.md"}</|DSML|invoke></|DSML|tool_calls> after',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([{ type: "text", text: "before  after" }]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("does not recover DeepSeek DSML calls for undeclared tool names", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-unknown-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  'before <|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/repro.md"}</|DSML|invoke></|DSML|tool_calls> after',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("write"),
+    );
+
+    expect(output.content).toEqual([{ type: "text", text: "before  after" }]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("does not recover malformed DeepSeek DSML parameter bodies", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-malformed-parameter",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="write"><|DSML|parameter name="path" string="true">/tmp/repro.md</|DSML|parameter><|DSML|parameter name="content" string="true">unterminated</|DSML|invoke></|DSML|tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("write"),
+    );
+
+    expect(output.content).toEqual([]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("does not recover malformed typed DeepSeek DSML parameters", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-malformed-typed-parameters",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="write"><|DSML|parameter name="dryRun" boolean="true"></|DSML|parameter></|DSML|invoke><|DSML|invoke name="limit"><|DSML|parameter name="count" number="true"> </|DSML|parameter></|DSML|invoke></|DSML|tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("write", "limit"),
+    );
+
+    expect(output.content).toEqual([]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("recovers zero-argument DeepSeek DSML tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-empty-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="refresh_status"></|DSML|invoke></|DSML|tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("refresh_status"),
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_0",
+        name: "refresh_status",
+        arguments: {},
+        partialArgs: "{}",
+      },
+    ]);
+    expect(output.stopReason).toBe("toolUse");
+  });
+
+  it("does not promote incomplete DeepSeek DSML invokes", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-malformed-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: '<|DSML|tool_calls><|DSML|invoke name="session_status">',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("session_status"),
+    );
+
+    expect(output.content).toEqual([]);
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("does not duplicate split DeepSeek DSML shadows when native tool calls are present", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-native-split-shadow-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: '<|DSML|tool_calls><|DSML|invoke name="read">',
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-native-split-shadow-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: '{"path":"/tmp/shadow.md"}</|DSML|invoke></|DSML|tool_calls>',
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("read"),
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+    ]);
+  });
+
+  it("keeps visible text after queued DeepSeek DSML shadows when native tool calls arrive later", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-native-after-shadow-text",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/shadow.md"}</|DSML|invoke></|DSML|tool_calls> visible',
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-native-after-shadow-text",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("read"),
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+      { type: "text", text: " visible" },
+    ]);
+  });
+
+  it("keeps same-chunk visible text after native tool calls that replace queued DSML shadows", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-native-after-shadow-same-chunk-text",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/shadow.md"}</|DSML|invoke></|DSML|tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-native-after-shadow-same-chunk-text",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: " after",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+      withDeepSeekDsmlToolNames("read"),
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+      { type: "text", text: " after" },
+    ]);
   });
 
   it("preserves DeepSeek visible content before same-chunk native tool calls", async () => {
@@ -1712,7 +2439,7 @@ describe("openai transport stream", () => {
     ]);
   });
 
-  it("filters DeepSeek DSML text queued after native tool calls", async () => {
+  it("keeps visible text after parseable DeepSeek DSML shadows that follow native tool calls", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
@@ -1751,7 +2478,24 @@ describe("openai transport stream", () => {
             {
               index: 0,
               delta: {
-                content: "<|DSML|tool_calls>shadow</|DSML|tool_calls> visible",
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/shadow.md"}</|DSML|invoke></|DSML|tool_calls> visible',
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-post-tool-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: " second",
               },
               logprobs: null,
               finish_reason: null,
@@ -1762,6 +2506,7 @@ describe("openai transport stream", () => {
       output,
       model,
       { push: (event) => events.push(event as CapturedStreamEvent) },
+      withDeepSeekDsmlToolNames("read"),
     );
 
     expect(output.content).toEqual([
@@ -1772,9 +2517,10 @@ describe("openai transport stream", () => {
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
       },
-      { type: "text", text: " visible" },
+      { type: "text", text: " visible second" },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
+    expect(JSON.stringify(events)).not.toContain("shadow.md");
   });
 
   it("keeps DeepSeek DSML state across native tool-call chunks", async () => {
@@ -6364,6 +7110,33 @@ describe("openai transport stream", () => {
 
     expect(params).toHaveProperty("tools");
     expect(params).toHaveProperty("tool_choice", "required");
+  });
+
+  it("narrows DeepSeek DSML recovery to top-level OpenAI-compatible tool_choice names", () => {
+    const tools = [
+      { type: "function", function: { name: "read" } },
+      { type: "function", function: { name: "write" } },
+      { type: "web_search" },
+    ];
+
+    const toolNames = testing.resolveOpenAICompletionsDeepSeekDsmlToolNames({
+      tools,
+      tool_choice: { type: "tool", name: "write" },
+    });
+
+    expect([...(toolNames ?? [])]).toEqual(["write"]);
+    expect(
+      testing.resolveOpenAICompletionsDeepSeekDsmlToolNames({
+        tools,
+        tool_choice: { type: "tool", name: "web_search" },
+      }),
+    ).toBeUndefined();
+    expect(
+      testing.resolveOpenAICompletionsDeepSeekDsmlToolNames({
+        tools,
+        tool_choice: { type: "tool" },
+      }),
+    ).toBeUndefined();
   });
 
   it("omits empty tools and tool_choice for proxy-like openai-completions endpoints when context.tools is []", () => {
