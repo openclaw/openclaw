@@ -1690,6 +1690,11 @@ export async function dispatchReplyFromConfig(
     sourceReplyDeliveryMode === "message_tool_only"
       ? { ...result, sourceReplyDeliveryMode }
       : result;
+  const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
+  const shouldDeliverPluginBindingReply =
+    !suppressAutomaticSourceDelivery ||
+    ctx.InboundEventKind !== "room_event" ||
+    explicitCommandTurnCtx;
 
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
@@ -1774,10 +1779,11 @@ export async function dispatchReplyFromConfig(
 
       switch (targetedClaimOutcome.status) {
         case "handled": {
-          if (targetedClaimOutcome.result.reply) {
+          if (targetedClaimOutcome.result.reply && shouldDeliverPluginBindingReply) {
             // A bound plugin's reply is the explicit output for this claimed turn,
             // not an automatic agent final; message-tool-only suppression must not
-            // turn a successful binding into a silent channel response.
+            // turn normal user-request bindings into silent channel responses.
+            // Ambient room events keep the same privacy guard as final replies.
             await deliverBindingPayload(targetedClaimOutcome.result.reply, "terminal");
           }
           markIdle("plugin_binding_dispatch");
@@ -2780,7 +2786,6 @@ export async function dispatchReplyFromConfig(
     // suppressed in room_event. sendPolicy: deny still suppresses everything.
     // Uses the same helper as the source-reply visibility policy so the bypass
     // and the policy stay aligned.
-    const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
       !sendPolicyDenied &&

@@ -7104,6 +7104,32 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         } as OpenClawConfig,
         expectedClaim: { channel: "discord" },
         pluginReply: { text: "Codex native reply" },
+        expectPluginReplyDelivered: true,
+      },
+      {
+        name: "suppresses ambient room_event plugin reply",
+        bindingId: "binding-message-tool-room-event",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:room-event-test",
+        },
+        ctx: {
+          Provider: "discord",
+          Surface: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "discord:channel:room-event-test",
+          To: "discord:channel:room-event-test",
+          AccountId: "default",
+          ChatType: "group",
+          InboundEventKind: "room_event",
+          Body: "observed message",
+          SessionKey: "agent:main:discord:channel:room-event-test",
+        },
+        cfg: emptyConfig,
+        expectedClaim: { channel: "discord" },
+        pluginReply: { text: "Codex ambient room event reply" },
+        expectPluginReplyDelivered: false,
       },
     ] satisfies Array<{
       name: string;
@@ -7114,6 +7140,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyOptions?: { sourceReplyDeliveryMode: "message_tool_only" };
       expectedClaim: Record<string, unknown>;
       pluginReply?: ReplyPayload;
+      expectPluginReplyDelivered?: boolean;
     }>,
   )("routes plugin-owned bindings under message-tool-only source delivery: $name", async (params) => {
     setNoAbort();
@@ -7174,7 +7201,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       }),
     );
     expect(replyResolver).not.toHaveBeenCalled();
-    if (params.pluginReply) {
+    if (params.expectPluginReplyDelivered) {
       expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(params.pluginReply);
     } else {
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
