@@ -118,6 +118,7 @@ export type SkillProposalUpdateInput = {
   workspaceDir: string;
   config?: OpenClawConfig;
   skillName: string;
+  description?: string;
   content: string;
   supportFiles?: SkillProposalSupportFileInput[];
   createdBy?: SkillProposalSource;

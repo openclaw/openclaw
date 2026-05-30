@@ -80,7 +80,7 @@ const SkillWorkshopToolSchema = Type.Object(
       Type.String({
         maxLength: 160,
         description:
-          "Skill description for action=create or action=revise. Keep it concise; max 160 bytes.",
+          "Skill description for action=create, action=update, or action=revise. Keep it concise; max 160 bytes.",
       }),
     ),
     skill_name: Type.Optional(
@@ -225,6 +225,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             required: true,
             label: "skill_name",
           }),
+          description: readStringParam(params, "description"),
           content: proposalContent,
           supportFiles,
           createdBy: "skill-workshop",

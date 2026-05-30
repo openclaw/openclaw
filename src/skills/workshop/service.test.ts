@@ -672,6 +672,44 @@ describe("skill workshop proposals", () => {
         content: "# Description Revision\n",
       }),
     ).rejects.toThrow("proposal description is too large");
+
+    const longDescriptionWorkspace = await makeWorkspace();
+    const longDescriptionSkillDir = path.join(
+      longDescriptionWorkspace,
+      "skills",
+      "long-description-skill",
+    );
+    await writeSkill({
+      dir: longDescriptionSkillDir,
+      name: "long-description-skill",
+      description: "x".repeat(433),
+      body: "# Long Description Skill\n\nExisting body.\n",
+    });
+
+    const updateWithDerivedDescription = await proposeUpdateSkill({
+      workspaceDir: longDescriptionWorkspace,
+      skillName: "long-description-skill",
+      content: "# Long Description Skill\n\nUpdated body.\n",
+    });
+    expect(
+      Buffer.byteLength(updateWithDerivedDescription.record.description, "utf8"),
+    ).toBeLessThanOrEqual(160);
+
+    const updateWithSuppliedDescription = await proposeUpdateSkill({
+      workspaceDir: longDescriptionWorkspace,
+      skillName: "long-description-skill",
+      description: "Short update description",
+      content: "# Long Description Skill\n\nSecond updated body.\n",
+    });
+    expect(updateWithSuppliedDescription.record.description).toBe("Short update description");
+    await expect(
+      proposeUpdateSkill({
+        workspaceDir: longDescriptionWorkspace,
+        skillName: "long-description-skill",
+        description: "x".repeat(161),
+        content: "# Long Description Skill\n\nThird updated body.\n",
+      }),
+    ).rejects.toThrow("proposal description is too large");
   });
 
   it("quarantines unsafe proposals during apply", async () => {

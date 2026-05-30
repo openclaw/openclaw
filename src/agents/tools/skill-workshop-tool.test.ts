@@ -261,6 +261,22 @@ describe("skill_workshop tool", () => {
       ),
     ).resolves.toContain("Use weather API details.");
 
+    const update = await tool.execute("call-update", {
+      action: "update",
+      skill_name: "weather-planner",
+      description: "Refresh weather planning steps",
+      proposal_content: "# Weather Planner\n\nCheck weather, alerts, and timing.\n",
+    });
+
+    expect((update.content[0] as { text: string }).text).toBe(
+      `Created skill update proposal ${(update.details as { id: string }).id} (pending) for weather-planner.`,
+    );
+    expect(update.details).toMatchObject({
+      status: "pending",
+      kind: "update",
+      skillKey: "weather-planner",
+    });
+
     const rejected = await tool.execute("call-3", {
       action: "create",
       name: "Rejected Skill",

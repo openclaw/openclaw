@@ -649,6 +649,7 @@ export const SkillsProposalUpdateParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
     skillName: NonEmptyString,
+    description: Type.Optional(NonEmptyString),
     content: SkillProposalContentString,
     supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
     goal: Type.Optional(Type.String()),

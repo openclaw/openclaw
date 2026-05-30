@@ -349,6 +349,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           config: resolved.cfg,
           agentId: resolved.agentId,
           skillName: params.skillName,
+          description: params.description,
           content: params.content,
           supportFiles: params.supportFiles,
           createdBy: "gateway",

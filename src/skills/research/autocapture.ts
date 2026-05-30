@@ -79,6 +79,7 @@ export async function runSkillResearchAutoCapture(params: {
             config: params.config,
             agentId: params.ctx.agentId,
             skillName: proposal.skillName,
+            description: proposal.description,
             content: buildAutoCaptureUpdateContent(existingSkill, proposal.content),
             createdBy: "skill-workshop",
             goal: proposal.goal,

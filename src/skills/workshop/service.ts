@@ -298,14 +298,14 @@ export async function proposeUpdateSkill(
   if (currentContent === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
   }
-  assertProposalDescriptionWithinLimit(targetSkill.description);
+  const description = resolveUpdateProposalDescription(input.description, targetSkill.description);
   assertProposalContentWithinLimit(input.content, config.maxSkillBytes);
 
   const supportFiles = prepareSkillProposalSupportFiles(input.supportFiles);
   const now = new Date().toISOString();
   const proposalContent = renderProposalMarkdown({
     name: targetSkill.skillKey,
-    description: targetSkill.description,
+    description,
     content: input.content,
     fallbackFrontmatterContent: currentContent,
     date: now,
@@ -319,7 +319,7 @@ export async function proposeUpdateSkill(
     kind: "update",
     status: "pending",
     title: `Update ${targetSkill.name}`,
-    description: targetSkill.description,
+    description,
     createdAt: now,
     updatedAt: now,
     createdBy: input.createdBy ?? "skill-workshop",
@@ -760,6 +760,32 @@ function assertProposalDescriptionWithinLimit(description: string): void {
       `Skill proposal description is too large (${sizeBytes} bytes, max ${MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES}).`,
     );
   }
+}
+
+function resolveUpdateProposalDescription(
+  inputDescription: string | undefined,
+  currentDescription: string,
+): string {
+  const supplied = normalizeOptionalString(inputDescription);
+  if (supplied) {
+    assertProposalDescriptionWithinLimit(supplied);
+    return supplied;
+  }
+  return truncateUtf8(currentDescription.trim(), MAX_SKILL_PROPOSAL_DESCRIPTION_BYTES);
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  let out = "";
+  let sizeBytes = 0;
+  for (const char of value) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (sizeBytes + charBytes > maxBytes) {
+      break;
+    }
+    out += char;
+    sizeBytes += charBytes;
+  }
+  return out.trimEnd();
 }
 
 function assertProposalContentWithinLimit(content: string, maxSkillBytes: number): void {

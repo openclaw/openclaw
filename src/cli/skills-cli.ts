@@ -604,6 +604,7 @@ export function registerSkillsCli(program: Command) {
       "--proposal-dir <path>",
       "Path to proposal directory with PROPOSAL.md and UTF-8 text support files",
     )
+    .option("--description <text>", "Concise proposal description")
     .option("--goal <text>", "Proposal or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
@@ -613,6 +614,7 @@ export function registerSkillsCli(program: Command) {
         opts: {
           proposal?: string;
           proposalDir?: string;
+          description?: string;
           goal?: string;
           evidence?: string;
           json?: boolean;
@@ -631,6 +633,7 @@ export function registerSkillsCli(program: Command) {
             config,
             agentId,
             skillName: skill,
+            description: opts.description,
             content: draft.content,
             supportFiles: draft.supportFiles,
             createdBy: "cli",
