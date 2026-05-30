@@ -102,18 +102,3 @@ export async function listMemoryHostPublicArtifacts(params: {
   }
   return artifacts;
 }
-
-export function listMemoryWorkspaceAgentIds(params: { cfg: OpenClawConfig }): string[] {
-  const agentIds: string[] = [];
-  const seen = new Set<string>();
-  for (const workspace of resolveMemoryDreamingWorkspaces(params.cfg)) {
-    for (const agentId of workspace.agentIds) {
-      if (seen.has(agentId)) {
-        continue;
-      }
-      seen.add(agentId);
-      agentIds.push(agentId);
-    }
-  }
-  return agentIds;
-}

@@ -50,6 +50,27 @@ function createGatewayAudit({
   });
 }
 
+async function writeSystemdUnitForAudit(home: string, lines: string[]) {
+  const unitDir = path.join(home, ".config", "systemd", "user");
+  const unitPath = path.join(unitDir, "openclaw-gateway.service");
+  await fs.mkdir(unitDir, { recursive: true });
+  await fs.writeFile(
+    unitPath,
+    [
+      "[Unit]",
+      "Description=OpenClaw Gateway",
+      "[Service]",
+      ...lines,
+      "ExecStart=/usr/bin/node gateway",
+      "",
+      "[Install]",
+      "WantedBy=default.target",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 function expectTokenAudit(
   audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
   {
@@ -332,6 +353,9 @@ describe("auditGatewayServiceConfig", () => {
     expect(
       readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=0"]),
     ).toBe(undefined);
+    expect(
+      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=65536"]),
+    ).toBe(undefined);
   });
 
   it("flags gateway service port drift from the expected config port", async () => {
@@ -356,6 +380,28 @@ describe("auditGatewayServiceConfig", () => {
     });
   });
 
+  it("flags explicit invalid gateway service ports", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port=65536"],
+        environment: {},
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    );
+    expect(issue).toStrictEqual({
+      code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
+      message: "Gateway service port does not match current gateway config.",
+      detail: "65536 -> 18888",
+      level: "recommended",
+    });
+  });
+
   it("accepts gateway service ports that match the expected config port", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
@@ -376,6 +422,73 @@ describe("auditGatewayServiceConfig", () => {
       serviceToken: "old-token",
     });
     expectTokenAudit(audit, { embedded: true, mismatch: true });
+  });
+
+  it.each(["process", "none"])(
+    `warns when KillMode is %s in explicit unit file`,
+    async (killMode) => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
+      await writeSystemdUnitForAudit(home, [
+        "After=network-online.target",
+        "Wants=network-online.target",
+        "RestartSec=5",
+        `KillMode=${killMode}`,
+      ]);
+
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: home },
+        platform: "linux",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/bin:/bin" },
+        },
+      });
+      expect(
+        audit.issues.some(
+          (entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("does not warn when KillMode is control-group", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "KillMode=control-group",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone),
+    ).toBe(false);
+  });
+
+  it("accepts systemd RestartSec values with seconds suffixes", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-restartsec-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5s",
+      "KillMode=control-group",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.systemdRestartSec)).toBe(false);
   });
 
   it("flags embedded service token even when it matches config token", async () => {

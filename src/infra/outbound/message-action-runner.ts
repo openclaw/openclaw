@@ -1,8 +1,8 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "../../agents/tools/common.js";
@@ -30,6 +30,7 @@ import {
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { stripPlainTextToolCallBlocks } from "../../plugin-sdk/tool-payload.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
@@ -864,7 +865,7 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
-  message = stripUnsupportedCitationControlMarkers(parsed.text);
+  message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text));
   actionParams.message = message;
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;
@@ -1173,9 +1174,8 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
         throw new Error("pollOption requires at least two values");
       }
       const allowMultiselect = readBooleanParam(params, "pollMulti") ?? false;
-      const durationHours = readNumberParam(params, "pollDurationHours", {
-        integer: true,
-        strict: true,
+      const durationHours = readPositiveIntegerParam(params, "pollDurationHours", {
+        message: "pollDurationHours must be a positive integer",
       });
 
       return {
@@ -1354,17 +1354,21 @@ export async function runMessageAction(
     requesterSenderId: input.requesterSenderId,
     senderIsOwner: input.senderIsOwner,
   });
+  const structuredAttachmentMode = action === "send" ? "all" : "selected";
 
   await normalizeSandboxMediaParams({
     args: params,
     mediaPolicy: normalizationPolicy,
     extraParamKeys: extraActionMediaSourceParamKeys,
+    structuredAttachments: structuredAttachmentMode,
   });
 
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg,
     agentId: resolvedAgentId,
-    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys),
+    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
+      structuredAttachments: structuredAttachmentMode,
+    }),
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
     accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
@@ -1386,6 +1390,7 @@ export async function runMessageAction(
     action,
     dryRun,
     mediaPolicy,
+    extraParamKeys: extraActionMediaSourceParamKeys,
   });
 
   const resolvedTarget = await resolveActionTarget({

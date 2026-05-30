@@ -5,7 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
+import {
+  clearContextEngineRuntimeQuarantine,
+  clearContextEnginesForOwner,
+  registerContextEngineForOwner,
+  resolveContextEngine,
+} from "../../context-engine/registry.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -13,15 +21,16 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
+  dropPreSessionStartAnnouncePairs,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
   sanitizeChatSendMessageInput,
@@ -131,6 +140,204 @@ describe("waitForAgentJob", () => {
         endedAt: 200,
         timeoutPhase: "provider",
         providerStarted: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a recorded hard timeout when a later lifecycle error arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-late-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const firstWait = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await firstWait, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt: 100,
+          endedAt: 250,
+          error: "late rejection",
+        },
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const secondWait = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(secondWait, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending hard timeout when a late lifecycle error arrives during grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-late-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt: 100,
+          endedAt: 250,
+          error: "late rejection",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await waitPromise, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending hard timeout when a late softer timeout arrives during grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-hard-timeout-late-soft-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 250,
+          aborted: true,
+          timeoutPhase: "gateway_draining",
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await waitPromise, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+
+      const cached = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(cached, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending hard timeout when a late lifecycle completion arrives during grace", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-late-completion-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+        },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 250,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expectRecordFields(await waitPromise, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
       });
     } finally {
       vi.useRealTimers();
@@ -333,6 +540,52 @@ describe("waitForAgentJob", () => {
     expect(fresh?.status).toBe("ok");
     expect(fresh?.startedAt).toBe(200);
     expect(fresh?.endedAt).toBe(210);
+  });
+
+  it("surfaces pending error diagnostics when outer timeout fires before error grace period", async () => {
+    // Preserve the retry grace: the caller timeout may carry the pending error
+    // reason, but it must not cache a terminal error before a later start can
+    // cancel the pending snapshot.
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", error: "transient-auth-failure" },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("timeout");
+      expect(result?.error).toBe("transient-auth-failure");
+      expect(result?.pendingError).toBe(true);
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 12_000 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 12_000, endedAt: 12_100 },
+      });
+
+      const recovered = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(recovered, {
+        status: "ok",
+        startedAt: 12_000,
+        endedAt: 12_100,
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1066,6 +1319,203 @@ describe("projectRecentChatDisplayMessages", () => {
         timestamp: 3,
       },
     ]);
+  });
+});
+
+describe("dropPreSessionStartAnnouncePairs (#85648)", () => {
+  const announceProvenance = {
+    kind: "inter_session",
+    sourceSessionKey: "agent:main:subagent:child",
+    sourceChannel: "internal",
+    sourceTool: "subagent_announce",
+  };
+  const cutoff = 1_700_000_000_000;
+
+  it("drops a pre-cutoff announce user message together with its adjacent assistant reply", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "real prior" }],
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 86_400_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff - 86_400_000 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 3, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fanfic lore-bible summary" }],
+        __openclaw: { seq: 4, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "fresh user turn" }],
+        __openclaw: { seq: 5, recordTimestampMs: cutoff + 5_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out.map((m) => asOptionalRecord(asOptionalRecord(m)?.["__openclaw"])?.["seq"])).toEqual([
+      1, 2, 5,
+    ]);
+  });
+
+  it("drops imported CLI-shaped announce pairs using timestamp and text fallback", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [
+          "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+          "This content was routed by OpenClaw from another session or internal tool.",
+        ].join("\n"),
+        timestamp: cutoff - 1_000,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "stale imported assistant reply" }],
+        timestamp: cutoff - 500,
+      },
+      {
+        role: "user",
+        content: "fresh imported turn",
+        timestamp: cutoff + 1_000,
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual([messages[2]]);
+  });
+
+  it("keeps a mid-session announce pair whose timestamp is at or after the cutoff", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff + 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "current-session reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff + 2_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual(messages);
+  });
+
+  it("keeps an adjacent assistant reply when only the announce user predates the cutoff", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fresh-session reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff + 1_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual([messages[1]]);
+  });
+
+  it("keeps an adjacent assistant reply when its record timestamp is missing", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "timestampless reply" }],
+        __openclaw: { seq: 2 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual([messages[1]]);
+  });
+
+  it("returns the input unchanged when sessionStartedAt is undefined", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "would-be-stripped reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff - 1_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, undefined);
+    expect(out).toBe(messages);
+  });
+
+  it("drops a trailing pre-cutoff announce user message even with no assistant reply", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "real prior" }],
+        __openclaw: { seq: 1, recordTimestampMs: cutoff + 1_000 },
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 2, recordTimestampMs: cutoff - 1_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out.map((m) => asOptionalRecord(asOptionalRecord(m)?.["__openclaw"])?.["seq"])).toEqual([
+      1,
+    ]);
+  });
+
+  it("does not drop a normal pre-cutoff user message that is not a subagent_announce", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "older user turn" }],
+        __openclaw: { seq: 1, recordTimestampMs: cutoff - 1_000 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "older reply" }],
+        __openclaw: { seq: 2, recordTimestampMs: cutoff - 1_000 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual(messages);
+  });
+
+  it("does not drop a pre-cutoff announce when its record timestamp is missing", () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Inter-session message] sourceTool=subagent_announce" }],
+        provenance: announceProvenance,
+        __openclaw: { seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "reply" }],
+        __openclaw: { seq: 2 },
+      },
+    ];
+    const out = dropPreSessionStartAnnouncePairs(messages, cutoff);
+    expect(out).toEqual(messages);
   });
 });
 
@@ -2792,6 +3242,7 @@ describe("gateway healthHandlers.status scope handling", () => {
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
   let pricingState: typeof import("../model-pricing-cache-state.js");
+  const contextEngineTestOwner = "plugin:health-test";
 
   beforeAll(async () => {
     ({ healthHandlers } = await import("./health.js"));
@@ -2800,10 +3251,15 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    registerLegacyContextEngine();
+    clearContextEnginesForOwner(contextEngineTestOwner);
+    clearContextEngineRuntimeQuarantine();
   });
 
   afterEach(() => {
     pricingState.clearGatewayModelPricingCacheState();
+    clearContextEnginesForOwner(contextEngineTestOwner);
+    clearContextEngineRuntimeQuarantine();
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -3005,6 +3461,83 @@ describe("gateway healthHandlers.health cache freshness", () => {
       probe: false,
       includeSensitive: false,
     });
+  });
+
+  it("merges live context-engine quarantine state into cached health responses", async () => {
+    const engineId = `health-context-engine-${Date.now()}`;
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    registerContextEngineForOwner(
+      engineId,
+      () => ({
+        info: { id: "lcm", name: "Lossless Claw Memory" },
+        ingest: async () => ({ ingested: false }),
+        assemble: async () => {
+          throw new Error("lcm transcript store is corrupt");
+        },
+        compact: async () => ({ ok: true, compacted: false }),
+      }),
+      contextEngineTestOwner,
+    );
+    try {
+      const contextEngine = await resolveContextEngine({
+        plugins: { slots: { contextEngine: engineId } },
+      } as OpenClawConfig);
+      await contextEngine.assemble({ sessionId: "s1", messages: [] });
+
+      const cached = {
+        ok: true,
+        ts: Date.now(),
+        durationMs: 1,
+        channels: {},
+        channelOrder: [],
+        channelLabels: {},
+        heartbeatSeconds: 0,
+        defaultAgentId: "main",
+        agents: [],
+        sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      };
+      const respond = vi.fn();
+      const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+      await healthHandlers.health({
+        req: {} as never,
+        params: {} as never,
+        respond: respond as never,
+        context: {
+          getHealthCache: () => cached,
+          refreshHealthSnapshot,
+          getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+          logHealth: { error: vi.fn() },
+        } as never,
+        client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+        isWebchatConnect: () => false,
+      });
+
+      const payload = mockCallArg(respond, 0, 1) as
+        | {
+            contextEngines?: {
+              quarantined?: Array<{
+                engineId?: string;
+                owner?: string;
+                operation?: string;
+                reason?: string;
+                failedAt?: number;
+              }>;
+            };
+          }
+        | undefined;
+      expect(payload?.contextEngines?.quarantined).toHaveLength(1);
+      expect(payload?.contextEngines?.quarantined?.[0]).toMatchObject({
+        engineId,
+        owner: contextEngineTestOwner,
+        operation: "assemble",
+        reason: "lcm transcript store is corrupt",
+      });
+      expect(typeof payload?.contextEngines?.quarantined?.[0]?.failedAt).toBe("number");
+      expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {

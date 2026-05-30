@@ -1,3 +1,30 @@
 // Numeric coercion helpers for plugin runtime inputs.
 
-export { parseFiniteNumber } from "../infra/parse-finite-number.js";
+export {
+  asFiniteNumberInRange,
+  asSafeIntegerInRange,
+  parseFiniteNumber,
+  clampTimerTimeoutMs,
+  clampPositiveTimerTimeoutMs,
+  addTimerTimeoutGraceMs,
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  MAX_DATE_TIMESTAMP_MS,
+  resolveIntegerOption,
+  resolveNonNegativeIntegerOption,
+  resolveOptionalIntegerOption,
+  parseStrictInteger,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+  positiveSecondsToSafeMilliseconds,
+  nonNegativeSecondsToSafeMilliseconds,
+  timestampMsToIsoString,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "../shared/number-coercion.js";
+export { MAX_TCP_PORT, parseTcpPort } from "../infra/tcp-port.js";

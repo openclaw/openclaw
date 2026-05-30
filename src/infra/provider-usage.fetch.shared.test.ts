@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   buildUsageErrorSnapshot,
@@ -34,6 +35,7 @@ describe("provider usage fetch shared helpers", () => {
   it.each([
     { value: 12, expected: 12 },
     { value: "12.5", expected: 12.5 },
+    { value: "12.5 credits", expected: undefined },
     { value: "not-a-number", expected: undefined },
   ])("parses finite numbers for %j", ({ value, expected }) => {
     expect(parseFiniteNumber(value)).toBe(expected);
@@ -89,6 +91,19 @@ describe("provider usage fetch shared helpers", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("caps oversized request timeouts before scheduling", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const fetchFnMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    const fetchFn = withFetchPreconnect(fetchFnMock);
+
+    await fetchJson("https://example.com/usage", {}, MAX_TIMER_TIMEOUT_MS + 1_000_000, fetchFn);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("maps configured status codes to token expired", () => {

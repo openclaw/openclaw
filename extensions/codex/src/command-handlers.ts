@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import {
   installCodexComputerUse,
@@ -29,6 +31,7 @@ import {
   formatCodexStatus,
   formatList,
   formatModels,
+  formatSkills,
   formatThreads,
   readString,
 } from "./command-formatters.js";
@@ -379,9 +382,8 @@ export async function handleCodexSubcommand(
       return { text: "Usage: /codex skills" };
     }
     return {
-      text: formatList(
+      text: formatSkills(
         await deps.codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}),
-        "Codex skills",
       ),
     };
   }
@@ -544,6 +546,7 @@ async function bindConversation(
     sessionFile: ctx.sessionFile,
     workspaceDir,
     agentDir: scope.agentDir,
+    sessionKey: ctx.sessionKey,
     threadId: parsed.threadId,
     model: parsed.model,
     modelProvider: parsed.provider,
@@ -1931,8 +1934,8 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
     }
     if (arg === "--limit") {
       const value = readRequiredOptionValue(args, index);
-      const parsedLimit = value ? Number.parseInt(value, 10) : Number.NaN;
-      if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+      const parsedLimit = parseStrictPositiveInteger(value);
+      if (parsedLimit === undefined) {
         parsed.help = true;
         continue;
       }
@@ -2103,9 +2106,4 @@ function normalizeComputerUseStringOverrides(
     normalized.mcpServerName = mcpServerName;
   }
   return normalized;
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed || undefined;
 }

@@ -28,8 +28,8 @@ openclaw models scan
 `openclaw models status` shows the resolved default/fallbacks plus an auth overview.
 When provider usage snapshots are available, the OAuth/API-key status section includes
 provider usage windows and quota snapshots.
-Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI
-Codex, MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks
+Current usage-window providers: Anthropic, GitHub Copilot, Gemini CLI, OpenAI,
+MiniMax, Xiaomi, and z.ai. Usage auth comes from provider-specific hooks
 when available; otherwise OpenClaw falls back to matching OAuth/API-key
 credentials from auth profiles, env, or config.
 In `--json` output, `auth.providers` is the env/config/store-aware provider
@@ -37,13 +37,13 @@ overview, while `auth.oauth` is auth-store profile health only.
 Add `--probe` to run live auth probes against each configured provider profile.
 Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent's model/auth state. When omitted,
-the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
+the command uses `OPENCLAW_AGENT_DIR` if set, otherwise the
 configured default agent.
 Probe rows can come from auth profiles, env credentials, or `models.json`.
-For Codex OAuth troubleshooting, `openclaw models status`,
-`openclaw models auth list --provider openai-codex`, and
+For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`,
+`openclaw models auth list --provider openai`, and
 `openclaw config get agents.defaults.model --json` are the quickest way to
-confirm whether an agent has a usable `openai-codex` auth profile for
+confirm whether an agent has a usable `openai` OAuth profile for
 `openai/*` through the native Codex runtime. See [OpenAI provider setup](/providers/openai#check-and-recover-codex-oauth-routing).
 
 Notes:
@@ -76,7 +76,7 @@ Notes:
   cap differs from the native context window; JSON rows include `contextTokens`
   when a provider exposes that cap.
 - `models list --provider <id>` filters by provider id, such as `moonshot` or
-  `openai-codex`. It does not accept display labels from interactive provider
+  `openai`. It does not accept display labels from interactive provider
   pickers, such as `Moonshot AI`.
 - Model refs are parsed by splitting on the **first** `/`. If the model ID includes `/` (OpenRouter-style), include the provider prefix (example: `openrouter/moonshotai/kimi-k2`).
 - If you omit the provider, OpenClaw resolves the input as an alias first, then
@@ -129,7 +129,7 @@ Options:
 - `--probe-timeout <ms>`
 - `--probe-concurrency <n>`
 - `--probe-max-tokens <n>`
-- `--agent <id>` (configured agent id; overrides `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR`)
+- `--agent <id>` (configured agent id; overrides `OPENCLAW_AGENT_DIR`)
 
 `--json` keeps stdout reserved for the JSON payload. Auth-profile, provider,
 and startup diagnostics are routed to stderr so scripts can pipe stdout directly
@@ -181,7 +181,7 @@ provider you choose.
 
 `models auth list` lists saved auth profiles for the selected agent without
 printing token, API-key, or OAuth secret material. Use `--provider <id>` to
-filter to one provider, such as `openai-codex`, and `--json` for scripting.
+filter to one provider, such as `openai`, and `--json` for scripting.
 
 `models auth login` runs a provider plugin's auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
@@ -192,15 +192,15 @@ specific configured agent store. The parent `--agent` flag is honored by
 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login.
 Use `--method api-key` only when you want to add an OpenAI API-key profile,
-usually as a backup for Codex subscription limits. The legacy
-`--provider openai-codex` spelling still works for existing scripts.
+usually as a backup for Codex subscription limits. Run `openclaw doctor --fix`
+to migrate older `openai-codex` auth/profile state to `openai`.
 
 Examples:
 
 ```bash
 openclaw models auth login --provider openai --set-default
 openclaw models auth login --provider openai --method api-key
-openclaw models auth paste-api-key --provider openai-codex
+openclaw models auth paste-api-key --provider openai
 openclaw models auth list --provider openai
 ```
 
@@ -212,19 +212,21 @@ Notes:
 - `paste-api-key` accepts API keys generated elsewhere, prompts for the key
   value, and writes it to the default profile id `<provider>:manual` unless you
   pass `--profile-id`. In automation, pipe the key on stdin, for example
-  `printf "%s\n" "$OPENAI_API_KEY" | openclaw models auth paste-api-key --provider openai-codex`.
+  `printf "%s\n" "$OPENAI_API_KEY" | openclaw models auth paste-api-key --provider openai`.
 - `setup-token` and `paste-token` remain generic token commands for providers
   that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth
   method (defaulting to that provider's `setup-token` method when it exposes
   one).
 - `paste-token` accepts a token string generated elsewhere or from automation.
-- `paste-token` requires `--provider`, prompts for the token value, and writes
-  it to the default profile id `<provider>:manual` unless you pass
+- `paste-token` requires `--provider`, prompts for the token value by default,
+  and writes it to the default profile id `<provider>:manual` unless you pass
   `--profile-id`.
+- In automation, pipe the token on stdin instead of passing it as an argument so
+  provider credentials do not appear in shell history or process lists.
 - `paste-token --expires-in <duration>` stores an absolute token expiry from a
   relative duration such as `365d` or `12h`.
-- For `openai-codex`, OpenAI API keys and ChatGPT/OAuth token material are
+- For `openai`, OpenAI API keys and ChatGPT/OAuth token material are
   different auth shapes. Use `paste-api-key` for `sk-...` OpenAI API keys and
   `paste-token` only for token auth material.
 - Anthropic note: Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats Claude CLI reuse and `claude -p` usage as sanctioned for this integration unless Anthropic publishes a new policy.

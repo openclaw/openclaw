@@ -1,13 +1,13 @@
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getOAuthApiKey,
   getOAuthProviders,
   type OAuthCredentials,
   type OAuthProvider,
-} from "@earendil-works/pi-ai/oauth";
-import { getRuntimeConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { coerceSecretRef } from "../../config/types.secrets.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+} from "../../llm/oauth.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
   refreshProviderOAuthCredentialWithPlugin,
@@ -223,7 +223,7 @@ const oauthManager = createOAuthManager({
       credential,
     }),
   readFallbackCredential: ({ profileId, credential }) =>
-    credential.provider === "openai-codex"
+    credential.provider === "openai" || credential.provider === "openai-codex"
       ? readExternalCliFallbackCredential({
           profileId,
           credential,

@@ -1,3 +1,7 @@
+import {
+  optionalPositiveIntegerSchema,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   callGatewayFromCli,
@@ -16,6 +20,7 @@ import {
 } from "./src/calendar.js";
 import {
   resolveGoogleMeetConfig,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
   type GoogleMeetConfig,
   type GoogleMeetMode,
   type GoogleMeetTransport,
@@ -272,7 +277,7 @@ const GoogleMeetToolSchema = Type.Object({
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
   message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
-  timeoutMs: Type.Optional(Type.Number({ description: "Probe timeout in milliseconds" })),
+  timeoutMs: optionalPositiveIntegerSchema({ description: "Probe timeout in milliseconds" }),
   meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
   today: Type.Optional(
     Type.Boolean({
@@ -288,7 +293,7 @@ const GoogleMeetToolSchema = Type.Object({
   conferenceRecord: Type.Optional(
     Type.String({ description: "Meet conferenceRecords/{id} resource name or id" }),
   ),
-  pageSize: Type.Optional(Type.Number({ description: "Meet API page size for list actions" })),
+  pageSize: optionalPositiveIntegerSchema({ description: "Meet API page size for list actions" }),
   includeTranscriptEntries: Type.Optional(
     Type.Boolean({ description: "For artifacts, include structured transcript entries" }),
   ),
@@ -314,12 +319,12 @@ const GoogleMeetToolSchema = Type.Object({
   mergeDuplicateParticipants: Type.Optional(
     Type.Boolean({ description: "For attendance, merge duplicate participant resources." }),
   ),
-  lateAfterMinutes: Type.Optional(
-    Type.Number({ description: "For attendance, mark participants late after this many minutes." }),
-  ),
-  earlyBeforeMinutes: Type.Optional(
-    Type.Number({ description: "For attendance, mark early leavers before this many minutes." }),
-  ),
+  lateAfterMinutes: optionalPositiveIntegerSchema({
+    description: "For attendance, mark participants late after this many minutes.",
+  }),
+  earlyBeforeMinutes: optionalPositiveIntegerSchema({
+    description: "For attendance, mark early leavers before this many minutes.",
+  }),
   accessToken: Type.Optional(Type.String({ description: "Access token override" })),
   refreshToken: Type.Optional(Type.String({ description: "Refresh token override" })),
   clientId: Type.Optional(Type.String({ description: "OAuth client id override" })),
@@ -363,17 +368,6 @@ function resolveMeetingInput(config: GoogleMeetConfig, value: unknown): string {
   return meeting;
 }
 
-function resolveOptionalPositiveInteger(value: unknown): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const parsed = typeof value === "number" ? value : Number(normalizeOptionalString(value));
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error("Expected pageSize to be a positive integer");
-  }
-  return parsed;
-}
-
 function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
   return raw.join !== false && raw.join !== "false";
 }
@@ -391,6 +385,7 @@ export const testing = {
     googleMeetToolDeps.platform = next ?? (() => process.platform);
   },
   isGoogleMeetAgentToolActionUnsupportedOnHost,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
 };
 
 /** @deprecated Use `testing`. */
@@ -462,14 +457,6 @@ function assertGoogleMeetAgentToolActionSupported(params: {
   );
 }
 
-function resolveGoogleMeetToolGatewayTimeoutMs(config: GoogleMeetConfig): number {
-  return Math.max(
-    60_000,
-    config.chrome.joinTimeoutMs + 30_000,
-    config.voiceCall.requestTimeoutMs + 10_000,
-  );
-}
-
 function readGatewayErrorDetails(err: unknown): unknown {
   if (!err || typeof err !== "object" || !("details" in err)) {
     return undefined;
@@ -487,7 +474,7 @@ async function callGoogleMeetGatewayFromTool(params: {
       googleMeetGatewayMethodForToolAction(params.action),
       {
         json: true,
-        timeout: String(resolveGoogleMeetToolGatewayTimeoutMs(params.config)),
+        timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
       },
       params.raw,
       { progress: false },
@@ -591,13 +578,13 @@ async function resolveArtifactQueryFromParams(
     meeting: resolvedMeeting.meeting,
     calendarEvent: resolvedMeeting.calendarEvent,
     conferenceRecord,
-    pageSize: resolveOptionalPositiveInteger(raw.pageSize),
+    pageSize: readPositiveIntegerParam(raw, "pageSize"),
     includeTranscriptEntries: raw.includeTranscriptEntries !== false,
     includeDocumentBodies: raw.includeDocumentBodies === true,
     allConferenceRecords: raw.includeAllConferenceRecords === true,
     mergeDuplicateParticipants: raw.mergeDuplicateParticipants !== false,
-    lateAfterMinutes: resolveOptionalPositiveInteger(raw.lateAfterMinutes),
-    earlyBeforeMinutes: resolveOptionalPositiveInteger(raw.earlyBeforeMinutes),
+    lateAfterMinutes: readPositiveIntegerParam(raw, "lateAfterMinutes"),
+    earlyBeforeMinutes: readPositiveIntegerParam(raw, "earlyBeforeMinutes"),
   };
 }
 
@@ -1014,7 +1001,7 @@ export default definePluginEntry({
             url: resolveMeetingInput(config, params?.url),
             transport: normalizeTransport(params?.transport),
             mode: normalizeMode(params?.mode),
-            timeoutMs: typeof params?.timeoutMs === "number" ? params.timeoutMs : undefined,
+            timeoutMs: readPositiveIntegerParam(asParamRecord(params), "timeoutMs"),
           });
           respond(true, result);
         } catch (err) {

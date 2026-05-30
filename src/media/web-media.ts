@@ -1,10 +1,13 @@
+import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
@@ -17,12 +20,9 @@ import {
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 import {
-  convertHeicToJpeg,
-  hasAlphaChannel,
-  isImageProcessorUnavailableError,
-  optimizeImageToPng,
+  createImageProcessor,
   readImageMetadataFromHeader,
-  resizeToJpeg,
+  readImageProbeFromHeader,
 } from "./media-services.js";
 import {
   detectMime,
@@ -56,6 +56,8 @@ type WebMediaOptions = {
   workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
   localRoots?: readonly string[] | "any";
+  /** Channel inbound attachment root patterns checked with inbound path policy semantics. */
+  inboundRoots?: readonly string[];
   /** Caller already validated the local path (sandbox/other guards); requires readFile override. */
   sandboxValidated?: boolean;
   readFile?: (filePath: string) => Promise<Buffer>;
@@ -150,9 +152,16 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "text/csv",
   "text/markdown",
 ]);
-// file-type returns undefined (no magic bytes) for plain-text formats like CSV and
-// Markdown, so host-read needs an explicit "this really decodes as text" fallback.
+// file-type returns undefined (no magic bytes) for plain-text formats like CSV
+// and Markdown, so host-read needs an explicit text validation fallback.
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
+// HTML remains deliberately outside the host-read allowlist pending a separate
+// security-boundary review, but extension-declared .html files still need to
+// fail closed instead of falling through to binary/media sniffing.
+const HOST_READ_DECLARED_TEXT_MIMES = new Set([...HOST_READ_TEXT_PLAIN_ALIASES, "text/html"]);
+const HOST_READ_DECLARED_TEXT_ERROR =
+  "hostReadCapability permits only validated plain-text CSV/Markdown documents " +
+  "and trusted generated HTML reports for local reads";
 const MB = 1024 * 1024;
 
 function getTextStats(text: string): { printableRatio: number } {
@@ -222,18 +231,71 @@ function decodeHostReadText(buffer: Buffer): string | undefined {
 }
 
 function isValidatedHostReadText(buffer?: Buffer): boolean {
+  return getValidatedHostReadText(buffer) !== undefined;
+}
+
+function getValidatedHostReadText(buffer?: Buffer): string | undefined {
   if (!buffer) {
-    return false;
+    return undefined;
   }
   if (buffer.length === 0) {
-    return true;
+    return "";
   }
   const text = decodeHostReadText(buffer);
   if (text === undefined) {
-    return false;
+    return undefined;
   }
   const { printableRatio } = getTextStats(text);
-  return printableRatio > 0.95;
+  return printableRatio > 0.95 ? text : undefined;
+}
+
+function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
+  if (!filePath) {
+    return false;
+  }
+  const relative = path.relative(path.resolve(root), path.resolve(filePath));
+  return (
+    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function hasHtmlDocumentShape(text: string): boolean {
+  const sample = text.trimStart().slice(0, 8192);
+  return /^(?:<!doctype\s+html\b|<html\b)/iu.test(sample) || /<\/(?:html|body)>/iu.test(sample);
+}
+
+async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined): Promise<boolean> {
+  if (!filePath) {
+    return false;
+  }
+  const info = await lstat(filePath).catch(() => undefined);
+  if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
+    return false;
+  }
+  const [resolvedFilePath, resolvedTmpRoot] = await Promise.all([
+    realpath(filePath).catch(() => undefined),
+    realpath(resolvePreferredOpenClawTmpDir()).catch(() => undefined),
+  ]);
+  return Boolean(
+    resolvedFilePath && resolvedTmpRoot && isPathInsideRoot(resolvedFilePath, resolvedTmpRoot),
+  );
+}
+
+function isTrustedGeneratedHostReadHtml(params: {
+  filePath?: string;
+  sniffedContentType?: string;
+  buffer?: Buffer;
+  trustedGeneratedHtmlPath?: boolean;
+}): boolean {
+  const sniffedMime = normalizeMimeType(params.sniffedContentType);
+  if (sniffedMime && sniffedMime !== "text/html") {
+    return false;
+  }
+  if (!params.trustedGeneratedHtmlPath) {
+    return false;
+  }
+  const text = getValidatedHostReadText(params.buffer);
+  return text !== undefined && hasHtmlDocumentShape(text);
 }
 
 function formatMb(bytes: number, digits = 2): string {
@@ -264,21 +326,35 @@ function assertHostReadMediaAllowed(params: {
   filePath?: string;
   kind: MediaKind | undefined;
   buffer?: Buffer;
+  trustedGeneratedHtmlPath?: boolean;
 }): void {
   const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
   const normalizedMime = normalizeMimeType(params.contentType);
-  // For extension-declared plain-text aliases such as .csv/.md, trust only the
+  // For extension-declared plain-text aliases such as .csv/.html/.md, trust only the
   // text validator path. Some opaque blobs can still produce bogus binary MIME
   // hits (for example BOM-prefixed 0xFF data sniffing as audio/mpeg), and
   // host-read should reject those instead of returning early on the sniff.
-  if (declaredMime && HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime)) {
-    if (!params.sniffedContentType && params.buffer && isValidatedHostReadText(params.buffer)) {
+  if (declaredMime && HOST_READ_DECLARED_TEXT_MIMES.has(declaredMime)) {
+    if (
+      declaredMime === "text/html" &&
+      isTrustedGeneratedHostReadHtml({
+        filePath: params.filePath,
+        sniffedContentType: params.sniffedContentType,
+        buffer: params.buffer,
+        trustedGeneratedHtmlPath: params.trustedGeneratedHtmlPath,
+      })
+    ) {
       return;
     }
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
-      "hostReadCapability permits only validated plain-text CSV/Markdown documents for local reads",
-    );
+    if (
+      HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime) &&
+      !params.sniffedContentType &&
+      params.buffer &&
+      isValidatedHostReadText(params.buffer)
+    ) {
+      return;
+    }
+    throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
   }
   const sniffedKind = kindFromMime(params.sniffedContentType);
   if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
@@ -347,7 +423,8 @@ type OptimizedImage = {
   buffer: Buffer;
   optimizedSize: number;
   resizeSide: number;
-  format: "jpeg" | "png";
+  format: "jpeg" | "png" | "webp";
+  mimeType: string;
   quality?: number;
   compressionLevel?: number;
 };
@@ -487,6 +564,70 @@ function assertImageSatisfiesHardDimensionPolicy(
   throw new Error(`Image dimensions exceed model image limits${detail}`);
 }
 
+function resolvePreservableOriginalImageContentType(params: {
+  buffer: Buffer;
+  cap: number;
+  contentType?: string;
+  fileName?: string;
+  policy?: ImageCompressionPolicy;
+}): string | null {
+  if (params.buffer.length > params.cap) {
+    return null;
+  }
+  const declaredContentType = normalizeMimeType(params.contentType);
+  const actualContentType = detectPreservableImageMime(params.buffer);
+  if (!actualContentType) {
+    return null;
+  }
+  const declaredPreservableContentType = isPreservableImageMime(declaredContentType)
+    ? declaredContentType
+    : undefined;
+  if (declaredPreservableContentType && declaredPreservableContentType !== actualContentType) {
+    return null;
+  }
+  if (declaredContentType?.startsWith("image/") && !declaredPreservableContentType) {
+    return null;
+  }
+  const resolvedContentType = declaredPreservableContentType ?? actualContentType;
+  if (isHeicSource({ contentType: resolvedContentType, fileName: params.fileName })) {
+    return null;
+  }
+  const meta = readImageMetadataFromHeader(params.buffer);
+  if (!meta) {
+    return null;
+  }
+  const preferredSide =
+    resolveImageCompressionGrid(params.policy).sides[0] ?? DEFAULT_VISION_MAX_SIDE;
+  if (
+    Math.max(meta.width, meta.height) > preferredSide ||
+    !imageSatisfiesHardDimensionPolicy(params.buffer, params.policy)
+  ) {
+    return null;
+  }
+  return resolvedContentType;
+}
+
+function detectPreservableImageMime(
+  buffer: Buffer,
+): "image/png" | "image/jpeg" | "image/webp" | null {
+  const format = readImageProbeFromHeader(buffer)?.format;
+  return format === "png"
+    ? "image/png"
+    : format === "jpeg"
+      ? "image/jpeg"
+      : format === "webp"
+        ? "image/webp"
+        : null;
+}
+
+function isPreservableImageMime(
+  contentType: string | undefined,
+): contentType is "image/png" | "image/jpeg" | "image/webp" {
+  return (
+    contentType === "image/png" || contentType === "image/jpeg" || contentType === "image/webp"
+  );
+}
+
 export function effectiveImageBytesCap(
   baseCap: number | undefined,
   policy?: ImageCompressionPolicy,
@@ -500,21 +641,21 @@ export function effectiveImageBytesCap(
 
 function buildDescendingLadder(maxSide: number, values: readonly number[]): number[] {
   const normalizedMax = Math.max(1, Math.floor(maxSide));
-  const ladder = [normalizedMax, ...values, ...LOW_IMAGE_SIDE_FALLBACKS]
-    .map((value) => Math.min(normalizedMax, value))
-    .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
-    .toSorted((a, b) => b - a);
+  const ladder = uniqueValues(
+    [normalizedMax, ...values, ...LOW_IMAGE_SIDE_FALLBACKS]
+      .map((value) => Math.min(normalizedMax, value))
+      .filter((value) => value > 0),
+  ).toSorted((a, b) => b - a);
   if (ladder.length > 1 || normalizedMax <= 1) {
     return ladder;
   }
-  return [
+  const fallbackLadder = [
     normalizedMax,
     Math.floor(normalizedMax * 0.75),
     Math.floor(normalizedMax * 0.5),
     Math.floor(normalizedMax * 0.25),
-  ]
-    .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
-    .toSorted((a, b) => b - a);
+  ];
+  return uniqueValues(fallbackLadder.filter((value) => value > 0)).toSorted((a, b) => b - a);
 }
 
 export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
@@ -570,28 +711,33 @@ async function optimizeImageWithFallback(params: {
   meta?: { contentType?: string; fileName?: string };
   imageCompression?: ImageCompressionPolicy;
 }): Promise<OptimizedImage> {
-  const { buffer, cap, meta } = params;
-  const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
-  const hasAlpha = isPng && (await hasAlphaChannel(buffer));
-
-  if (hasAlpha) {
-    const grid = resolveImageCompressionGrid(params.imageCompression);
-    const optimized = await optimizeImageToPng(buffer, cap, { sides: grid.sides });
-    if (optimized.buffer.length <= cap) {
-      return { ...optimized, format: "png" };
-    }
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `PNG with alpha still exceeds ${formatMb(cap, 0)}MB after optimization; falling back to JPEG`,
-      );
-    }
-  }
-
-  const optimized = await optimizeImageToJpeg(buffer, cap, {
-    ...meta,
-    ...(params.imageCompression ? { imageCompression: params.imageCompression } : {}),
+  const { buffer, cap } = params;
+  const grid = resolveImageCompressionGrid(params.imageCompression);
+  const optimized = await createImageProcessor().encode(buffer, {
+    format: "auto",
+    maxBytes: cap,
+    opaque: { format: "jpeg" },
+    transparent: { format: "png" },
+    search: {
+      maxSide: grid.sides,
+      quality: grid.qualities,
+    },
+    transparency: "auto",
   });
-  return { ...optimized, format: "jpeg" };
+  if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
+    logVerbose(`Image transparency flattened to fit ${formatMb(cap, 0)}MB optimization budget`);
+  }
+  return {
+    buffer: optimized.data,
+    optimizedSize: optimized.bytes,
+    resizeSide: optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height),
+    format: optimized.format,
+    mimeType: optimized.mimeType,
+    ...(optimized.chosen.quality === undefined ? {} : { quality: optimized.chosen.quality }),
+    ...(optimized.chosen.compressionLevel === undefined
+      ? {}
+      : { compressionLevel: optimized.chosen.compressionLevel }),
+  };
 }
 
 export async function optimizeImageBufferForWebMedia(params: {
@@ -616,42 +762,34 @@ export async function optimizeImageBufferForWebMedia(params: {
     };
   }
   const meta = { contentType: params.contentType, fileName: params.fileName };
-  let optimized: OptimizedImage;
-  try {
-    optimized = await optimizeImageWithFallback({
+  const originalContentType = resolvePreservableOriginalImageContentType({
+    buffer: params.buffer,
+    cap,
+    contentType: params.contentType,
+    fileName: params.fileName,
+    policy: params.imageCompression,
+  });
+  if (originalContentType) {
+    return {
       buffer: params.buffer,
-      cap,
-      meta,
-      imageCompression: params.imageCompression,
-    });
-  } catch (err) {
-    if (
-      isImageProcessorUnavailableError(err) &&
-      !isHeicSource(meta) &&
-      params.buffer.length <= cap &&
-      imageSatisfiesHardDimensionPolicy(params.buffer, params.imageCompression)
-    ) {
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `Image optimizer unavailable; sending original ${formatMb(params.buffer.length)}MB media without optimization`,
-        );
-      }
-      return {
-        buffer: params.buffer,
-        contentType: params.contentType,
-        kind: "image",
-        fileName: params.fileName,
-      };
-    }
-    throw err;
+      contentType: originalContentType,
+      kind: "image",
+      fileName: params.fileName,
+    };
   }
+  const optimized = await optimizeImageWithFallback({
+    buffer: params.buffer,
+    cap,
+    meta,
+    imageCompression: params.imageCompression,
+  });
   logOptimizedImage({ originalSize: params.buffer.length, optimized });
   if (optimized.buffer.length > cap) {
     throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
   }
   return {
     buffer: optimized.buffer,
-    contentType: optimized.format === "png" ? "image/png" : "image/jpeg",
+    contentType: optimized.mimeType,
     kind: "image",
     fileName:
       optimized.format === "jpeg" && isHeicSource(params)
@@ -675,6 +813,7 @@ async function loadWebMediaInternal(
     trustExplicitProxyDns,
     workspaceDir,
     localRoots,
+    inboundRoots,
     sandboxValidated = false,
     readFile: readFileOverride,
     hostReadCapability = false,
@@ -702,42 +841,18 @@ async function loadWebMediaInternal(
     meta?: { contentType?: string; fileName?: string },
   ) => {
     const originalSize = buffer.length;
-    let optimized: OptimizedImage;
-    try {
-      optimized = await optimizeImageWithFallback({
-        buffer,
-        cap,
-        meta,
-        ...(imageCompression ? { imageCompression } : {}),
-      });
-    } catch (err) {
-      if (
-        isImageProcessorUnavailableError(err) &&
-        !isHeicSource(meta ?? {}) &&
-        buffer.length <= cap &&
-        imageSatisfiesHardDimensionPolicy(buffer, imageCompression)
-      ) {
-        if (shouldLogVerbose()) {
-          logVerbose(
-            `Image optimizer unavailable; sending original ${formatMb(buffer.length)}MB media without optimization`,
-          );
-        }
-        return {
-          buffer,
-          contentType: meta?.contentType,
-          kind: "image" as const,
-          fileName: meta?.fileName,
-        };
-      }
-      throw err;
-    }
+    const optimized = await optimizeImageWithFallback({
+      buffer,
+      cap,
+      meta,
+      ...(imageCompression ? { imageCompression } : {}),
+    });
     logOptimizedImage({ originalSize, optimized });
 
     if (optimized.buffer.length > cap) {
       throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
     }
 
-    const contentType = optimized.format === "png" ? "image/png" : "image/jpeg";
     const fileName =
       optimized.format === "jpeg" && meta && isHeicSource(meta)
         ? toJpegFileName(meta.fileName)
@@ -745,7 +860,7 @@ async function loadWebMediaInternal(
 
     return {
       buffer: optimized.buffer,
-      contentType,
+      contentType: optimized.mimeType,
       kind: "image" as const,
       fileName,
     };
@@ -771,6 +886,21 @@ async function loadWebMediaInternal(
         return {
           buffer: params.buffer,
           contentType: params.contentType,
+          kind: params.kind,
+          fileName: params.fileName,
+        };
+      }
+      const originalContentType = resolvePreservableOriginalImageContentType({
+        buffer: params.buffer,
+        cap: imageCap,
+        contentType: params.contentType,
+        fileName: params.fileName,
+        policy: imageCompression,
+      });
+      if (originalContentType) {
+        return {
+          buffer: params.buffer,
+          contentType: originalContentType,
           kind: params.kind,
           fileName: params.fileName,
         };
@@ -849,7 +979,18 @@ async function loadWebMediaInternal(
 
   // Guard local reads against allowed directory roots to prevent file exfiltration.
   if (!(sandboxValidated || localRoots === "any")) {
-    await assertLocalMediaAllowed(mediaUrl, localRoots);
+    await assertLocalMediaAllowed(mediaUrl, localRoots, { inboundRoots });
+  }
+
+  const hostReadDeclaredMime = hostReadCapability
+    ? normalizeMimeType(mimeTypeFromFilePath(mediaUrl))
+    : undefined;
+  const trustedGeneratedHtmlPath =
+    hostReadDeclaredMime === "text/html"
+      ? await isTrustedGeneratedHostReadHtmlPath(mediaUrl)
+      : false;
+  if (hostReadDeclaredMime === "text/html" && !trustedGeneratedHtmlPath) {
+    throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
   }
 
   // Local path
@@ -892,6 +1033,7 @@ async function loadWebMediaInternal(
       filePath: mediaUrl,
       kind,
       buffer: data,
+      trustedGeneratedHtmlPath,
     });
   }
   let fileName = basenameFromAnyPath(mediaUrl) || undefined;
@@ -945,72 +1087,23 @@ export async function optimizeImageToJpeg(
   resizeSide: number;
   quality: number;
 }> {
-  // Try a grid of sizes/qualities until under the limit.
-  let source = buffer;
-  if (isHeicSource(opts)) {
-    try {
-      source = await convertHeicToJpeg(buffer);
-    } catch (err) {
-      throw new Error(`HEIC image conversion failed: ${String(err)}`, { cause: err });
-    }
-  }
   const { sides, qualities } = resolveImageCompressionGrid(opts.imageCompression);
-  let smallest: {
-    buffer: Buffer;
-    size: number;
-    resizeSide: number;
-    quality: number;
-  } | null = null;
-  let firstResizeError: unknown;
-  const errors: string[] = [];
-
-  for (const side of sides) {
-    for (const quality of qualities) {
-      try {
-        const out = await resizeToJpeg({
-          buffer: source,
-          maxSide: side,
-          quality,
-          withoutEnlargement: true,
-        });
-        const size = out.length;
-        if (!smallest || size < smallest.size) {
-          smallest = { buffer: out, size, resizeSide: side, quality };
-        }
-        if (size <= maxBytes) {
-          return {
-            buffer: out,
-            optimizedSize: size,
-            resizeSide: side,
-            quality,
-          };
-        }
-      } catch (err) {
-        firstResizeError ??= err;
-        const message = formatErrorMessage(err).trim();
-        if (message && !errors.includes(message)) {
-          errors.push(message);
-        }
-        // Continue trying other size/quality combinations
-      }
-    }
-  }
-
-  if (smallest) {
-    return {
-      buffer: smallest.buffer,
-      optimizedSize: smallest.size,
-      resizeSide: smallest.resizeSide,
-      quality: smallest.quality,
-    };
-  }
-
-  if (isImageProcessorUnavailableError(firstResizeError)) {
-    throw firstResizeError;
-  }
-
-  const detail = errors.length > 0 ? `: ${errors.slice(0, 3).join("; ")}` : "";
-  throw new Error(`Failed to optimize image${detail}`, { cause: firstResizeError });
+  const optimized = await createImageProcessor().encode(buffer, {
+    format: "auto",
+    maxBytes,
+    opaque: { format: "jpeg" },
+    search: {
+      maxSide: sides,
+      quality: qualities,
+    },
+    transparency: "flatten",
+  });
+  return {
+    buffer: optimized.data,
+    optimizedSize: optimized.bytes,
+    resizeSide: optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height),
+    quality: optimized.chosen.quality ?? qualities.at(-1) ?? 85,
+  };
 }
 
-export { optimizeImageToPng };
+export { optimizeImageToPng } from "./media-services.js";

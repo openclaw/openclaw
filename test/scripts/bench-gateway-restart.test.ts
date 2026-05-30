@@ -6,6 +6,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
+import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 describe("gateway restart benchmark script", () => {
   it("prints help without running benchmark cases", () => {
@@ -210,6 +211,42 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     expect(testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
   });
 
+  registerStopChildBehaviorTests({
+    stopChild: testing.stopChild,
+    queuedExitCode: 0,
+  });
+
+  it("marks clean and signaled pre-teardown child exits as benchmark failures", () => {
+    expect(
+      testing.resolveSampleExitFailure({
+        exitedBeforeTeardown: true,
+        exitCode: 0,
+        signal: null,
+      }),
+    ).toBe("restart_child_exited");
+    expect(
+      testing.resolveSampleExitFailure({
+        exitedBeforeTeardown: true,
+        exitCode: null,
+        signal: "SIGSEGV",
+      }),
+    ).toBe("restart_child_exited");
+    expect(
+      testing.resolveSampleExitFailure({
+        exitedBeforeTeardown: true,
+        exitCode: 9,
+        signal: null,
+      }),
+    ).toBe("child_nonzero_exit");
+    expect(
+      testing.resolveSampleExitFailure({
+        exitedBeforeTeardown: false,
+        exitCode: null,
+        signal: "SIGTERM",
+      }),
+    ).toBeNull();
+  });
+
   it("budgets timeout per restart instead of against the whole sample", () => {
     const sampleStartAt = 1_000;
     const timeoutMs = 30_000;
@@ -252,6 +289,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         childExitCode: null,
         childSignal: "SIGTERM",
         events: [],
+        exitedBeforeTeardown: false,
         failureCode: null,
         firstOutputMs: 1,
         initialGatewayReadyLogLine: "[gateway] ready",
@@ -377,6 +415,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         childExitCode: null,
         childSignal: null,
         events: [],
+        exitedBeforeTeardown: true,
         failureCode: "initial_readyz_timeout",
         firstOutputMs: 1,
         initialGatewayReadyLogLine: "[gateway] ready",
@@ -429,6 +468,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         childExitCode: 0,
         childSignal: null,
         events: [],
+        exitedBeforeTeardown: false,
         failureCode: null,
         firstOutputMs: 1,
         initialGatewayReadyLogLine: "[gateway] ready",

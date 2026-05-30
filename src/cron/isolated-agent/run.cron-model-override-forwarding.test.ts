@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  clearCliSessionMock,
   clearFastTestEnv,
   getCliSessionIdMock,
   isCliProviderMock,
@@ -16,7 +17,7 @@ import {
   resolveSupportedThinkingLevelMock,
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runWithModelFallbackMock,
   updateSessionStoreMock,
   runCliAgentMock,
@@ -164,12 +165,12 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
   });
 
   it("passes the cron payload model to the embedded agent runner", async () => {
-    // Use passthrough so runEmbeddedPiAgentMock actually gets called
+    // Use passthrough so runEmbeddedAgentMock actually gets called
     runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
       const result = await run(provider, model);
       return { result, provider, model, attempts: [] };
     });
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "summary done" }],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
@@ -177,7 +178,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     const result = await runCronIsolatedAgentTurn(makeParams());
 
     expect(result.status).toBe("ok");
-    const embeddedCall = firstMockArg(runEmbeddedPiAgentMock);
+    const embeddedCall = firstMockArg(runEmbeddedAgentMock);
     expect(embeddedCall.provider).toBe("google");
     expect(embeddedCall.model).toBe("gemini-2.0-flash");
   });
@@ -187,7 +188,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
       const result = await run(provider, model);
       return { result, provider, model, attempts: [] };
     });
-    runEmbeddedPiAgentMock.mockImplementation(async ({ onExecutionPhase }) => {
+    runEmbeddedAgentMock.mockImplementation(async ({ onExecutionPhase }) => {
       onExecutionPhase?.({
         phase: "model_call_started",
         provider: "google",
@@ -284,6 +285,45 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     ).toBe(true);
   });
 
+  it("clears stale CLI bindings when cron CLI replacement is unflushed", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      const result = await run(provider, model);
+      return { result, provider, model, attempts: [] };
+    });
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "stale-cli-session" },
+          "codex-cli": { sessionId: "codex-session" },
+        },
+      }),
+      isNewSession: false,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "summary done" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-6",
+          sessionId: "",
+          clearCliSessionBinding: true,
+          usage: { input: 10, output: 20 },
+        },
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        job: makeJob({ sessionTarget: "session:existing-cron-session" }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(clearCliSessionMock).toHaveBeenCalledWith(cronSession.sessionEntry, "claude-cli");
+  });
+
   it("validates cron thinking with catalog reasoning metadata", async () => {
     resolveAllowedModelRefMock.mockImplementation(() => ({
       ref: { provider: "ollama", model: "qwen3:0.6b" },
@@ -329,7 +369,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(catalogEntry.id).toBe("qwen3:0.6b");
     expect(catalogEntry.reasoning).toBe(true);
 
-    const embeddedCall = firstMockArg(runEmbeddedPiAgentMock);
+    const embeddedCall = firstMockArg(runEmbeddedAgentMock);
     expect(embeddedCall.provider).toBe("ollama");
     expect(embeddedCall.model).toBe("qwen3:0.6b");
     expect(embeddedCall.thinkLevel).toBe("medium");

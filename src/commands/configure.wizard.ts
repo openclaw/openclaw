@@ -1,10 +1,12 @@
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
@@ -15,7 +17,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { isPlainObject, resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -64,8 +65,7 @@ const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigMo
 );
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(typeof value === "string" ? value.trim() : value);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (parsePort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
@@ -640,7 +640,7 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      gatewayPort = Number.parseInt(portInput, 10);
+      gatewayPort = parsePort(portInput) ?? gatewayPort;
     };
 
     if (selectedSections) {

@@ -1,6 +1,6 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
-import { isAbortedAgentStopReason } from "./run-termination.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
   captureSubagentCompletionReplyUsing,
@@ -59,6 +59,9 @@ type AgentWaitResult = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  pendingError?: boolean;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
 };
 
 export type SubagentRunOutcome = {
@@ -69,10 +72,6 @@ export type SubagentRunOutcome = {
   elapsedMs?: number;
 };
 
-function readFiniteNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 export function withSubagentOutcomeTiming(
   outcome: SubagentRunOutcome,
   timing: {
@@ -80,8 +79,8 @@ export function withSubagentOutcomeTiming(
     endedAt?: number;
   },
 ): SubagentRunOutcome {
-  const startedAt = readFiniteNumber(timing.startedAt) ?? readFiniteNumber(outcome.startedAt);
-  const endedAt = readFiniteNumber(timing.endedAt) ?? readFiniteNumber(outcome.endedAt);
+  const startedAt = asFiniteNumber(timing.startedAt) ?? asFiniteNumber(outcome.startedAt);
+  const endedAt = asFiniteNumber(timing.endedAt) ?? asFiniteNumber(outcome.endedAt);
   const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
   if (typeof startedAt === "number") {
     nextTiming.startedAt = startedAt;
@@ -277,17 +276,17 @@ export function applySubagentWaitOutcome(params: {
     next.endedAt = params.wait.endedAt;
   }
   const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
+  const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(params.wait);
   let outcome = next.outcome;
-  // Capture/announcement callers can pass raw wait snapshots that bypass the primary normalizers.
-  if (isBlockedLivenessState(params.wait?.livenessState)) {
-    outcome = { status: "error", error: formatBlockedLivenessError(waitError) };
-  } else if (isAbortedAgentStopReason(params.wait?.stopReason)) {
-    outcome = { status: "error", error: "subagent run terminated" };
-  } else if (params.wait?.status === "timeout") {
+  // Capture/announcement callers can pass raw wait snapshots that bypass the
+  // primary normalizers, so preserve the shared timeout/cancel precedence here.
+  if (terminalOutcome?.status === "timeout") {
     outcome = { status: "timeout" };
-  } else if (params.wait?.status === "error") {
-    outcome = { status: "error", error: waitError };
-  } else if (params.wait?.status === "ok") {
+  } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
+    outcome = { status: "error", error: "subagent run terminated" };
+  } else if (terminalOutcome?.reason === "blocked" || terminalOutcome?.reason === "failed") {
+    outcome = { status: "error", error: terminalOutcome.error ?? waitError };
+  } else if (terminalOutcome?.reason === "completed") {
     outcome = { status: "ok" };
   }
   next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
@@ -335,18 +334,39 @@ function formatChildResultData(resultText?: string | null): string {
   );
 }
 
-export function buildChildCompletionFindings(
-  children: Array<{
-    childSessionKey: string;
-    task: string;
-    label?: string;
-    createdAt: number;
-    endedAt?: number;
-    completion?: {
-      resultText?: string | null;
+type ChildCompletionRow = {
+  childSessionKey: string;
+  task: string;
+  label?: string;
+  createdAt: number;
+  endedAt?: number;
+  frozenResultText?: string | null;
+  completion?: {
+    resultText?: string | null;
+    fallbackResultText?: string | null;
+  };
+  delivery?: {
+    payload?: {
+      frozenResultText?: string | null;
+      fallbackFrozenResultText?: string | null;
     };
-    outcome?: SubagentRunOutcome;
-  }>,
+  };
+  outcome?: SubagentRunOutcome;
+};
+
+function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
+  return (
+    child.completion?.resultText ??
+    child.delivery?.payload?.frozenResultText ??
+    child.completion?.fallbackResultText ??
+    child.delivery?.payload?.fallbackFrozenResultText ??
+    child.frozenResultText ??
+    undefined
+  )?.trim();
+}
+
+export function buildChildCompletionFindings(
+  children: Array<ChildCompletionRow>,
 ): string | undefined {
   const sorted = [...children].toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
@@ -359,7 +379,7 @@ export function buildChildCompletionFindings(
 
   const sections: string[] = [];
   for (const [index, child] of sorted.entries()) {
-    const resultText = child.completion?.resultText?.trim();
+    const resultText = selectChildCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.outcome);
     if (
       child.outcome?.status === "ok" &&
@@ -395,8 +415,16 @@ export function dedupeLatestChildCompletionRows(
     label?: string;
     createdAt: number;
     endedAt?: number;
+    frozenResultText?: string | null;
     completion?: {
       resultText?: string | null;
+      fallbackResultText?: string | null;
+    };
+    delivery?: {
+      payload?: {
+        frozenResultText?: string | null;
+        fallbackFrozenResultText?: string | null;
+      };
     };
     outcome?: SubagentRunOutcome;
   }>,
@@ -420,8 +448,16 @@ export function filterCurrentDirectChildCompletionRows(
     label?: string;
     createdAt: number;
     endedAt?: number;
+    frozenResultText?: string | null;
     completion?: {
       resultText?: string | null;
+      fallbackResultText?: string | null;
+    };
+    delivery?: {
+      payload?: {
+        frozenResultText?: string | null;
+        fallbackFrozenResultText?: string | null;
+      };
     };
     outcome?: SubagentRunOutcome;
   }>,

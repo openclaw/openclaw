@@ -4,6 +4,7 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
+import { parseMergeForwardContent } from "./bot-content.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
 import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
@@ -199,7 +200,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         upsertPairingRequest: vi.fn(),
         buildPairingReply: vi.fn(),
       },
-      turn: {
+      inbound: {
         run: vi.fn(async (params) => {
           const input = await params.adapter.ingest(params.raw);
           const turn = await params.adapter.resolveTurn(input, {
@@ -219,9 +220,6 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
             dispatchResult: await turn.runDispatch(),
           };
         }),
-        runPrepared: vi.fn(async (params) => ({
-          dispatchResult: await params.runDispatch(),
-        })),
       },
       ...overrides.channel,
     },
@@ -1237,13 +1235,13 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     const context = mockCallArg<{
-      ReplyToBody?: string;
       ReplyToId?: string;
       RootMessageId?: string;
+      SupplementalContext?: { quote?: { body?: string } };
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ReplyToId).toBe("om_parent_001");
     expect(context.RootMessageId).toBe("om_root_001");
-    expect(context.ReplyToBody).toBe("quoted content");
+    expect(context.SupplementalContext?.quote?.body).toBe("quoted content");
   });
 
   it("uses message create_time as Timestamp instead of Date.now()", async () => {
@@ -1302,6 +1300,42 @@ describe("handleFeishuMessage command authorization", () => {
         chat_type: "p2p",
         message_type: "text",
         content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    const before = Date.now();
+    await dispatchMessage({ cfg, event });
+    const after = Date.now();
+
+    const call = mockFinalizeInboundContext.mock.calls.at(0)?.[0] as { Timestamp: number };
+    expect(call.Timestamp).toBeGreaterThanOrEqual(before);
+    expect(call.Timestamp).toBeLessThanOrEqual(after);
+  });
+
+  it("falls back to Date.now() when create_time is malformed", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-attacker",
+        },
+      },
+      message: {
+        message_id: "msg-malformed-create-time",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+        create_time: "1700000000000ms",
       },
     };
 
@@ -1748,13 +1782,12 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const context = mockCallArg<{ ReplyToBody?: string; ReplyToId?: string }>(
-      mockFinalizeInboundContext,
-      0,
-      0,
-    );
+    const context = mockCallArg<{
+      ReplyToId?: string;
+      SupplementalContext?: { quote?: { body?: string } };
+    }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ReplyToId).toBe("om_parent_blocked");
-    expect(context.ReplyToBody).toBeUndefined();
+    expect(context.SupplementalContext?.quote?.body).toBeUndefined();
   });
 
   it("keeps quoted group context from non-allowlisted senders in default all mode", async () => {
@@ -1800,13 +1833,12 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const context = mockCallArg<{ ReplyToBody?: string; ReplyToId?: string }>(
-      mockFinalizeInboundContext,
-      0,
-      0,
-    );
+    const context = mockCallArg<{
+      ReplyToId?: string;
+      SupplementalContext?: { quote?: { body?: string } };
+    }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ReplyToId).toBe("om_parent_visible");
-    expect(context.ReplyToBody).toBe("visible quoted content");
+    expect(context.SupplementalContext?.quote?.body).toBe("visible quoted content");
   });
 
   it("dispatches group image message when groupPolicy is open (requireMention defaults to false)", async () => {
@@ -2428,6 +2460,34 @@ describe("handleFeishuMessage command authorization", () => {
     const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
     expect(context.BodyForAgent).toContain(
       "[Merged and Forwarded Messages]\n- alpha\n- [File: report.pdf]",
+    );
+  });
+
+  it("does not partially parse malformed merge_forward create_time values", () => {
+    const content = JSON.stringify([
+      {
+        message_id: "container",
+        msg_type: "merge_forward",
+        body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+      },
+      {
+        message_id: "partial",
+        upper_message_id: "container",
+        msg_type: "text",
+        body: { content: JSON.stringify({ text: "partial" }) },
+        create_time: "2000ms",
+      },
+      {
+        message_id: "valid",
+        upper_message_id: "container",
+        msg_type: "text",
+        body: { content: JSON.stringify({ text: "valid" }) },
+        create_time: "1000",
+      },
+    ]);
+
+    expect(parseMergeForwardContent({ content })).toBe(
+      "[Merged and Forwarded Messages]\n- partial\n- valid",
     );
   });
 
@@ -3273,13 +3333,15 @@ describe("handleFeishuMessage command authorization", () => {
     expect(listRequest.rootMessageId).toBe("om_topic_root");
     const context = mockCallArg<{
       MessageThreadId?: string;
-      ThreadHistoryBody?: string;
-      ThreadLabel?: string;
-      ThreadStarterBody?: string;
+      SupplementalContext?: {
+        thread?: { historyBody?: string; label?: string; starterBody?: string };
+      };
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.ThreadStarterBody).toBe("root starter");
-    expect(context.ThreadHistoryBody).toBe("assistant reply\n\nfollow-up question");
-    expect(context.ThreadLabel).toBe("Feishu thread in oc-group");
+    expect(context.SupplementalContext?.thread?.starterBody).toBe("root starter");
+    expect(context.SupplementalContext?.thread?.historyBody).toBe(
+      "assistant reply\n\nfollow-up question",
+    );
+    expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
     expect(context.MessageThreadId).toBe("om_topic_root");
   });
 
@@ -3318,13 +3380,13 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockListFeishuThreadMessages).not.toHaveBeenCalled();
     const context = mockCallArg<{
       MessageThreadId?: string;
-      ThreadHistoryBody?: string;
-      ThreadLabel?: string;
-      ThreadStarterBody?: string;
+      SupplementalContext?: {
+        thread?: { historyBody?: string; label?: string; starterBody?: string };
+      };
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.ThreadStarterBody).toBeUndefined();
-    expect(context.ThreadHistoryBody).toBeUndefined();
-    expect(context.ThreadLabel).toBe("Feishu thread in oc-group");
+    expect(context.SupplementalContext?.thread?.starterBody).toBeUndefined();
+    expect(context.SupplementalContext?.thread?.historyBody).toBeUndefined();
+    expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
     expect(context.MessageThreadId).toBe("om_topic_root");
   });
 
@@ -3390,13 +3452,15 @@ describe("handleFeishuMessage command authorization", () => {
 
     const context = mockCallArg<{
       MessageThreadId?: string;
-      ThreadHistoryBody?: string;
-      ThreadLabel?: string;
-      ThreadStarterBody?: string;
+      SupplementalContext?: {
+        thread?: { historyBody?: string; label?: string; starterBody?: string };
+      };
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.ThreadStarterBody).toBe("root starter");
-    expect(context.ThreadHistoryBody).toBe("assistant reply\n\nfollow-up question");
-    expect(context.ThreadLabel).toBe("Feishu thread in oc-group");
+    expect(context.SupplementalContext?.thread?.starterBody).toBe("root starter");
+    expect(context.SupplementalContext?.thread?.historyBody).toBe(
+      "assistant reply\n\nfollow-up question",
+    );
+    expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
     expect(context.MessageThreadId).toBe("om_topic_root");
   });
 
@@ -3470,11 +3534,12 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     const context = mockCallArg<{
-      ThreadHistoryBody?: string;
-      ThreadStarterBody?: string;
+      SupplementalContext?: { thread?: { historyBody?: string; starterBody?: string } };
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.ThreadStarterBody).toBe("assistant reply");
-    expect(context.ThreadHistoryBody).toBe("assistant reply\n\nallowed follow-up");
+    expect(context.SupplementalContext?.thread?.starterBody).toBe("assistant reply");
+    expect(context.SupplementalContext?.thread?.historyBody).toBe(
+      "assistant reply\n\nallowed follow-up",
+    );
   });
 
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {

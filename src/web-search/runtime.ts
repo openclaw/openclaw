@@ -23,6 +23,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   hasWebProviderEntryCredential,
   providerRequiresCredential,
@@ -137,7 +138,6 @@ export function listWebSearchProviders(params?: {
   const config = resolveWebSearchRuntimeConfig({ config: params?.config });
   return resolveRuntimeWebSearchProviders({
     config,
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -147,7 +147,6 @@ export function listConfiguredWebSearchProviders(params?: {
   const config = resolveWebSearchRuntimeConfig({ config: params?.config });
   return resolvePluginWebSearchProviders({
     config,
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -163,7 +162,6 @@ export function resolveWebSearchProviderId(params: {
     params.providers ??
       resolvePluginWebSearchProviders({
         config,
-        bundledAllowlistCompat: true,
       }),
   );
   const raw =
@@ -282,12 +280,10 @@ export function resolveWebSearchDefinition(
     options?.preferRuntimeProviders
       ? resolveRuntimeWebSearchProviders({
           config,
-          bundledAllowlistCompat: true,
           ...loadScope,
         })
       : resolvePluginWebSearchProviders({
           config,
-          bundledAllowlistCompat: true,
           ...loadScope,
         }),
   );
@@ -351,12 +347,10 @@ function resolveWebSearchCandidates(
     options?.preferRuntimeProviders
       ? resolveRuntimeWebSearchProviders({
           config,
-          bundledAllowlistCompat: true,
           ...loadScope,
         })
       : resolvePluginWebSearchProviders({
           config,
-          bundledAllowlistCompat: true,
           ...loadScope,
         }),
   ).filter(Boolean);
@@ -364,13 +358,13 @@ function resolveWebSearchCandidates(
     return [];
   }
 
-  const preferredIds = [
-    options?.providerId,
-    runtimeWebSearch?.selectedProvider,
-    runtimeWebSearch?.providerConfigured,
-    resolveWebSearchProviderId({ config, agentDir: options?.agentDir, search, providers }),
-  ].filter(
-    (value, index, array): value is string => Boolean(value) && array.indexOf(value) === index,
+  const preferredIds = uniqueStrings(
+    [
+      options?.providerId,
+      runtimeWebSearch?.selectedProvider,
+      runtimeWebSearch?.providerConfigured,
+      resolveWebSearchProviderId({ config, agentDir: options?.agentDir, search, providers }),
+    ].filter((value): value is string => Boolean(value)),
   );
 
   const explicitProviderId = options?.providerId?.trim();

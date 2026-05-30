@@ -1,13 +1,17 @@
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   clearPendingQueueItemsForRun,
   createChatSessionsLoadOverrides,
   flushChatQueueForEvent,
+  hasReconnectableQueuedChatSends,
+  markQueuedChatSendsWaitingForReconnect,
   refreshChatAvatar,
+  retryReconnectableQueuedChatSends,
+  scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -44,12 +48,12 @@ import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap
 import { loadDevices, type DevicesState } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
-  addExecApproval,
+  clearResolvedExecApprovalPrompt,
+  enqueueExecApprovalPrompt,
   parseExecApprovalRequested,
   parseExecApprovalResolved,
   parsePluginApprovalRequested,
   pruneExecApprovalQueue,
-  removeExecApproval,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import {
@@ -117,10 +121,11 @@ type GatewayHost = {
   sessionKey: string;
   sessionsShowArchived: boolean;
   chatRunId: string | null;
-  pendingAbort?: { runId?: string | null; sessionKey: string } | null;
+  pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   refreshSessionsAfterChat: Set<string>;
   sessionsLoading?: boolean;
   execApprovalQueue: ExecApprovalRequest[];
+  execApprovalBusy: boolean;
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
   reconcileWebPushState?: () => Promise<void> | void;
@@ -156,18 +161,13 @@ function enqueueApprovalRequest(host: GatewayHost, entry: ExecApprovalRequest | 
   if (!entry) {
     return;
   }
-  host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
-  host.execApprovalError = null;
-  const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
-  window.setTimeout(() => {
-    host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
-  }, delay);
+  enqueueExecApprovalPrompt(host, entry);
 }
 
 function removeResolvedApprovalRequest(host: GatewayHost, payload: unknown) {
   const resolved = parseExecApprovalResolved(payload);
   if (resolved) {
-    host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+    clearResolvedExecApprovalPrompt(host, resolved.id);
   }
 }
 
@@ -465,6 +465,85 @@ function resolveMainSessionFallback(host: GatewayHost): string {
   });
 }
 
+function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+  return sessionKey?.trim().toLowerCase() === "global";
+}
+
+function resolveDefaultAgentId(host: GatewayHost): string {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  return normalizeAgentId(
+    host.agentsList?.defaultId?.trim() ||
+      snapshot?.sessionDefaults?.defaultAgentId?.trim() ||
+      "main",
+  );
+}
+
+function resolveSelectedGlobalAgentId(host: GatewayHost): string {
+  return normalizeAgentId(host.assistantAgentId?.trim() || resolveDefaultAgentId(host));
+}
+
+function resolveGlobalAliasAgentId(host: GatewayHost, sessionKey: string | undefined | null) {
+  const parsed = parseAgentSessionKey(sessionKey ?? "");
+  if (!parsed) {
+    return undefined;
+  }
+  const rest = parsed.rest.trim().toLowerCase();
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim().toLowerCase() || "main";
+  return rest === "main" || rest === mainKey ? normalizeAgentId(parsed.agentId) : undefined;
+}
+
+function resolveSelectedGlobalEventAgentId(
+  host: GatewayHost,
+  agentId: string | undefined | null,
+): string {
+  return agentId ? normalizeAgentId(agentId) : resolveDefaultAgentId(host);
+}
+
+function globalAgentScopeMatches(
+  host: GatewayHost,
+  sessionKey: string | undefined | null,
+  agentId: string | undefined | null,
+): boolean {
+  if (!isGlobalSessionKey(sessionKey)) {
+    return true;
+  }
+  const selectedAgentId = isGlobalSessionKey(host.sessionKey)
+    ? resolveSelectedGlobalAgentId(host)
+    : resolveGlobalAliasAgentId(host, host.sessionKey);
+  if (!selectedAgentId) {
+    return true;
+  }
+  return resolveSelectedGlobalEventAgentId(host, agentId) === selectedAgentId;
+}
+
+function sessionMessageMatchesHost(
+  host: GatewayHost,
+  sessionKey: string | undefined,
+  agentId: string | undefined | null,
+): boolean {
+  if (!sessionKey) {
+    return false;
+  }
+  if (areUiSessionKeysEquivalent(sessionKey, host.sessionKey)) {
+    return true;
+  }
+  const hostAliasAgentId = resolveGlobalAliasAgentId(host, host.sessionKey);
+  return Boolean(
+    hostAliasAgentId &&
+    isGlobalSessionKey(sessionKey) &&
+    resolveSelectedGlobalEventAgentId(host, agentId) === hostAliasAgentId,
+  );
+}
+
+function chatSideResultAgentScopeMatches(host: GatewayHost, sideResult: ChatSideResult): boolean {
+  return globalAgentScopeMatches(host, sideResult.sessionKey, sideResult.agentId);
+}
+
 function fallbackUnconfiguredSessionSelection(host: GatewayHost) {
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (!parsed) {
@@ -556,8 +635,17 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           .request(
             "chat.abort",
             abort.runId
-              ? { sessionKey: abort.sessionKey, runId: abort.runId }
-              : { sessionKey: abort.sessionKey },
+              ? {
+                  sessionKey: abort.sessionKey,
+                  ...scopedAgentParamsForSession(host, abort.sessionKey),
+                  ...(abort.agentId ? { agentId: abort.agentId } : {}),
+                  runId: abort.runId,
+                }
+              : {
+                  sessionKey: abort.sessionKey,
+                  ...scopedAgentParamsForSession(host, abort.sessionKey),
+                  ...(abort.agentId ? { agentId: abort.agentId } : {}),
+                },
           )
           .catch((err) => {
             // Log to console for diagnostics; user sees no feedback for a stale abort
@@ -585,10 +673,18 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           clearRunStatus: !hadOrphanedRun,
         },
       );
-      if (shutdownHost.resumeChatQueueAfterReconnect) {
+      const hasReconnectableChatSends = hasReconnectableQueuedChatSends(
+        host as unknown as Parameters<typeof hasReconnectableQueuedChatSends>[0],
+      );
+      if (shutdownHost.resumeChatQueueAfterReconnect || hasReconnectableChatSends) {
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.
         shutdownHost.resumeChatQueueAfterReconnect = false;
+        if (hasReconnectableChatSends) {
+          void retryReconnectableQueuedChatSends(
+            host as unknown as Parameters<typeof retryReconnectableQueuedChatSends>[0],
+          );
+        }
         void flushChatQueueForEvent(
           host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
         );
@@ -613,6 +709,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      markQueuedChatSendsWaitingForReconnect(
+        host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
+      );
       clearSessionsChangedReloadTimer(host);
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
@@ -700,6 +799,7 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         ...createChatSessionsLoadOverrides(host),
+        ...scopedAgentParamsForSession(host, host.sessionKey),
       });
     }
   }
@@ -840,13 +940,14 @@ function flushChatQueueAfterSessionRunReconcile(
 
 function handleSessionMessageGatewayEvent(
   host: GatewayHost,
-  payload: { sessionKey?: string; runId?: unknown } | undefined,
+  payload: { sessionKey?: string; agentId?: string; runId?: unknown } | undefined,
 ) {
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const sessionKey = payload?.sessionKey?.trim();
-  const sessionMatchesHost = Boolean(
-    sessionKey && areUiSessionKeysEquivalent(sessionKey, host.sessionKey),
-  );
+  if (!globalAgentScopeMatches(host, sessionKey, payload?.agentId)) {
+    return;
+  }
+  const sessionMatchesHost = sessionMessageMatchesHost(host, sessionKey, payload?.agentId);
   const runIdBeforeApply = host.chatRunId;
   const result = applySessionsChangedEvent(host as unknown as SessionsState, payload);
   if (result.applied && result.clearedChatRun) {
@@ -871,11 +972,13 @@ function handleSessionMessageGatewayEvent(
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
+      ...scopedAgentParamsForSession(host, host.sessionKey),
       publishChatRunStatus: false,
     }).finally(() =>
       replayDeferredSessionMessageReloadAfterSessionsRefresh(
         host,
         sessionKey,
+        payload?.agentId,
         refreshStartedAt,
         runIdBeforeRefresh,
       ),
@@ -889,6 +992,7 @@ function handleSessionMessageGatewayEvent(
 function replayDeferredSessionMessageReloadAfterSessionsRefresh(
   host: GatewayHost,
   sessionKey: string,
+  agentId: string | undefined | null,
   startedAt: number,
   completedRunId?: string | null,
 ) {
@@ -898,7 +1002,7 @@ function replayDeferredSessionMessageReloadAfterSessionsRefresh(
       deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim() ?? "",
       sessionKey,
     ) ||
-    !areUiSessionKeysEquivalent(host.sessionKey, sessionKey)
+    !sessionMessageMatchesHost(host, sessionKey, agentId)
   ) {
     return;
   }
@@ -912,6 +1016,7 @@ function replayDeferredSessionMessageReloadAfterSessionsRefresh(
           replayDeferredSessionMessageReloadAfterSessionsRefresh(
             host,
             sessionKey,
+            agentId,
             startedAt,
             completedRunId,
           ),
@@ -971,7 +1076,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat.side_result") {
     const sideResult = parseChatSideResult(evt.payload);
-    if (!sideResult || sideResult.sessionKey !== host.sessionKey) {
+    if (
+      !sideResult ||
+      !sessionMessageMatchesHost(host, sideResult.sessionKey, sideResult.agentId) ||
+      !chatSideResultAgentScopeMatches(host, sideResult)
+    ) {
       return;
     }
     const sideResultHost = host as GatewayHostWithSideResults;
@@ -981,7 +1090,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "session.message") {
-    handleSessionMessageGatewayEvent(host, evt.payload as { sessionKey?: string } | undefined);
+    handleSessionMessageGatewayEvent(
+      host,
+      evt.payload as { sessionKey?: string; agentId?: string } | undefined,
+    );
     return;
   }
 

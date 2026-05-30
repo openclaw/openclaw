@@ -12,9 +12,10 @@ import {
   Text,
   TUI,
 } from "@earendil-works/pi-tui";
+import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
-import type { CommandEntry } from "../gateway/protocol/index.js";
+import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
@@ -34,7 +35,7 @@ import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatTokens } from "./tui-formatters.js";
+import { formatGoalFooter, formatTokens } from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
   readTuiLastSessionKey,
@@ -368,14 +369,18 @@ export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
 
 export function canSubmitTuiChatMessage(params: {
   local?: boolean;
-  activityStatus: string;
   activeChatRunId?: string | null;
   pendingChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
+  message?: string;
 }): boolean {
+  const stopText = params.message ? isChatStopCommandText(params.message) : false;
+  if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
+    return true;
+  }
   const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
-  if (params.activeChatRunId) {
-    return params.local === true && params.activityStatus === "finishing context" && !pending;
+  if (!params.local && params.activeChatRunId) {
+    return false;
   }
   return !pending;
 }
@@ -985,6 +990,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     statusTimer = null;
   };
 
+  const stopStatusTimeout = () => {
+    if (!statusTimeout) {
+      return;
+    }
+    clearTimeout(statusTimeout);
+    statusTimeout = null;
+  };
+
   const startWaitingTimer = () => {
     if (waitingTimer) {
       return;
@@ -1047,7 +1060,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     connectionStatus = text;
     renderStatus();
     if (statusTimeout) {
-      clearTimeout(statusTimeout);
+      stopStatusTimeout();
     }
     if (ttlMs && ttlMs > 0) {
       statusTimeout = setTimeout(() => {
@@ -1151,6 +1164,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,
+      formatGoalFooter(sessionInfo.goal),
       think !== "off" ? `think ${think}` : null,
       fast ? "fast" : null,
       verbose !== "off" ? `verbose ${verbose}` : null,
@@ -1258,6 +1272,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       .then(() => drainAndStopTuiSafely(tui))
       .finally(() => {
         clearTimeout(hardExitTimer);
+        stopStatusTimeout();
       })
       .catch((err) => {
         if (!isTuiTerminalLossError(err)) {
@@ -1282,7 +1297,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       client,
       chatLog,
       tui,
-      opts,
+      opts: { ...opts, local: isLocalMode },
       state,
       deliverDefault,
       openOverlay,
@@ -1310,13 +1325,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     closeOverlay,
   });
   updateAutocompleteProvider();
-  const canSubmitChatMessage = () =>
+  const canSubmitChatMessage = (message: string) =>
     canSubmitTuiChatMessage({
-      local: opts.local,
-      activityStatus: state.activityStatus,
+      local: isLocalMode,
       activeChatRunId: state.activeChatRunId,
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
+      message,
     });
   const notifyBlockedChatSubmit = () => {
     chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");

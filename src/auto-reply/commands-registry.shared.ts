@@ -1,4 +1,5 @@
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -51,7 +52,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   return {
     key: command.key,
     nativeName: command.nativeName,
-    nativeAliases: command.nativeAliases?.map((alias) => alias.trim()).filter(Boolean),
+    nativeAliases: command.nativeAliases
+      ? normalizeStringEntries(command.nativeAliases)
+      : undefined,
     description: command.description,
     acceptsArgs,
     args: command.args,
@@ -216,6 +219,29 @@ export function buildBuiltinChatCommands(
       textAlias: "/status",
       category: "status",
       tier: "essential",
+    }),
+    defineChatCommand({
+      key: "goal",
+      nativeName: "goal",
+      description: "Show or control the current goal.",
+      textAlias: "/goal",
+      category: "status",
+      tier: "standard",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "action",
+          description: "status, start, pause, resume, complete, block, clear",
+          type: "string",
+          choices: ["status", "start", "pause", "resume", "complete", "block", "clear"],
+        },
+        {
+          name: "text",
+          description: "Goal objective or note",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
     }),
     defineChatCommand({
       key: "diagnostics",

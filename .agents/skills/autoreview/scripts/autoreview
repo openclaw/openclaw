@@ -6,13 +6,15 @@ import concurrent.futures
 import copy
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 ENGINES = ("codex", "claude", "droid", "copilot")
@@ -93,13 +95,136 @@ def run(args: list[str], cwd: Path, *, input_text: str | None = None, check: boo
     return result
 
 
+def run_with_heartbeat(
+    args: list[str],
+    cwd: Path,
+    *,
+    input_text: str | None = None,
+    label: str,
+    heartbeat_seconds: int = 60,
+    stream_output: bool = False,
+    stream_display: Callable[[str, str], str | None] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    if stream_output:
+        return run_with_stream(
+            args,
+            cwd,
+            input_text=input_text,
+            label=label,
+            heartbeat_seconds=heartbeat_seconds,
+            stream_display=stream_display,
+        )
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    first_communicate = True
+    while True:
+        try:
+            stdout, stderr = proc.communicate(
+                input=input_text if first_communicate else None,
+                timeout=heartbeat_seconds,
+            )
+            return subprocess.CompletedProcess(args, int(proc.returncode or 0), stdout, stderr)
+        except subprocess.TimeoutExpired:
+            first_communicate = False
+            elapsed = int(time.monotonic() - started)
+            print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}", file=sys.stderr, flush=True)
+
+
+def run_with_stream(
+    args: list[str],
+    cwd: Path,
+    *,
+    input_text: str | None,
+    label: str,
+    heartbeat_seconds: int,
+    stream_display: Callable[[str, str], str | None] | None,
+) -> subprocess.CompletedProcess[str]:
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    events: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+
+    def read_stream(name: str, stream: Any) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                events.put((name, line))
+        finally:
+            events.put((name, None))
+
+    def write_stdin() -> None:
+        if proc.stdin is None or input_text is None:
+            return
+        try:
+            proc.stdin.write(input_text)
+            proc.stdin.close()
+        except BrokenPipeError:
+            return
+
+    threads = [
+        threading.Thread(target=read_stream, args=("stdout", proc.stdout), daemon=True),
+        threading.Thread(target=read_stream, args=("stderr", proc.stderr), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    stdin_thread = threading.Thread(target=write_stdin, daemon=True)
+    stdin_thread.start()
+
+    open_streams = 2
+    while open_streams:
+        try:
+            name, line = events.get(timeout=heartbeat_seconds)
+        except queue.Empty:
+            elapsed = int(time.monotonic() - started)
+            print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}", file=sys.stderr, flush=True)
+            continue
+        if line is None:
+            open_streams -= 1
+            continue
+        if name == "stdout":
+            stdout_parts.append(line)
+        else:
+            stderr_parts.append(line)
+        display = stream_display(name, line) if stream_display else line
+        if display:
+            target = sys.stdout if name == "stdout" else sys.stderr
+            target.write(display)
+            target.flush()
+
+    for thread in threads:
+        thread.join()
+    stdin_thread.join(timeout=1)
+    returncode = proc.wait()
+    return subprocess.CompletedProcess(args, returncode, "".join(stdout_parts), "".join(stderr_parts))
+
+
 def git(repo: Path, *args: str, check: bool = True) -> str:
-    return run(["git", *args], repo, check=check).stdout
+    return run([resolve_command("git", repo), *args], repo, check=check).stdout
 
 
 def repo_root() -> Path:
+    start = Path.cwd().resolve()
+    unsafe_root = discover_repo_root(start) or start
+    git_bin = find_command("git", unsafe_root)
+    if not git_bin:
+        raise SystemExit("git executable not found. Install Git or add it to PATH.")
     result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
+        [git_bin, "rev-parse", "--show-toplevel"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -107,6 +232,16 @@ def repo_root() -> Path:
     if result.returncode != 0:
         raise SystemExit("autoreview must run inside a git repository")
     return Path(result.stdout.strip()).resolve()
+
+
+def discover_repo_root(start: Path) -> Path | None:
+    current = start
+    while True:
+        if (current / ".git").exists():
+            return current
+        if current.parent == current:
+            return None
+        current = current.parent
 
 
 def current_branch(repo: Path) -> str:
@@ -118,6 +253,7 @@ def is_dirty(repo: Path) -> bool:
 
 
 def choose_target(repo: Path, mode: str, base_ref: str | None) -> tuple[str, str | None]:
+    mode = "local" if mode == "uncommitted" else mode
     branch = current_branch(repo)
     if mode == "local" or (mode == "auto" and is_dirty(repo)):
         return "local", None
@@ -129,17 +265,70 @@ def choose_target(repo: Path, mode: str, base_ref: str | None) -> tuple[str, str
 
 
 def detect_pr_base(repo: Path) -> str | None:
-    if not shutil_which("gh"):
+    gh_bin = find_command("gh", repo)
+    if not gh_bin:
         return None
-    result = run(["gh", "pr", "view", "--json", "baseRefName", "--jq", ".baseRefName"], repo, check=False)
+    result = run([gh_bin, "pr", "view", "--json", "baseRefName", "--jq", ".baseRefName"], repo, check=False)
     base = result.stdout.strip()
     return f"origin/{base}" if result.returncode == 0 and base else None
 
 
-def shutil_which(name: str) -> str | None:
+def resolve_command(name: str, repo: Path) -> str:
+    resolved = find_command(name, repo)
+    if resolved:
+        return resolved
+    raise SystemExit(f"executable not found: {name}. Install it or pass an explicit trusted path when supported.")
+
+
+def find_command(name: str, repo: Path) -> str | None:
+    command = Path(name)
+    if has_directory_component(name, command):
+        base = command if command.is_absolute() else repo / command
+        return first_executable_candidate(base)
     for part in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(part) / name
-        if candidate.exists() and os.access(candidate, os.X_OK):
+        if not part or part == ".":
+            continue
+        path_part = Path(part)
+        if not path_part.is_absolute():
+            continue
+        try:
+            resolved_part = path_part.resolve()
+            resolved_repo = repo.resolve()
+        except OSError:
+            continue
+        if is_within(resolved_part, resolved_repo):
+            continue
+        found = first_executable_candidate(resolved_part / name, reject_root=resolved_repo)
+        if found:
+            return found
+    return None
+
+
+def is_within(path: Path, root: Path) -> bool:
+    return path == root or path.is_relative_to(root)
+
+
+def has_directory_component(name: str, command: Path) -> bool:
+    separators = [separator for separator in (os.sep, os.altsep) if separator]
+    return command.is_absolute() or bool(command.drive) or any(separator in name for separator in separators)
+
+
+def first_executable_candidate(path: Path, *, reject_root: Path | None = None) -> str | None:
+    if os.name == "nt" and not path.suffix:
+        extensions = [ext for ext in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if ext]
+        candidates = [path.with_suffix(ext.lower()) for ext in extensions]
+        candidates.extend(path.with_suffix(ext.upper()) for ext in extensions)
+        candidates.append(path)
+    else:
+        candidates = [path]
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            if reject_root is not None:
+                try:
+                    if is_within(candidate.resolve(), reject_root):
+                        continue
+                except OSError:
+                    continue
             return str(candidate)
     return None
 
@@ -298,16 +487,18 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         raise SystemExit("--no-tools is not supported by the Codex engine; use --engine claude --no-tools for a no-tools run")
     schema_path = write_json_temp(SCHEMA)
     output_path = Path(tempfile.NamedTemporaryFile("w", suffix=".json", delete=False).name)
-    cmd = [args.codex_bin, "--ask-for-approval", "never"]
+    cmd = [resolve_command(args.codex_bin, repo), "--ask-for-approval", "never"]
     if args.web_search:
         cmd.append("--search")
     if args.model:
         cmd.extend(["--model", args.model])
     if args.thinking:
         cmd.extend(["-c", f'model_reasoning_effort="{args.thinking}"'])
+    cmd.append("exec")
+    if args.stream_engine_output:
+        cmd.append("--json")
     cmd.extend(
         [
-            "exec",
             "--ephemeral",
             "-C",
             str(repo),
@@ -320,7 +511,14 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             "-",
         ]
     )
-    result = run(cmd, repo, input_text=prompt, check=False)
+    result = run_with_heartbeat(
+        cmd,
+        repo,
+        input_text=prompt,
+        label="codex",
+        stream_output=args.stream_engine_output,
+        stream_display=CodexStreamDisplay() if args.stream_engine_output else None,
+    )
     try:
         output = output_path.read_text()
     finally:
@@ -333,11 +531,11 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
 
 def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     cmd = [
-        args.claude_bin,
+        resolve_command(args.claude_bin, repo),
         "--print",
         "--no-session-persistence",
         "--output-format",
-        "json",
+        "stream-json" if args.stream_engine_output else "json",
         "--json-schema",
         json.dumps(SCHEMA),
     ]
@@ -345,11 +543,20 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--allowedTools", claude_allowed_tools(args)])
     else:
         cmd.extend(["--tools", ""])
+    if args.stream_engine_output:
+        cmd.append("--verbose")
     if args.model:
         cmd.extend(["--model", args.model])
     if args.thinking:
         cmd.extend(["--effort", args.thinking])
-    result = run(cmd, repo, input_text=prompt, check=False)
+    result = run_with_heartbeat(
+        cmd,
+        repo,
+        input_text=prompt,
+        label="claude",
+        stream_output=args.stream_engine_output,
+        stream_display=ClaudeStreamDisplay() if args.stream_engine_output else None,
+    )
     if result.returncode != 0:
         raise SystemExit(f"claude engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
@@ -361,7 +568,7 @@ def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     prompt_path = Path(tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False).name)
     prompt_path.write_text(prompt)
     cmd = [
-        args.droid_bin,
+        resolve_command(args.droid_bin, repo),
         "exec",
         "--cwd",
         str(repo),
@@ -374,7 +581,7 @@ def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--model", args.model])
     if not args.tools:
         cmd.extend(["--disabled-tools", "*"])
-    result = run(cmd, repo, check=False)
+    result = run_with_heartbeat(cmd, repo, label="droid", stream_output=args.stream_engine_output)
     prompt_path.unlink(missing_ok=True)
     if result.returncode != 0:
         raise SystemExit(f"droid engine failed ({result.returncode})\n{result.stderr or result.stdout}")
@@ -391,7 +598,7 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         prompt_path.write_text(prompt)
         os.chmod(prompt_path, 0o600)
         cmd = [
-            args.copilot_bin,
+            resolve_command(args.copilot_bin, repo),
             "-C",
             tempdir,
             "-p",
@@ -399,7 +606,7 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             "--output-format",
             "json",
             "--stream",
-            "off",
+            "on" if args.stream_engine_output else "off",
             "--no-ask-user",
             "--disable-builtin-mcps",
         ]
@@ -416,10 +623,140 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         )
         if args.web_search:
             cmd.append("--allow-all-urls")
-        result = run(cmd, Path(tempdir), check=False)
+        result = run_with_heartbeat(cmd, Path(tempdir), label="copilot", stream_output=args.stream_engine_output)
     if result.returncode != 0:
         raise SystemExit(f"copilot engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
+
+
+class CodexStreamDisplay:
+    def __init__(self, *, activity_seconds: int = 20) -> None:
+        self.activity_seconds = activity_seconds
+        self.hidden_events = 0
+        self.last_visible = time.monotonic()
+
+    def __call__(self, name: str, line: str) -> str | None:
+        if name != "stdout":
+            return line
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return self.visible(line)
+        event_type = event.get("type")
+        if event_type == "thread.started":
+            return self.visible(f"codex thread: {event.get('thread_id', '<unknown>')}\n")
+        if event_type == "turn.started":
+            return self.visible("codex turn started\n")
+        if event_type == "turn.completed":
+            usage = event.get("usage")
+            message = format_codex_usage(usage) + "\n" if isinstance(usage, dict) else "codex turn completed\n"
+            return self.visible(self.flush_hidden() + message)
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+            return self.visible(self.flush_hidden() + item["text"].rstrip() + "\n")
+        return self.hidden_activity()
+
+    def hidden_activity(self) -> str | None:
+        self.hidden_events += 1
+        if time.monotonic() - self.last_visible < self.activity_seconds:
+            return None
+        return self.visible(self.flush_hidden())
+
+    def flush_hidden(self) -> str:
+        if not self.hidden_events:
+            return ""
+        count = self.hidden_events
+        self.hidden_events = 0
+        return f"codex activity: {count} hidden tool/status events\n"
+
+    def visible(self, text: str) -> str:
+        self.last_visible = time.monotonic()
+        return text
+
+
+class ClaudeStreamDisplay:
+    def __init__(self, *, activity_seconds: int = 20) -> None:
+        self.activity_seconds = activity_seconds
+        self.hidden_events = 0
+        self.last_visible = time.monotonic()
+        self.started = False
+
+    def __call__(self, name: str, line: str) -> str | None:
+        if name != "stdout":
+            return line
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return self.visible(line)
+        event_type = event.get("type")
+        if event_type == "system" and not self.started:
+            self.started = True
+            return self.visible("claude turn started\n")
+        if event_type == "assistant":
+            return self.assistant_message(event)
+        if event_type == "result":
+            return self.visible(self.flush_hidden() + self.result_summary(event))
+        return self.hidden_activity()
+
+    def assistant_message(self, event: dict[str, Any]) -> str | None:
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return self.hidden_activity()
+        chunks: list[str] = []
+        for item in message.get("content", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text" and isinstance(item.get("text"), str):
+                chunks.append(item["text"].rstrip())
+        if chunks:
+            return self.visible(self.flush_hidden() + "\n".join(chunks) + "\n")
+        return self.hidden_activity()
+
+    def result_summary(self, event: dict[str, Any]) -> str:
+        usage = event.get("usage")
+        fields: list[str] = []
+        if isinstance(usage, dict):
+            for key in (
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+                "output_tokens",
+            ):
+                value = usage.get(key)
+                if isinstance(value, int):
+                    fields.append(f"{key}={value}")
+        cost = event.get("total_cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            fields.append(f"cost_usd={cost:.6f}")
+        return "claude usage: " + " ".join(fields) + "\n" if fields else "claude turn completed\n"
+
+    def hidden_activity(self) -> str | None:
+        self.hidden_events += 1
+        if time.monotonic() - self.last_visible < self.activity_seconds:
+            return None
+        return self.visible(self.flush_hidden())
+
+    def flush_hidden(self) -> str:
+        if not self.hidden_events:
+            return ""
+        count = self.hidden_events
+        self.hidden_events = 0
+        return f"claude activity: {count} hidden tool/status events\n"
+
+    def visible(self, text: str) -> str:
+        self.last_visible = time.monotonic()
+        return text
+
+
+def format_codex_usage(usage: dict[str, Any]) -> str:
+    fields = [
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    ]
+    parts = [f"{field}={usage[field]}" for field in fields if isinstance(usage.get(field), int)]
+    return "codex usage: " + " ".join(parts) if parts else "codex usage: unavailable"
 
 
 def claude_allowed_tools(args: argparse.Namespace) -> str:
@@ -459,7 +796,7 @@ def extract_json(text: str) -> dict[str, Any]:
 
 
 def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
-    candidates: list[str] = []
+    candidates: list[str | dict[str, Any]] = []
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -478,7 +815,13 @@ def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
             candidates.append(data["content"])
         if isinstance(event.get("result"), str):
             candidates.append(event["result"])
+        if isinstance(event.get("structured_output"), dict):
+            candidates.append(event["structured_output"])
     for candidate in reversed(candidates):
+        if isinstance(candidate, dict):
+            if "findings" in candidate:
+                return candidate
+            continue
         parsed = parse_json_candidate(candidate)
         if isinstance(parsed, dict) and "findings" in parsed:
             return parsed
@@ -602,9 +945,23 @@ def print_report(report: dict[str, Any], *, label: str = "autoreview") -> None:
     print(report["overall_explanation"])
 
 
-def start_parallel_tests(command: str, repo: Path) -> tuple[subprocess.Popen, float]:
+def start_parallel_tests(command: str, repo: Path, shell_kind: str) -> tuple[subprocess.Popen, float]:
     print(f"tests: {command}")
-    return subprocess.Popen(command, cwd=repo, shell=True), time.time()
+    if shell_kind == "default" or shell_kind == "cmd":
+        return subprocess.Popen(command, cwd=repo, shell=True), time.time()
+    if shell_kind == "powershell":
+        powershell = resolve_command("powershell", repo)
+        return subprocess.Popen(
+            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            cwd=repo,
+        ), time.time()
+    if shell_kind == "pwsh":
+        pwsh = resolve_command("pwsh", repo)
+        return subprocess.Popen(
+            [pwsh, "-NoProfile", "-Command", command],
+            cwd=repo,
+        ), time.time()
+    raise SystemExit(f"invalid --parallel-tests-shell/AUTOREVIEW_PARALLEL_TESTS_SHELL: {shell_kind}")
 
 
 def finish_parallel_tests(proc: subprocess.Popen, started: float) -> int:
@@ -615,7 +972,7 @@ def finish_parallel_tests(proc: subprocess.Popen, started: float) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bundle-driven AI code review.")
-    parser.add_argument("--mode", choices=["auto", "local", "branch", "commit"], default="auto")
+    parser.add_argument("--mode", choices=["auto", "local", "uncommitted", "branch", "commit"], default="auto")
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
     parser.add_argument("--engine", choices=ENGINES, default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
@@ -642,7 +999,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", action="append", help="Extra evidence file to include in the review bundle.")
     parser.add_argument("--output", help="Write human output to a file as well as stdout.")
     parser.add_argument("--json-output", help="Write validated structured review JSON.")
+    parser.add_argument(
+        "--stream-engine-output",
+        action="store_true",
+        default=os.environ.get("AUTOREVIEW_STREAM_ENGINE_OUTPUT") == "1",
+        help="Stream review engine output while preserving buffered output for validation. Codex output is filtered to hide tool/file chatter.",
+    )
     parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
+    parser.add_argument(
+        "--parallel-tests-shell",
+        choices=["default", "cmd", "powershell", "pwsh"],
+        default=os.environ.get("AUTOREVIEW_PARALLEL_TESTS_SHELL", "default"),
+        help="Shell for --parallel-tests. Default preserves Python shell=True platform behavior; use powershell or pwsh for PowerShell-specific commands.",
+    )
     parser.add_argument("--require-finding", action="append", default=[], help="Require finding text to contain this substring.")
     parser.add_argument("--expect-findings", action="store_true", help="Treat findings as success; for harness acceptance tests.")
     parser.add_argument("--dry-run", action="store_true")
@@ -848,7 +1217,7 @@ def main() -> int:
 
     tests_proc: tuple[subprocess.Popen, float] | None = None
     if args.parallel_tests:
-        tests_proc = start_parallel_tests(args.parallel_tests, repo)
+        tests_proc = start_parallel_tests(args.parallel_tests, repo, args.parallel_tests_shell)
     try:
         if len(reviewers) == 1:
             report = run_reviewer(reviewers[0], repo, prompt, changed_paths, args.require_finding)

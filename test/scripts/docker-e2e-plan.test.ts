@@ -771,6 +771,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.needs.package).toBe(true);
   });
 
+  it("dedupes scheduler resources from lane wrappers and explicit lane metadata", () => {
+    const plan = planFor({
+      selectedLaneNames: ["release-user-journey", "release-plugin-marketplace"],
+    });
+
+    expect(plan.lanes.map((lane) => ({ name: lane.name, resources: lane.resources }))).toEqual([
+      {
+        name: "release-user-journey",
+        resources: ["docker", "npm", "service"],
+      },
+      {
+        name: "release-plugin-marketplace",
+        resources: ["docker", "npm"],
+      },
+    ]);
+  });
+
   it("plans the Droid ACP bind live lane as Factory-auth proof", () => {
     const plan = planFor({ selectedLaneNames: ["live-acp-bind-droid"] });
 
@@ -834,7 +851,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "openai-web-search-minimal",
         "mcp-channels",
         "cron-mcp-cleanup",
-        "pi-bundle-mcp-tools",
+        "agent-bundle-mcp-tools",
         "crestodian-first-run",
         "crestodian-planner",
         "crestodian-rescue",
@@ -861,7 +878,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "openai-web-search-minimal", stateScenario: "empty" },
       { name: "mcp-channels", stateScenario: "empty" },
       { name: "cron-mcp-cleanup", stateScenario: "empty" },
-      { name: "pi-bundle-mcp-tools", stateScenario: "empty" },
+      { name: "agent-bundle-mcp-tools", stateScenario: "empty" },
       { name: "crestodian-first-run", stateScenario: "empty" },
       { name: "crestodian-planner", stateScenario: "empty" },
       { name: "crestodian-rescue", stateScenario: "empty" },

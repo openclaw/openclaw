@@ -250,6 +250,20 @@ describe("runMessageAction send validation", () => {
     expect(JSON.stringify(result.payload)).not.toContain("turn2view0");
   });
 
+  it("rejects message sends whose body is only leaked plain-text tool calls", async () => {
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}',
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/send requires text or media/i);
+  });
+
   it.each([
     {
       name: "structured poll params",

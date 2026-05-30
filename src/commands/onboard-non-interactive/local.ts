@@ -1,5 +1,5 @@
 import { formatCliCommand } from "../../cli/command-format.js";
-import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
@@ -15,6 +15,7 @@ import {
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
+import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
 import {
   type GatewayHealthFailureDiagnostics,
@@ -204,10 +205,11 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await replaceConfigFile({
+  nextConfig = await commitNonInteractiveOnboardConfig({
     nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
-    writeOptions: { allowConfigSizeDrop: true },
+    baseConfig,
+    baseHash,
+    reset: opts.reset,
   });
   logConfigUpdated(runtime);
 

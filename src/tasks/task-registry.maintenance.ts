@@ -18,6 +18,7 @@ import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
 import type { CronJob, CronStoreFile } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isPluginStateDatabaseOpen,
@@ -57,15 +58,19 @@ import {
   listTaskAuditFindings,
   summarizeTaskAuditFindings,
 } from "./task-registry.audit.js";
-import type { TaskAuditSummary } from "./task-registry.audit.js";
+import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
+import {
+  resolveEffectiveTaskCleanupAfter,
+  resolveTaskCleanupAfter,
+  resolveTaskRetentionMs,
+} from "./task-retention.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS = 30 * 60_000;
 const TASK_STALE_RUNNING_MS = 30 * 60_000;
-const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
 /**
@@ -333,8 +338,8 @@ function parseCronExecutionId(task: TaskRecord): CronExecutionId | undefined {
   if (separator <= "cron:".length) {
     return undefined;
   }
-  const startedAt = Number(runId.slice(separator + 1));
-  if (!Number.isFinite(startedAt)) {
+  const startedAt = parseStrictNonNegativeInteger(runId.slice(separator + 1));
+  if (startedAt === undefined) {
     return undefined;
   }
   const jobId = runId.slice("cron:".length, separator).trim();
@@ -498,6 +503,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   if (task.runtime === "acp") {
     const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
       sessionKey: childSessionKey,
+      clone: false,
     });
     if (!acpEntry || acpEntry.storeReadFailed) {
       return true;
@@ -570,10 +576,10 @@ function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
     return false;
   }
   if (typeof task.cleanupAfter === "number") {
-    return now >= task.cleanupAfter;
+    return now >= resolveEffectiveTaskCleanupAfter(task);
   }
   const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
-  return now - terminalAt >= TASK_RETENTION_MS;
+  return now - terminalAt >= resolveTaskRetentionMs(task.status);
 }
 
 function shouldStampCleanupAfter(task: TaskRecord): boolean {
@@ -581,8 +587,7 @@ function shouldStampCleanupAfter(task: TaskRecord): boolean {
 }
 
 function resolveCleanupAfter(task: TaskRecord): number {
-  const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
-  return terminalAt + TASK_RETENTION_MS;
+  return resolveTaskCleanupAfter(task);
 }
 
 function taskReferenceAt(task: TaskRecord): number {
@@ -644,7 +649,10 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   ) {
     return false;
   }
-  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
+    sessionKey,
+    clone: false,
+  });
   if (!acpEntry || acpEntry.storeReadFailed || !acpEntry.acp) {
     return false;
   }
@@ -682,7 +690,10 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
   if (!sessionKey) {
     return;
   }
-  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
+    sessionKey,
+    clone: false,
+  });
   const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
   if (!acpEntry || !closeAcpSession) {
     return;
@@ -718,7 +729,7 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
 async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
   let acpSessions: AcpSessionStoreEntry[];
   try {
-    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({});
+    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({ clone: false });
   } catch (error) {
     log.warn("Failed to list ACP sessions during task maintenance", { error });
     return;
@@ -769,12 +780,16 @@ function markTaskLost(
   now: number,
   context?: BackingSessionLookupContext,
 ): TaskRecord {
-  const cleanupAfter =
-    task.cleanupAfter ?? resolveCleanupAfter({ ...task, endedAt: task.endedAt ?? now });
+  const lostAt = task.endedAt ?? now;
+  const cleanupAfter = resolveEffectiveTaskCleanupAfter({
+    ...task,
+    status: "lost",
+    endedAt: lostAt,
+  });
   const updated =
     taskRegistryMaintenanceRuntime.markTaskLostById({
       taskId: task.taskId,
-      endedAt: task.endedAt ?? now,
+      endedAt: lostAt,
       lastEventAt: now,
       error: task.error ?? resolveTaskLostError(task, context),
       cleanupAfter,
@@ -937,8 +952,12 @@ export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
 }
 
 export function getInspectableTaskAuditSummary(): TaskAuditSummary {
+  return summarizeTaskAuditFindings(getInspectableTaskAuditFindings());
+}
+
+export function getInspectableTaskAuditFindings(): TaskAuditFinding[] {
   const tasks = reconcileInspectableTasks();
-  return summarizeTaskAuditFindings(listTaskAuditFindings({ tasks }));
+  return listTaskAuditFindings({ tasks });
 }
 
 export function reconcileTaskLookupToken(token: string): TaskRecord | undefined {

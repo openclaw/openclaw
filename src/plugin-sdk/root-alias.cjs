@@ -2,6 +2,7 @@
 
 const path = require("node:path");
 const fs = require("node:fs");
+const os = require("node:os");
 
 let monolithicSdk = null;
 let diagnosticEventsModule = null;
@@ -147,14 +148,55 @@ function onDiagnosticEventFromSharedState(listener) {
   };
 }
 
+function snapshotDiagnosticListeners(state) {
+  return state && state.listeners instanceof Set ? new Set(state.listeners) : null;
+}
+
+function removeAddedDiagnosticListeners(beforeListeners) {
+  const state = getDiagnosticEventsState(false);
+  if (!state || !(state.listeners instanceof Set)) {
+    return;
+  }
+  if (!beforeListeners) {
+    state.listeners.clear();
+    return;
+  }
+  for (const listener of state.listeners) {
+    if (!beforeListeners.has(listener)) {
+      state.listeners.delete(listener);
+    }
+  }
+}
+
+function trySubscribeDiagnosticEvents(diagnosticEvents, listener, beforeListeners) {
+  try {
+    const unsubscribe = diagnosticEvents.onDiagnosticEvent(listener);
+    if (typeof unsubscribe === "function") {
+      return unsubscribe;
+    }
+  } catch {
+    // Fall back to shared state if a stale dist chunk exposes a broken wrapper.
+  }
+  removeAddedDiagnosticListeners(beforeListeners);
+  return null;
+}
+
 function onDiagnosticEvent(listener) {
   const beforeState = getDiagnosticEventsState(false);
+  const beforeListeners = snapshotDiagnosticListeners(beforeState);
   const beforeSize = beforeState?.listeners?.size;
   const diagnosticEvents = loadDiagnosticEventsModule();
   if (!diagnosticEvents || typeof diagnosticEvents.onDiagnosticEvent !== "function") {
     return onDiagnosticEventFromSharedState(listener);
   }
-  const unsubscribeDiagnosticEvents = diagnosticEvents.onDiagnosticEvent(listener);
+  const unsubscribeDiagnosticEvents = trySubscribeDiagnosticEvents(
+    diagnosticEvents,
+    listener,
+    beforeListeners,
+  );
+  if (!unsubscribeDiagnosticEvents) {
+    return onDiagnosticEventFromSharedState(listener);
+  }
   const afterState = getDiagnosticEventsState(false);
   if (afterState && afterState.listeners.size > (beforeSize ?? 0)) {
     return unsubscribeDiagnosticEvents;
@@ -163,8 +205,11 @@ function onDiagnosticEvent(listener) {
   // diagnostic module in a separate graph from the active core emitter.
   const unsubscribeSharedState = onDiagnosticEventFromSharedState(listener);
   return () => {
-    unsubscribeDiagnosticEvents();
-    unsubscribeSharedState();
+    try {
+      unsubscribeDiagnosticEvents();
+    } finally {
+      unsubscribeSharedState();
+    }
   };
 }
 
@@ -281,6 +326,74 @@ function buildPluginSdkAliasMap(useDist) {
   return aliasMap;
 }
 
+function sanitizeJitiCachePathSegment(value) {
+  const normalized = String(value)
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized.length > 0 ? normalized : "unknown";
+}
+
+function resolveJitiFsCacheTmpDir() {
+  let tmpDir = os.tmpdir();
+  if (process.env.TMPDIR && tmpDir === process.cwd() && !process.env.JITI_RESPECT_TMPDIR_ENV) {
+    const originalTmpDir = process.env.TMPDIR;
+    delete process.env.TMPDIR;
+    try {
+      tmpDir = os.tmpdir();
+    } finally {
+      process.env.TMPDIR = originalTmpDir;
+    }
+  }
+  return tmpDir;
+}
+
+function readJitiBooleanEnv(name, defaultValue) {
+  if (!(name in process.env)) {
+    return defaultValue;
+  }
+  try {
+    return Boolean(JSON.parse(process.env[name] ?? ""));
+  } catch {
+    return defaultValue;
+  }
+}
+
+function shouldUseJitiFsCache() {
+  return readJitiBooleanEnv("JITI_FS_CACHE", readJitiBooleanEnv("JITI_CACHE", true));
+}
+
+function resolvePluginSdkJitiFsCacheDir() {
+  const packageRoot = getPackageRoot();
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  let version = "unknown";
+  let installMarker = "no-package-json";
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+    if (typeof parsed.version === "string" && parsed.version.trim().length > 0) {
+      version = parsed.version;
+    }
+  } catch {
+    // Keep the root alias load path best-effort when package metadata is unavailable.
+  }
+  try {
+    const stat = fs.statSync(packageJsonPath);
+    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
+  } catch {
+    // Package installs should have package.json, but source/test graphs may stub it.
+  }
+  return path.join(
+    resolveJitiFsCacheTmpDir(),
+    "jiti",
+    "openclaw",
+    sanitizeJitiCachePathSegment(version),
+    sanitizeJitiCachePathSegment(installMarker),
+  );
+}
+
+function resolvePluginSdkJitiFsCacheOption() {
+  return shouldUseJitiFsCache() ? resolvePluginSdkJitiFsCacheDir() : false;
+}
+
 function getModuleLoader(tryNative) {
   if (moduleLoaders.has(tryNative)) {
     return moduleLoaders.get(tryNative);
@@ -290,6 +403,7 @@ function getModuleLoader(tryNative) {
   const moduleLoader = createJiti(__filename, {
     alias: buildPluginSdkAliasMap(tryNative),
     interopDefault: true,
+    fsCache: resolvePluginSdkJitiFsCacheOption(),
     // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
     // so local plugins do not create a second transpiled OpenClaw core graph.
     tryNative,
@@ -362,10 +476,13 @@ function normalizeDiagnosticEventsModule(mod) {
   if (typeof mod.onDiagnosticEvent === "function") {
     return mod;
   }
-  if (typeof mod.r === "function") {
+  const fn = Object.values(mod).find(
+    (v) => typeof v === "function" && v.name === "onDiagnosticEvent",
+  );
+  if (fn) {
     return {
       ...mod,
-      onDiagnosticEvent: mod.r,
+      onDiagnosticEvent: fn,
     };
   }
   return mod;

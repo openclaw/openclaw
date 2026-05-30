@@ -1,15 +1,21 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
+import {
+  loadCronQuarantineFile,
+  resolveCronQuarantinePath,
+  resolveCronStorePath,
+  loadCronStore,
+  saveCronStore,
+} from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import {
   countStaleDreamingJobs,
@@ -335,7 +341,44 @@ export async function maybeRepairLegacyCronStore(params: {
   prompter: Pick<DoctorPrompter, "confirm">;
 }) {
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const store = await loadCronStore(storePath);
+  const quarantinePath = resolveCronQuarantinePath(storePath);
+  let store: Awaited<ReturnType<typeof loadCronStore>>;
+  try {
+    store = await loadCronStore(storePath);
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    note(
+      [
+        `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
+        `- ${reason}`,
+        `Fix the file's permissions or contents and re-run ${formatCliCommand("openclaw doctor")}; later health checks will continue.`,
+      ].join("\n"),
+      "Cron",
+    );
+    return;
+  }
+  try {
+    const quarantine = await loadCronQuarantineFile(quarantinePath);
+    if (quarantine.jobs.length > 0) {
+      note(
+        [
+          `Quarantined cron job rows found at ${shortenHomePath(quarantinePath)}.`,
+          `- ${pluralize(quarantine.jobs.length, "row")} was removed from the active cron store after runtime validation failed.`,
+          `- Review or repair the quarantined rows manually before copying any job back into ${shortenHomePath(storePath)}.`,
+        ].join("\n"),
+        "Cron",
+      );
+    }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    note(
+      [
+        `Unable to read quarantined cron rows at ${shortenHomePath(quarantinePath)}.`,
+        `- ${reason}`,
+      ].join("\n"),
+      "Cron",
+    );
+  }
   const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   if (rawJobs.length === 0) {
     return;

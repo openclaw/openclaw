@@ -1,5 +1,7 @@
 profile: openclaw-check
-provider: aws
+# Default OpenClaw runner spend to the Azure-backed Crabbox account.
+# Use `--provider aws` only for AWS-specific runner proof.
+provider: azure
 class: standard
 capacity:
   market: spot
@@ -20,7 +22,8 @@ actions:
   workflow: .github/workflows/crabbox-hydrate.yml
   # Default AWS hydration uses local Actions replay. Use
   # `crabbox actions hydrate --github-runner --job hydrate-github` when the
-  # hydrate job needs GitHub secrets.
+  # hydrate job needs GitHub secrets, or `--github-runner --job
+  # hydrate-windows-daemon` for focused native Windows daemon proof.
   job: hydrate
   ref: main
   runnerLabels:
@@ -28,6 +31,11 @@ actions:
     - openclaw
   runnerVersion: latest
   ephemeral: true
+blacksmith:
+  org: openclaw
+  workflow: .github/workflows/ci-check-testbox.yml
+  job: check
+  ref: main
 aws:
   region: eu-west-1
   rootGB: 400

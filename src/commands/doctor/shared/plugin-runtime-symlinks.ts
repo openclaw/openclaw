@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { note } from "../../../terminal/note.js";
+import { note } from "../../../../packages/terminal-core/src/note.js";
+import { sortUniqueStrings } from "../../../shared/string-normalization.js";
 import { shortenHomePath } from "../../../utils.js";
 
 const PLUGIN_RUNTIME_DEPS_MARKER = "plugin-runtime-deps";
@@ -142,9 +143,7 @@ export async function removeStalePluginRuntimeSymlinks(
 }
 
 function uniqueResolvedRoots(values: readonly string[]): string[] {
-  return [...new Set(values.map((value) => path.resolve(value)))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  return sortUniqueStrings(values.map((value) => path.resolve(value)));
 }
 
 function isPathInsideRoot(candidate: string, root: string): boolean {

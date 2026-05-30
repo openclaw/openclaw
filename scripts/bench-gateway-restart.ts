@@ -8,6 +8,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -98,6 +99,7 @@ type GatewayRestartSample = {
   childExitCode: number | null;
   childSignal: string | null;
   events: BenchmarkEvent[];
+  exitedBeforeTeardown: boolean;
   failureCode: GatewayRestartFailureCode | null;
   firstOutputMs: number | null;
   initialGatewayReadyLogLine: string | null;
@@ -757,10 +759,6 @@ function requestStatus(port: number, pathname: string): Promise<number> {
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function writePluginFixtures(
   root: string,
   count: number,
@@ -867,38 +865,6 @@ function writeRestartIntent(env: NodeJS.ProcessEnv, targetPid: number, reason: s
   } catch {
     return false;
   }
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<{
-  exitCode: number | null;
-  signal: string | null;
-}> {
-  if (child.exitCode != null || child.signalCode != null) {
-    return { exitCode: child.exitCode, signal: child.signalCode };
-  }
-  const exited = new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
-    child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
-  });
-  killProcessTree(child, "SIGTERM");
-  const timeout = delay(2000).then(() => {
-    if (child.exitCode == null && child.signalCode == null) {
-      killProcessTree(child, "SIGKILL");
-    }
-    return exited;
-  });
-  return Promise.race([exited, timeout]);
-}
-
-function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid !== undefined) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below.
-    }
-  }
-  child.kill(signal);
 }
 
 function readProcessRssMb(pid: number | undefined): number | null {
@@ -1195,6 +1161,15 @@ function hasInitialReadyLogs(params: {
 
 function resolveRestartDeadlineFailure(childExited: boolean): GatewayRestartFailureCode {
   return childExited ? "restart_child_exited" : "restart_deadline_timeout";
+}
+
+function resolveSampleExitFailure(exit: StopChildResult): GatewayRestartFailureCode | null {
+  if (!exit.exitedBeforeTeardown) {
+    return null;
+  }
+  return exit.exitCode !== null && exit.exitCode !== 0
+    ? "child_nonzero_exit"
+    : "restart_child_exited";
 }
 
 function computeResourceSlope(iterations: RestartIteration[]): ResourceSlope {
@@ -1524,13 +1499,12 @@ async function runGatewaySample(options: {
   const exit = await stopChild(child);
   clearInterval(rssTimer);
   sampleRss();
-  await childExitPromise.catch(() => null);
+  // stopChild is the bounded teardown wait; the raw exit promise may never settle.
+  void childExitPromise.catch(() => null);
   flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt, {
     flushPartial: true,
   });
-  if (exit.exitCode !== null && exit.exitCode !== 0 && failureCode === null) {
-    failureCode = "child_nonzero_exit";
-  }
+  failureCode ??= resolveSampleExitFailure(exit);
   try {
     rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
   } catch {
@@ -1541,6 +1515,7 @@ async function runGatewaySample(options: {
     childExitCode: exit.exitCode,
     childSignal: exit.signal,
     events,
+    exitedBeforeTeardown: exit.exitedBeforeTeardown,
     failureCode,
     firstOutputMs,
     initialGatewayReadyLogLine,
@@ -1693,8 +1668,10 @@ export const testing = {
   resolveRestartDeadlineFailure,
   resolveEntry,
   resolvePhaseDeadlineAt,
+  resolveSampleExitFailure,
   sanitizedEnv,
   shouldFailBenchmark,
+  stopChild,
   summarizeCase,
   waitForRestartProbe,
   writeConfig,

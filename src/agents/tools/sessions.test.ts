@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
@@ -103,6 +104,30 @@ const installRegistry = async () => {
           },
           capabilities: { chatTypes: ["direct", "channel", "thread"] },
           messaging: {
+            resolveSessionTarget: resolveSessionTargetStub,
+          },
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({}),
+          },
+        },
+      },
+      {
+        pluginId: "feishu",
+        source: "test",
+        plugin: {
+          id: "feishu",
+          meta: {
+            id: "feishu",
+            label: "Feishu",
+            selectionLabel: "Feishu",
+            docsPath: "/channels/feishu",
+            blurb: "Feishu test stub.",
+            preferSessionLookupForAnnounceTarget: true,
+          },
+          capabilities: { chatTypes: ["direct", "group"] },
+          messaging: {
+            resolveSessionConversation: resolveSessionConversationStub,
             resolveSessionTarget: resolveSessionTargetStub,
           },
           config: {
@@ -408,6 +433,43 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
+  it("hydrates announce delivery from explicit external context over stale webchat session fields", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:feishu:direct:ou_user",
+          channel: "webchat",
+          lastChannel: "webchat",
+          lastTo: "session:dashboard",
+          route: {
+            channel: "webchat",
+            target: { to: "session:dashboard" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_user",
+          },
+          origin: {
+            provider: "feishu",
+            accountId: "work",
+            threadId: "thread-77",
+          },
+        },
+      ],
+    });
+
+    const target = await resolveAnnounceTarget({
+      sessionKey: "agent:main:feishu:direct:ou_user",
+      displayKey: "agent:main:feishu:direct:ou_user",
+    });
+    expect(target).toEqual({
+      channel: "feishu",
+      to: "user:ou_user",
+      accountId: "work",
+      threadId: "thread-77",
+    });
+  });
+
   it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
@@ -514,10 +576,32 @@ describe("sessions_list gating", () => {
 
     const details = requireDetails(result);
     expect(details.count).toBe(1);
+    expect(details.visibility).toBeUndefined();
     const session = requireSessions(details)[0];
     expect(session?.key).toBe("agent:codex:acp:child-1");
     expect(session?.parentSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes visibility metadata when session visibility is restricted", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "tree" },
+      },
+    });
+
+    const result = await createMainSessionsListTool().execute("call1", {});
+
+    const details = requireDetails(result);
+    expect(details.count).toBe(1);
+    expect(details.visibility).toMatchObject({
+      mode: "tree",
+      restricted: true,
+      warning:
+        "Session visibility is restricted (effective tools.sessions.visibility=tree). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.",
+    });
   });
 
   it("keeps literal current keys for message previews", async () => {
@@ -702,6 +786,19 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it.each([1.5, -1, "1sec"])("rejects invalid timeoutSeconds value %s", async (timeoutSeconds) => {
+    const tool = createMainSessionsSendTool();
+
+    await expect(
+      tool.execute("call-invalid-timeout", {
+        sessionKey: MAIN_AGENT_SESSION_KEY,
+        message: "hi",
+        timeoutSeconds,
+      }),
+    ).rejects.toThrow("timeoutSeconds must be a non-negative integer");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("returns an error when label resolution fails", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("No session found with label: nope"));
     const tool = createMainSessionsSendTool();
@@ -830,5 +927,40 @@ describe("sessions_send gating", () => {
     expect(details.status).toBe("ok");
     expect(details.reply).toBeUndefined();
     expect(details.sessionKey).toBe(MAIN_AGENT_SESSION_KEY);
+  });
+
+  it("caps oversized timeoutSeconds before waiting for the target run", async () => {
+    const tool = createMainSessionsSendTool();
+    const waitTimeouts: unknown[] = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; timeoutMs?: unknown };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [{ key: MAIN_AGENT_SESSION_KEY, kind: "direct" }],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-huge-timeout", acceptedAt: 123 };
+      }
+      if (request.method === "agent.wait") {
+        waitTimeouts.push(request.timeoutMs);
+        return { runId: "run-huge-timeout", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-huge-timeout", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      message: "ping",
+      timeoutSeconds: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(requireDetails(result).status).toBe("ok");
+    expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
   });
 });
