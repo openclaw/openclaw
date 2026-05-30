@@ -201,6 +201,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "create") {
         proposal = await proposeCreateSkill({
           workspaceDir: options.workspaceDir,
+          config: options.config,
           name: readStringParam(params, "name", { required: true }),
           description: readStringParam(params, "description", { required: true }),
           content: proposalContent,
@@ -234,6 +235,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         });
         proposal = await reviseSkillProposal({
           workspaceDir: options.workspaceDir,
+          config: options.config,
           proposalId: pendingProposal.record.id,
           content: proposalContent,
           supportFiles,

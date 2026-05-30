@@ -128,6 +128,8 @@ Rules:
   workspace (default: 50).
 - `workshop.maxSkillBytes`: maximum generated proposal body size in bytes
   (default: 40000).
+  Proposal descriptions are also hard-capped at 512 bytes because they can be
+  shown in skill discovery and proposal listings.
 - `entries.<skillKey>`: per-skill overrides.
 - `agents.defaults.skills`: optional default skill allowlist inherited by agents
   that omit `agents.list[].skills`.

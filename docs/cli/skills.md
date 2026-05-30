@@ -129,7 +129,9 @@ Notes:
 `openclaw skills workshop` manages pending skill proposals in the selected
 workspace. Proposals are durable OpenClaw state under
 `<OPENCLAW_STATE_DIR>/skill-workshop/proposals/`; they are not active skills
-until applied. The default state directory is `~/.openclaw`.
+until applied. The default state directory is `~/.openclaw`. Proposal bodies
+honor `skills.workshop.maxSkillBytes`, and proposal descriptions are capped at
+512 bytes because they can appear in discovery and listing output.
 
 Create a proposal from a draft markdown file:
 

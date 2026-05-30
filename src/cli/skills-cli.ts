@@ -570,10 +570,11 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
           const draft = await readSkillProposalInput(opts);
           const proposal = await proposeCreateSkill({
             workspaceDir,
+            config,
             name: opts.name,
             description: opts.description,
             content: draft.content,
@@ -676,10 +677,11 @@ export function registerSkillsCli(program: Command) {
         command: Command,
       ) => {
         try {
-          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
           const draft = await readSkillProposalInput(opts);
           const proposal = await reviseSkillProposal({
             workspaceDir,
+            config,
             proposalId,
             content: draft.content,
             supportFiles: draft.supportFiles,

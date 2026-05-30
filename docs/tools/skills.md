@@ -143,6 +143,10 @@ listing manifest and can be rebuilt from proposal folders when missing or stale.
 `version: v1`, and `date`; those proposal-only fields are stripped when the
 proposal is applied as an active `SKILL.md`.
 
+Proposal bodies honor `skills.workshop.maxSkillBytes`, and proposal
+descriptions are capped at 512 bytes because they can appear in discovery and
+listing output.
+
 Proposal folders can also carry support files under `assets/`, `examples/`,
 `references/`, `scripts/`, or `templates/`. OpenClaw records support file
 metadata in `proposal.json`, stores the file contents beside `PROPOSAL.md`,
