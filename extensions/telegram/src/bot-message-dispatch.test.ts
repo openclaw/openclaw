@@ -2489,7 +2489,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("hides command details in interleaved progress unless tool args are enabled", async () => {
+  it("hides command details in interleaved progress when command text is status", async () => {
     const { reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
       reasoningMessageId: 3001,
@@ -2523,6 +2523,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
           preview: {
             toolProgress: true,
             interleavedProgress: true,
+            interleavedToolArgs: true,
             commandText: "status",
           },
         },
@@ -2531,7 +2532,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     const updates = reasoningDraftStream.update.mock.calls.map((call) => String(call[0]));
     expect(updates.join("\n")).not.toContain("pnpm test -- --run");
-    expect(updates.at(-1)).toContain("tool: Exec (completed)");
+    expect(updates.at(-1)).toContain("🛠️ completed");
   });
 
   it("folds final reasoning into the interleaved progress lane", async () => {

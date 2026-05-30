@@ -34,6 +34,7 @@ import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewNativeToolProgress,
   resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
+  resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingPreviewToolProgress,
   resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -1227,6 +1228,7 @@ export const dispatchTelegramMessage = async ({
   });
   const interleavedToolArgsEnabled =
     interleavedProgressEnabled && telegramCfg.streaming?.preview?.interleavedToolArgs === true;
+  const interleavedCommandTextMode = resolveChannelStreamingPreviewCommandText(telegramCfg);
   let interleavedBody = "";
   let interleavedRenderOffset = 0;
   let interleavedReasoningState = emptyInterleavedStreamState();
@@ -2243,7 +2245,10 @@ export const dispatchTelegramMessage = async ({
                     const commandLine = buildChannelProgressDraftLineForEntry(telegramCfg, {
                       event: "command-output",
                       phase: payload.phase,
-                      title: interleavedToolArgsEnabled ? payload.title : undefined,
+                      title:
+                        interleavedToolArgsEnabled && interleavedCommandTextMode !== "status"
+                          ? payload.title
+                          : undefined,
                       name: payload.name,
                       status: payload.status,
                       exitCode: payload.exitCode,
