@@ -411,6 +411,20 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
+  it("treats auth cooldown changes as no-op for gateway restart planning", () => {
+    const changedPaths = [
+      "auth.cooldowns.billingBackoffHours",
+      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
+    ];
+    const plan = buildGatewayReloadPlan(changedPaths);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual([]);
+    expect(plan.noopPaths).toEqual(changedPaths);
+    expect(resolveConfigReloadMetadata("auth.cooldowns.billingBackoffHours").kind).toBe("none");
+  });
+
   it("restarts for gateway.auth.token changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
     expect(plan.restartGateway).toBe(true);
@@ -463,6 +477,11 @@ describe("buildGatewayReloadPlan", () => {
       path: "gateway.remote.url",
       expectRestartGateway: false,
       expectNoopPath: "gateway.remote.url",
+    },
+    {
+      path: "auth.cooldowns.billingBackoffHours",
+      expectRestartGateway: false,
+      expectNoopPath: "auth.cooldowns.billingBackoffHours",
     },
     {
       path: "gateway.auth.token",

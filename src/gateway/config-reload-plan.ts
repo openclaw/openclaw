@@ -97,6 +97,9 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-heartbeat"],
   },
+  // Auth cooldown readers resolve values from the active config for each auth
+  // failure decision, so cooldown tuning does not need a gateway restart.
+  { prefix: "auth.cooldowns", kind: "none" },
   {
     prefix: "agents.list",
     kind: "hot",
