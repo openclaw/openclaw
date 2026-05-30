@@ -765,9 +765,9 @@ export async function runCodexAppServerAttempt(
     }
   }
   // Codex app-server threads own conversation continuity. The mirrored
-  // OpenClaw transcript is persistence/search state; only explicit
-  // non-legacy context engines project alternate context into the turn prompt.
-  const codexModelInputHistoryMessages = activeContextEngine ? historyMessages : [];
+  // OpenClaw transcript is persistence/search state. Context-engine output is
+  // rendered into the prompt/developer instructions, not parallel history.
+  const codexModelInputHistoryMessages: typeof historyMessages = [];
   const buildPromptFromCurrentInputs = () =>
     resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptText, params.currentInboundContext),
