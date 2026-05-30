@@ -357,6 +357,13 @@ const McpServerSchema = z
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
       .optional(),
+    toolFilter: z
+      .object({
+        include: z.array(z.string().trim().min(1)).min(1).optional(),
+        exclude: z.array(z.string().trim().min(1)).min(1).optional(),
+      })
+      .strict()
+      .optional(),
     codex: z
       .object({
         agents: z

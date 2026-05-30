@@ -109,6 +109,10 @@ target server during config edits.
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
         },
+        toolFilter: {
+          include: ["search_*"],
+          exclude: ["admin_*"],
+        },
         // Optional Codex app-server projection controls.
         codex: {
           agents: ["main"],
@@ -125,6 +129,12 @@ target server during config edits.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
   `openclaw doctor --fix` normalize into the canonical `transport` field.
+- `mcp.servers.<name>.toolFilter`: optional per-server tool selection. `include`
+  limits the discovered MCP tools to matching names; `exclude` hides matching
+  names. Entries are exact MCP tool names or simple `*` globs. Servers with
+  resources or prompts also generate utility tool names (`resources_list`,
+  `resources_read`, `prompts_list`, `prompts_get`), and those names use the
+  same filter.
 - `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
   This block is OpenClaw metadata for Codex app-server threads only; it does not
   affect ACP sessions, generic Codex harness config, or other runtime adapters.
@@ -142,6 +152,11 @@ target server during config edits.
 - Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
   The next tool discovery/use recreates them from the new config, so removed
   `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.
+- Runtime discovery also honors MCP tool-list change notifications by dropping
+  the cached catalog for that session. Servers that advertise resources or
+  prompts get utility tools for listing/reading resources and listing/fetching
+  prompts. Repeated tool-call failures pause the affected server briefly before
+  another call is attempted.
 
 See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 [CLI backends](/gateway/cli-backends#bundle-mcp-overlays) for runtime behavior.
