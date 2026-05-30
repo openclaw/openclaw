@@ -6,6 +6,7 @@ const spawnSyncMock = vi.hoisted(() => vi.fn());
 const execFileMock = vi.hoisted(() =>
   Object.assign(vi.fn(), {
     [Symbol.for("nodejs.util.promisify.custom")]: vi.fn(),
+    __promisify__: vi.fn(),
   }),
 );
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
