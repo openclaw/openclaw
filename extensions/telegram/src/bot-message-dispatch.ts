@@ -57,6 +57,7 @@ import {
   logVerbose,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
+import type { DurableMessageSuppressionReason } from "../../../src/channels/message/send.js";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -1274,6 +1275,7 @@ export const dispatchTelegramMessage = async ({
     );
   const endTelegramInboundEventDeliveryCorrelation = beginDeliveryCorrelation();
   const sessionKey = ctxPayload.SessionKey;
+  let finalDurableNoSendReason: DurableMessageSuppressionReason | undefined;
   const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
     if (!sessionKey) {
       return undefined;
@@ -1477,10 +1479,12 @@ export const dispatchTelegramMessage = async ({
           throw durable.error;
         }
         if (durable.status === "handled_visible") {
+          finalDurableNoSendReason = undefined;
           deliveryState.markDelivered();
           return true;
         }
         if (durable.status === "handled_no_send") {
+          finalDurableNoSendReason = durable.reason;
           return false;
         }
       }
@@ -1493,6 +1497,7 @@ export const dispatchTelegramMessage = async ({
         mediaLoader: telegramDeps.loadWebMedia,
       });
       if (result.delivered) {
+        finalDurableNoSendReason = undefined;
         deliveryState.markDelivered();
       }
       return result.delivered;
@@ -2167,7 +2172,8 @@ export const dispatchTelegramMessage = async ({
     }
     return;
   }
-  let sentFallback = false;
+  let failureFallbackSent = false;
+  let recoverySuccessful = false;
   const deliverySummary = deliveryState.snapshot();
   const shouldSendFailureFallback =
     !isRoomEvent &&
@@ -2184,18 +2190,19 @@ export const dispatchTelegramMessage = async ({
       silent: silentErrorReplies && (dispatchError != null || hadErrorReplyFailureOrSkip),
       mediaLoader: telegramDeps.loadWebMedia,
     });
-    sentFallback = result.delivered;
+    failureFallbackSent = result.delivered;
   }
 
   const shouldRetryMissingFinalResponse =
     !isRoomEvent &&
     !dispatchError &&
-    !sentFallback &&
+    !failureFallbackSent &&
     !deliverySummary.delivered &&
     !queuedFinal &&
     finalAnswerDeliveryStarted &&
     !finalAnswerDelivered &&
-    !suppressSilentReplyFallback;
+    !suppressSilentReplyFallback &&
+    finalDurableNoSendReason === "no_visible_result";
   if (shouldRetryMissingFinalResponse) {
     const fallbackText =
       (await resolveCurrentTurnTranscriptFinalText())?.trim() || EMPTY_RESPONSE_FALLBACK;
@@ -2206,11 +2213,12 @@ export const dispatchTelegramMessage = async ({
       silent: false,
       mediaLoader: telegramDeps.loadWebMedia,
     });
-    sentFallback = result.delivered;
+    recoverySuccessful = result.delivered;
   }
 
   if (
-    !sentFallback &&
+    !failureFallbackSent &&
+    !recoverySuccessful &&
     !dispatchError &&
     !deliverySummary.delivered &&
     !suppressSilentReplyFallback &&
@@ -2235,18 +2243,23 @@ export const dispatchTelegramMessage = async ({
         silent: false,
         mediaLoader: telegramDeps.loadWebMedia,
       });
-      sentFallback = result.delivered;
+      recoverySuccessful = result.delivered;
     }
     silentReplyDispatchLogger.debug("telegram turn ended without visible final response", {
       hasSessionKey: Boolean(policySessionKey),
       hasChatId: chatId != null,
       queuedFinal,
-      sentFallback,
+      failureFallbackSent,
+      recoverySuccessful,
     });
   }
 
   const hasFinalResponse =
-    deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
+    deliverySummary.delivered ||
+    failureFallbackSent ||
+    recoverySuccessful ||
+    suppressSilentReplyFallback ||
+    queuedFinal;
 
   if (statusReactionController && !hasFinalResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
@@ -2257,7 +2270,11 @@ export const dispatchTelegramMessage = async ({
   }
 
   const shouldClearGroupHistory =
-    !isRoomEvent || deliverySummary.delivered || sentFallback || queuedFinal;
+    !isRoomEvent ||
+    deliverySummary.delivered ||
+    failureFallbackSent ||
+    recoverySuccessful ||
+    queuedFinal;
 
   if (!hasFinalResponse) {
     if (!shouldClearGroupHistory) {
@@ -2308,7 +2325,7 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    const statusReactionOutcome = dispatchError || sentFallback ? "error" : "done";
+    const statusReactionOutcome = dispatchError || failureFallbackSent ? "error" : "done";
     void finalizeTelegramStatusReaction({
       outcome: statusReactionOutcome,
       hasFinalResponse: true,
