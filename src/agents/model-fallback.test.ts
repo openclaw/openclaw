@@ -670,6 +670,36 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("does not prepare agent harness plugins for forced OpenClaw runtime candidates", async () => {
+    const cfg = makeCfg({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "openclaw" },
+            models: [],
+          },
+        },
+      },
+    });
+    const prepareAgentHarnessRuntime = vi.fn(() => {
+      throw new Error("OpenClaw candidates should not prepare plugin harnesses");
+    });
+    const run = vi.fn().mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.5",
+      prepareAgentHarnessRuntime,
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(prepareAgentHarnessRuntime).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("does not prepare agent harness plugins for implicit Codex candidates", async () => {
     const cfg = makeCfg();
     const prepareAgentHarnessRuntime = vi.fn(() => {
@@ -1191,6 +1221,55 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.model).toBe("gpt-5.4");
     expect(result.attempts[0]?.reason).toBe("format");
     expect(result.attempts[0]?.code).toBe("empty_result");
+  });
+
+  it("continues fallback after embedded provider business-denial payloads", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "zai/glm-5.1",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    });
+    const rawError =
+      '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}';
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        payloads: [{ text: rawError, isError: true }],
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult)
+      .mockResolvedValueOnce({
+        payloads: [{ text: "fallback ok" }],
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult);
+
+    const result = await runWithModelFallback<EmbeddedAgentRunResult>({
+      cfg,
+      provider: "zai",
+      model: "glm-5.1",
+      run,
+      classifyResult: ({ provider, model, result }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result,
+        }),
+    });
+
+    expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual(["openai", "gpt-5.5"]);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "zai",
+      model: "glm-5.1",
+      reason: "auth",
+      code: "embedded_error_payload",
+      error: rawError,
+    });
   });
 
   it("surfaces classified terminal results when no fallback remains", async () => {
@@ -2489,7 +2568,7 @@ describe("runWithModelFallback", () => {
       });
     });
 
-    it("keeps alias-resolved primary models subject to transient cooldowns", async () => {
+    it("probes alias-resolved primary models during rate-limit cooldowns", async () => {
       const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
       const cfg = makeCfg({
         agents: {
@@ -2505,7 +2584,7 @@ describe("runWithModelFallback", () => {
         },
       });
 
-      const run = vi.fn().mockResolvedValueOnce("haiku success");
+      const run = vi.fn().mockResolvedValueOnce("sonnet success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -2515,9 +2594,9 @@ describe("runWithModelFallback", () => {
         agentDir: dir,
       });
 
-      expect(result.result).toBe("haiku success");
+      expect(result.result).toBe("sonnet success");
       expect(run).toHaveBeenCalledTimes(1);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-haiku-3-5", {
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-6", {
         allowTransientCooldownProbe: true,
       });
     });
@@ -2593,7 +2672,7 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6", {
         allowTransientCooldownProbe: true,
       });
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
@@ -2631,7 +2710,7 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6", {
         allowTransientCooldownProbe: true,
       });
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
@@ -2656,8 +2735,8 @@ describe("runWithModelFallback", () => {
 
       const run = vi
         .fn()
-        .mockRejectedValueOnce(new Error("Model not found: anthropic/claude-sonnet-4-5"))
-        .mockResolvedValueOnce("haiku success");
+        .mockRejectedValueOnce(new Error("Model not found: anthropic/claude-opus-4-6"))
+        .mockResolvedValueOnce("sonnet success");
 
       const result = await runWithModelFallback({
         cfg,
@@ -2667,12 +2746,12 @@ describe("runWithModelFallback", () => {
         agentDir: dir,
       });
 
-      expect(result.result).toBe("haiku success");
+      expect(result.result).toBe("sonnet success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6", {
         allowTransientCooldownProbe: true,
       });
-      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
       });
     });

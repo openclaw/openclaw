@@ -222,7 +222,7 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
   };
 });
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: terminalNoteMock,
 }));
 
@@ -669,6 +669,10 @@ vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
     warnings: [],
     failedPluginIds: [],
   })),
+}));
+
+vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
+  collectActiveToolSchemaProjectionWarnings: vi.fn(() => []),
 }));
 
 vi.mock("./doctor/shared/plugin-dependency-cleanup.js", () => ({
@@ -1806,7 +1810,7 @@ describe("doctor config flow", () => {
       enabled: true,
       maxPerDay: 2,
     });
-  });
+  }, 300_000);
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({

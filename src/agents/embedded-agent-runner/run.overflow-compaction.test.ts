@@ -680,6 +680,89 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     ).toBeUndefined();
   });
 
+  it("forwards unscoped tool auth profiles to Copilot plugin harnesses", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>
+      makeAttemptResult({ assistantTexts: ["ok"] }),
+    );
+    const runtimePlan = makeForwardedRuntimePlan({
+      resolvedRef: {
+        provider: "github-copilot",
+        modelId: "gpt-4o",
+        harnessId: "copilot",
+      },
+      auth: {
+        harnessAuthProvider: "github-copilot",
+        forwardedAuthProfileId: "github-copilot:work",
+      },
+    });
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "copilot",
+      label: "Copilot",
+      supports: (ctx) =>
+        ctx.provider === "github-copilot"
+          ? { supported: true, priority: 100 }
+          : { supported: false },
+      runAttempt: pluginRunAttempt,
+    });
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
+    mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
+    const copilotAuthStore = {
+      version: 1,
+      profiles: {
+        "github-copilot:work": {
+          type: "oauth" as const,
+          provider: "github-copilot",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "anthropic:work": {
+          type: "api_key" as const,
+          provider: "anthropic",
+          key: "sk-ant",
+        },
+      },
+    };
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValueOnce(copilotAuthStore);
+
+    try {
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "github-copilot",
+        model: "gpt-4o",
+        config: {
+          models: {
+            providers: {
+              "github-copilot": {
+                agentRuntime: { id: "copilot" },
+                baseUrl: "https://api.githubcopilot.com",
+                models: [],
+              },
+            },
+          },
+        },
+        authProfileId: "github-copilot:work",
+        authProfileIdSource: "user",
+        runId: "copilot-plugin-harness-forwards-tool-auth-store",
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
+    expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
+    const harnessParams = mockCallArg(pluginRunAttempt) as {
+      authProfileStore?: { profiles?: Record<string, unknown> };
+      toolAuthProfileStore?: unknown;
+    };
+    const forwardedAuthStore = expectRecordFields(harnessParams.authProfileStore, {});
+    const authProfiles = expectRecordFields(forwardedAuthStore.profiles, {});
+    expect(Object.keys(authProfiles)).toEqual(["github-copilot:work"]);
+    expect(harnessParams.toolAuthProfileStore).toBe(copilotAuthStore);
+  });
+
   it("forwards optional attempt params and the runtime plan into one attempt call", async () => {
     const internalEvents: AgentInternalEvent[] = [];
     const forwardingCase = makeForwardingCase(internalEvents);
@@ -874,7 +957,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:work",
       },
     });
@@ -912,7 +995,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai-codex",
+      provider: "openai",
       authProfileId: "openai-codex:work",
       authProfileIdSource: "user",
     });
@@ -924,7 +1007,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:work",
       },
     });
@@ -949,14 +1032,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     };
     const runtimePlan = makeForwardedRuntimePlan({
       resolvedRef: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.5",
         harnessId: "codex",
       },
       auth: {
-        providerForAuth: "openai-codex",
-        authProfileProviderForAuth: "openai-codex",
-        harnessAuthProvider: "openai-codex",
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:work",
       },
     });
@@ -965,7 +1048,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       profiles: {
         "openai-codex:work": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
@@ -983,7 +1066,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedResolveModelAsync.mockResolvedValueOnce({
       model: {
         id: "gpt-5.5",
-        provider: "openai-codex",
+        provider: "openai",
         contextWindow: 200000,
         api: "openai-codex-responses",
       },
@@ -1016,17 +1099,17 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
     expect(mockedEnsureAuthProfileStore).toHaveBeenCalledTimes(1);
     expectRecordFields(mockCallArg(mockedEnsureAuthProfileStore, 0, 1), {
-      externalCliProviderIds: ["openai-codex"],
+      externalCliProviderIds: ["openai"],
       allowKeychainPrompt: false,
     });
     expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
     expectMockCallFields(mockedGetApiKeyForModel, {
       profileId: "openai-codex:work",
     });
-    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenCalledWith("openai-codex", "test-key");
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenCalledWith("openai", "test-key");
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     expectMockCallFields(pluginRunAttempt, {
-      provider: "openai-codex",
+      provider: "openai",
       authProfileId: "openai-codex:work",
       authProfileIdSource: "user",
       resolvedApiKey: "test-key",
@@ -1044,14 +1127,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     };
     const runtimePlan = makeForwardedRuntimePlan({
       resolvedRef: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.5",
         harnessId: "codex",
       },
       auth: {
-        providerForAuth: "openai-codex",
-        authProfileProviderForAuth: "openai-codex",
-        harnessAuthProvider: "openai-codex",
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:default",
       },
     });
@@ -1060,7 +1143,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       profiles: {
         "openai-codex:default": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "access-token",
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
@@ -1091,14 +1174,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         provider?: string;
         store?: { profiles?: Record<string, unknown> };
       };
-      return provider === "openai-codex" && store?.profiles?.["openai-codex:default"]
+      return provider === "openai" && store?.profiles?.["openai-codex:default"]
         ? ["openai-codex:default"]
         : [];
     });
     mockedResolveModelAsync.mockResolvedValueOnce({
       model: {
         id: "gpt-5.5",
-        provider: "openai-codex",
+        provider: "openai",
         contextWindow: 200000,
         api: "openai-codex-responses",
       },
@@ -1141,34 +1224,34 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
     expect(mockedEnsureAuthProfileStore).toHaveBeenCalledTimes(1);
     expectRecordFields(mockCallArg(mockedEnsureAuthProfileStore, 0, 1), {
-      externalCliProviderIds: ["openai-codex"],
+      externalCliProviderIds: ["openai"],
       allowKeychainPrompt: false,
     });
     expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).not.toHaveBeenCalled();
     expectMockCallFields(mockedResolveAuthProfileOrder, {
-      provider: "openai-codex",
+      provider: "openai",
       store: codexAuthStore,
     });
     expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(1);
     expectMockCallFields(mockedGetApiKeyForModel, {
       profileId: "openai-codex:default",
     });
-    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenCalledWith("openai-codex", "test-key");
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenCalledWith("openai", "test-key");
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai-codex",
+      provider: "openai",
       authProfileId: "openai-codex:default",
       authProfileIdSource: "auto",
       resolvedApiKey: "test-key",
     });
     expectRuntimePlanFields(pluginParams.runtimePlan, {
       resolvedRef: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.5",
         harnessId: "codex",
       },
       auth: {
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:default",
       },
     });
@@ -1180,7 +1263,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const authProfiles = expectRecordFields(forwardedAuthStore.profiles, {});
     expect(Object.keys(authProfiles)).toEqual(["openai-codex:default"]);
     expectRecordFields(authProfiles["openai-codex:default"], {
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(harnessParams.toolAuthProfileStore).toBe(codexAuthStore);
   });
@@ -1208,28 +1291,28 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     };
     const firstRuntimePlan = makeForwardedRuntimePlan({
       resolvedRef: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.5",
         harnessId: "codex",
       },
       auth: {
-        providerForAuth: "openai-codex",
-        authProfileProviderForAuth: "openai-codex",
-        harnessAuthProvider: "openai-codex",
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:sub",
         forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai-codex:backup"],
       },
     });
     const secondRuntimePlan = makeForwardedRuntimePlan({
       resolvedRef: {
-        provider: "openai-codex",
+        provider: "openai",
         modelId: "gpt-5.5",
         harnessId: "codex",
       },
       auth: {
-        providerForAuth: "openai-codex",
-        authProfileProviderForAuth: "openai-codex",
-        harnessAuthProvider: "openai-codex",
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:backup",
         forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai-codex:backup"],
       },
@@ -1239,14 +1322,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       profiles: {
         "openai-codex:sub": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "sub-access-token",
           refresh: "sub-refresh-token",
           expires: Date.now() + 60_000,
         },
         "openai-codex:backup": {
           type: "oauth" as const,
-          provider: "openai-codex",
+          provider: "openai",
           access: "backup-access-token",
           refresh: "backup-refresh-token",
           expires: Date.now() + 60_000,
@@ -1265,7 +1348,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedResolveModelAsync.mockResolvedValueOnce({
       model: {
         id: "gpt-5.5",
-        provider: "openai-codex",
+        provider: "openai",
         contextWindow: 200000,
         api: "openai-codex-responses",
       },
@@ -1311,26 +1394,18 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).toHaveBeenCalledTimes(2);
-    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(
-      1,
-      "openai-codex",
-      "sub-token",
-    );
-    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(
-      2,
-      "openai-codex",
-      "backup-token",
-    );
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(1, "openai", "sub-token");
+    expect(codexAuthStorage.setRuntimeApiKey).toHaveBeenNthCalledWith(2, "openai", "backup-token");
     expect(pluginRunAttempt).toHaveBeenCalledTimes(2);
     expectMockCallFields(pluginRunAttempt, {
-      provider: "openai-codex",
+      provider: "openai",
       authProfileId: "openai-codex:sub",
       resolvedApiKey: "sub-token",
     });
     expectMockCallFields(
       pluginRunAttempt,
       {
-        provider: "openai-codex",
+        provider: "openai",
         authProfileId: "openai-codex:backup",
         resolvedApiKey: "backup-token",
       },
@@ -1351,7 +1426,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:default",
       },
     });
@@ -1389,7 +1464,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai-codex",
+      provider: "openai",
       authProfileId: "openai-codex:default",
       authProfileIdSource: "auto",
     });
@@ -1401,7 +1476,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:default",
       },
     });
@@ -1422,7 +1497,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:default",
       },
     });
@@ -1457,12 +1532,12 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
     expectMockCallFields(mockedResolveAuthProfileOrder, {
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai-codex",
+      provider: "openai",
       authProfileId: "openai-codex:default",
       authProfileIdSource: "auto",
     });
@@ -1474,7 +1549,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:default",
       },
     });
@@ -1495,7 +1570,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai:personal",
       },
     });
@@ -1514,7 +1589,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       profiles: {
         "openai:personal": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: Date.now() + 60_000,
@@ -1542,12 +1617,12 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
     expectMockCallFields(mockedResolveAuthProfileOrder, {
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(mockedBuildAgentRuntimePlan).toHaveBeenCalledTimes(1);
     expect(pluginRunAttempt).toHaveBeenCalledTimes(1);
     const pluginParams = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai-codex",
+      provider: "openai",
       authProfileId: "openai:personal",
       authProfileIdSource: "auto",
     });
@@ -1559,7 +1634,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai:personal",
       },
     });
@@ -1572,7 +1647,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const authProfiles = expectRecordFields(authProfileStore.profiles, {});
     expect(Object.keys(authProfiles)).toEqual(["openai:personal"]);
     expectRecordFields(authProfiles["openai:personal"], {
-      provider: "openai-codex",
+      provider: "openai",
     });
   });
 
@@ -1601,7 +1676,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai-codex:sub",
         forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai:backup"],
       },
@@ -1614,7 +1689,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       },
       auth: {
         providerForAuth: "openai",
-        harnessAuthProvider: "openai-codex",
+        harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai:backup",
         forwardedAuthProfileCandidateIds: ["openai-codex:sub", "openai:backup"],
       },
@@ -1636,7 +1711,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       profiles: {
         "openai-codex:sub": {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: Date.now() + 60_000,
@@ -1679,14 +1754,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
     expect(pluginRunAttempt).toHaveBeenCalledTimes(2);
     const firstAttempt = expectMockCallFields(pluginRunAttempt, {
-      provider: "openai-codex",
+      provider: "openai",
       authProfileId: "openai-codex:sub",
       authProfileIdSource: "auto",
     });
     const secondAttempt = expectMockCallFields(
       pluginRunAttempt,
       {
-        provider: "openai-codex",
+        provider: "openai",
         authProfileId: "openai:backup",
         authProfileIdSource: "auto",
       },

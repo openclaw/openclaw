@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -10,7 +11,7 @@ import { isRecord } from "../shared/record-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { resolveDefaultPluginNpmDir } from "./install-paths.js";
+import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
@@ -90,6 +91,22 @@ function fileFingerprint(filePath: string): unknown {
   } catch {
     return [filePath, "missing"];
   }
+}
+
+function directoryChildPackageJsonFingerprint(directoryPath: string): unknown {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directoryPath, { withFileTypes: true });
+  } catch {
+    return [directoryPath, "missing"];
+  }
+  return [
+    directoryPath,
+    ...entries
+      .filter((entry) => entry.isDirectory())
+      .toSorted((a, b) => a.name.localeCompare(b.name))
+      .map((entry) => fileFingerprint(path.join(directoryPath, entry.name, "package.json"))),
+  ];
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | undefined {
@@ -194,6 +211,9 @@ function resolvePersistedRegistryFastMemoFingerprint(params: {
   return {
     index: fileFingerprint(indexPath),
     npmPackageJson: fileFingerprint(path.join(npmRoot, "package.json")),
+    npmProjectPackageJsons: directoryChildPackageJsonFingerprint(
+      resolvePluginNpmProjectsDir(npmRoot),
+    ),
   };
 }
 
@@ -442,6 +462,19 @@ function buildPluginMetadataOwnerMaps(
     }
     for (const providerId of plugin.providers ?? []) {
       appendOwner(providers, providerId, plugin.id);
+    }
+    for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+      const alias = normalizeProviderId(rawAlias);
+      const targetProvider = normalizeProviderId(target);
+      if (
+        alias &&
+        targetProvider &&
+        (plugin.providers ?? []).some(
+          (providerId) => normalizeProviderId(providerId) === targetProvider,
+        )
+      ) {
+        appendOwner(providers, alias, plugin.id);
+      }
     }
     for (const providerId of Object.keys(plugin.modelCatalog?.providers ?? {})) {
       appendOwner(modelCatalogProviders, providerId, plugin.id);

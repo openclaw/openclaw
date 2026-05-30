@@ -7,7 +7,11 @@ import { setTimeout as sleepTimeout } from "node:timers/promises";
 import { promisify } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  addTimerTimeoutGraceMs,
+  parseStrictPositiveInteger,
+  resolveNonNegativeIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -1210,6 +1214,7 @@ export async function navigateChromeMcpPage(params: {
   timeoutMs?: number;
 }): Promise<{ url: string }> {
   const resolvedTimeoutMs = params.timeoutMs ?? CHROME_MCP_NAVIGATE_TIMEOUT_MS;
+  const callTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(resolvedTimeoutMs);
   await callTool(
     params.profileName,
     chromeMcpProfileOptionsFromParams(params),
@@ -1220,7 +1225,7 @@ export async function navigateChromeMcpPage(params: {
       url: params.url,
       timeout: resolvedTimeoutMs,
     },
-    { timeoutMs: resolvedTimeoutMs + 5_000 },
+    { timeoutMs: callTimeoutMs },
   );
   const page = await findPageById(
     params.profileName,
@@ -1228,6 +1233,10 @@ export async function navigateChromeMcpPage(params: {
     chromeMcpProfileOptionsFromParams(params),
   );
   return { url: page.url ?? params.url };
+}
+
+export function resolveChromeMcpNavigateCallTimeoutMs(timeoutMs: number): number {
+  return addTimerTimeoutGraceMs(timeoutMs) ?? 1;
 }
 
 export async function takeChromeMcpSnapshot(params: {
@@ -1320,7 +1329,7 @@ export async function clickChromeMcpCoords(params: {
   const pressedButtons = button === "middle" ? 4 : button === "right" ? 2 : 1;
   const x = JSON.stringify(params.x);
   const y = JSON.stringify(params.y);
-  const delayMs = JSON.stringify(Math.max(0, Math.floor(params.delayMs ?? 0)));
+  const delayMs = JSON.stringify(resolveNonNegativeIntegerOption(params.delayMs, 0));
   const doubleClick = params.doubleClick ? "true" : "false";
   await evaluateChromeMcpScript({
     profileName: params.profileName,

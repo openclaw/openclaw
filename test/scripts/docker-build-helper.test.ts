@@ -1121,9 +1121,7 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
       expect(script).toContain('export NPM_CONFIG_CACHE="$npm_config_cache"');
       expect(script).toContain('chmod 700 "$npm_config_cache" || true');
       expect(script).not.toContain('export TMPDIR="$ARTIFACT_ROOT/tmp"');
-      expect(script).not.toContain(
-        'export TMPDIR="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/tmp"',
-      );
+      expect(script).not.toContain('export TMPDIR="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/tmp"');
       expect(script).not.toContain('export npm_config_cache="$ARTIFACT_ROOT/npm-cache"');
       expect(script).not.toContain(
         'export npm_config_cache="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/npm-cache"',
@@ -1683,6 +1681,7 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
+    expect(runner).toContain("OPENCLAW_PLUGIN_LIFECYCLE_TRACE");
     expect(runner).toContain("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
     expect(runner).toContain('tee "$RUN_LOG"');
     expect(runner).not.toContain('cat "$RUN_LOG"');
@@ -1692,6 +1691,12 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(sweep).toContain("read -r plugin_id plugin_dir requires_config");
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins install "$plugin_id"');
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force');
+    expect(sweep).toContain("now_ms()");
+    expect(sweep).toContain("lifecycle_trace_enabled()");
+    expect(sweep).toContain("if lifecycle_trace_enabled; then");
+    expect(sweep).toContain("install_ms=");
+    expect(sweep).toContain("runtime_ms=");
+    expect(sweep).toContain("uninstall_ms=");
     expect(sweep).toContain("assert-installed");
     expect(sweep).toContain("assert-uninstalled");
   });

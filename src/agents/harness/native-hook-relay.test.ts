@@ -21,6 +21,7 @@ import {
   invokeNativeHookRelay,
   invokeNativeHookRelayBridge,
   registerNativeHookRelay,
+  resolveNativeHookRelayDeferredToolApproval,
 } from "./native-hook-relay.js";
 
 afterEach(() => {
@@ -773,6 +774,20 @@ describe("native hook relay registry", () => {
       runId: "run-2",
       event: "pre_tool_use",
     });
+  });
+
+  it("treats stale direct bridge records as retryable during lookup", () => {
+    expect(
+      testing.isNativeHookRelayBridgeLookupRetryableForTests(
+        new Error("native hook relay bridge stale registration"),
+      ),
+    ).toBe(true);
+    expect(
+      testing.isNativeHookRelayBridgeLookupRetryableForTests(
+        new Error("native hook relay bridge stale registration"),
+        300,
+      ),
+    ).toBe(false);
   });
 
   it("accepts bootstrap generation mismatches during a bounded grace window", async () => {
@@ -1844,7 +1859,7 @@ describe("native hook relay registry", () => {
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
   });
 
-  it("reports synthetic app-server PreToolUse approval requirements without opening plugin approvals", async () => {
+  it("defers synthetic app-server PreToolUse approval requirements to the app-server approval", async () => {
     const beforeToolCall = vi.fn(async () => ({
       requireApproval: {
         title: "Needs approval",
@@ -1876,14 +1891,81 @@ describe("native hook relay registry", () => {
       },
     });
 
-    expect(JSON.parse(response.stdout)).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "native command needs approval",
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares in-flight deferred PreToolUse approvals for duplicate app-server requests", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      requireApproval: {
+        title: "Needs approval",
+        description: "native command needs approval",
+      },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-approval-report-duplicate",
+        tool_input: { cmd: "cat /tmp/private_key" },
       },
     });
-    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+
+    let resolveApproval:
+      | ((value: { blocked: false; params: unknown; approvalResolution: "allow-once" }) => void)
+      | undefined;
+    const approvalRequester = vi.fn(
+      () =>
+        new Promise<{ blocked: false; params: unknown; approvalResolution: "allow-once" }>(
+          (resolve) => {
+            resolveApproval = resolve;
+          },
+        ),
+    );
+    testing.setNativeHookRelayDeferredToolApprovalRequesterForTests(approvalRequester);
+
+    const firstApproval = resolveNativeHookRelayDeferredToolApproval({
+      relayId: relay.relayId,
+      toolUseId: "native-approval-report-duplicate",
+    });
+    const duplicateApproval = resolveNativeHookRelayDeferredToolApproval({
+      relayId: relay.relayId,
+      toolUseId: "native-approval-report-duplicate",
+    });
+
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
+    resolveApproval?.({
+      blocked: false,
+      params: { cmd: "cat /tmp/private_key", command: "cat /tmp/private_key" },
+      approvalResolution: "allow-once",
+    });
+
+    await expect(Promise.all([firstApproval, duplicateApproval])).resolves.toEqual([
+      { handled: true, outcome: "approved-once" },
+      { handled: true, outcome: "approved-once" },
+    ]);
+    await expect(
+      resolveNativeHookRelayDeferredToolApproval({
+        relayId: relay.relayId,
+        toolUseId: "native-approval-report-duplicate",
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { asDateTimestampMs, timestampMsToIsoString } from "../shared/number-coercion.js";
 import { resolveUserPath } from "../utils.js";
 import type { OAuthCredentials, OAuthProvider } from "./auth-profiles/types.js";
 
@@ -221,9 +222,10 @@ function decodeJwtExpiryMs(token: string): number | null {
   try {
     const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
     const payload = JSON.parse(payloadRaw) as { exp?: unknown };
-    return typeof payload.exp === "number" && Number.isFinite(payload.exp) && payload.exp > 0
-      ? payload.exp * 1000
-      : null;
+    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0) {
+      return null;
+    }
+    return asDateTimestampMs(payload.exp * 1000) ?? null;
   } catch {
     return null;
   }
@@ -310,7 +312,7 @@ function readCodexKeychainCredentials(options?: {
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
-      expires: new Date(expires).toISOString(),
+      expires: timestampMsToIsoString(expires),
     });
 
     return {
@@ -525,7 +527,7 @@ export function writeClaudeCliKeychainCredentials(
     );
 
     log.info("wrote refreshed credentials to claude cli keychain", {
-      expires: new Date(newCredentials.expires).toISOString(),
+      expires: timestampMsToIsoString(newCredentials.expires),
     });
     return true;
   } catch (error) {
@@ -567,7 +569,7 @@ export function writeClaudeCliFileCredentials(
 
     saveJsonFile(credPath, data);
     log.info("wrote refreshed credentials to claude cli file", {
-      expires: new Date(newCredentials.expires).toISOString(),
+      expires: timestampMsToIsoString(newCredentials.expires),
     });
     return true;
   } catch (error) {

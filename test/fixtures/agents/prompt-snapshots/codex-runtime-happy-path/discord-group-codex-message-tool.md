@@ -78,6 +78,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -116,6 +117,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -221,8 +223,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 40277,
-    "roughTokens": 10070
+    "chars": 41222,
+    "roughTokens": 10306
   },
   "openClawDeveloperInstructions": {
     "chars": 2988,
@@ -233,8 +235,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6925
   },
   "totalWithDynamicToolsJson": {
-    "chars": 67979,
-    "roughTokens": 16995
+    "chars": 68924,
+    "roughTokens": 17231
   },
   "userInputText": {
     "chars": 1629,
@@ -718,7 +720,8 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],

@@ -33,14 +33,16 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
 import {
   createFixedWindowRateLimiter,
+  resolveFixedWindowRateLimitInteger,
   type FixedWindowRateLimiter,
 } from "../infra/fixed-window-rate-limit.js";
+import { timestampMsToIsoString } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { shortenHomePath } from "../utils.js";
 import {
@@ -56,7 +58,7 @@ import {
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
-import { readBool, readNumber, readString } from "./meta.js";
+import { readBool, readNonNegativeInteger, readNumber, readString } from "./meta.js";
 import {
   buildAcpPermissionRequest,
   parseGatewayExecApprovalEventData,
@@ -501,10 +503,7 @@ function buildSessionMetadata(params: {
     normalizeOptionalString(params.row?.displayName) ||
     normalizeOptionalString(params.row?.label) ||
     params.sessionKey;
-  const updatedAt =
-    typeof params.row?.updatedAt === "number" && Number.isFinite(params.row.updatedAt)
-      ? new Date(params.row.updatedAt).toISOString()
-      : null;
+  const updatedAt = timestampMsToIsoString(params.row?.updatedAt) ?? null;
   return {
     title,
     updatedAt,
@@ -612,13 +611,15 @@ export class AcpGatewayAgent implements Agent {
     this.sessionStore = opts.sessionStore ?? defaultAcpSessionStore;
     this.eventLedger = opts.eventLedger ?? createInMemoryAcpEventLedger();
     this.sessionCreateRateLimiter = createFixedWindowRateLimiter({
-      maxRequests: Math.max(
-        1,
-        opts.sessionCreateRateLimit?.maxRequests ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+      maxRequests: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.maxRequests,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS,
+        { min: 1 },
       ),
-      windowMs: Math.max(
-        1_000,
-        opts.sessionCreateRateLimit?.windowMs ?? SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+      windowMs: resolveFixedWindowRateLimitInteger(
+        opts.sessionCreateRateLimit?.windowMs,
+        SESSION_CREATE_RATE_LIMIT_DEFAULT_WINDOW_MS,
+        { min: 1_000 },
       ),
     });
   }
@@ -1023,7 +1024,7 @@ export class AcpGatewayAgent implements Agent {
       idempotencyKey: runId,
       thinking: readString(params["_meta"], ["thinking", "thinkingLevel"]),
       deliver: readBool(params["_meta"], ["deliver"]),
-      timeoutMs: readNumber(params["_meta"], ["timeoutMs"]),
+      timeoutMs: readNonNegativeInteger(params["_meta"], ["timeoutMs"]),
     };
 
     return new Promise<PromptResponse>((resolve, reject) => {
@@ -1911,7 +1912,7 @@ export class AcpGatewayAgent implements Agent {
       sessionId: session.key,
       cwd,
       title: session.derivedTitle ?? session.displayName ?? session.label ?? session.key,
-      updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
+      updatedAt: timestampMsToIsoString(session.updatedAt),
       _meta: toAcpSessionLineageMeta(session),
     };
   }

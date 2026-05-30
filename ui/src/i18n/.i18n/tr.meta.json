@@ -1,15 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.queue.retry",
-    "chat.queue.retryQueuedMessage",
-    "chat.queue.retrySend"
-  ],
-  "generatedAt": "2026-05-28T16:05:46.798Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-05-30T14:51:08.900Z",
   "locale": "tr",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "7c867296be27a09ab0e35f76d2518f479e24ab667179c5b3fabf83d6c57f3ef9",
-  "totalKeys": 1158,
-  "translatedKeys": 1155,
+  "sourceHash": "cf9ec1de1e155dd9ef3eb10e45f3d93c24c2f18aafcbd2317e0265eea027254f",
+  "totalKeys": 1280,
+  "translatedKeys": 1280,
   "workflow": 1
 }

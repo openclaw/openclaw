@@ -4,6 +4,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationProviderContext } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { timestampMsToIsoFileStamp } from "../../shared/number-coercion.js";
 
 export function createMigrationLogger(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
   const info = opts.json ? runtime.error : runtime.log;
@@ -24,7 +25,7 @@ export function buildMigrationReportDir(
   stateDir: string,
   nowMs = Date.now(),
 ): string {
-  const stamp = new Date(nowMs).toISOString().replaceAll(":", "-");
+  const stamp = timestampMsToIsoFileStamp(nowMs);
   return path.join(stateDir, "migration", providerId, stamp);
 }
 

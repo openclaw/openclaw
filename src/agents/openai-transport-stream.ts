@@ -15,6 +15,7 @@ import type {
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
+import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
 import type { Api, Context, Model } from "../llm/types.js";
@@ -79,6 +80,7 @@ import {
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
+const OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS = "Follow the user request.";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
@@ -88,6 +90,7 @@ const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const OPENAI_RESPONSES_REASONING_REPLAY_META_KEY = "__openclaw_replay";
 const OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY = "openclawReasoningReplay";
 const OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH = 64;
+const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai", "openai-codex"]);
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
@@ -1914,7 +1917,7 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
 
 function isOpenAICodexResponsesModel(model: Model): boolean {
   return (
-    model.provider === "openai-codex" &&
+    OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
     (model.api === "openai-codex-responses" || model.api === "openclaw-openai-responses-transport")
   );
 }
@@ -1992,6 +1995,19 @@ function buildOpenAICodexResponsesInstructions(context: Context): string | undef
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
+function resolveOpenAICodexResponsesInstructions(
+  model: Model,
+  context: Context,
+): string | undefined {
+  const instructions = buildOpenAICodexResponsesInstructions(context);
+  if (instructions && instructions.trim().length > 0) {
+    return instructions;
+  }
+  return usesNativeOpenAICodexResponsesBackend(model)
+    ? OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS
+    : undefined;
+}
+
 function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Context): void {
   if (messages.length > 0 || !context.systemPrompt) {
     return;
@@ -2063,7 +2079,9 @@ export function buildOpenAIResponsesParams(
     stream: true,
     prompt_cache_key: promptCacheKey,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
+    ...(isCodexResponses
+      ? { instructions: resolveOpenAICodexResponsesInstructions(model, context) }
+      : {}),
     ...(metadata ? { metadata } : {}),
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
@@ -2253,16 +2271,10 @@ function normalizeAzureBaseUrl(baseUrl: string): string {
 }
 
 function resolveAzureDeploymentName(model: Model): string {
-  const deploymentMap = process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
-  if (deploymentMap) {
-    for (const entry of deploymentMap.split(",")) {
-      const [modelId, deploymentName] = entry.split("=", 2).map((value) => value?.trim());
-      if (modelId === model.id && deploymentName) {
-        return deploymentName;
-      }
-    }
-  }
-  return model.id;
+  return resolveAzureDeploymentNameFromMap({
+    modelId: model.id,
+    deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
+  });
 }
 
 function createAzureOpenAIClient(
@@ -2978,11 +2990,25 @@ function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptio
 function resolveOpenAICompletionsMaxTokens(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
-): number | undefined {
+): { maxTokens: number | undefined; clampToModelMaxTokens: boolean } {
+  if (options?.maxTokens) {
+    return { maxTokens: options.maxTokens, clampToModelMaxTokens: true };
+  }
   const paramsMaxTokens = resolveMaxTokensParam(
     (model as { params?: Record<string, unknown> }).params,
   );
-  return (options?.maxTokens || undefined) ?? (paramsMaxTokens || undefined) ?? model.maxTokens;
+  if (paramsMaxTokens) {
+    return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false };
+  }
+  return { maxTokens: model.maxTokens, clampToModelMaxTokens: false };
+}
+
+function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number | undefined {
+  return typeof model.maxTokens === "number" &&
+    Number.isFinite(model.maxTokens) &&
+    model.maxTokens > 0
+    ? Math.floor(model.maxTokens)
+    : undefined;
 }
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
@@ -3590,17 +3616,33 @@ export function buildOpenAICompletionsParams(
     }
   }
   {
-    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
+    const maxTokenBudget = resolveOpenAICompletionsMaxTokens(model, options);
+    const effectiveMaxTokens = maxTokenBudget.maxTokens;
     const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
     let clampedMaxTokens = effectiveMaxTokens;
+    const modelMaxTokens = resolveOpenAICompletionsModelMaxTokens(model);
+    if (
+      maxTokenBudget.clampToModelMaxTokens &&
+      clampedMaxTokens !== undefined &&
+      modelMaxTokens !== undefined &&
+      clampedMaxTokens > modelMaxTokens
+    ) {
+      clampedMaxTokens = modelMaxTokens;
+      emitModelTransportDebug(
+        log,
+        `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+          `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
+          `modelMaxTokens=${modelMaxTokens}`,
+      );
+    }
     if (
       compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
-      effectiveMaxTokens !== undefined &&
+      clampedMaxTokens !== undefined &&
       effectiveContextTokens !== undefined
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
       const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
-      if (effectiveMaxTokens > remainingBudget) {
+      if (clampedMaxTokens > remainingBudget) {
         clampedMaxTokens = remainingBudget;
         emitModelTransportDebug(
           log,

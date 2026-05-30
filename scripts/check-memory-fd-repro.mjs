@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 const ISSUE_FILE_COUNTS = [
   ["memory/transcripts", 9394],
@@ -25,6 +26,7 @@ const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
 export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
+export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
 
 const SKIP_GATEWAY_ENV = {
   NODE_ENV: "test",
@@ -60,15 +62,21 @@ Options:
 `.trim();
 }
 
-function readNumber(value, label) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`${label} must be a non-negative number`);
+const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
+
+export function readNumber(value, label) {
+  const raw = String(value).trim();
+  if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
+    throw new Error(`${label} must be a non-negative integer`);
   }
-  return Math.floor(parsed);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} must be a safe integer`);
+  }
+  return parsed;
 }
 
-function readPositiveNumber(value, label) {
+export function readPositiveNumber(value, label) {
   const parsed = readNumber(value, label);
   if (parsed <= 0) {
     throw new Error(`${label} must be greater than 0`);
@@ -76,24 +84,32 @@ function readPositiveNumber(value, label) {
   return parsed;
 }
 
-function parseArgs(argv) {
+function readNumberEnv(name, fallback) {
+  const raw = process.env[name];
+  return raw == null || raw.trim() === "" ? fallback : readNumber(raw, name);
+}
+
+function readPositiveNumberEnv(name, fallback) {
+  const raw = process.env[name];
+  return raw == null || raw.trim() === "" ? fallback : readPositiveNumber(raw, name);
+}
+
+export function parseArgs(argv) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const options = {
-    fileCount: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_FILES || DEFAULT_FILE_COUNT),
+    fileCount: undefined,
     mode: process.env.OPENCLAW_MEMORY_FD_REPRO_MODE || "fixed",
-    maxWorkspaceRegFds: Number(
-      process.env.OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS || DEFAULT_MAX_WORKSPACE_REG_FDS,
-    ),
+    maxWorkspaceRegFds: undefined,
     minLeakedFds: undefined,
-    invokeTimeoutMs: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS || 30_000),
-    sampleDelayMs: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS || 1_000),
-    settleDelayMs: Number(process.env.OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS || 5_000),
+    invokeTimeoutMs: undefined,
+    sampleDelayMs: undefined,
+    settleDelayMs: undefined,
     outputDir: path.resolve(".artifacts", "memory-fd-repro", stamp),
     keep: process.env.OPENCLAW_MEMORY_FD_REPRO_KEEP === "1",
     allowNonDarwin: process.env.OPENCLAW_MEMORY_FD_REPRO_ALLOW_NON_DARWIN === "1",
   };
 
-  for (let i = 0; i < argv.length; i += 1) {
+  parseArgv: for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
     const readValue = () => {
@@ -106,7 +122,7 @@ function parseArgs(argv) {
 
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--help":
         console.log(usage());
         process.exit(0);
@@ -157,6 +173,14 @@ function parseArgs(argv) {
   if (!["fixed", "leak", "report"].includes(options.mode)) {
     throw new Error('--mode must be "fixed", "leak", or "report"');
   }
+  options.fileCount ??= readPositiveNumberEnv("OPENCLAW_MEMORY_FD_REPRO_FILES", DEFAULT_FILE_COUNT);
+  options.maxWorkspaceRegFds ??= readNumberEnv(
+    "OPENCLAW_MEMORY_FD_REPRO_MAX_WORKSPACE_REG_FDS",
+    DEFAULT_MAX_WORKSPACE_REG_FDS,
+  );
+  options.invokeTimeoutMs ??= readPositiveNumberEnv("OPENCLAW_MEMORY_FD_REPRO_TIMEOUT_MS", 30_000);
+  options.sampleDelayMs ??= readNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SAMPLE_DELAY_MS", 1_000);
+  options.settleDelayMs ??= readNumberEnv("OPENCLAW_MEMORY_FD_REPRO_SETTLE_DELAY_MS", 5_000);
   if (!Number.isFinite(options.fileCount) || options.fileCount <= 0) {
     throw new Error("file count must be greater than 0");
   }
@@ -409,6 +433,8 @@ export async function stopGatewayWithRuntime({
   }
 }
 
+export { readBoundedResponseText };
+
 async function invokeMemorySearch({ port, token, timeoutMs }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -431,7 +457,11 @@ async function invokeMemorySearch({ port, token, timeoutMs }) {
       }),
       signal: controller.signal,
     });
-    const text = await res.text();
+    const text = await readBoundedResponseText(
+      res,
+      "memory_search",
+      MEMORY_SEARCH_RESPONSE_MAX_BYTES,
+    );
     return {
       ok: res.ok,
       status: res.status,

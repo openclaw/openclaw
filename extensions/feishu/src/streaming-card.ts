@@ -3,6 +3,11 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
+import {
+  asDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
@@ -42,9 +47,24 @@ type StreamingStartOptions = {
 
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
+const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
+
+function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
+  const now = resolveDateTimestampMs(nowMs);
+  if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
+    return now;
+  }
+  return (
+    resolveExpiresAtMsFromDurationSeconds(value, { nowMs: now }) ??
+    resolveExpiresAtMsFromDurationSeconds(FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS, {
+      nowMs: now,
+    }) ??
+    now
+  );
+}
 
 function resolveApiBase(domain?: FeishuDomain): string {
   if (domain === "lark") {
@@ -73,7 +93,11 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
 async function getToken(creds: Credentials): Promise<string> {
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
-  if (cached && cached.expiresAt > Date.now() + 60000) {
+  const rawNow = Date.now();
+  const hasValidClock = asDateTimestampMs(rawNow) !== undefined;
+  const now = resolveDateTimestampMs(rawNow);
+  const minUsableExpiresAt = resolveExpiresAtMsFromDurationSeconds(60, { nowMs: now }) ?? now;
+  if (cached && hasValidClock && cached.expiresAt > minUsableExpiresAt) {
     return cached.token;
   }
 
@@ -103,7 +127,7 @@ async function getToken(creds: Credentials): Promise<string> {
   }
   tokenCache.set(key, {
     token: data.tenant_access_token,
-    expiresAt: Date.now() + (data.expire ?? 7200) * 1000,
+    expiresAt: resolveStreamingTokenExpiresAt(data.expire, now),
   });
   return data.tenant_access_token;
 }

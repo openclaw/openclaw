@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   applyCodeModeCatalog,
@@ -93,7 +93,12 @@ async function runUntilCompleted(params: {
 }
 
 describe("Code Mode", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     testing.activeRuns.clear();
     testing.resumingRunIds.clear();
     testing.setTypescriptRuntimeForTest(null);
@@ -495,7 +500,6 @@ describe("Code Mode", () => {
       tools: {
         codeMode: {
           enabled: true,
-          timeoutMs: 100,
         },
       },
     } as never;
@@ -538,9 +542,18 @@ describe("Code Mode", () => {
     );
     expect(first.status).toBe("waiting");
     expect(first.pendingToolCalls).toHaveLength(2);
+    const runId = first.runId;
+    expect(typeof runId).toBe("string");
+    if (typeof runId !== "string") {
+      throw new Error("expected code mode run id");
+    }
+
+    const activeRun = testing.activeRuns.get(runId);
+    expect(activeRun).toBeDefined();
+    activeRun!.config.timeoutMs = 100;
 
     const second = resultDetails(
-      await codeModeTools[1].execute("code-wait-timeout", { runId: first.runId }),
+      await codeModeTools[1].execute("code-wait-timeout", { runId }),
     );
 
     expect(second.status).toBe("waiting");
@@ -887,6 +900,32 @@ describe("Code Mode", () => {
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("timeout exceeded");
     expect(details.code).toBe("timeout");
+  });
+
+  it("normalizes QuickJS interrupt timeout errors", () => {
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "timeout",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "timeout",
+      error: "code mode timeout exceeded",
+    });
+
+    expect(
+      testing.normalizeCodeModeWorkerResult({
+        status: "failed",
+        code: "internal_error",
+        error: "interrupted",
+        output: [],
+      }),
+    ).toMatchObject({
+      code: "internal_error",
+      error: "interrupted",
+    });
   });
 
   it("classifies missing worker runtime as unavailable", async () => {

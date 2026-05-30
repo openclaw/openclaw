@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../../../shared/number-coercion.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 
 type AggregateTimeoutParams = Parameters<typeof waitForCompactionRetryWithAggregateTimeout>[0];
@@ -115,6 +116,24 @@ describe("waitForCompactionRetryWithAggregateTimeout", () => {
 
       expect(result.timedOut).toBe(false);
       expectClearedTimeoutState(params.onTimeout, false);
+    });
+  });
+
+  it("caps aggregate timeout before scheduling", async () => {
+    await withFakeTimers(async () => {
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const waitForCompactionRetry = vi.fn(async () => {});
+      const params = buildAggregateTimeoutParams({
+        waitForCompactionRetry,
+        aggregateTimeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      const result = await waitForCompactionRetryWithAggregateTimeout(params);
+
+      expect(result.timedOut).toBe(false);
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expectClearedTimeoutState(params.onTimeout, false);
+      timeoutSpy.mockRestore();
     });
   });
 

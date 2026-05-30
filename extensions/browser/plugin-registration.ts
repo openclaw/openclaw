@@ -15,6 +15,15 @@ import { BrowserToolSchema } from "./src/browser-tool.schema.js";
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 
+let browserRegistrationRuntimeModulePromise: Promise<
+  typeof import("./register.runtime.js")
+> | null = null;
+
+const loadBrowserRegistrationRuntimeModule = async () => {
+  browserRegistrationRuntimeModulePromise ??= import("./register.runtime.js");
+  return await browserRegistrationRuntimeModulePromise;
+};
+
 function isTruthyEnvValue(value: string | undefined): boolean {
   return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
 }
@@ -51,7 +60,7 @@ function createLazyBrowserTool(opts?: {
     ].join(" "),
     parameters: BrowserToolSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const { createBrowserTool } = await import("./register.runtime.js");
+      const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
       const tool = createBrowserTool(opts);
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
@@ -65,7 +74,7 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     command: "browser.proxy",
     cap: "browser",
     handle: async (paramsJSON) => {
-      const { runBrowserProxyCommand } = await import("./register.runtime.js");
+      const { runBrowserProxyCommand } = await loadBrowserRegistrationRuntimeModule();
       return await runBrowserProxyCommand(paramsJSON);
     },
   },
@@ -73,7 +82,7 @@ export const browserPluginNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
 
 export const browserSecurityAuditCollectors: OpenClawPluginSecurityAuditCollector[] = [
   async (ctx) => {
-    const { collectBrowserSecurityAuditFindings } = await import("./register.runtime.js");
+    const { collectBrowserSecurityAuditFindings } = await loadBrowserRegistrationRuntimeModule();
     return collectBrowserSecurityAuditFindings(ctx);
   },
 ];
@@ -82,7 +91,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
   let service: OpenClawPluginService | null = null;
   const loadService = async () => {
     if (!service) {
-      const { createBrowserPluginService } = await import("./register.runtime.js");
+      const { createBrowserPluginService } = await loadBrowserRegistrationRuntimeModule();
       service = createBrowserPluginService();
     }
     return service;
@@ -124,7 +133,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerGatewayMethod(
     BROWSER_REQUEST_GATEWAY_METHOD,
     async (opts) => {
-      const { handleBrowserGatewayRequest } = await import("./register.runtime.js");
+      const { handleBrowserGatewayRequest } = await loadBrowserRegistrationRuntimeModule();
       return await handleBrowserGatewayRequest(opts);
     },
     {

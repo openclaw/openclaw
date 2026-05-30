@@ -270,6 +270,45 @@ describe("Feishu Card Action Handler", () => {
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
 
+  it("does not open approval cards when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      const event: FeishuCardActionEvent = {
+        operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
+        token: "tok4-boundary",
+        action: {
+          value: createFeishuCardInteractionEnvelope({
+            k: "meta",
+            a: FEISHU_APPROVAL_REQUEST_ACTION,
+            m: {
+              command: "/new",
+              prompt: "Start a fresh session?",
+            },
+            c: {
+              u: "u123",
+              h: "chat1",
+              t: "group",
+              s: "agent:codex:feishu:chat:chat1",
+              e: 8_640_000_000_000_000,
+            },
+          }),
+          tag: "button",
+        },
+        context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
+      };
+
+      await handleFeishuCardAction({ cfg, event, runtime, accountId: "main" });
+
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      const sendMessage = sendMessageCall();
+      expect(sendMessage.to).toBe("chat:chat1");
+      expect(String(sendMessage.text)).toContain("payload is invalid");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs approval confirmation through the normal message path", async () => {
     const event = createStructuredQuickActionEvent({
       token: "tok5",
@@ -374,6 +413,39 @@ describe("Feishu Card Action Handler", () => {
     expect(message.chat_id).toBe("oc_dm_chat_123");
     expect(message.chat_type).toBe("p2p");
     expect(createFeishuClientMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache resolved chat type when expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      const getChat = vi.fn().mockResolvedValue({ code: 0, data: { chat_type: "p2p" } });
+      createFeishuClientMock.mockReturnValue({
+        im: {
+          chat: {
+            get: getChat,
+          },
+        },
+      });
+      const firstEvent = createCardActionEvent({
+        token: "tok9b-boundary-1",
+        chatId: "oc_dm_chat_boundary",
+        actionValue: { text: "/help" },
+      });
+      const secondEvent = createCardActionEvent({
+        token: "tok9b-boundary-2",
+        chatId: "oc_dm_chat_boundary",
+        actionValue: { text: "/help" },
+      });
+
+      await handleFeishuCardAction({ cfg, event: firstEvent, runtime });
+      await handleFeishuCardAction({ cfg, event: secondEvent, runtime });
+
+      expect(getChat).toHaveBeenCalledTimes(2);
+      expect(handleFeishuMessage).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses resolved DM chat type when building approval cards without stored context", async () => {

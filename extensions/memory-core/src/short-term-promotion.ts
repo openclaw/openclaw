@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  formatMemoryDreamingDay,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -18,6 +21,7 @@ import {
 } from "./concept-vocabulary.js";
 import { asRecord } from "./dreaming-shared.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
@@ -30,8 +34,11 @@ export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
 export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
 export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
 const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
+const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
+const SHORT_TERM_RECALL_MAX_ENTRIES = 512;
+const SHORT_TERM_RECALL_MAX_SNIPPET_CHARS = 800;
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
 const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
 const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
@@ -149,6 +156,7 @@ type ShortTermAuditIssue = {
     | "recall-store-unreadable"
     | "recall-store-empty"
     | "recall-store-invalid"
+    | "recall-store-over-limit"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
     | "qmd-index-missing"
@@ -182,6 +190,7 @@ export type ShortTermAuditSummary = {
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
+  removedOverflowEntries: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };
@@ -218,6 +227,13 @@ type ApplyShortTermPromotionsOptions = {
    * `DEFAULT_MEMORY_FILE_MAX_CHARS`. See #73691.
    */
   memoryFileMaxChars?: number;
+  /**
+   * Maximum visible size of each promoted short-term snippet in MEMORY.md, in
+   * estimated tokens. This keeps daily journal ranges from being copied
+   * wholesale into long-term memory while preserving the candidate's provenance
+   * metadata.
+   */
+  maxPromotedSnippetTokens?: number;
 };
 
 type ApplyShortTermPromotionsResult = {
@@ -256,6 +272,19 @@ function normalizeSnippet(raw: string): string {
     return "";
   }
   return trimmed.replace(/\s+/g, " ");
+}
+
+function truncateShortTermSnippet(snippet: string): string {
+  if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
+    return snippet;
+  }
+  return snippet.slice(0, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
+}
+
+function enforceShortTermRecallSnippetCap(store: ShortTermRecallStore): void {
+  for (const entry of Object.values(store.entries)) {
+    entry.snippet = truncateShortTermSnippet(entry.snippet);
+  }
 }
 
 function consumeDreamingLeadPrefix(snippet: string): string {
@@ -497,10 +526,11 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         typeof entry.claimHash === "string" && entry.claimHash.trim().length > 0
           ? entry.claimHash.trim()
           : undefined;
-      const snippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
-      if (snippet && isContaminatedDreamingSnippet(snippet)) {
+      const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
+      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
         continue;
       }
+      const snippet = truncateShortTermSnippet(fullSnippet);
       const queryHashes = Array.isArray(entry.queryHashes)
         ? normalizeDistinctStrings(entry.queryHashes, MAX_QUERY_HASHES)
         : [];
@@ -516,7 +546,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
             ),
             MAX_CONCEPT_TAGS,
           )
-        : deriveConceptTags({ path: entryPath, snippet });
+        : deriveConceptTags({ path: entryPath, snippet: fullSnippet });
 
       const normalizedKey =
         key || buildEntryKey({ path: entryPath, startLine, endLine, source, claimHash });
@@ -548,6 +578,59 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
     updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : nowIso,
     entries,
   };
+}
+
+function parseStoreTimestampMs(value: string | undefined): number {
+  if (!value) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+}
+
+function compareStoreTimestampDesc(left: string | undefined, right: string | undefined): number {
+  const leftMs = parseStoreTimestampMs(left);
+  const rightMs = parseStoreTimestampMs(right);
+  if (leftMs === rightMs) {
+    return 0;
+  }
+  return rightMs > leftMs ? 1 : -1;
+}
+
+function compareShortTermRecallRetention(a: ShortTermRecallEntry, b: ShortTermRecallEntry): number {
+  const lastDiff = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
+  if (lastDiff !== 0) {
+    return lastDiff;
+  }
+  const signalDiff = totalSignalCountForEntry(b) - totalSignalCountForEntry(a);
+  if (signalDiff !== 0) {
+    return signalDiff;
+  }
+  const totalScoreDiff = b.totalScore - a.totalScore;
+  if (totalScoreDiff !== 0) {
+    return totalScoreDiff;
+  }
+  const maxScoreDiff = b.maxScore - a.maxScore;
+  if (maxScoreDiff !== 0) {
+    return maxScoreDiff;
+  }
+  const promotedDiff = compareStoreTimestampDesc(a.promotedAt, b.promotedAt);
+  if (promotedDiff !== 0) {
+    return promotedDiff;
+  }
+  return a.key.localeCompare(b.key);
+}
+
+function enforceShortTermRecallStoreRetention(store: ShortTermRecallStore): number {
+  const entries = Object.entries(store.entries);
+  if (entries.length <= SHORT_TERM_RECALL_MAX_ENTRIES) {
+    return 0;
+  }
+  const retained = entries
+    .toSorted(([, a], [, b]) => compareShortTermRecallRetention(a, b))
+    .slice(0, SHORT_TERM_RECALL_MAX_ENTRIES);
+  store.entries = Object.fromEntries(retained.toSorted(([a], [b]) => a.localeCompare(b)));
+  return entries.length - retained.length;
 }
 
 function toFinitePositive(value: unknown, fallback: number): number {
@@ -787,10 +870,12 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
 
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
   try {
-    return normalizeStore(
+    const store = normalizeStore(
       await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_STORE_RELATIVE_PATH),
       nowIso,
     );
+    enforceShortTermRecallStoreRetention(store);
+    return store;
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
       return emptyStore(nowIso);
@@ -884,6 +969,8 @@ async function writePhaseSignalStore(
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
+  enforceShortTermRecallSnippetCap(store);
+  enforceShortTermRecallStoreRetention(store);
   await ensureShortTermArtifactsDir(workspaceDir);
   await privateFileStore(workspaceDir).writeJson(SHORT_TERM_STORE_RELATIVE_PATH, store, {
     trailingNewline: true,
@@ -966,8 +1053,8 @@ export async function recordShortTermRecalls(params: {
     return;
   }
 
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const signalType = params.signalType ?? "recall";
   const queryHash = hashQuery(query);
   const todayBucket =
@@ -977,11 +1064,12 @@ export async function recordShortTermRecalls(params: {
 
     for (const result of relevant) {
       const normalizedPath = normalizeMemoryPath(result.path);
-      const snippet = normalizeSnippet(result.snippet);
-      if (!snippet || isContaminatedDreamingSnippet(snippet)) {
+      const rawSnippet = normalizeSnippet(result.snippet);
+      const snippet = truncateShortTermSnippet(rawSnippet);
+      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
         continue;
       }
-      const claimHash = snippet ? buildClaimHash(snippet) : undefined;
+      const claimHash = buildClaimHash(rawSnippet);
       const groundedKey = claimHash
         ? buildEntryKey({
             path: normalizedPath,
@@ -1082,11 +1170,12 @@ export async function recordGroundedShortTermCandidates(params: {
   }
   const relevant = params.items
     .map((item) => {
-      const snippet = normalizeSnippet(item.snippet);
+      const rawSnippet = normalizeSnippet(item.snippet);
+      const snippet = truncateShortTermSnippet(rawSnippet);
       const normalizedPath = normalizeMemoryPath(item.path);
       if (
-        !snippet ||
-        isContaminatedDreamingSnippet(snippet) ||
+        !rawSnippet ||
+        isContaminatedDreamingSnippet(rawSnippet) ||
         !normalizedPath ||
         !isShortTermMemoryPath(normalizedPath) ||
         !Number.isFinite(item.startLine) ||
@@ -1099,6 +1188,7 @@ export async function recordGroundedShortTermCandidates(params: {
         startLine: Math.max(1, Math.floor(item.startLine)),
         endLine: Math.max(1, Math.floor(item.endLine)),
         snippet,
+        identitySnippet: rawSnippet,
         score: clampScore(item.score),
         query: normalizeSnippet(item.query ?? query),
         signalCount: Math.max(1, Math.floor(item.signalCount ?? 1)),
@@ -1110,8 +1200,8 @@ export async function recordGroundedShortTermCandidates(params: {
     return;
   }
 
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const fallbackDayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
     const store = await readStore(workspaceDir, nowIso);
@@ -1123,7 +1213,7 @@ export async function recordGroundedShortTermCandidates(params: {
         continue;
       }
       const queryHash = hashQuery(effectiveQuery);
-      const claimHash = buildClaimHash(item.snippet);
+      const claimHash = buildClaimHash(item.identitySnippet);
       const key = buildEntryKey({
         path: item.path,
         startLine: item.startLine,
@@ -1192,8 +1282,8 @@ export async function recordDreamingPhaseSignals(params: {
   if (keys.length === 0) {
     return;
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
 
   await withShortTermLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
@@ -1245,8 +1335,8 @@ export async function recordRemConsideredPhaseSignals(params: {
   if (keys.length === 0) {
     return;
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
 
   await withShortTermLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
@@ -1287,8 +1377,8 @@ export async function readLightStagedKeys(params: {
   if (!workspaceDir) {
     return new Set();
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readPhaseSignalStore(workspaceDir, nowIso);
   const keys = new Set<string>();
   for (const [key, entry] of Object.entries(store.entries)) {
@@ -1320,8 +1410,8 @@ export async function rankShortTermPromotionCandidates(
     return [];
   }
 
-  const nowMs = Number.isFinite(options.nowMs) ? (options.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(options.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const minScore = toFiniteScore(options.minScore, DEFAULT_PROMOTION_MIN_SCORE);
   const minRecallCount = toFiniteNonNegativeInt(
     options.minRecallCount,
@@ -1461,8 +1551,8 @@ export async function readShortTermRecallEntries(params: {
   if (!workspaceDir) {
     return [];
   }
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const store = await readStore(workspaceDir, nowIso);
   return Object.values(store.entries).filter(
     (entry): entry is ShortTermRecallEntry =>
@@ -1665,21 +1755,62 @@ function buildPromotionSection(
   candidates: PromotionCandidate[],
   nowMs: number,
   timezone?: string,
+  maxPromotedSnippetTokens = DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
 ): string {
   const sectionDate = formatMemoryDreamingDay(nowMs, timezone);
   const lines = ["", `## Promoted From Short-Term Memory (${sectionDate})`, ""];
 
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const snippet = candidate.snippet || "(no snippet captured)";
+    const metadata = `[score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
+    // Cap only the visible MEMORY.md text. The recall store keeps the full
+    // rehydrated snippet so ranking, provenance, and dream narratives remain
+    // tied to the source entry instead of this presentation budget.
     lines.push(
-      `- ${snippet.replace(/^- +/, "")} [score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`,
+      `- ${formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens)} ${metadata}`,
     );
   }
 
   lines.push("");
   return lines.join("\n");
+}
+
+function resolvePromotedSnippetCharLimit(maxTokens: number): number {
+  const tokenLimit = toFiniteNonNegativeInt(
+    maxTokens,
+    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  );
+  // This is an inexpensive display-size guard, not a tokenizer contract.
+  return tokenLimit * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
+}
+
+function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
+  const limit = resolvePromotedSnippetCharLimit(maxTokens);
+  if (limit === 0 || snippet.length <= limit) {
+    return snippet;
+  }
+  const hardLimit = snippet.slice(0, limit);
+  const sentenceBoundary = Math.max(
+    hardLimit.lastIndexOf(". "),
+    hardLimit.lastIndexOf("! "),
+    hardLimit.lastIndexOf("? "),
+  );
+  const wordBoundary = hardLimit.lastIndexOf(" ");
+  const cutAt =
+    sentenceBoundary >= Math.floor(limit * 0.55)
+      ? sentenceBoundary + 1
+      : wordBoundary >= Math.floor(limit * 0.65)
+        ? wordBoundary
+        : limit;
+  return `${hardLimit.slice(0, cutAt).trimEnd()}...`;
+}
+
+function formatPromotedSnippetForMemory(rawSnippet: string, maxTokens: number): string {
+  const normalized = normalizeSnippet(rawSnippet || "(no snippet captured)")
+    .replace(/^[-*+] +/, "")
+    .trim();
+  return truncatePromotedSnippet(normalized || "(no snippet captured)", maxTokens);
 }
 
 function withTrailingNewline(content: string): string {
@@ -1691,7 +1822,10 @@ function withTrailingNewline(content: string): string {
 
 function extractPromotionMarkers(memoryText: string): Set<string> {
   const markers = new Set<string>();
-  const matches = memoryText.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]+?)\s*-->/gi);
+  // Marker keys include source paths, so spaces are valid. Capture until the
+  // comment close; otherwise a path like "memory/project alpha/..." is missed
+  // and the same candidate can be appended again.
+  const matches = memoryText.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->/gi);
   for (const match of matches) {
     const key = match[1]?.trim();
     if (key) {
@@ -1705,8 +1839,8 @@ export async function applyShortTermPromotions(
   options: ApplyShortTermPromotionsOptions,
 ): Promise<ApplyShortTermPromotionsResult> {
   const workspaceDir = options.workspaceDir.trim();
-  const nowMs = Number.isFinite(options.nowMs) ? (options.nowMs as number) : Date.now();
-  const nowIso = new Date(nowMs).toISOString();
+  const nowMs = resolveMemoryCoreNowMs(options.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
   const limit = Number.isFinite(options.limit)
     ? Math.max(0, Math.floor(options.limit as number))
     : options.candidates.length;
@@ -1795,7 +1929,12 @@ export async function applyShortTermPromotions(
 
     let compactedDates: string[] = [];
     if (toAppend.length > 0) {
-      const section = buildPromotionSection(toAppend, nowMs, options.timezone);
+      const section = buildPromotionSection(
+        toAppend,
+        nowMs,
+        options.timezone,
+        options.maxPromotedSnippetTokens,
+      );
       const budgetChars =
         typeof options.memoryFileMaxChars === "number" &&
         Number.isFinite(options.memoryFileMaxChars)
@@ -1901,8 +2040,9 @@ export async function auditShortTermPromotionArtifacts(params: {
       const nowIso = new Date().toISOString();
       const parsed = JSON.parse(raw) as unknown;
       const store = normalizeStore(parsed, nowIso);
+      const normalizedEntryCount = Object.keys(store.entries).length;
       updatedAt = store.updatedAt;
-      entryCount = Object.keys(store.entries).length;
+      entryCount = normalizedEntryCount;
       promotedCount = Object.values(store.entries).filter((entry) =>
         Boolean(entry.promotedAt),
       ).length;
@@ -1923,6 +2063,14 @@ export async function auditShortTermPromotionArtifacts(params: {
           severity: "warn",
           code: "recall-store-invalid",
           message: `Short-term recall store contains ${invalidEntryCount} invalid entr${invalidEntryCount === 1 ? "y" : "ies"}.`,
+          fixable: true,
+        });
+      }
+      if (normalizedEntryCount > SHORT_TERM_RECALL_MAX_ENTRIES) {
+        issues.push({
+          severity: "warn",
+          code: "recall-store-over-limit",
+          message: `Short-term recall store contains ${normalizedEntryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
           fixable: true,
         });
       }
@@ -2028,6 +2176,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   const nowIso = new Date().toISOString();
   let rewroteStore = false;
   let removedInvalidEntries = 0;
+  let removedOverflowEntries = 0;
   let removedStaleLock = false;
 
   try {
@@ -2080,6 +2229,7 @@ export async function repairShortTermPromotionArtifacts(params: {
         updatedAt: normalized.updatedAt,
         entries: nextEntries,
       };
+      removedOverflowEntries = enforceShortTermRecallStoreRetention(comparableStore);
       const comparableRaw = `${JSON.stringify(comparableStore, null, 2)}\n`;
       if (comparableRaw !== `${raw.trimEnd()}\n`) {
         await writeStore(workspaceDir, {
@@ -2098,6 +2248,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   return {
     changed: rewroteStore || removedStaleLock,
     removedInvalidEntries,
+    removedOverflowEntries,
     rewroteStore,
     removedStaleLock,
   };
@@ -2158,5 +2309,7 @@ export const testing = {
   totalSignalCountForEntry,
   isContaminatedDreamingSnippet,
   lineRangeOverlapsDreamingFence,
+  SHORT_TERM_RECALL_MAX_ENTRIES,
+  SHORT_TERM_RECALL_MAX_SNIPPET_CHARS,
 };
 export { testing as __testing };

@@ -16,6 +16,7 @@ import type {
   ThinkingConfig,
   TurnCoverage,
 } from "@google/genai";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
   RealtimeVoiceAudioFormat,
@@ -179,6 +180,20 @@ function asTurnCoverage(value: unknown): GoogleRealtimeTurnCoverage | undefined 
   }
 }
 
+function asNonNegativeInteger(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number !== undefined && Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+}
+
+function asGoogleRealtimeThinkingBudget(value: unknown): number | undefined {
+  const budget = asFiniteNumber(value);
+  return budget !== undefined &&
+    Number.isSafeInteger(budget) &&
+    (budget === -1 || (budget >= 0 && budget <= 24_576))
+    ? budget
+    : undefined;
+}
+
 function resolveGoogleRealtimeProviderConfigRecord(
   config: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -207,11 +222,11 @@ function normalizeProviderConfig(
       path: "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
     }),
     model: trimToUndefined(raw?.model),
-    voice: trimToUndefined(raw?.voice),
+    voice: trimToUndefined(raw?.speakerVoice) ?? trimToUndefined(raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
     apiVersion: trimToUndefined(raw?.apiVersion),
-    prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
-    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
+    prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
+    silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
     startSensitivity: asSensitivity(raw?.startSensitivity),
     endSensitivity: asSensitivity(raw?.endSensitivity),
     activityHandling: asActivityHandling(raw?.activityHandling),
@@ -221,7 +236,7 @@ function normalizeProviderConfig(
     sessionResumption: asBoolean(raw?.sessionResumption),
     contextWindowCompression: asBoolean(raw?.contextWindowCompression),
     thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
-    thinkingBudget: asFiniteNumber(raw?.thinkingBudget),
+    thinkingBudget: asGoogleRealtimeThinkingBudget(raw?.thinkingBudget),
   };
 }
 
@@ -305,10 +320,10 @@ function buildRealtimeInputConfig(
     ...(startSensitivity ? { startOfSpeechSensitivity: startSensitivity } : {}),
     ...(endSensitivity ? { endOfSpeechSensitivity: endSensitivity } : {}),
     ...(typeof config.prefixPaddingMs === "number"
-      ? { prefixPaddingMs: Math.max(0, Math.floor(config.prefixPaddingMs)) }
+      ? { prefixPaddingMs: config.prefixPaddingMs }
       : {}),
     ...(typeof config.silenceDurationMs === "number"
-      ? { silenceDurationMs: Math.max(0, Math.floor(config.silenceDurationMs)) }
+      ? { silenceDurationMs: config.silenceDurationMs }
       : {}),
   };
   const realtimeInputConfig = {
@@ -843,6 +858,11 @@ async function createGoogleRealtimeBrowserSession(
   const voice = req.voice ?? config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE;
   const expiresAtMs = Date.now() + GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS;
   const newSessionExpiresAtMs = Date.now() + GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS;
+  const expireTime = timestampMsToIsoString(expiresAtMs);
+  const newSessionExpireTime = timestampMsToIsoString(newSessionExpiresAtMs);
+  if (!expireTime || !newSessionExpireTime) {
+    throw new Error("Google realtime browser session expiry is outside the supported Date range");
+  }
   const ai = createGoogleGenAI({
     apiKey,
     httpOptions: {
@@ -852,8 +872,8 @@ async function createGoogleRealtimeBrowserSession(
   const token = await ai.authTokens.create({
     config: {
       uses: 1,
-      expireTime: new Date(expiresAtMs).toISOString(),
-      newSessionExpireTime: new Date(newSessionExpiresAtMs).toISOString(),
+      expireTime,
+      newSessionExpireTime,
       liveConnectConstraints: {
         model,
         config: buildGoogleLiveConnectConfig({

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createInlineCodeState } from "../markdown/code-spans.js";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { handleAgentEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
@@ -685,6 +685,22 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: { phase: "end" },
     });
+  });
+
+  it("final-flushes block replies before clearing pending fence fragments", async () => {
+    const ctx = createContext(undefined);
+    ctx.state.blockState.pendingFenceFragment = "```";
+    ctx.flushBlockReplyBuffer = vi.fn((options?: { final?: boolean }) => {
+      if (vi.mocked(ctx.flushBlockReplyBuffer).mock.calls.length === 1) {
+        expect(options).toEqual({ final: true });
+        expect(ctx.state.blockState.pendingFenceFragment).toBe("```");
+      }
+    });
+
+    await handleAgentEnd(ctx);
+
+    expect(ctx.flushBlockReplyBuffer).toHaveBeenNthCalledWith(1, { final: true });
+    expect(ctx.state.blockState.pendingFenceFragment).toBeUndefined();
   });
 
   it("emits lifecycle end when block reply flush throws", () => {

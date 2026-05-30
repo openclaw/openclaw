@@ -7,6 +7,12 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
+  parseNonNegativeInt,
+  parsePositiveInt,
+  parsePositiveNumber,
+} from "./lib/numeric-options.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
   collectMetricObservations,
@@ -28,7 +34,8 @@ const DEFAULT_QA_PLUGIN_CHUNK_SIZE = 12;
 const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     repoRoot: process.cwd(),
     outputDir: path.join(
@@ -63,10 +70,10 @@ function parseArgs(argv) {
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
   options.pluginIds.push(...envIds);
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  parseArgv: for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     const readValue = () => {
-      const value = argv[index + 1];
+      const value = args[index + 1];
       if (!value) {
         throw new Error(`Missing value for ${arg}`);
       }
@@ -75,7 +82,7 @@ function parseArgs(argv) {
     };
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--repo-root":
         options.repoRoot = path.resolve(readValue());
         break;
@@ -217,42 +224,6 @@ function readOptionalPositiveIntEnv(name) {
 function readOptionalNonNegativeIntEnv(name) {
   const raw = process.env[name];
   return raw ? parseNonNegativeInt(raw, name) : undefined;
-}
-
-function parsePositiveInt(raw, label) {
-  const text = String(raw).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(raw, label) {
-  const text = String(raw).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parsePositiveNumber(raw, label) {
-  const text = String(raw).trim();
-  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  const value = Number(text);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  return value;
 }
 
 export function createGauntletPrebuildCommand(repoRoot) {

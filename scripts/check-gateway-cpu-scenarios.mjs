@@ -5,6 +5,12 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import {
+  parseNonNegativeInt,
+  parsePositiveInt,
+  parsePositiveNumber,
+} from "./lib/numeric-options.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
@@ -18,6 +24,7 @@ const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
 
 function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     outputDir: path.join(
       process.cwd(),
@@ -34,10 +41,10 @@ function parseArgs(argv) {
     cpuCoreWarn: DEFAULT_CPU_CORE_WARN,
     hotWallWarnMs: DEFAULT_HOT_WALL_WARN_MS,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     const readValue = () => {
-      const value = argv[index + 1];
+      const value = args[index + 1];
       if (!value) {
         throw new Error(`Missing value for ${arg}`);
       }
@@ -90,42 +97,6 @@ function parseArgs(argv) {
     throw new Error("--skip-startup and --skip-qa cannot be used together");
   }
   return options;
-}
-
-function parsePositiveInt(raw, label) {
-  const text = String(raw).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(raw, label) {
-  const text = String(raw).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parsePositiveNumber(raw, label) {
-  const text = String(raw).trim();
-  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  const value = Number(text);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  return value;
 }
 
 function printHelp() {

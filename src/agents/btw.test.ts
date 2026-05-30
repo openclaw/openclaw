@@ -547,6 +547,9 @@ describe("runBtwSideQuestion", () => {
     const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
     expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
     expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+    expect(discoverModelsMock).toHaveBeenCalledWith(undefined, DEFAULT_AGENT_DIR, {
+      workspaceDir: "/tmp/workspace",
+    });
   });
 
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {

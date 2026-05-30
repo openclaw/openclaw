@@ -26,6 +26,26 @@ describe("gateway CPU scenario guard", () => {
     ).toThrow("--skip-startup and --skip-qa cannot be used together");
   });
 
+  it("accepts package-manager argument separators before script options", () => {
+    expect(
+      testing.parseArgs([
+        "--",
+        "--output-dir",
+        makeTempRoot(),
+        "--startup-case",
+        "default",
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--runs",
+        "2",
+      ]),
+    ).toMatchObject({
+      qaScenarios: ["channel-chat-baseline"],
+      runs: 2,
+      startupCases: ["default"],
+    });
+  });
+
   it("rejects non-decimal numeric options", () => {
     expect(() =>
       testing.parseArgs(["--output-dir", makeTempRoot(), "--runs", "1e3"]),

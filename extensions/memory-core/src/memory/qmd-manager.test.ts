@@ -166,7 +166,8 @@ import {
   requireNodeSqlite,
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { QmdMemoryManager } from "./qmd-manager.js";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
@@ -225,6 +226,18 @@ describe("QmdMemoryManager", () => {
   function expectMockMessageNotContains(mock: Mock, text: string): void {
     expect(mockMessages(mock).join("\n")).not.toContain(text);
   }
+
+  it("caps mcporter search process timeout grace", () => {
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(1_000)).toBe(5_000);
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(10_000)).toBe(12_000);
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(MAX_TIMER_TIMEOUT_MS - 100)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+  });
 
   async function expectPathMissing(targetPath: string): Promise<void> {
     try {
@@ -4394,6 +4407,35 @@ describe("QmdMemoryManager", () => {
       lines: 3,
       truncated: true,
       nextFrom: 13,
+    });
+    expect(readFileSpy).not.toHaveBeenCalled();
+
+    await manager.close();
+    readFileSpy.mockRestore();
+  });
+
+  it("defaults non-finite partial read line options before streaming canonical memory files", async () => {
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const relPath = path.join("memory", "non-finite-window.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, relPath),
+      ["line-1", "line-2", "line-3"].join("\n"),
+      "utf-8",
+    );
+
+    const { manager } = await createManager();
+
+    const result = await manager.readFile({
+      relPath,
+      from: Number.NaN,
+      lines: Number.POSITIVE_INFINITY,
+    });
+    expect(result).toEqual({
+      path: relPath,
+      text: "line-1\nline-2\nline-3",
+      from: 1,
+      lines: 3,
     });
     expect(readFileSpy).not.toHaveBeenCalled();
 

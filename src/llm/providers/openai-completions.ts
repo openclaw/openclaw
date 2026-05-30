@@ -467,7 +467,12 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+  const reasoningEffort =
+    clampedReasoning === "off"
+      ? undefined
+      : clampedReasoning === "max"
+        ? "xhigh"
+        : clampedReasoning;
   const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 
   return streamOpenAICompletions(model, context, {
@@ -574,10 +579,11 @@ function buildParams(
   }
 
   if (options?.maxTokens) {
+    const maxTokens = clampOpenAICompletionsMaxTokens(model, options.maxTokens);
     if (compat.maxTokensField === "max_tokens") {
-      params.max_tokens = options.maxTokens;
+      params.max_tokens = maxTokens;
     } else {
-      params.max_completion_tokens = options.maxTokens;
+      params.max_completion_tokens = maxTokens;
     }
   }
 
@@ -670,6 +676,19 @@ function buildParams(
   }
 
   return params;
+}
+
+function clampOpenAICompletionsMaxTokens(
+  model: Model<"openai-completions">,
+  requestedMaxTokens: number,
+): number {
+  const modelMaxTokens =
+    typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens) && model.maxTokens > 0
+      ? Math.floor(model.maxTokens)
+      : undefined;
+  return modelMaxTokens === undefined || requestedMaxTokens <= modelMaxTokens
+    ? requestedMaxTokens
+    : modelMaxTokens;
 }
 
 function getCompatCacheControl(

@@ -16,6 +16,10 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import {
+  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
+  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+} from "../infra/plugin-approvals.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -31,6 +35,12 @@ import {
   type PluginHookToolKind,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { addTimerTimeoutGraceMs } from "../shared/number-coercion.js";
+import {
+  resolveSkillTelemetrySource,
+  resolveSkillTelemetrySourceValue,
+} from "../skills/loading/source.js";
+import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { isPlainObject } from "../utils.js";
 import { adjustedParamsByToolCallId } from "./agent-tools.before-tool-call.state.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
@@ -42,8 +52,6 @@ import {
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { resolveSkillTelemetrySource, resolveSkillTelemetrySourceValue } from "./skills/source.js";
-import type { SkillSnapshot, SkillTelemetrySource } from "./skills/types.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -104,10 +112,40 @@ type HookOutcome =
       reason: string;
       params?: unknown;
     }
-  | { blocked: false; params: unknown };
+  | {
+      blocked: false;
+      params: unknown;
+      approvalResolution?: PluginApprovalResolution;
+      deferredApproval?: DeferredPluginToolApproval;
+    };
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
+
+function resolvePluginToolApprovalTimeoutMs(approval: PluginApprovalRequest): number {
+  if (
+    typeof approval.timeoutMs !== "number" ||
+    !Number.isFinite(approval.timeoutMs) ||
+    approval.timeoutMs <= 0
+  ) {
+    return DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+  }
+  return Math.min(Math.floor(approval.timeoutMs), MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
+}
+
+function resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs: number): number {
+  return addTimerTimeoutGraceMs(timeoutMs, 10_000) ?? DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
+}
+
+export type DeferredPluginToolApproval = {
+  approval: PluginApprovalRequest;
+  toolName: string;
+  toolCallId?: string;
+  ctx?: HookContext;
+  baseParams: unknown;
+  overrideParams?: unknown;
+};
+
 type BeforeToolCallWrapperOptions = {
-  approvalMode?: "request" | "report";
+  approvalMode?: "request" | "report" | "defer";
   emitDiagnostics: boolean;
 };
 
@@ -388,6 +426,8 @@ async function requestPluginToolApproval(params: {
   overrideParams?: unknown;
 }): Promise<HookOutcome> {
   const approval = params.approval;
+  const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
+  const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
   try {
     const requestResult: {
       id?: string;
@@ -397,7 +437,7 @@ async function requestPluginToolApproval(params: {
       "plugin.approval.request",
       // Buffer beyond the approval timeout so the gateway can clean up
       // and respond before the client-side RPC timeout fires.
-      { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+      { timeoutMs: gatewayTimeoutMs },
       {
         pluginId: approval.pluginId,
         title: approval.title,
@@ -408,7 +448,7 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
-        timeoutMs: approval.timeoutMs ?? 120_000,
+        timeoutMs,
         twoPhase: true,
       },
       { expectFinal: false },
@@ -451,7 +491,7 @@ async function requestPluginToolApproval(params: {
         "plugin.approval.waitDecision",
         // Buffer beyond the approval timeout so the gateway can clean up
         // and respond before the client-side RPC timeout fires.
-        { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+        { timeoutMs: gatewayTimeoutMs },
         { id },
       );
       let waitResult: { id?: string; decision?: string | null } | undefined;
@@ -491,6 +531,7 @@ async function requestPluginToolApproval(params: {
       return {
         blocked: false,
         params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+        approvalResolution: resolution,
       };
     }
     if (decision === PluginApprovalResolutions.DENY) {
@@ -507,6 +548,7 @@ async function requestPluginToolApproval(params: {
       return {
         blocked: false,
         params: mergeParamsWithApprovalOverrides(params.baseParams, params.overrideParams),
+        approvalResolution: resolution,
       };
     }
     return {
@@ -537,6 +579,28 @@ async function requestPluginToolApproval(params: {
       params: params.baseParams,
     };
   }
+}
+
+export async function requestDeferredPluginToolApproval(params: {
+  deferredApproval: DeferredPluginToolApproval;
+  signal?: AbortSignal;
+}): Promise<HookOutcome> {
+  const deferred = params.deferredApproval;
+  return requestPluginToolApproval({
+    approval: deferred.approval,
+    toolName: deferred.toolName,
+    ...(deferred.toolCallId ? { toolCallId: deferred.toolCallId } : {}),
+    ...(deferred.ctx ? { ctx: deferred.ctx } : {}),
+    signal: params.signal,
+    baseParams: deferred.baseParams,
+    overrideParams: deferred.overrideParams,
+  });
+}
+
+export function cancelDeferredPluginToolApproval(
+  deferredApproval: DeferredPluginToolApproval,
+): void {
+  notifyPluginApprovalResolution(deferredApproval.approval, PluginApprovalResolutions.CANCELLED);
 }
 
 export function buildBlockedToolResult(params: {
@@ -647,7 +711,7 @@ export async function runBeforeToolCallHook(args: {
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
-  approvalMode?: "request" | "report";
+  approvalMode?: "request" | "report" | "defer";
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
@@ -805,6 +869,20 @@ export async function runBeforeToolCallHook(args: {
       };
     }
     if (trustedPolicyResult?.requireApproval) {
+      if (args.approvalMode === "defer") {
+        return {
+          blocked: false,
+          params,
+          deferredApproval: {
+            approval: trustedPolicyResult.requireApproval,
+            toolName,
+            ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+            ...(args.ctx ? { ctx: args.ctx } : {}),
+            baseParams: params,
+            overrideParams: trustedPolicyResult.params,
+          },
+        };
+      }
       if (args.approvalMode === "report") {
         notifyPluginApprovalResolution(
           trustedPolicyResult.requireApproval,
@@ -875,6 +953,20 @@ export async function runBeforeToolCallHook(args: {
     }
 
     if (hookResult?.requireApproval) {
+      if (args.approvalMode === "defer") {
+        return {
+          blocked: false,
+          params: policyAdjustedParams,
+          deferredApproval: {
+            approval: hookResult.requireApproval,
+            toolName,
+            ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+            ...(args.ctx ? { ctx: args.ctx } : {}),
+            baseParams: policyAdjustedParams,
+            overrideParams: hookResult.params,
+          },
+        };
+      }
       if (args.approvalMode === "report") {
         notifyPluginApprovalResolution(
           hookResult.requireApproval,

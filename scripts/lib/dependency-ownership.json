@@ -32,11 +32,6 @@
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
-    "ajv": {
-      "owner": "core:json-schema-validation",
-      "class": "core-runtime",
-      "risk": ["schema-validation"]
-    },
     "chalk": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -76,16 +71,6 @@
       "owner": "core:proxy",
       "class": "core-runtime",
       "risk": ["network", "proxy"]
-    },
-    "https-proxy-agent": {
-      "owner": "core:proxy",
-      "class": "core-runtime",
-      "risk": ["network", "proxy"]
-    },
-    "ipaddr.js": {
-      "owner": "core:ssrf-guard",
-      "class": "core-runtime",
-      "risk": ["network-policy"]
     },
     "jiti": {
       "owner": "core:plugin-loader",
@@ -133,11 +118,6 @@
       "class": "plugin-runtime",
       "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
       "risk": ["wasm", "parser", "untrusted-files"]
-    },
-    "proxy-agent": {
-      "owner": "core:proxy",
-      "class": "core-runtime",
-      "risk": ["network", "proxy"]
     },
     "qrcode": {
       "owner": "core:qr-setup",

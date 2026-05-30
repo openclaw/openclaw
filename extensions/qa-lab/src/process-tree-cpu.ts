@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 
 type ProcessTreeSnapshot = {
   childrenByParent: Map<number, number[]>;
@@ -11,30 +12,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function parsePositiveInteger(value: unknown): number | null {
-  const raw = typeof value === "string" ? value.trim() : value;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  const parsed = parseStrictInteger(value);
+  if (parsed === undefined || parsed <= 0) {
     return null;
   }
   return parsed;
 }
 
 function parseNonNegativeInteger(value: unknown): number | null {
-  const raw = typeof value === "string" ? value.trim() : value;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  const parsed = parseStrictInteger(value);
+  if (parsed === undefined || parsed < 0) {
     return null;
   }
   return parsed;
 }
 
 function parseNonNegativeNumber(value: unknown): number | null {
-  const raw = typeof value === "string" ? value.trim() : value;
-  if (raw === "") {
-    return null;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictFiniteNumber(value);
+  if (parsed === undefined || parsed < 0) {
     return null;
   }
   return parsed;
@@ -77,8 +72,8 @@ export function parsePsRssBytes(raw: string): number | null {
   if (!trimmed) {
     return null;
   }
-  const rssKiB = Number(trimmed);
-  if (!Number.isFinite(rssKiB) || rssKiB < 0) {
+  const rssKiB = parseStrictFiniteNumber(trimmed);
+  if (rssKiB === undefined || rssKiB < 0) {
     return null;
   }
   return Math.round(rssKiB * 1024);

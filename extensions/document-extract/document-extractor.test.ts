@@ -108,6 +108,28 @@ describe("PDF document extractor", () => {
     expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
   });
 
+  it("opens encrypted PDFs with the request password", async () => {
+    pdfDocument.extract.mockResolvedValueOnce({ text: "enough text", images: [] });
+    const extractor = createPdfDocumentExtractor();
+
+    await extractor.extract(request({ password: "secret" }));
+
+    expect(openPdfMock).toHaveBeenCalledWith(expect.any(Uint8Array), { password: "secret" });
+    expect(pdfDocument.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes clawpdf password errors", async () => {
+    openPdfMock.mockRejectedValueOnce(
+      Object.assign(new Error("bad password"), { code: "password" }),
+    );
+    const extractor = createPdfDocumentExtractor();
+
+    await expect(extractor.extract(request({ password: "wrong" }))).rejects.toThrow(
+      "PDF requires a password or password is incorrect.",
+    );
+    expect(pdfDocument.destroy).not.toHaveBeenCalled();
+  });
+
   it("filters selected pages before passing them to clawpdf", async () => {
     pdfDocument.extract
       .mockResolvedValueOnce({ text: "", images: [] })

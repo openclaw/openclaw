@@ -309,6 +309,45 @@ describe("getCompatibleActivePluginRegistry", () => {
     expect(cacheKey).not.toContain("telegram configured");
   });
 
+  it("separates raw env substitution mode in the loader cache key", () => {
+    const baseOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          entries: {
+            demo: { config: { apiKey: "${DEMO_KEY}" } },
+          },
+        },
+      },
+    };
+
+    const plain = testing.resolvePluginLoadCacheContext(baseOptions).cacheKey;
+    const resolving = testing.resolvePluginLoadCacheContext({
+      ...baseOptions,
+      resolveRawConfigEnvVars: true,
+    }).cacheKey;
+
+    expect(resolving).not.toBe(plain);
+  });
+
+  it("does not embed raw resolved plugin config env values in the loader cache key", () => {
+    const { cacheKey } = testing.resolvePluginLoadCacheContext({
+      config: {
+        plugins: {
+          allow: ["demo"],
+          entries: {
+            demo: { config: { apiKey: "${DEMO_KEY}" } },
+          },
+        },
+      },
+      env: { ...process.env, DEMO_KEY: "resolved-demo-secret" },
+      resolveRawConfigEnvVars: true,
+    });
+
+    expect(cacheKey).not.toContain("resolved-demo-secret");
+    expect(cacheKey).not.toContain("apiKey");
+  });
+
   it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry, "startup-registry");

@@ -491,7 +491,7 @@ describe("openai transport stream", () => {
         id: "gpt-5.4-codex",
         name: "GPT-5.4 Codex",
         api: "openai-codex-responses",
-        provider: "openai-codex",
+        provider: "openai",
         baseUrl: "https://chatgpt.com/backend-api",
         headers: {
           originator: "openclaw",
@@ -2291,6 +2291,95 @@ describe("openai transport stream", () => {
     ) as { prompt_cache_key?: string };
 
     expect(params.prompt_cache_key).toBeUndefined();
+  });
+
+  it("adds fallback instructions for raw native Codex responses probes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("Follow the user request.");
+    expect(params.max_output_tokens).toBeUndefined();
+    expect(params.prompt_cache_retention).toBeUndefined();
+  });
+
+  it("treats canonical OpenAI Codex responses models as native Codex responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("Follow the user request.");
+    expect(params.max_output_tokens).toBeUndefined();
+    expect(params.prompt_cache_retention).toBeUndefined();
+  });
+
+  it("does not add fallback instructions for custom Codex-compatible responses backends", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBeUndefined();
+    expect(params.max_output_tokens).toBe(16);
   });
 
   it("uses top-level instructions for Codex responses and preserves prompt cache identity", () => {
@@ -5064,6 +5153,32 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_completion_tokens).toBe(16_000);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("clamps runtime maxTokens to the OpenAI completions model output cap", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        api: "openai-completions",
+        provider: "xiaomi-token-plan",
+        baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 32_000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { maxTokens: 200_000 } as never,
+    );
+
+    expect(params.max_completion_tokens).toBe(32_000);
     expect(params).not.toHaveProperty("max_tokens");
   });
 

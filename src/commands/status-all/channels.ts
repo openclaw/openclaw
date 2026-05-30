@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
@@ -23,7 +24,6 @@ import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
 import { asRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   summarizeTokenConfig,
   type ChannelAccountTokenSummaryRow,

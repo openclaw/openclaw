@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
@@ -9,6 +8,7 @@ import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/types.
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { tryNativeRequireJavaScriptModule } from "../plugins/native-module-require.js";
 import {
   createProfiler,
   formatPluginLoadProfileLine,
@@ -20,7 +20,7 @@ import {
   type PluginModuleLoaderCache,
 } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
+import { buildPluginLoaderAliasMap, resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import type {
   AnyAgentTool,
   OpenClawPluginApi,
@@ -70,6 +70,7 @@ type DefineBundledChannelSetupEntryOptions = {
   runtime?: BundledEntryModuleRef;
   legacyStateMigrations?: BundledEntryModuleRef;
   legacySessionSurface?: BundledEntryModuleRef;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
 
@@ -135,6 +136,7 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
     options?: BundledEntryModuleLoadOptions,
   ) => BundledChannelLegacySessionSurface;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   features?: BundledChannelSetupEntryFeatures;
 };
 
@@ -142,7 +144,6 @@ export type BundledEntryModuleLoadOptions = {
   createLoaderForTest?: PluginModuleLoaderFactory;
 };
 
-const nodeRequire = createRequire(import.meta.url);
 const moduleLoaders: PluginModuleLoaderCache = new Map();
 const entryBoundaryInfoCache = new Map<string, BundledEntryBoundaryInfo>();
 const resolvedModulePaths = new Map<string, string>();
@@ -411,9 +412,15 @@ function loadBundledEntryModuleSync(
   const loadStartMs = profile ? performance.now() : 0;
   let sourceLoaderReadyMs = 0;
   if (canTryNodeRequireBuiltModule(modulePath)) {
-    try {
-      loaded = nodeRequire(modulePath);
-    } catch {
+    const native = tryNativeRequireJavaScriptModule(modulePath, {
+      allowWindows: true,
+      aliasMap: buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url, "dist"),
+      fallbackOnMissingDependency: true,
+      fallbackOnNativeError: true,
+    });
+    if (native.ok) {
+      loaded = native.moduleExport;
+    } else {
       const moduleLoader = getSourceModuleLoader(modulePath, options);
       sourceLoaderReadyMs = profile ? performance.now() : 0;
       loaded = moduleLoader(toSafeImportPath(modulePath));
@@ -435,7 +442,7 @@ function loadBundledEntryModuleSync(
         pluginId: "(bundled-entry)",
         source: modulePath,
         elapsedMs: endMs - loadStartMs,
-        // When the built-artifact fast path resolves via `nodeRequire`, the
+        // When the built-artifact fast path resolves natively, the
         // source-loader timestamp stays `0`; keep its breakdown at zero so
         // `elapsedMs=` owns the native load time.
         extras: [
@@ -577,6 +584,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
   runtime,
   legacyStateMigrations,
   legacySessionSurface,
+  registerSetupRuntime,
   features,
 }: DefineBundledChannelSetupEntryOptions): BundledChannelSetupEntryContract<TPlugin> {
   // Bundled setup entries stay on a light path during setup-only/setup-runtime loads.
@@ -624,6 +632,7 @@ export function defineBundledChannelSetupEntry<TPlugin = ChannelPlugin>({
     ...(loadLegacyStateMigrationDetector ? { loadLegacyStateMigrationDetector } : {}),
     ...(loadLegacySessionSurface ? { loadLegacySessionSurface } : {}),
     ...(setChannelRuntime ? { setChannelRuntime } : {}),
+    ...(registerSetupRuntime ? { registerSetupRuntime } : {}),
     ...(features ? { features } : {}),
   };
 }

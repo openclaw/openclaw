@@ -406,7 +406,7 @@ describe("Hermes migration secret items", () => {
     expect(plan.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "auth:openai-codex",
+          id: "auth:openai",
           kind: "auth",
           status: "planned",
           sensitive: true,
@@ -426,18 +426,18 @@ describe("Hermes migration secret items", () => {
         { access?: string; provider?: string; refresh?: string; type?: string }
       >;
     };
-    const profile = authStore.profiles?.["openai-codex:account-acct_test"];
+    const profile = authStore.profiles?.["openai:account-acct_test"];
     expect(profile).toEqual(
       expect.objectContaining({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: accessToken,
         refresh: "refresh-test-token",
       }),
     );
-    expect(config.auth?.profiles?.["openai-codex:account-acct_test"]).toEqual(
+    expect(config.auth?.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
-        provider: "openai-codex",
+        provider: "openai",
         mode: "oauth",
       }),
     );
@@ -873,12 +873,12 @@ describe("Hermes migration secret items", () => {
     expect(plan.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "auth:openai-codex",
+          id: "auth:openai",
           kind: "auth",
           status: "planned",
           source: path.join(root, ".local", "share", "opencode", "auth.json"),
           details: expect.objectContaining({
-            provider: "openai-codex",
+            provider: "openai",
             sourceKind: "opencode-auth-json",
             sourceLabel: "OpenCode OpenAI OAuth credential",
           }),
@@ -897,10 +897,10 @@ describe("Hermes migration secret items", () => {
         { access?: string; accountId?: string; provider?: string; refresh?: string; type?: string }
       >;
     };
-    expect(authStore.profiles?.["openai-codex:account-acct_opencode"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_opencode"]).toEqual(
       expect.objectContaining({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         accountId: "acct_opencode",
         access: accessToken,
         refresh: "openai-refresh-token",
@@ -965,24 +965,24 @@ describe("Hermes migration secret items", () => {
         .filter((item) => item.kind === "auth")
         .map((item) => ({ id: item.id, status: item.status })),
     ).toEqual([
-      { id: "auth:openai-codex:openai-codex:hermes-import-1", status: "migrated" },
-      { id: "auth:openai-codex:openai-codex:hermes-import-2", status: "migrated" },
+      { id: "auth:openai:openai:hermes-import-1", status: "migrated" },
+      { id: "auth:openai:openai:hermes-import-2", status: "migrated" },
     ]);
     const authStore = JSON.parse(
       await fs.readFile(path.join(agentDir, "auth-profiles.json"), "utf8"),
     ) as {
       profiles?: Record<string, { access?: string; provider?: string; refresh?: string }>;
     };
-    expect(authStore.profiles?.["openai-codex:hermes-import-1"]).toEqual(
+    expect(authStore.profiles?.["openai:hermes-import-1"]).toEqual(
       expect.objectContaining({
-        provider: "openai-codex",
+        provider: "openai",
         access: "opaque-hermes-access",
         refresh: "opaque-hermes-refresh",
       }),
     );
-    expect(authStore.profiles?.["openai-codex:hermes-import-2"]).toEqual(
+    expect(authStore.profiles?.["openai:hermes-import-2"]).toEqual(
       expect.objectContaining({
-        provider: "openai-codex",
+        provider: "openai",
         access: "opaque-opencode-access",
         refresh: "opaque-opencode-refresh",
       }),
@@ -1021,7 +1021,7 @@ describe("Hermes migration secret items", () => {
     expect(plan.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "auth:openai-codex",
+          id: "auth:openai",
           details: expect.objectContaining({
             sourceCredentialFingerprint: expect.any(String),
             sourceCredentialIndex: 0,
@@ -1043,7 +1043,7 @@ describe("Hermes migration secret items", () => {
     );
 
     const result = await provider.apply(ctx, plan);
-    const authItem = result.items.find((item) => item.id === "auth:openai-codex");
+    const authItem = result.items.find((item) => item.id === "auth:openai");
 
     expect(authItem).toEqual(
       expect.objectContaining({
@@ -1075,8 +1075,8 @@ describe("Hermes migration secret items", () => {
       },
       auth: {
         profiles: {
-          "openai-codex:account-acct_conflict": {
-            provider: "openai-codex",
+          "openai:account-acct_conflict": {
+            provider: "openai",
             mode: "api_key",
           },
         },
@@ -1107,14 +1107,14 @@ describe("Hermes migration secret items", () => {
         includeSecrets: true,
       }),
     );
-    const authItem = plan.items.find((item) => item.id === "auth:openai-codex");
+    const authItem = plan.items.find((item) => item.id === "auth:openai");
 
     expect(authItem).toEqual(
       expect.objectContaining({
         status: "conflict",
         reason: HERMES_REASON_AUTH_PROFILE_EXISTS,
         details: expect.objectContaining({
-          profileId: "openai-codex:account-acct_conflict",
+          profileId: "openai:account-acct_conflict",
         }),
       }),
     );
@@ -1208,9 +1208,9 @@ describe("Hermes migration secret items", () => {
         .map((item) => item.details?.profileId)
         .toSorted((left, right) => String(left).localeCompare(String(right))),
     ).toEqual([
-      "openai-codex:account-acct_active",
-      "openai-codex:account-acct_pool",
-      "openai-codex:account-acct_second_pool",
+      "openai:account-acct_active",
+      "openai:account-acct_pool",
+      "openai:account-acct_second_pool",
     ]);
 
     const result = await provider.apply(ctx, plan);
@@ -1224,26 +1224,26 @@ describe("Hermes migration secret items", () => {
         { access?: string; provider?: string; refresh?: string; type?: string }
       >;
     };
-    expect(authStore.profiles?.["openai-codex:account-acct_active"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_active"]).toEqual(
       expect.objectContaining({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: activeAccessToken,
         refresh: "refresh-active-token",
       }),
     );
-    expect(authStore.profiles?.["openai-codex:account-acct_pool"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_pool"]).toEqual(
       expect.objectContaining({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: poolAccessToken,
         refresh: "refresh-pool-token",
       }),
     );
-    expect(authStore.profiles?.["openai-codex:account-acct_second_pool"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_second_pool"]).toEqual(
       expect.objectContaining({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: secondPoolAccessToken,
         refresh: "refresh-second-pool-token",
       }),
@@ -1251,9 +1251,9 @@ describe("Hermes migration secret items", () => {
     expect(
       Object.keys(config.auth?.profiles ?? {}).toSorted((left, right) => left.localeCompare(right)),
     ).toEqual([
-      "openai-codex:account-acct_active",
-      "openai-codex:account-acct_pool",
-      "openai-codex:account-acct_second_pool",
+      "openai:account-acct_active",
+      "openai:account-acct_pool",
+      "openai:account-acct_second_pool",
     ]);
     expect(config.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({});
   });
@@ -1299,9 +1299,9 @@ describe("Hermes migration secret items", () => {
       path.join(agentDir, "auth-profiles.json"),
       JSON.stringify({
         profiles: {
-          "openai-codex:account-acct_old": {
+          "openai:account-acct_old": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "old-access-token",
             refresh: "old-refresh-token",
             accountId: "acct_old",
@@ -1322,13 +1322,13 @@ describe("Hermes migration secret items", () => {
       runtime: makeConfigRuntime(config),
     });
     const plan = await provider.plan(ctx);
-    const authItem = plan.items.find((item) => item.id === "auth:openai-codex");
+    const authItem = plan.items.find((item) => item.id === "auth:openai");
 
     expect(authItem).toEqual(
       expect.objectContaining({
         status: "planned",
         details: expect.objectContaining({
-          profileId: "openai-codex:account-acct_new",
+          profileId: "openai:account-acct_new",
         }),
       }),
     );
@@ -1341,14 +1341,14 @@ describe("Hermes migration secret items", () => {
     ) as {
       profiles?: Record<string, { access?: string; accountId?: string; email?: string }>;
     };
-    expect(authStore.profiles?.["openai-codex:account-acct_old"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_old"]).toEqual(
       expect.objectContaining({
         access: "old-access-token",
         accountId: "acct_old",
         email: sharedEmail,
       }),
     );
-    expect(authStore.profiles?.["openai-codex:account-acct_new"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_new"]).toEqual(
       expect.objectContaining({
         access: accessToken,
         accountId: "acct_new",

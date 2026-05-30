@@ -530,6 +530,7 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
       disableTools: true,
+      modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
     });
     return buildResult("ok");

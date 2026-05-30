@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "../../shared/number-coercion.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
@@ -105,8 +109,9 @@ function shouldProbeWhamForFailure(
   provider: string | undefined,
   reason: AuthProfileFailureReason,
 ): boolean {
+  const normalizedProvider = normalizeProviderId(provider ?? "");
   return (
-    normalizeProviderId(provider ?? "") === "openai-codex" &&
+    (normalizedProvider === "openai" || normalizedProvider === "openai-codex") &&
     (reason === "rate_limit" ||
       reason === "empty_response" ||
       reason === "no_error_details" ||
@@ -124,14 +129,15 @@ function resolveWhamResetMs(window: WhamUsageWindow | undefined, now: number): n
     Number.isFinite(window.reset_after_seconds) &&
     window.reset_after_seconds > 0
   ) {
-    return window.reset_after_seconds * 1000;
+    return positiveSecondsToSafeMilliseconds(window.reset_after_seconds) ?? null;
   }
   if (
     typeof window.reset_at === "number" &&
     Number.isFinite(window.reset_at) &&
     window.reset_at > 0
   ) {
-    return Math.max(0, window.reset_at * 1000 - now);
+    const resetAtMs = resolveExpiresAtMsFromEpochSeconds(window.reset_at);
+    return resetAtMs === undefined ? null : Math.max(0, resetAtMs - now);
   }
   return null;
 }
@@ -204,7 +210,7 @@ async function probeWhamForCooldown(
     }
     const headers =
       resolveProviderRequestHeaders({
-        provider: "openai-codex",
+        provider: "openai",
         baseUrl: WHAM_USAGE_URL,
         capability: "other",
         transport: "http",

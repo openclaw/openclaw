@@ -1,4 +1,5 @@
 import fsSync from "node:fs";
+import { note } from "../../packages/terminal-core/src/note.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -37,7 +38,6 @@ import {
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairWorkspaceMemoryHealth, noteWorkspaceMemoryHealth } from "./doctor-workspace.js";
@@ -307,11 +307,18 @@ export async function maybeRepairMemoryRecallHealth(params: {
       if (approved) {
         const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
         if (repair.changed) {
+          const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
+          const details = [
+            repair.removedInvalidEntries > 0
+              ? `-${repair.removedInvalidEntries} invalid entries`
+              : null,
+            removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow entries` : null,
+          ]
+            .filter(Boolean)
+            .join(", ");
           const lines = [
             "Memory recall artifacts repaired:",
-            repair.rewroteStore
-              ? `- rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid entries)` : ""}`
-              : null,
+            repair.rewroteStore ? `- rewrote recall store${details ? ` (${details})` : ""}` : null,
             repair.removedStaleLock ? "- removed stale promotion lock" : null,
             `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
           ].filter(Boolean);

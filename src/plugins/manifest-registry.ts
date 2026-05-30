@@ -1,14 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   normalizeOptionalTrimmedStringList,
   uniqueStrings,
 } from "../shared/string-normalization.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -45,6 +46,7 @@ import {
   type PluginManifestProviderEndpoint,
   type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
+  type PluginManifestSecretProviderIntegration,
   type PluginManifestSetup,
   type PluginManifestToolMetadata,
   type PluginPackageChannel,
@@ -57,6 +59,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -216,6 +219,7 @@ export type PluginManifestRecord = {
   modelIdNormalization?: PluginManifestModelIdNormalization;
   providerEndpoints?: PluginManifestProviderEndpoint[];
   providerRequest?: PluginManifestProviderRequest;
+  secretProviderIntegrations?: Record<string, PluginManifestSecretProviderIntegration>;
   cliBackends: string[];
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
@@ -532,6 +536,7 @@ function buildRecord(params: {
     modelIdNormalization: params.manifest.modelIdNormalization,
     providerEndpoints: params.manifest.providerEndpoints,
     providerRequest: params.manifest.providerRequest,
+    secretProviderIntegrations: params.manifest.secretProviderIntegrations,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
@@ -1008,6 +1013,10 @@ export function loadPluginManifestRegistry(
     }
     const manifest = manifestRes.manifest;
     if (candidate.origin !== "bundled") {
+      const packageManifestSource = path.join(
+        candidate.packageDir ?? candidate.rootDir,
+        "package.json",
+      );
       const allowLegacyBareMinHostVersion =
         candidate.origin === "global" &&
         matchesInstalledPluginRecord({
@@ -1023,10 +1032,6 @@ export function loadPluginManifestRegistry(
         allowLegacyBareSemver: allowLegacyBareMinHostVersion,
       });
       if (!minHostVersionCheck.ok) {
-        const packageManifestSource = path.join(
-          candidate.packageDir ?? candidate.rootDir,
-          "package.json",
-        );
         diagnostics.push({
           level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
           pluginId: manifest.id,
@@ -1037,6 +1042,29 @@ export function loadPluginManifestRegistry(
               : minHostVersionCheck.kind === "unknown_host_version"
                 ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
                 : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+        });
+        continue;
+      }
+      const packagePluginApiRangeCheck = resolvePackagePluginApiRange(candidate.packageManifest);
+      if (!packagePluginApiRangeCheck.ok) {
+        diagnostics.push({
+          level: "error",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message: `plugin manifest invalid | ${packagePluginApiRangeCheck.error}`,
+        });
+        continue;
+      }
+      const packagePluginApiRange = packagePluginApiRangeCheck.range;
+      if (
+        packagePluginApiRange &&
+        !satisfiesPluginApiRange(currentHostVersion, packagePluginApiRange)
+      ) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load`,
         });
         continue;
       }

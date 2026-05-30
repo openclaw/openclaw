@@ -7,6 +7,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
 import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
+import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
 function expectTextContentBlock(block: unknown, text: string) {
@@ -21,6 +22,7 @@ function makeToolRuntime(
     serverName?: string;
     result?: CallToolResult;
     resultText?: string;
+    diagnostics?: readonly McpToolCatalogDiagnostic[];
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "bundleProbe";
@@ -52,6 +54,7 @@ function makeToolRuntime(
         },
       },
       tools,
+      ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
     }),
     peekCatalog: () => ({
       version: 1,
@@ -64,6 +67,7 @@ function makeToolRuntime(
         },
       },
       tools,
+      ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
     }),
     callTool: async () =>
       params.result ?? {
@@ -135,6 +139,24 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
+  });
+
+  it("preserves catalog diagnostics when MCP servers fail tool listing", async () => {
+    const diagnostics = [
+      {
+        serverName: "dofbot",
+        safeServerName: "dofbot",
+        launchSummary: "node dofbot-mcp.mjs",
+        message: 'tools[0].inputSchema.type expected "object"',
+      },
+    ];
+
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({ tools: [], diagnostics }),
+    });
+
+    expect(runtime.tools).toEqual([]);
+    expect(runtime.diagnostics).toEqual(diagnostics);
   });
 
   it("materializes configured MCP tools through the session runtime boundary", async () => {

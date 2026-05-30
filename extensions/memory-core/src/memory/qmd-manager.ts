@@ -49,6 +49,7 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -126,6 +127,12 @@ type McporterState = {
   daemonStart: Promise<void> | null;
 };
 
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.floor(value))
+    : fallback;
+}
+
 type QmdEmbedQueueState = {
   tail: Promise<void>;
 };
@@ -191,6 +198,10 @@ function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
     },
     stale: Math.max(QMD_EMBED_LOCK_MIN_WAIT_MS, expectedEmbedMs * 2),
   };
+}
+
+export function resolveQmdMcporterSearchProcessTimeoutMs(timeoutMs: number): number {
+  return Math.max(addTimerTimeoutGraceMs(timeoutMs, 2_000) ?? 1, 5_000);
 }
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
@@ -1333,18 +1344,19 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const contextLimits = this.contextLimits;
     if (params.from !== undefined || params.lines !== undefined) {
-      const requestedCount = Math.max(
-        1,
+      const startLine = normalizePositiveInteger(params.from, 1);
+      const requestedCount = normalizePositiveInteger(
         params.lines ?? contextLimits?.memoryGetDefaultLines ?? DEFAULT_MEMORY_READ_LINES,
+        DEFAULT_MEMORY_READ_LINES,
       );
-      const partial = await this.readPartialText(absPath, params.from, requestedCount);
+      const partial = await this.readPartialText(absPath, startLine, requestedCount);
       if (partial.missing) {
         return { text: "", path: relPath };
       }
       return buildMemoryReadResultFromSlice({
         selectedLines: partial.selectedLines,
         relPath,
-        startLine: Math.max(1, params.from ?? 1),
+        startLine,
         moreSourceLinesRemain: partial.moreSourceLinesRemain,
         maxChars: contextLimits?.memoryGetMaxChars,
         suggestReadFallback: isDefaultMemoryPath(relPath),
@@ -2123,7 +2135,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           "--timeout",
           String(Math.max(0, params.timeoutMs)),
         ],
-        { timeoutMs: Math.max(params.timeoutMs + 2_000, 5_000) },
+        { timeoutMs: resolveQmdMcporterSearchProcessTimeoutMs(params.timeoutMs) },
       );
       // If we got here with the v2 "query" tool, confirm v2 for future calls.
       if (useUnifiedQueryTool && this.qmdMcpToolVersion === null) {
@@ -2205,8 +2217,8 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): Promise<
     { missing: true } | { missing: false; selectedLines: string[]; moreSourceLinesRemain: boolean }
   > {
-    const start = Math.max(1, from ?? 1);
-    const count = Math.max(1, lines ?? Number.POSITIVE_INFINITY);
+    const start = normalizePositiveInteger(from, 1);
+    const count = normalizePositiveInteger(lines, Number.MAX_SAFE_INTEGER);
     let handle;
     try {
       handle = await fs.open(absPath);
