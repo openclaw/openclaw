@@ -7,7 +7,7 @@ import {
   resolveCliBackendLiveTest,
 } from "../agents/cli-backends.js";
 import { parseModelRef } from "../agents/model-selection.js";
-import { isClaudeCliCompatibleBackend } from "../agents/provider-id.js";
+import { isClaudeCliCompatibleBackend } from "@openclaw/model-catalog-core/provider-id";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,

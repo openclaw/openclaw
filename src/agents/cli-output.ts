@@ -2,7 +2,7 @@ import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
-import { isClaudeCliCompatibleBackend } from "./provider-id.js";
+import { isClaudeCliCompatibleBackend } from "@openclaw/model-catalog-core/provider-id";
 
 type CliUsage = {
   input?: number;

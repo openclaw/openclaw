@@ -1,5 +1,6 @@
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
@@ -13,7 +14,6 @@ import {
   readCodexCliCredentialsCached,
 } from "./cli-credentials.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
-import { isClaudeCliCompatibleBackend } from "./provider-id.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export function resolveModelAuthLabel(params: {
@@ -42,23 +42,19 @@ export function resolveModelAuthLabel(params: {
           }),
         });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
-  const acceptedProviderKeys = [
-    ...new Set(
-      [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+  const acceptedProviderKeys = uniqueStrings(
+    [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+  );
+  const order = uniqueStrings(
+    acceptedProviderKeys.flatMap((acceptedProvider) =>
+      resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store,
+        provider: acceptedProvider,
+        preferredProfile: profileOverride,
+      }),
     ),
-  ];
-  const order = [
-    ...new Set(
-      acceptedProviderKeys.flatMap((acceptedProvider) =>
-        resolveAuthProfileOrder({
-          cfg: params.cfg,
-          store,
-          provider: acceptedProvider,
-          preferredProfile: profileOverride,
-        }),
-      ),
-    ),
-  ];
+  );
   const candidates = [profileOverride, ...order].filter(Boolean) as string[];
 
   for (const profileId of candidates) {
@@ -107,10 +103,10 @@ export function resolveModelAuthLabel(params: {
     return "oauth (codex-cli)";
   }
   if (
-    isClaudeCliCompatibleBackend(providerKey) &&
+    providerKey === "claude-cli" &&
     readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
   ) {
-    return `oauth (${providerKey})`;
+    return "oauth (claude-cli)";
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

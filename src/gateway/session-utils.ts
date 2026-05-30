@@ -27,7 +27,6 @@ import {
   resolvePersistedSelectedModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
-import { isClaudeCliCompatibleBackend } from "../agents/provider-id.js";
 import {
   buildSubagentRunReadIndex,
   countActiveDescendantRuns,
@@ -1629,7 +1628,7 @@ export async function resolveGatewayModelSupportsImages(params: {
         return true;
       }
       if (
-        isClaudeCliCompatibleBackend(normalizedProvider) &&
+        normalizedProvider === "claude-cli" &&
         normalizedCandidates.some(
           (candidate) =>
             candidate === "opus" ||
@@ -1643,7 +1642,7 @@ export async function resolveGatewayModelSupportsImages(params: {
       return false;
     }
     if (
-      isClaudeCliCompatibleBackend(normalizedProvider) &&
+      normalizedProvider === "claude-cli" &&
       normalizedCandidates.some(
         (candidate) =>
           candidate === "opus" ||

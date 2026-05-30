@@ -14,7 +14,6 @@ import {
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { isClaudeCliCompatibleBackend } from "./provider-id.js";
 
 export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
 
@@ -325,7 +324,7 @@ function resolveConfiguredProviderContextTokens(
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
-  if (provider !== "anthropic" && !isClaudeCliCompatibleBackend(provider)) {
+  if (provider !== "anthropic" && provider !== "claude-cli") {
     return false;
   }
   const modelId = resolveModelFamilyId(model);

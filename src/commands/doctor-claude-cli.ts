@@ -42,8 +42,6 @@ function isClaudeCliFamilyModelRef(ref: string | undefined): boolean {
     normalized?.startsWith(`${CLAUDE_CLI_INTERACTIVE_PROVIDER}/`) === true
   );
 }
-const CLAUDE_PROJECTS_DIRNAME = path.join(".claude", "projects");
-const MAX_SANITIZED_PROJECT_LENGTH = 200;
 
 type ClaudeCliReadableCredential =
   | Pick<OAuthCredential, "type" | "expires">
