@@ -1,3 +1,8 @@
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import {
+  gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_RETRY_AFTER_MS,
+} from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
@@ -11,11 +16,6 @@ import {
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
-import { ErrorCodes, errorShape } from "./protocol/index.js";
-import {
-  gatewayStartupUnavailableDetails,
-  GATEWAY_STARTUP_RETRY_AFTER_MS,
-} from "./protocol/startup-unavailable.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
 import type {
   GatewayRequestHandler,
@@ -429,6 +429,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.bins",
       "skills.search",
       "skills.detail",
+      "skills.securityVerdicts",
+      "skills.skillCard",
       "skills.install",
       "skills.update",
     ],

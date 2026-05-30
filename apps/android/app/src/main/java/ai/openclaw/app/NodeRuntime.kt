@@ -47,6 +47,7 @@ import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceConversationEntry
+import ai.openclaw.app.voice.VoiceConversationRole
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -64,6 +65,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -254,6 +256,18 @@ class NodeRuntime(
     val fingerprintSha256: String,
     val auth: GatewayConnectAuth,
     val previousFingerprintSha256: String? = null,
+  )
+
+  data class VoiceE2eSliceResult(
+    val mode: String,
+    val status: String,
+    val userText: String?,
+    val assistantText: String?,
+  )
+
+  data class VoiceE2eResult(
+    val normal: VoiceE2eSliceResult?,
+    val realtime: VoiceE2eSliceResult?,
   )
 
   private val _isConnected = MutableStateFlow(false)
@@ -501,7 +515,7 @@ class NodeRuntime(
         context = appContext,
         scope = scope,
         session = operatorSession,
-        isConnected = { operatorConnected },
+        isConnected = { _isConnected.value },
         onBeforeSpeak = { micCapture.pauseForTts() },
         onAfterSpeak = { micCapture.resumeAfterTts() },
       ).also { speaker ->
@@ -608,7 +622,7 @@ class NodeRuntime(
       context = appContext,
       scope = scope,
       session = operatorSession,
-      isConnected = { operatorConnected },
+      isConnected = { _isConnected.value },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
       onStoppedByRelay = { finishTalkModeAfterRelayClose() },
@@ -855,6 +869,7 @@ class NodeRuntime(
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
+  val chatHistoryLoading: StateFlow<Boolean> = chat.historyLoading
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
@@ -1184,6 +1199,115 @@ class NodeRuntime(
     }
     // Keep TalkMode in sync so any active Talk playback also respects speaker mute.
     talkMode.setPlaybackEnabled(value)
+  }
+
+  suspend fun runVoiceE2e(
+    mode: String,
+    transcript: String,
+    realtimeAssistantText: String,
+    timeoutMs: Long,
+  ): VoiceE2eResult {
+    if (!BuildConfig.DEBUG) {
+      throw IllegalStateException("voice e2e is debug-only")
+    }
+    if (!_isConnected.value) {
+      throw IllegalStateException("gateway not connected")
+    }
+    if (!hasRecordAudioPermission()) {
+      throw IllegalStateException("microphone permission missing")
+    }
+
+    val normalizedMode = mode.trim().lowercase().ifEmpty { "both" }
+    val runNormal = normalizedMode == "both" || normalizedMode == "normal" || normalizedMode == "dictation"
+    val runRealtime = normalizedMode == "both" || normalizedMode == "realtime" || normalizedMode == "talk"
+    if (!runNormal && !runRealtime) {
+      throw IllegalArgumentException("unknown voice e2e mode: $mode")
+    }
+
+    val previousSpeakerEnabled = speakerEnabled.value
+    setSpeakerEnabled(false)
+    var completed = false
+    return try {
+      VoiceE2eResult(
+        normal =
+          if (runNormal) {
+            runNormalVoiceE2e(transcript = transcript, timeoutMs = timeoutMs)
+          } else {
+            null
+          },
+        realtime =
+          if (runRealtime) {
+            runRealtimeVoiceE2e(
+              transcript = transcript,
+              assistantText = realtimeAssistantText,
+              timeoutMs = timeoutMs,
+            )
+          } else {
+            null
+          },
+      ).also { completed = true }
+    } finally {
+      if (!completed) {
+        stopActiveVoiceSession()
+      }
+      setSpeakerEnabled(previousSpeakerEnabled)
+    }
+  }
+
+  private suspend fun runNormalVoiceE2e(
+    transcript: String,
+    timeoutMs: Long,
+  ): VoiceE2eSliceResult {
+    stopActiveVoiceSession()
+    setVoiceCaptureMode(VoiceCaptureMode.ManualMic)
+    micCapture.submitTranscribedMessage(transcript)
+    awaitVoiceConversation(timeoutMs = timeoutMs) {
+      micCapture.conversation.value.any { it.role == VoiceConversationRole.Assistant && !it.isStreaming }
+    }
+    val entries = micCapture.conversation.value
+    return VoiceE2eSliceResult(
+      mode = "normal",
+      status = micCapture.statusText.value,
+      userText = entries.lastOrNull { it.role == VoiceConversationRole.User }?.text,
+      assistantText = entries.lastOrNull { it.role == VoiceConversationRole.Assistant }?.text,
+    )
+  }
+
+  private suspend fun runRealtimeVoiceE2e(
+    transcript: String,
+    assistantText: String,
+    timeoutMs: Long,
+  ): VoiceE2eSliceResult {
+    stopActiveVoiceSession()
+    setVoiceCaptureMode(VoiceCaptureMode.TalkMode)
+    talkMode.runE2eRealtimeTurn(
+      userText = transcript,
+      assistantText = assistantText,
+      timeoutMs = timeoutMs,
+    )
+    awaitVoiceConversation(timeoutMs = timeoutMs) {
+      val entries = talkMode.conversation.value
+      entries.any { it.role == VoiceConversationRole.User && !it.isStreaming } &&
+        entries.any { it.role == VoiceConversationRole.Assistant && !it.isStreaming }
+    }
+    val entries = talkMode.conversation.value
+    return VoiceE2eSliceResult(
+      mode = "realtime",
+      status = talkMode.statusText.value,
+      userText = entries.lastOrNull { it.role == VoiceConversationRole.User }?.text,
+      assistantText = entries.lastOrNull { it.role == VoiceConversationRole.Assistant }?.text,
+    )
+  }
+
+  private suspend fun awaitVoiceConversation(
+    timeoutMs: Long,
+    ready: () -> Boolean,
+  ) {
+    withTimeout(timeoutMs) {
+      while (!ready()) {
+        delay(100L)
+      }
+    }
   }
 
   private fun setVoiceCaptureMode(

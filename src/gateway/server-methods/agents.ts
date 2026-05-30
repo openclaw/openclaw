@@ -1,5 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateAgentsCreateParams,
+  validateAgentsDeleteParams,
+  validateAgentsFilesGetParams,
+  validateAgentsFilesListParams,
+  validateAgentsFilesSetParams,
+  validateAgentsListParams,
+  validateAgentsUpdateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
 import {
   listAgentIds,
@@ -30,19 +42,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString as resolveOptionalStringParam } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateAgentsCreateParams,
-  validateAgentsDeleteParams,
-  validateAgentsFilesGetParams,
-  validateAgentsFilesListParams,
-  validateAgentsFilesSetParams,
-  validateAgentsListParams,
-  validateAgentsUpdateParams,
-} from "../protocol/index.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import {
   AgentConfigPreconditionError,
@@ -263,10 +264,6 @@ function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
 
 function sanitizeIdentityLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function resolveOptionalStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function respondInvalidMethodParams(

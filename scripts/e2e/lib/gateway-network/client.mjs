@@ -1,5 +1,7 @@
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
+import { waitForWebSocketOpen } from "../websocket-open.mjs";
+import { readGatewayNetworkClientConnectTimeoutMs } from "./limits.mjs";
 
 const url = process.env.GW_URL;
 const token = process.env.GW_TOKEN;
@@ -7,16 +9,7 @@ if (!url || !token) {
   throw new Error("missing GW_URL/GW_TOKEN");
 }
 
-const deadlineMs = Number.parseInt(
-  process.env.OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS ??
-    process.env.OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS ??
-    "80000",
-  10,
-);
-if (!Number.isFinite(deadlineMs) || deadlineMs < 0) {
-  throw new Error(`invalid gateway network client timeout: ${String(deadlineMs)}`);
-}
-const deadline = Date.now() + Math.max(1_000, deadlineMs);
+const deadline = Date.now() + readGatewayNetworkClientConnectTimeoutMs();
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,20 +17,7 @@ function delay(ms) {
 
 async function openSocket(timeoutMs = 10_000) {
   const ws = new WebSocket(url);
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.close();
-      reject(new Error("ws open timeout"));
-    }, timeoutMs);
-    ws.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error instanceof Error ? error : new Error(String(error)));
-    });
-  });
+  await waitForWebSocketOpen(ws, timeoutMs, "ws open timeout");
   return ws;
 }
 

@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { formatInvalidConfigRecoveryHint } from "../cli/config-recovery-hints.js";
+import {
+  formatInvalidConfigRecoveryHint,
+  formatPluginPackagingRuntimeOutputRecoveryHint,
+} from "../cli/config-recovery-hints.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
@@ -7,11 +10,13 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   prepareSecretsRuntimeFastPathSnapshot,
@@ -125,6 +130,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
           ...(pluginMetadataSnapshot?.manifestRegistry
             ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
             : {}),
+          discovery: pluginMetadataSnapshot?.discovery,
         }),
       );
   if (autoEnable.changes.length === 0) {
@@ -165,11 +171,15 @@ export function createRuntimeSecretsActivator(params: {
   ) => void;
   prepareRuntimeSecretsSnapshot?: PrepareRuntimeSecretsSnapshot;
   activateRuntimeSecretsSnapshot?: ActivateRuntimeSecretsSnapshot;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
 }): ActivateRuntimeSecrets {
   let secretsDegraded = false;
   let secretsActivationTail: Promise<void> = Promise.resolve();
   let secretsRuntimePromise: Promise<typeof import("../secrets/runtime.js")> | null = null;
   let authProfilesPromise: Promise<typeof import("../agents/auth-profiles.js")> | null = null;
+  const startupManifestRegistry =
+    params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
   const loadSecretsRuntime = () => {
     secretsRuntimePromise ??= import("../secrets/runtime.js");
     return secretsRuntimePromise;
@@ -262,6 +272,7 @@ export function createRuntimeSecretsActivator(params: {
         ) {
           const fastPath = prepareSecretsRuntimeFastPathSnapshot({
             config: pruneSkippedStartupSecretSurfaces(config),
+            ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
           });
           if (fastPath) {
             const coercePreflightSnapshot = (
@@ -293,6 +304,9 @@ export function createRuntimeSecretsActivator(params: {
                         includeAuthStoreRefs:
                           includeAuthStoreRefs ?? fastPath.refreshContext.includeAuthStoreRefs,
                         loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
+                        ...(fastPath.refreshContext.manifestRegistry
+                          ? { manifestRegistry: fastPath.refreshContext.manifestRegistry }
+                          : {}),
                         ...(fastPath.usesAuthStoreFallback || !fastPath.refreshContext.loadAuthStore
                           ? {}
                           : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
@@ -313,6 +327,9 @@ export function createRuntimeSecretsActivator(params: {
                           includeAuthStoreRefs:
                             includeAuthStoreRefs ?? fastPath.refreshContext.includeAuthStoreRefs,
                           loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
+                          ...(fastPath.refreshContext.manifestRegistry
+                            ? { manifestRegistry: fastPath.refreshContext.manifestRegistry }
+                            : {}),
                           ...(fastPath.usesAuthStoreFallback ||
                           !fastPath.refreshContext.loadAuthStore
                             ? {}
@@ -347,6 +364,10 @@ export function createRuntimeSecretsActivator(params: {
           () =>
             prepareRuntimeSecretsSnapshot({
               config: pruneSkippedStartupSecretSurfaces(config),
+              ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
+              ...(params.pluginMetadataSnapshot
+                ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+                : {}),
               ...(loadAuthStore ? { loadAuthStore } : {}),
             }),
           {
@@ -386,8 +407,13 @@ export function assertValidGatewayStartupConfigSnapshot(
     snapshot.issues.length > 0
       ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
       : "Unknown validation issue.";
-  const doctorHint = options.includeDoctorHint ? `\n${formatInvalidConfigRecoveryHint()}` : "";
-  throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${doctorHint}`);
+  const recoveryHint =
+    options.includeDoctorHint && isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+      ? `\n${formatPluginPackagingRuntimeOutputRecoveryHint()}`
+      : options.includeDoctorHint
+        ? `\n${formatInvalidConfigRecoveryHint()}`
+        : "";
+  throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${recoveryHint}`);
 }
 
 export async function prepareGatewayStartupConfig(params: {

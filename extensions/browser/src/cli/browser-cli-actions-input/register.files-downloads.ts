@@ -1,6 +1,10 @@
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 import {
   danger,
   DEFAULT_UPLOAD_DIR,
@@ -100,7 +104,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next file chooser (default: 120000)",
-      (v: string) => Number(v),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (paths: string[], opts, cmd) => {
       try {
@@ -139,7 +143,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next download (default: 120000)",
-      (v: string) => Number(v),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (outPath: string | undefined, opts, cmd) => {
       await runDownloadCommand(cmd, opts, {
@@ -162,7 +166,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the download to start (default: 120000)",
-      (v: string) => Number(v),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
       await runDownloadCommand(cmd, opts, {
@@ -185,7 +189,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next dialog (default: 120000)",
-      (v: string) => Number(v),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);

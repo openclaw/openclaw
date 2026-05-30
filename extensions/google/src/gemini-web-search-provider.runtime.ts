@@ -7,11 +7,12 @@ import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  MAX_SEARCH_COUNT,
   normalizeFreshness,
   parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveCitationRedirectUrl,
@@ -23,6 +24,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveGeminiConfig,
   resolveGeminiBaseUrl,
@@ -59,10 +61,6 @@ type GeminiGroundingResponse = {
     status?: string;
   };
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function throwMalformedGeminiResponse(): never {
   throw new Error("Gemini API error: malformed JSON response");
@@ -321,7 +319,12 @@ export async function executeGeminiSearch(
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const model = resolveGeminiModel(geminiConfig);
   const baseUrl = resolveGeminiBaseUrl(geminiConfig);
   const cacheKey = buildSearchCacheKey([

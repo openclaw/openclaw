@@ -469,7 +469,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("keeps a local BTW result visible when its empty final chat event arrives", () => {
-    const { state, btw, loadHistory, noteLocalBtwRunId, handleBtwEvent, handleChatEvent } =
+    const { state, btw, loadHistory, noteLocalBtwRunId, tui, handleBtwEvent, handleChatEvent } =
       createHandlersHarness({
         state: { activeChatRunId: null },
       });
@@ -482,6 +482,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       question: "what changed?",
       text: "nothing important",
     } satisfies BtwEvent);
+    tui.requestRender.mockClear();
 
     handleChatEvent({
       runId: "run-btw",
@@ -495,6 +496,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       text: "nothing important",
       isError: undefined,
     });
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
   it("clears stale streaming for a local BTW empty final without hiding the result", () => {
@@ -554,6 +557,54 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
+  it("ignores selected-global chat events from other agents", () => {
+    const { chatLog, handleChatEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        currentAgentId: "work",
+        currentSessionKey: "global",
+        activeChatRunId: null,
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      state: "delta",
+      message: { content: "wrong agent" },
+    });
+    handleChatEvent({
+      runId: "run-legacy-default-global",
+      sessionKey: "global",
+      state: "delta",
+      message: { content: "legacy default" },
+    });
+
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
+  it("ignores selected-global BTW events from other agents", () => {
+    const { btw, handleBtwEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        currentAgentId: "work",
+        currentSessionKey: "global",
+      },
+    });
+
+    handleBtwEvent({
+      kind: "btw",
+      runId: "btw-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      question: "status?",
+      text: "wrong agent",
+    });
+
+    expect(btw.showResult).not.toHaveBeenCalled();
   });
 
   it("clears run mapping when the session changes", () => {
@@ -699,6 +750,26 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces render when a command final only adds system text", () => {
+    const { state, chatLog, tui, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-command" },
+    });
+
+    handleChatEvent({
+      runId: "run-command",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: {
+        command: true,
+        content: [{ type: "text", text: "/status done" }],
+      },
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("/status done");
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
   it("binds optimistic pending messages to the first gateway run id and skips history reload", () => {
@@ -1022,6 +1093,27 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
+  it("preserves backend billing and usage-limit errors in local mode", () => {
+    const backendError =
+      '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
+    const { chatLog, handleChatEvent } = createHandlersHarness({
+      localMode: true,
+      state: {
+        activeChatRunId: null,
+        sessionInfo: { modelProvider: "xai" },
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-xai-spending-limit",
+      sessionKey: "agent:main:main",
+      state: "error",
+      errorMessage: backendError,
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(`run error: ${backendError}`);
+  });
+
   it("drops streaming assistant when chat final has no message", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
@@ -1106,7 +1198,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("reloads history when a local run ends without a displayable final message", () => {
-    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+    const { state, loadHistory, noteLocalRunId, tui, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-local-silent" },
     });
 
@@ -1119,6 +1211,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
   it("does not reload history for local run with empty final when another run is active (#53115)", () => {

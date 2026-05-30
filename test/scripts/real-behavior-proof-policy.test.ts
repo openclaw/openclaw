@@ -9,6 +9,7 @@ import {
   hasClawSweeperExactHeadProof,
   isMaintainerTeamMember,
   labelsForRealBehaviorProof,
+  readBoundedGitHubApiJson,
 } from "../../scripts/github/real-behavior-proof-policy.mjs";
 
 function externalPr(body: string, overrides: Record<string, unknown> = {}) {
@@ -44,6 +45,59 @@ function proofBody(evidence: string, overrides: Record<string, string> = {}) {
     `- Observed result after fix: ${fields.observedResult}`,
     `- What was not tested: ${fields.notTested}`,
   ].join("\n");
+}
+
+function stalledResponse() {
+  let keepAlive: ReturnType<typeof setTimeout> | undefined;
+  const reader = {
+    read: () =>
+      new Promise<ReadableStreamReadResult<Uint8Array>>(() => {
+        keepAlive = setTimeout(() => {}, 10_000);
+      }),
+    cancel: vi.fn(() => {
+      if (keepAlive) {
+        clearTimeout(keepAlive);
+      }
+      return Promise.resolve();
+    }),
+    releaseLock: vi.fn(),
+  };
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    body: {
+      getReader: () => reader,
+    },
+  };
+}
+
+function contentLengthResponse(contentLength: number) {
+  const cancel = vi.fn(() => Promise.resolve());
+  return {
+    headers: new Headers({ "content-length": String(contentLength) }),
+    body: { cancel },
+    cancel,
+  };
+}
+
+function chunkedResponse(chunks: Uint8Array[]) {
+  const cancel = vi.fn(() => Promise.resolve());
+  const read = vi.fn();
+  for (const chunk of chunks) {
+    read.mockResolvedValueOnce({ done: false, value: chunk });
+  }
+  read.mockResolvedValueOnce({ done: true, value: undefined });
+  return {
+    headers: new Headers(),
+    body: {
+      getReader: () => ({
+        read,
+        cancel,
+        releaseLock: vi.fn(),
+      }),
+    },
+  };
 }
 
 describe("real-behavior-proof-policy", () => {
@@ -83,6 +137,42 @@ describe("real-behavior-proof-policy", () => {
       steps: "pnpm openclaw gateway restart, then pnpm openclaw gateway status",
     });
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
+  it("uses the latest real behavior proof section when duplicates exist", () => {
+    const validProof = proofBody(
+      [
+        "Terminal transcript:",
+        "```text",
+        "$ openclaw doctor --non-interactive",
+        "Discord external plugin is installed without explicit trust.",
+        "Add plugins.entries.discord.enabled=true to trust it.",
+        "```",
+      ].join("\n"),
+    );
+    const mockOnlyProof = proofBody("Focused tests passed: 2 files, 36 tests.", {
+      steps: "pnpm test",
+      observedResult: "CI passes.",
+    });
+
+    const laterValid = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [mockOnlyProof, "## Summary", "- Keep the detailed proof below.", validProof].join("\n\n"),
+      ),
+    });
+    const laterInvalid = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [validProof, "## Summary", "- Latest edit replaced proof with tests.", mockOnlyProof].join(
+          "\n\n",
+        ),
+      ),
+    });
+
+    expect(laterValid.status).toBe("passed");
+    expect(laterValid.fields?.evidence).toContain("openclaw doctor --non-interactive");
+    expect(labelsForRealBehaviorProof(laterValid)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(laterInvalid.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(laterInvalid)).toEqual([MOCK_ONLY_PROOF_LABEL]);
   });
 
   it("accepts out-of-scope follow-ups as not-tested proof detail", () => {
@@ -370,11 +460,7 @@ describe("real-behavior-proof-policy", () => {
 
 describe("isMaintainerTeamMember", () => {
   function jsonResponse(status: number, body: unknown = {}) {
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      json: () => Promise.resolve(body),
-    };
+    return new Response(JSON.stringify(body), { status });
   }
 
   it("returns true for active members", async () => {
@@ -421,5 +507,73 @@ describe("isMaintainerTeamMember", () => {
     await expect(
       isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
     ).rejects.toThrow(/500/);
+  });
+
+  it("aborts stalled membership fetches", async () => {
+    const fetch = vi.fn((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    });
+
+    await expect(
+      isMaintainerTeamMember({
+        fetch: fetch as typeof globalThis.fetch,
+        login: "u",
+        org: "o",
+        timeoutMs: 5,
+        token: "t",
+      }),
+    ).rejects.toThrow(/maintainer membership lookup for u timed out after 5ms/);
+  });
+
+  it("times out stalled membership response bodies", async () => {
+    const fetch = vi.fn().mockResolvedValue(stalledResponse());
+
+    await expect(
+      isMaintainerTeamMember({
+        fetch: fetch as typeof globalThis.fetch,
+        login: "u",
+        org: "o",
+        timeoutMs: 5,
+        token: "t",
+      }),
+    ).rejects.toThrow(/maintainer membership response for u timed out after 5ms/);
+  });
+});
+
+describe("readBoundedGitHubApiJson", () => {
+  it("reads bounded JSON response bodies", async () => {
+    await expect(
+      readBoundedGitHubApiJson(new Response('{"state":"active"}'), "GitHub API", 1024),
+    ).resolves.toEqual({ state: "active" });
+  });
+
+  it("rejects oversized JSON bodies by content length", async () => {
+    const response = contentLengthResponse(1025);
+
+    await expect(
+      readBoundedGitHubApiJson(response as unknown as Response, "GitHub API", 1024),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "GitHub API response body exceeded 1024 bytes",
+    });
+    expect(response.cancel).toHaveBeenCalled();
+  });
+
+  it("rejects oversized streamed JSON bodies", async () => {
+    const encoder = new TextEncoder();
+    const response = chunkedResponse([
+      encoder.encode('{"body":"'),
+      encoder.encode("x".repeat(1024)),
+      encoder.encode('"}'),
+    ]);
+
+    await expect(
+      readBoundedGitHubApiJson(response as unknown as Response, "GitHub API", 1024),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "GitHub API response body exceeded 1024 bytes",
+    });
   });
 });

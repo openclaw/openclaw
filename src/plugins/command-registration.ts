@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
+import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -159,6 +160,12 @@ export function validatePluginCommandDefinition(
         : "Command requiredScopes contains unknown operator scope";
     }
   }
+  if (
+    command.exposeSenderIsOwner !== undefined &&
+    typeof command.exposeSenderIsOwner !== "boolean"
+  ) {
+    return "Command exposeSenderIsOwner must be a boolean";
+  }
   if (command.channels !== undefined) {
     if (!Array.isArray(command.channels)) {
       return "Command channels must be an array of channel ids";
@@ -263,8 +270,8 @@ function normalizeAgentPromptGuidance(
       text: entry.text.trim(),
     };
     if (entry.surfaces) {
-      normalized.surfaces = entry.surfaces.map(
-        (surface) => surface.trim() as AgentPromptSurfaceKind,
+      normalized.surfaces = entry.surfaces.map((surface) =>
+        normalizeAgentPromptSurfaceKind(surface.trim() as AgentPromptSurfaceKind),
       );
     }
     return normalized;
@@ -307,7 +314,12 @@ export function pluginCommandSupportsChannel(
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
-  opts?: { pluginName?: string; pluginRoot?: string; allowReservedCommandNames?: boolean },
+  opts?: {
+    pluginName?: string;
+    pluginRoot?: string;
+    allowReservedCommandNames?: boolean;
+    allowOwnerStatusExposure?: boolean;
+  },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (isPluginCommandRegistryLocked()) {
@@ -362,6 +374,9 @@ export function registerPluginCommand(
     pluginId,
     pluginName: opts?.pluginName,
     pluginRoot: opts?.pluginRoot,
+    ...(opts?.allowOwnerStatusExposure === true && normalizedCommand.exposeSenderIsOwner === true
+      ? { trustedOwnerStatusExposure: true as const }
+      : {}),
   });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };

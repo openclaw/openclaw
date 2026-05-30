@@ -1,4 +1,4 @@
-import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
+import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -22,7 +22,7 @@ type EventHandlerChatLog = {
 };
 
 type EventHandlerTui = {
-  requestRender: () => void;
+  requestRender: (force?: boolean) => void;
 };
 
 type EventHandlerBtwPresenter = {
@@ -187,10 +187,17 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
-    if (!localMode || !isAuthErrorMessage(errorMessage)) {
+    if (!localMode) {
       return undefined;
     }
     const provider = state.sessionInfo.modelProvider?.trim();
+    const failoverReason = classifyFailoverReason(errorMessage, { provider });
+    if (failoverReason === "billing" || failoverReason === "rate_limit") {
+      return undefined;
+    }
+    if (!isAuthErrorMessage(errorMessage)) {
+      return undefined;
+    }
     return provider
       ? `auth or provider access failed for ${provider}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
       : "auth or provider access failed for the current provider. Run /auth to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.";
@@ -424,6 +431,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     return false;
   };
 
+  const isMatchingGlobalAgentEvent = (
+    sessionKey: string | undefined,
+    agentId?: string,
+  ): boolean => {
+    if (normalizeLowercaseStringOrEmpty(sessionKey) !== "global") {
+      return true;
+    }
+    const selectedAgentId = normalizeLowercaseStringOrEmpty(state.currentAgentId);
+    const defaultAgentId = normalizeLowercaseStringOrEmpty(state.agentDefaultId);
+    const eventAgentId = normalizeLowercaseStringOrEmpty(agentId);
+    if (eventAgentId) {
+      return eventAgentId === selectedAgentId;
+    }
+    return selectedAgentId === defaultAgentId;
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -431,6 +454,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     const evt = payload as ChatEvent;
     syncSessionKey();
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
     if (finalizedRuns.has(evt.runId)) {
@@ -482,7 +508,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (!evt.message) {
@@ -491,7 +517,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (isCommandMessage(evt.message)) {
@@ -501,7 +527,7 @@ export function createEventHandlers(context: EventHandlerContext) {
           chatLog.addSystem(text);
         }
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle", displayedFinal: true });
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       maybeRefreshHistoryForRun(evt.runId);
@@ -674,6 +700,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     const evt = payload as BtwEvent;
     syncSessionKey();
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
     if (evt.kind !== "btw") {

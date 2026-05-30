@@ -104,7 +104,7 @@ within their overall connection budget instead of surfacing it as a terminal
 handshake failure.
 
 `server`, `features`, `snapshot`, and `policy` are all required by the schema
-(`src/gateway/protocol/schema/frames.ts`). `auth` is also required and reports
+(`packages/gateway-protocol/src/schema/frames.ts`). `auth` is also required and reports
 the negotiated role/scopes. `pluginSurfaceUrls` is optional and maps plugin
 surface names, such as `canvas`, to scoped hosted URLs.
 
@@ -161,7 +161,7 @@ operator token:
       {
         "deviceToken": "…",
         "role": "operator",
-        "scopes": ["operator.approvals", "operator.read", "operator.write"]
+        "scopes": ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"]
       }
     ]
   }
@@ -169,9 +169,11 @@ operator token:
 ```
 
 The operator handoff is intentionally bounded so QR onboarding can start the
-mobile operator loop without granting `operator.admin`, `operator.pairing`, or
-`operator.talk.secrets`. Those scopes require a separate approved operator
-pairing or token flow. Clients should persist `hello-ok.auth.deviceTokens` only
+mobile operator loop without granting `operator.admin` or `operator.pairing`.
+It does include `operator.talk.secrets` so the native client can read the Talk
+configuration it needs after bootstrap. Broader admin and pairing scopes require
+a separate approved operator pairing or token flow. Clients should persist
+`hello-ok.auth.deviceTokens` only
 when the connect used bootstrap auth on trusted transport such as `wss://` or
 loopback/local pairing.
 
@@ -345,10 +347,12 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `models.list` returns the runtime-allowed model catalog. Pass `{ "view": "configured" }` for picker-sized configured models (`agents.defaults.models` first, then `models.providers.*.models`), or `{ "view": "all" }` for the full catalog.
     - `usage.status` returns provider usage windows/remaining quota summaries.
     - `usage.cost` returns aggregated cost usage summaries for a date range.
+      Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping. Dreaming-aware clients may also pass `{ "agentId": "agent-id" }` to scope Dreaming store stats to a selected agent workspace; omitting `agentId` keeps the default-agent fallback and aggregates configured Dreaming workspaces.
     - `doctor.memory.dreamDiary`, `doctor.memory.backfillDreamDiary`, `doctor.memory.resetDreamDiary`, `doctor.memory.resetGroundedShortTerm`, `doctor.memory.repairDreamingArtifacts`, and `doctor.memory.dedupeDreamDiary` accept optional `{ "agentId": "agent-id" }` params for selected-agent Dreaming views/actions. When `agentId` is omitted, they operate on the configured default agent workspace.
     - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients. It can include workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates, so callers need `operator.read`.
-    - `sessions.usage` returns per-session usage summaries.
+    - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one
+      agent, or `agentScope: "all"` to list configured agents together.
     - `sessions.usage.timeseries` returns timeseries usage for one session.
     - `sessions.usage.logs` returns usage log entries for one session.
 
@@ -561,8 +565,14 @@ terminal summary, and sanitized error text.
   - `sessionKey` is required.
   - The gateway derives trusted runtime context from the session server-side instead of accepting
     caller-supplied auth or delivery context.
-  - The response is session-scoped and reflects what the active conversation can use right now,
-    including core, plugin, and channel tools.
+  - The response is a session-scoped server-derived projection of the active inventory,
+    including core, plugin, channel, and already-discovered MCP server tools.
+  - `tools.effective` is read-only for MCP: it may project a warm session MCP catalog through the
+    final tool policy, but it does not create MCP runtimes, connect transports, or issue
+    `tools/list`. If no matching warm catalog exists, the response may include a notice such as
+    `mcp-not-yet-connected`, `mcp-not-yet-listed`, or `mcp-stale-catalog`.
+  - Effective tool entries use `source="core"`, `source="plugin"`, `source="channel"`, or
+    `source="mcp"`.
 - Operators may call `tools.invoke` (`operator.write`) to invoke one available tool through the
   same gateway policy path as `/tools/invoke`.
   - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
@@ -639,7 +649,7 @@ terminal summary, and sanitized error text.
 
 ## Versioning
 
-- `PROTOCOL_VERSION` lives in `src/gateway/protocol/version.ts`.
+- `PROTOCOL_VERSION` lives in `packages/gateway-protocol/src/version.ts`.
 - Clients send `minProtocol` + `maxProtocol`; the server rejects ranges that
   do not include its current protocol. Current clients and servers require
   protocol v4.
@@ -655,8 +665,8 @@ stable across protocol v4 and are the expected baseline for third-party clients.
 
 | Constant                                  | Default                                               | Source                                                                                     |
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `PROTOCOL_VERSION`                        | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
-| `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
+| `PROTOCOL_VERSION`                        | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                 |
+| `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                 |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |
@@ -706,7 +716,8 @@ rather than the pre-handshake defaults.
 - Built-in setup-code bootstrap returns the primary node
   `hello-ok.auth.deviceToken` plus a bounded operator token in
   `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
-  excludes `operator.admin`, `operator.pairing`, and `operator.talk.secrets`.
+  includes `operator.talk.secrets` for native Talk configuration reads and
+  excludes `operator.admin` and `operator.pairing`.
 - While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
   details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
   and `pauseReconnect: false`. Clients should keep reconnecting with the same
@@ -717,7 +728,8 @@ rather than the pre-handshake defaults.
   caller-requested scope set remains authoritative; cached scopes are only
   reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
-  `device.token.revoke` (requires `operator.pairing` scope).
+  `device.token.revoke` (requires `operator.pairing` scope). Rotating or
+  revoking a node or other non-operator role also requires `operator.admin`.
 - `device.token.rotate` returns rotation metadata. It echoes the replacement
   bearer token only for same-device calls that are already authenticated with
   that device token, so token-only clients can persist their replacement before
@@ -726,8 +738,9 @@ rather than the pre-handshake defaults.
   recorded in that device's pairing entry; token mutation cannot expand or
   target a device role that pairing approval never granted.
 - For paired-device token sessions, device management is self-scoped unless the
-  caller also has `operator.admin`: non-admin callers can remove/revoke/rotate
-  only their **own** device entry.
+  caller also has `operator.admin`: non-admin callers can manage only the
+  operator token for their **own** device entry. Node and other non-operator
+  token management is admin-only, even for the caller's own device.
 - `device.token.rotate` and `device.token.revoke` also check the target operator
   token scope set against the caller's current session scopes. Non-admin callers
   cannot rotate or revoke a broader operator token than they already hold.
@@ -806,7 +819,7 @@ Migration target:
 
 This protocol exposes the **full gateway API** (status, channels, models, chat,
 agent, sessions, nodes, approvals, etc.). The exact surface is defined by the
-TypeBox schemas in `src/gateway/protocol/schema.ts`.
+TypeBox schemas in `packages/gateway-protocol/src/schema.ts`.
 
 ## Related
 

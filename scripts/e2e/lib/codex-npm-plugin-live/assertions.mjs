@@ -1,35 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  assertPathInside,
+  configPath,
+  findPackageJson,
+  managedNpmRoot,
+  npmProjectRootForInstalledPackage,
+  readInstallRecords,
+  readJson,
+  realPathMaybe,
+  stateDir,
+} from "../codex-install-utils.mjs";
 
 const command = process.argv[2];
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const allowBetaCompatDiagnostics =
   process.env.OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS === "1";
-
-function stateDir() {
-  return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
-}
-
-function configPath() {
-  return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
-
-function realPathMaybe(filePath) {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return path.resolve(filePath);
-  }
-}
-
-function assertPathInside(parentPath, childPath, label) {
-  const parent = realPathMaybe(parentPath);
-  const child = realPathMaybe(childPath);
-  const relative = path.relative(parent, child);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`${label} resolved outside ${parentPath}: ${child}`);
-  }
-}
 
 function configure() {
   const modelRef = process.argv[3] || "codex/gpt-5.4";
@@ -66,7 +51,10 @@ function configure() {
     defaults: {
       ...cfg.agents?.defaults,
       model: { primary: modelRef, fallbacks: [] },
-      agentRuntime: { id: "codex" },
+      models: {
+        ...cfg.agents?.defaults?.models,
+        [modelRef]: { agentRuntime: { id: "codex" } },
+      },
       workspace: path.join(state, "workspace"),
       skipBootstrap: true,
       timeoutSeconds: 420,
@@ -77,22 +65,11 @@ function configure() {
 }
 
 function readInstallRecord() {
-  const indexPath = path.join(stateDir(), "plugins", "installs.json");
-  const index = readJson(indexPath);
-  const record = (index.installRecords || index.records || {}).codex;
+  const record = readInstallRecords().codex;
   if (!record) {
     throw new Error("missing codex install record");
   }
   return record;
-}
-
-function readInstallRecords() {
-  const indexPath = path.join(stateDir(), "plugins", "installs.json");
-  if (!fs.existsSync(indexPath)) {
-    return {};
-  }
-  const index = readJson(indexPath);
-  return index.installRecords || index.records || {};
 }
 
 function normalizePluginSpec(spec) {
@@ -195,10 +172,6 @@ function assertPlugin() {
   }
 }
 
-function managedNpmRoot() {
-  return path.join(stateDir(), "npm");
-}
-
 function codexInstallPath() {
   const record = readInstallRecord();
   if (typeof record.installPath !== "string" || record.installPath.length === 0) {
@@ -207,19 +180,13 @@ function codexInstallPath() {
   return record.installPath.replace(/^~(?=$|\/)/u, process.env.HOME);
 }
 
-function findPackageJson(packageName) {
-  const parts = packageName.split("/");
-  const candidates =
-    packageName.startsWith("@") && parts.length === 2
-      ? [
-          path.join(codexInstallPath(), "node_modules", parts[0], parts[1], "package.json"),
-          path.join(managedNpmRoot(), "node_modules", parts[0], parts[1], "package.json"),
-        ]
-      : [
-          path.join(codexInstallPath(), "node_modules", packageName, "package.json"),
-          path.join(managedNpmRoot(), "node_modules", packageName, "package.json"),
-        ];
-  return candidates.find((candidate) => fs.existsSync(candidate));
+function codexNpmProjectRoot() {
+  return npmProjectRootForInstalledPackage(codexInstallPath(), "@openclaw/codex");
+}
+
+function findCodexPackageJson(packageName) {
+  const projectRoot = codexNpmProjectRoot();
+  return findPackageJson(packageName, [projectRoot, codexInstallPath(), managedNpmRoot()]);
 }
 
 function assertNpmDeps() {
@@ -237,7 +204,7 @@ function assertNpmDeps() {
     throw new Error(`unexpected codex package name: ${pluginPackage.name}`);
   }
 
-  const openAiCodexPackageJson = findPackageJson("@openai/codex");
+  const openAiCodexPackageJson = findCodexPackageJson("@openai/codex");
   if (!openAiCodexPackageJson) {
     throw new Error("missing @openai/codex dependency under .openclaw/npm");
   }
@@ -253,6 +220,7 @@ function assertNpmDeps() {
 function resolveCodexBin() {
   const commandName = process.platform === "win32" ? "codex.cmd" : "codex";
   const candidates = [
+    path.join(codexNpmProjectRoot(), "node_modules", ".bin", commandName),
     path.join(codexInstallPath(), "node_modules", ".bin", commandName),
     path.join(managedNpmRoot(), "node_modules", ".bin", commandName),
   ];
@@ -260,7 +228,7 @@ function resolveCodexBin() {
   if (candidate) {
     return candidate;
   }
-  const packageJson = findPackageJson("@openai/codex");
+  const packageJson = findCodexPackageJson("@openai/codex");
   if (!packageJson) {
     throw new Error("cannot resolve Codex binary without @openai/codex package");
   }
@@ -349,10 +317,11 @@ function assertAgentTurn() {
       `OpenClaw agent reply did not contain ${marker}:\nstdout=${stdout}\nstderr=${stderr}`,
     );
   }
+  const expectedProvider = modelRef.split("/")[0] || "codex";
   const executionTrace = response.meta?.executionTrace;
-  if (!executionTrace || executionTrace.winnerProvider !== "codex") {
+  if (!executionTrace || executionTrace.winnerProvider !== expectedProvider) {
     throw new Error(
-      `expected Codex plugin to win the agent turn, got ${JSON.stringify(executionTrace)}`,
+      `expected Codex plugin model provider ${expectedProvider} to win the agent turn, got ${JSON.stringify(executionTrace)}`,
     );
   }
 

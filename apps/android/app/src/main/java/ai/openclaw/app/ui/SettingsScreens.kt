@@ -70,6 +70,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -90,6 +91,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
 internal enum class SettingsRoute {
@@ -684,6 +686,13 @@ private fun GatewaySettingsScreen(
       ClawSecondaryButton(text = "Disconnect", onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
     }
     ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = "Clear this phone's saved gateway access and scan a fresh setup code.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+      }
+    }
+    ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = "Connection Setup", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         ClawTextField(value = setupCode, onValueChange = { setupCode = it }, placeholder = "Setup code")
@@ -1116,11 +1125,11 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
 
 @Composable
 internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
-      Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).padding(horizontal = 0.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-        Text(text = row.value, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
     }
   }

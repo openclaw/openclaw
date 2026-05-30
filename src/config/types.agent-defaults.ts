@@ -1,6 +1,5 @@
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
-  AgentEmbeddedHarnessConfig,
   AgentModelConfig,
   AgentToolModelConfig,
   AgentRuntimePolicyConfig,
@@ -16,7 +15,7 @@ import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
-export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
+export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
 export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
 
@@ -88,7 +87,7 @@ export type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
   /** Default line window for memory_get when lines is omitted (default: 120). */
   memoryGetDefaultLines?: number;
-  /** Max chars kept for a single live tool result before truncation (default: 16000). */
+  /** Advanced max chars for a single live tool result; unset uses model-context auto cap. */
   toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;
@@ -202,12 +201,13 @@ export type CliBackendConfig = {
 export type AgentDefaultsConfig = {
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
-  /** Default agent runtime policy. */
-  agentRuntime?: AgentRuntimePolicyConfig;
-  /** @deprecated Use agentRuntime. */
-  embeddedHarness?: AgentEmbeddedHarnessConfig;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
+  /**
+   * @deprecated Legacy raw config accepted only by doctor/migration repair.
+   * Normal schema parsing rejects this key; use per-model agentRuntime instead.
+   */
+  agentRuntime?: AgentRuntimePolicyConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentToolModelConfig;
   /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
@@ -216,6 +216,8 @@ export type AgentDefaultsConfig = {
   videoGenerationModel?: AgentToolModelConfig;
   /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   musicGenerationModel?: AgentToolModelConfig;
+  /** Optional voice model and fallbacks (provider/model) for TTS/STT/realtime voice providers. */
+  voiceModel?: AgentToolModelConfig;
   /**
    * When true (default), shared image/music/video generation appends other
    * auth-backed provider defaults after explicit primary/fallback refs. Set to
@@ -239,8 +241,6 @@ export type AgentDefaultsConfig = {
   silentReply?: SilentReplyPolicyShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
-  /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
-  systemPromptOverride?: string;
   /** Provider-independent prompt overlays applied by model family. */
   promptOverlays?: PromptOverlaysConfig;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
@@ -309,21 +309,21 @@ export type AgentDefaultsConfig = {
   compaction?: AgentCompactionConfig;
   /** Outer run loop retry iteration boundaries. */
   runRetries?: AgentRunRetriesConfig;
-  /** Embedded Pi runner hardening and compatibility controls. */
-  embeddedPi?: {
+  /** Embedded OpenClaw runner hardening and compatibility controls. */
+  embeddedAgent?: {
     /**
-     * How embedded Pi should trust workspace-local `.pi/config/settings.json`.
+     * How embedded OpenClaw should trust workspace-local `.openclaw/settings.json`.
      * - sanitize (default): apply project settings except shellPath/shellCommandPrefix
      * - ignore: ignore project settings entirely
      * - trusted: trust project settings as-is
      */
     projectSettingsPolicy?: "trusted" | "sanitize" | "ignore";
     /**
-     * Embedded Pi execution contract:
+     * Embedded OpenClaw execution contract:
      * - default: keep the standard runner behavior
      * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
      */
-    executionContract?: EmbeddedPiExecutionContract;
+    executionContract?: EmbeddedAgentExecutionContract;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
@@ -407,7 +407,7 @@ export type AgentDefaultsConfig = {
     ackMaxChars?: number;
     /** Suppress tool error warning payloads during heartbeat runs. */
     suppressToolErrorWarnings?: boolean;
-    /** Run timeout in seconds for heartbeat agent turns. */
+    /** Run timeout in seconds for heartbeat agent turns. Unset uses global timeout or heartbeat cadence capped at 600 seconds. */
     timeoutSeconds?: number;
     /**
      * If true, run heartbeat turns with lightweight bootstrap context.
@@ -478,7 +478,7 @@ export type AgentCompactionQualityGuardConfig = {
 export type AgentCompactionMidTurnPrecheckConfig = {
   /**
    * Enable structured context pressure checks after tool results are appended
-   * and before the next Pi model call. Default: false.
+   * and before the next agent model call. Default: false.
    */
   enabled?: boolean;
 };
@@ -486,11 +486,11 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Pi reserve tokens target before floor enforcement. */
+  /** Embedded OpenClaw reserve tokens target before floor enforcement. */
   reserveTokens?: number;
-  /** Pi keepRecentTokens budget used for cut-point selection. */
+  /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
-  /** Minimum reserve tokens enforced for Pi compaction (0 disables the floor). */
+  /** Minimum reserve tokens enforced for embedded OpenClaw compaction (0 disables the floor). */
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
   maxHistoryShare?: number;
@@ -512,8 +512,8 @@ export type AgentCompactionConfig = {
   memoryFlush?: AgentCompactionMemoryFlushConfig;
   /**
    * H2/H3 section names from AGENTS.md to inject after compaction.
-   * Defaults to ["Session Startup", "Red Lines"] when unset.
-   * Set to [] to disable post-compaction context injection entirely.
+   * Disabled when unset or [].
+   * Explicit ["Session Startup", "Red Lines"] preserves legacy fallback headings.
    */
   postCompactionSections?: string[];
   /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").

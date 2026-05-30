@@ -5,6 +5,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
@@ -15,9 +16,14 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import {
+  normalizeStringEntries,
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
+import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
-import type { SkillScanFinding } from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditFinding = {
@@ -32,7 +38,7 @@ type CollectPluginsTrustFindingsParams = Parameters<
   typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings
 >[0];
 type SkillScanSummary = Awaited<
-  ReturnType<typeof import("./skill-scanner.js").scanDirectoryWithSummary>
+  ReturnType<typeof import("../skills/security/scanner.js").scanDirectoryWithSummary>
 >;
 type ExecDockerRawFn = (
   args: string[],
@@ -42,23 +48,23 @@ type ExecDockerRawFn = (
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
 
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
-let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
+let skillsModulePromise: Promise<typeof import("../skills/loading/workspace.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
 let agentScopeModulePromise: Promise<typeof import("../agents/agent-scope.js")> | undefined;
 let agentWorkspaceDirsModulePromise:
   | Promise<typeof import("../agents/workspace-dirs.js")>
   | undefined;
-let skillSourceModulePromise: Promise<typeof import("../agents/skills/source.js")> | undefined;
+let skillSourceModulePromise: Promise<typeof import("../skills/loading/source.js")> | undefined;
 let sandboxDockerModulePromise: Promise<typeof import("../agents/sandbox/docker.js")> | undefined;
 let sandboxConstantsModulePromise:
   | Promise<typeof import("../agents/sandbox/constants.js")>
   | undefined;
 let auditPluginsTrustModulePromise: Promise<typeof import("./audit-plugins-trust.js")> | undefined;
 let auditFsModulePromise: Promise<typeof import("./audit-fs.js")> | undefined;
-let skillScannerModulePromise: Promise<typeof import("./skill-scanner.js")> | undefined;
+let skillScannerModulePromise: Promise<typeof import("../skills/security/scanner.js")> | undefined;
 
 function loadSkillsModule() {
-  skillsModulePromise ??= import("../agents/skills.js");
+  skillsModulePromise ??= import("../skills/loading/workspace.js");
   return skillsModulePromise;
 }
 
@@ -83,12 +89,12 @@ function loadAgentWorkspaceDirsModule() {
 }
 
 function loadSkillSourceModule() {
-  skillSourceModulePromise ??= import("../agents/skills/source.js");
+  skillSourceModulePromise ??= import("../skills/loading/source.js");
   return skillSourceModulePromise;
 }
 
 function loadSkillScannerModule() {
-  skillScannerModulePromise ??= import("./skill-scanner.js");
+  skillScannerModulePromise ??= import("../skills/security/scanner.js");
   return skillScannerModulePromise;
 }
 
@@ -189,7 +195,7 @@ async function readPluginManifestExtensions(pluginPath: string): Promise<string[
   if (!Array.isArray(extensions)) {
     return [];
   }
-  return extensions.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+  return normalizeTrimmedStringList(extensions);
 }
 
 function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string): string {
@@ -231,7 +237,7 @@ function buildCodeSafetySummaryCacheKey(params: {
   dirPath: string;
   includeFiles?: string[];
 }): string {
-  const includeFiles = (params.includeFiles ?? []).map((entry) => entry.trim()).filter(Boolean);
+  const includeFiles = normalizeStringEntries(params.includeFiles);
   const includeKey = includeFiles.length > 0 ? includeFiles.toSorted().join("\u0000") : "";
   return `${params.dirPath}\u0000${includeKey}`;
 }
@@ -295,10 +301,10 @@ async function withDockerProbeTimeout<T>(
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
-  let timeout: NodeJS.Timeout | undefined;
+  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
+    timeout = setNodeTimeout(() => {
       timedOut = true;
       controller.abort();
       reject(new DockerProbeTimeoutError(timeoutMs));
@@ -313,7 +319,7 @@ async function withDockerProbeTimeout<T>(
     throw err;
   } finally {
     if (timeout) {
-      clearTimeout(timeout);
+      clearNodeTimeout(timeout);
     }
   }
 }
@@ -337,11 +343,7 @@ async function listSandboxBrowserContainers(params: {
     if (result.code !== 0) {
       return null;
     }
-    return result.stdout
-      .toString("utf8")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
   } catch (err) {
     if (isDockerProbeTimeoutError(err)) {
       params.onTimeout?.();
@@ -424,11 +426,7 @@ async function readSandboxBrowserPortMappings(params: {
     if (result.code !== 0) {
       return null;
     }
-    return result.stdout
-      .toString("utf8")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
   } catch (err) {
     if (isDockerProbeTimeoutError(err)) {
       params.onTimeout?.();
@@ -706,7 +704,7 @@ export async function collectStateDeepFilesystemFindings(params: {
     : [];
   const { resolveDefaultAgentId } = await loadAgentScopeModule();
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const ids = Array.from(new Set([defaultAgentId, ...agentIds])).map((id) => normalizeAgentId(id));
+  const ids = uniqueStrings([defaultAgentId, ...agentIds]).map((id) => normalizeAgentId(id));
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");

@@ -1,4 +1,4 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
@@ -7,6 +7,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -34,6 +35,7 @@ type ProbeTransition = {
 type GatewaySample = {
   cpuCoreRatio: number | null;
   cpuMs: number | null;
+  exitedBeforeTeardown?: boolean;
   exitCode: number | null;
   firstOutputMs: number | null;
   gatewayReadyLogLine: string | null;
@@ -407,6 +409,17 @@ function collectResultFailures(
           reason: `missing ${missing.join(", ")}`,
           sampleIndex: index + 1,
         });
+        return;
+      }
+      if (sample.exitedBeforeTeardown === true) {
+        failures.push({
+          id: result.id,
+          reason:
+            sample.signal == null
+              ? `child exited ${sample.exitCode ?? "before teardown"}`
+              : `child exited by ${sample.signal}`,
+          sampleIndex: index + 1,
+        });
       }
     });
   }
@@ -601,10 +614,6 @@ function requestStatus(port: number, pathname: string): Promise<number> {
   });
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function writePluginFixtures(
   root: string,
   count: number,
@@ -685,38 +694,6 @@ function sanitizedEnv(
     ...benchCase.env,
   };
   return env;
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<{
-  exitCode: number | null;
-  signal: string | null;
-}> {
-  if (child.exitCode != null || child.signalCode != null) {
-    return { exitCode: child.exitCode, signal: child.signalCode };
-  }
-  const exited = new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
-    child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
-  });
-  killProcessTree(child, "SIGTERM");
-  const timeout = delay(2000).then(() => {
-    if (child.exitCode == null && child.signalCode == null) {
-      killProcessTree(child, "SIGKILL");
-    }
-    return exited;
-  });
-  return Promise.race([exited, timeout]);
-}
-
-function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid !== undefined) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below.
-    }
-  }
-  child.kill(signal);
 }
 
 function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
@@ -969,12 +946,14 @@ async function runGatewaySample(options: {
   const exit = await stopChild(child);
   clearInterval(rssTimer);
   sampleRss();
-  await childExitPromise.catch(() => null);
+  // stopChild is the bounded teardown wait; the raw exit promise may never settle.
+  void childExitPromise.catch(() => null);
   rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
 
   return {
     cpuCoreRatio,
     cpuMs,
+    exitedBeforeTeardown: exit.exitedBeforeTeardown,
     exitCode: exit.exitCode,
     firstOutputMs,
     gatewayReadyLogLine,
@@ -1109,6 +1088,7 @@ export const testing = {
   parsePositiveInt,
   resolveEntry,
   sanitizedEnv,
+  stopChild,
   summarizeCase,
   waitForProbe,
   writeConfig,

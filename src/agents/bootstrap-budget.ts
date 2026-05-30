@@ -1,6 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;

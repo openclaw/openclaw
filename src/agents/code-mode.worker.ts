@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
+
+const require = createRequire(import.meta.url);
+const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
+let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
 
 type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield";
 
@@ -53,7 +59,12 @@ type CodeModeWorkerResult =
   | {
       status: "failed";
       error: string;
-      code: "invalid_input" | "runtime_unavailable" | "timeout" | "internal_error";
+      code:
+        | "invalid_input"
+        | "runtime_unavailable"
+        | "timeout"
+        | "snapshot_limit_exceeded"
+        | "internal_error";
       output: unknown[];
     };
 
@@ -68,6 +79,21 @@ class CodeModeWorkerFailure extends Error {
     super(message, options);
     this.name = "CodeModeWorkerFailure";
     this.code = code;
+  }
+}
+
+class CodeModeWorkerFailureWithOutput extends CodeModeWorkerFailure {
+  readonly output: unknown[];
+
+  constructor(
+    code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
+    message: string,
+    output: unknown[],
+    options?: ErrorOptions,
+  ) {
+    super(code, message, options);
+    this.name = "CodeModeWorkerFailureWithOutput";
+    this.output = output;
   }
 }
 
@@ -89,6 +115,13 @@ type VmRun = {
   vm: QuickJS;
   didTimeout: () => boolean;
 };
+
+function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
+  quickJsWasmModulePromise ??= readFile(QUICKJS_WASM_PATH).then((bytes) =>
+    WebAssembly.compile(bytes),
+  );
+  return quickJsWasmModulePromise;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -263,6 +296,7 @@ async function createVm(params: {
   const startedAt = Date.now();
   let timedOut = false;
   const vm = await QuickJS.create({
+    wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
@@ -303,6 +337,7 @@ async function restoreVm(params: {
   let timedOut = false;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
+    wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
@@ -335,6 +370,49 @@ function takeOutput(vm: QuickJS): unknown[] {
   } finally {
     take.dispose();
   }
+}
+
+function takeOutputSafely(vm: QuickJS): unknown[] {
+  try {
+    return takeOutput(vm);
+  } catch {
+    return [];
+  }
+}
+
+function throwWorkerFailureWithOutput(params: {
+  error: unknown;
+  didTimeout: () => boolean;
+  output: unknown[];
+  vm: QuickJS;
+}): never {
+  const timedOut = params.didTimeout() || isQuickJsInterruptedError(params.error);
+  const failureOutput = params.output.length > 0 ? params.output : takeOutputSafely(params.vm);
+  if (timedOut) {
+    throw new CodeModeWorkerFailureWithOutput(
+      "timeout",
+      "code mode timeout exceeded",
+      failureOutput,
+      { cause: params.error },
+    );
+  }
+  if (params.error instanceof CodeModeWorkerFailure) {
+    throw new CodeModeWorkerFailureWithOutput(
+      params.error.code,
+      params.error.message,
+      failureOutput,
+      { cause: params.error },
+    );
+  }
+  if (failureOutput.length > 0) {
+    throw new CodeModeWorkerFailureWithOutput(
+      "internal_error",
+      errorMessage(params.error),
+      failureOutput,
+      { cause: params.error },
+    );
+  }
+  throw params.error;
 }
 
 function drainPendingJobs(vm: QuickJS): void {
@@ -377,7 +455,7 @@ function waitingResult(params: {
 }): CodeModeWorkerResult {
   const snapshotBytes = QuickJS.serializeSnapshot(params.vm.snapshot());
   if (snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
-    throw new Error("code mode snapshot limit exceeded");
+    throw new CodeModeWorkerFailure("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
   return {
     status: "waiting",
@@ -394,6 +472,7 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
     config: input.config,
     pendingRequests,
   });
+  let output: unknown[] = [];
   try {
     vm.evalCode(
       buildUserSource(input.source),
@@ -401,7 +480,7 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
       EvalFlags.ASYNC,
     ).dispose();
     drainPendingJobs(vm);
-    const output = takeOutput(vm);
+    output = takeOutput(vm);
     const resultHandle = getResultHandle(vm);
     try {
       if (pendingRequests.length > 0) {
@@ -419,10 +498,7 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
       resultHandle.dispose();
     }
   } catch (error) {
-    if (didTimeout() || isQuickJsInterruptedError(error)) {
-      throw new CodeModeWorkerFailure("timeout", "code mode timeout exceeded", { cause: error });
-    }
-    throw error;
+    return throwWorkerFailureWithOutput({ error, didTimeout, output, vm });
   } finally {
     vm.dispose();
   }
@@ -435,6 +511,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
     config: input.config,
     pendingRequests,
   });
+  let output: unknown[] = [];
   try {
     const settle = vm.global.getProp("__openclawSettleBridge");
     try {
@@ -458,7 +535,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
       settle.dispose();
     }
     drainPendingJobs(vm);
-    const output = takeOutput(vm);
+    output = takeOutput(vm);
     const resultHandle = getResultHandle(vm);
     try {
       if (pendingRequests.length > 0) {
@@ -476,10 +553,7 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
       resultHandle.dispose();
     }
   } catch (error) {
-    if (didTimeout() || isQuickJsInterruptedError(error)) {
-      throw new CodeModeWorkerFailure("timeout", "code mode timeout exceeded", { cause: error });
-    }
-    throw error;
+    return throwWorkerFailureWithOutput({ error, didTimeout, output, vm });
   } finally {
     vm.dispose();
   }
@@ -525,7 +599,7 @@ async function main(): Promise<CodeModeWorkerResult> {
       status: "failed",
       error: errorMessage(error),
       code: error instanceof CodeModeWorkerFailure ? error.code : "internal_error",
-      output: [],
+      output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
     };
   }
 }

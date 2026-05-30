@@ -13,7 +13,6 @@ const tempDirs: string[] = [];
 const previousEnv = {
   CODEX_HOME: process.env.CODEX_HOME,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
-  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
 };
 
 async function makeTempDir(): Promise<string> {
@@ -92,7 +91,6 @@ afterEach(async () => {
   vi.restoreAllMocks();
   restoreEnv("CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
-  restoreEnv("PI_CODING_AGENT_DIR");
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -114,7 +112,6 @@ describe("prepareAcpxCodexAuthConfig", () => {
       "codex-acp.js",
     );
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-    delete process.env.PI_CODING_AGENT_DIR;
 
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
@@ -177,7 +174,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@zed-industries/codex-acp@0.14.0"');
+    expect(wrapper).toContain('"@zed-industries/codex-acp@0.15.0"');
     expect(wrapper).toContain('"--", "codex-acp"');
     expect(wrapper).not.toContain("@zed-industries/codex-acp@^0.11.1");
   });
@@ -198,7 +195,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.36.1"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.37.0"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
@@ -391,7 +388,6 @@ describe("prepareAcpxCodexAuthConfig", () => {
     );
     process.env.CODEX_HOME = sourceCodexHome;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-    delete process.env.PI_CODING_AGENT_DIR;
 
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},

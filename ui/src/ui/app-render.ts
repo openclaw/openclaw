@@ -6,6 +6,7 @@ import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
+  scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
@@ -22,7 +23,7 @@ import {
   dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
-import { warnQueryToken } from "./app-settings.ts";
+import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
@@ -61,6 +62,7 @@ import {
   saveConfig,
   stageDefaultAgentConfigEntry,
   stageConfigPreset,
+  updateConfigRawValue,
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
@@ -117,6 +119,7 @@ import {
   branchSessionFromCheckpoint,
   deleteSessionsAndRefresh,
   loadSessions,
+  parseSessionsFilterInteger,
   patchSession,
   restoreSessionFromCheckpoint,
   toggleSessionCompactionCheckpoints,
@@ -124,6 +127,7 @@ import {
 import {
   closeClawHubDetail,
   installFromClawHub,
+  loadSkillCard,
   installSkill,
   loadClawHubDetail,
   loadSkills,
@@ -133,6 +137,7 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import { captureSessionToWorkboard, getWorkboardState } from "./controllers/workboard.ts";
 import { getCronJobPayload } from "./cron-payload.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { formatRelativeTimestamp } from "./format.ts";
@@ -149,9 +154,9 @@ import {
   titleForTab,
   type Tab,
 } from "./navigation.ts";
-import "./components/dashboard-header.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
+import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
   isSubagentSessionKey,
@@ -159,6 +164,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
 import { loadLocalAssistantIdentity } from "./storage.ts";
+import { normalizeStringEntries } from "./string-coerce.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { GatewaySessionRow } from "./types.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
@@ -361,6 +367,7 @@ function renderSidebarRecentSession(state: AppViewState, row: GatewaySessionRow)
 // Lazy-loaded view modules are deferred so the initial bundle stays small.
 // The shared loader renders visible fallback states instead of leaving a tab blank.
 const lazyAgents = createLazyView(() => import("./views/agents.ts"), notifyLazyViewChanged);
+const lazyActivity = createLazyView(() => import("./views/activity.ts"), notifyLazyViewChanged);
 const lazyChannels = createLazyView(() => import("./views/channels.ts"), notifyLazyViewChanged);
 const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewChanged);
 const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
@@ -369,6 +376,7 @@ const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewC
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
+const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
 function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
@@ -1172,7 +1180,7 @@ export function renderApp(state: AppViewState) {
     formValue: state.configForm,
     originalValue: state.configFormOriginal,
     onRawChange: (next: string) => {
-      state.configRaw = next;
+      updateConfigRawValue(state, next);
     },
     onRequestUpdate: requestHostUpdate,
     onFormPatch: (path: Array<string | number>, value: unknown) =>
@@ -1207,7 +1215,10 @@ export function renderApp(state: AppViewState) {
     gatewayUrl: state.settings.gatewayUrl,
     assistantName: state.assistantName,
     configPath: state.configSnapshot?.path ?? null,
-    rawAvailable: typeof state.configSnapshot?.raw === "string",
+    rawAvailable:
+      typeof state.configSnapshot?.raw === "string" ||
+      !!state.configSnapshot?.config ||
+      !!state.configForm,
   } satisfies Omit<
     ConfigProps,
     | "formMode"
@@ -1847,7 +1858,11 @@ export function renderApp(state: AppViewState) {
           </div>
         </aside>
       </div>
-      <main class="content ${isChat ? "content--chat" : ""}">
+      <main
+        class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
+          ? "content--logs"
+          : ""} ${state.tab === "workboard" ? "content--workboard" : ""}"
+      >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
               ${state.updateStatusBanner.text}
@@ -1971,6 +1986,55 @@ export function renderApp(state: AppViewState) {
               onRefreshLogs: () => state.loadOverview({ refresh: true }),
             })
           : nothing}
+        ${state.tab === "activity"
+          ? renderLazyView(lazyActivity, (m) =>
+              m.renderActivity({
+                entries: state.activityEntries,
+                filterText: state.activityFilterText,
+                statusFilters: state.activityStatusFilters,
+                toolFilter: state.activityToolFilter,
+                expandedIds: state.activityExpandedIds,
+                autoFollow: state.activityAutoFollow,
+                onFilterTextChange: (next) => (state.activityFilterText = next),
+                onToolFilterChange: (next) => (state.activityToolFilter = next),
+                onStatusToggle: (status, enabled) => {
+                  state.activityStatusFilters = {
+                    ...state.activityStatusFilters,
+                    [status]: enabled,
+                  };
+                },
+                onToggleAutoFollow: (next) => {
+                  state.activityAutoFollow = next;
+                  if (next) {
+                    state.scheduleActivityScroll(true);
+                  }
+                },
+                onClear: () => {
+                  state.activityEntries = [];
+                  state.activityExpandedIds = new Set();
+                  state.activityAtBottom = true;
+                },
+                onExpandAll: () => {
+                  state.activityExpandedIds = new Set(
+                    state.activityEntries.map((entry) => entry.id),
+                  );
+                },
+                onCollapseAll: () => {
+                  state.activityExpandedIds = new Set();
+                },
+                onEntryToggle: (id, open) => {
+                  const next = new Set(state.activityExpandedIds);
+                  if (open) {
+                    next.add(id);
+                  } else {
+                    next.delete(id);
+                  }
+                  state.activityExpandedIds = next;
+                },
+                onScroll: (event) => state.handleActivityScroll(event),
+              }),
+            )
+          : nothing}
         ${state.tab === "instances"
           ? renderLazyView(lazyInstances, (m) =>
               m.renderInstances({
@@ -1983,8 +2047,20 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "sessions"
-          ? renderLazyView(lazySessions, (m) =>
-              m.renderSessions({
+          ? renderLazyView(lazySessions, (m) => {
+              const workboardState = getWorkboardState(state);
+              const workboardEnabled = isPluginEnabledInConfigSnapshot(
+                state.configSnapshot,
+                "workboard",
+                {
+                  enabledByDefault: false,
+                },
+              );
+              const operatorCanWrite = hasOperatorWriteAccess(
+                (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                  null,
+              );
+              return m.renderSessions({
                 loading: state.sessionsLoading,
                 result: state.sessionsResult,
                 error: state.sessionsError,
@@ -2002,6 +2078,12 @@ export function renderApp(state: AppViewState) {
                 page: state.sessionsPage,
                 pageSize: state.sessionsPageSize,
                 selectedKeys: state.sessionsSelectedKeys,
+                workboardSessionKeys: new Set(
+                  workboardState.cards
+                    .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
+                    .filter((key): key is string => typeof key === "string" && key.length > 0),
+                ),
+                workboardBusySessionKey: [...workboardState.capturingSessionKeys][0] ?? null,
                 expandedCheckpointKey: state.sessionsExpandedCheckpointKey,
                 checkpointItemsByKey: state.sessionsCheckpointItemsByKey,
                 checkpointLoadingKey: state.sessionsCheckpointLoadingKey,
@@ -2016,8 +2098,8 @@ export function renderApp(state: AppViewState) {
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
                   void loadSessions(state, {
-                    activeMinutes: Number(next.activeMinutes) || 0,
-                    limit: Number(next.limit) || 0,
+                    activeMinutes: parseSessionsFilterInteger(next.activeMinutes),
+                    limit: parseSessionsFilterInteger(next.limit),
                     includeGlobal: next.includeGlobal,
                     includeUnknown: next.includeUnknown,
                     showArchived: next.showArchived,
@@ -2102,6 +2184,18 @@ export function renderApp(state: AppViewState) {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
+                onAddToWorkboard:
+                  workboardEnabled && operatorCanWrite
+                    ? async (session) => {
+                        await captureSessionToWorkboard({
+                          host: state,
+                          client: state.client,
+                          session,
+                          requestUpdate: requestHostUpdate,
+                        });
+                        state.setTab("workboard" as import("./navigation.ts").Tab);
+                      }
+                    : undefined,
                 onToggleCheckpointDetails: (sessionKey) =>
                   toggleSessionCompactionCheckpoints(state, sessionKey),
                 onBranchFromCheckpoint: async (sessionKey, checkpointId) => {
@@ -2117,6 +2211,29 @@ export function renderApp(state: AppViewState) {
                 },
                 onRestoreCheckpoint: (sessionKey, checkpointId) =>
                   restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
+              });
+            })
+          : nothing}
+        ${state.tab === "workboard"
+          ? renderLazyView(lazyWorkboard, (m) =>
+              m.renderWorkboard({
+                host: state,
+                client: state.client,
+                connected: state.connected,
+                canWrite: hasOperatorWriteAccess(
+                  (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                    null,
+                ),
+                pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
+                  enabledByDefault: false,
+                }),
+                agentsList: state.agentsList,
+                sessions: state.sessionsResult?.sessions ?? [],
+                onOpenSession: (sessionKey) => {
+                  switchChatSession(state, sessionKey);
+                  state.setTab("chat" as import("./navigation.ts").Tab);
+                },
+                onRequestUpdate: requestHostUpdate,
               }),
             )
           : nothing}
@@ -2211,16 +2328,18 @@ export function renderApp(state: AppViewState) {
                   updateCronRunsFilter(state, { cronRunsScope: "job" });
                   await loadCronRuns(state, jobId);
                 },
-                onLoadMoreJobs: () => loadCronJobsPage(state, { append: true }),
+                onLoadMoreJobs: () => loadCronJobsPage(state, { append: true, tableFilters: true }),
                 onJobsFiltersChange: async (patch) => {
                   updateCronJobsFilter(state, patch);
                   const shouldReload =
                     typeof patch.cronJobsQuery === "string" ||
                     Boolean(patch.cronJobsEnabledFilter) ||
+                    Boolean(patch.cronJobsScheduleKindFilter) ||
+                    Boolean(patch.cronJobsLastStatusFilter) ||
                     Boolean(patch.cronJobsSortBy) ||
                     Boolean(patch.cronJobsSortDir);
                   if (shouldReload) {
-                    await loadCronJobsPage(state, { append: false });
+                    await loadCronJobsPage(state, { append: false, tableFilters: true });
                   }
                 },
                 onJobsFiltersReset: async () => {
@@ -2232,7 +2351,7 @@ export function renderApp(state: AppViewState) {
                     cronJobsSortBy: "nextRunAtMs",
                     cronJobsSortDir: "asc",
                   });
-                  await loadCronJobsPage(state, { append: false });
+                  await loadCronJobsPage(state, { append: false, tableFilters: true });
                 },
                 onLoadMoreRuns: () => loadMoreCronRuns(state),
                 onRunsFiltersChange: async (patch) => {
@@ -2458,7 +2577,7 @@ export function renderApp(state: AppViewState) {
                     state.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
                     [];
                   const existing = Array.isArray(entry?.skills)
-                    ? entry.skills.map((name) => String(name).trim()).filter(Boolean)
+                    ? normalizeStringEntries(entry.skills)
                     : undefined;
                   const base = existing ?? allSkills;
                   const next = new Set(base);
@@ -2507,7 +2626,7 @@ export function renderApp(state: AppViewState) {
                   void refreshVisibleToolsEffectiveForCurrentSession(state);
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
-                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
+                  const normalized = normalizeStringEntries(fallbacks);
                   const currentConfig = getCurrentConfigValue();
                   const resolvedConfig = resolveAgentConfig(currentConfig, agentId);
                   const effectivePrimary =
@@ -2575,6 +2694,13 @@ export function renderApp(state: AppViewState) {
                 messages: state.skillMessages,
                 busyKey: state.skillsBusyKey,
                 detailKey: state.skillsDetailKey,
+                detailTab: state.skillsDetailTab,
+                clawhubVerdicts: state.clawhubVerdicts,
+                clawhubVerdictsLoading: state.clawhubVerdictsLoading,
+                clawhubVerdictsError: state.clawhubVerdictsError,
+                skillCardContents: state.skillCardContents,
+                skillCardLoadingKey: state.skillCardLoadingKey,
+                skillCardErrors: state.skillCardErrors,
                 clawhubQuery: state.clawhubSearchQuery,
                 clawhubResults: state.clawhubSearchResults,
                 clawhubSearchLoading: state.clawhubSearchLoading,
@@ -2593,8 +2719,17 @@ export function renderApp(state: AppViewState) {
                 onSaveKey: (key) => saveSkillApiKey(state, key),
                 onInstall: (skillKey, name, installId) =>
                   installSkill(state, skillKey, name, installId),
-                onDetailOpen: (key) => (state.skillsDetailKey = key),
+                onDetailOpen: (key) => {
+                  state.skillsDetailKey = key;
+                  state.skillsDetailTab = "overview";
+                },
                 onDetailClose: () => (state.skillsDetailKey = null),
+                onDetailTabChange: (tab) => {
+                  state.skillsDetailTab = tab;
+                  if (tab === "card" && state.skillsDetailKey) {
+                    void loadSkillCard(state, state.skillsDetailKey);
+                  }
+                },
                 onClawHubQueryChange: (query) => {
                   setClawHubSearchQuery(state, query);
                   if (clawhubSearchTimer) {
@@ -2772,6 +2907,7 @@ export function renderApp(state: AppViewState) {
                   canAbort: hasAbortableSessionRun(state),
                   onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
                   onQueueRemove: (id) => state.removeQueuedMessage(id),
+                  onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
                   onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
@@ -2783,7 +2919,10 @@ export function renderApp(state: AppViewState) {
                     }
                     const hadActiveRun = hasAbortableSessionRun(state);
                     try {
-                      await state.client.request("sessions.reset", { key: state.sessionKey });
+                      await state.client.request("sessions.reset", {
+                        key: state.sessionKey,
+                        ...scopedAgentParamsForSession(state, state.sessionKey),
+                      });
                       state.chatMessages = [];
                       state.chatSideResult = null;
                       reconcileChatRunLifecycle(

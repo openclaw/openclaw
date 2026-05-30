@@ -30,6 +30,9 @@ vi.mock("./session-binding.js", () => ({
 
 vi.mock("./shared-client.js", () => ({
   getSharedCodexAppServerClient: (...args: unknown[]) => getSharedCodexAppServerClientMock(...args),
+  getLeasedSharedCodexAppServerClient: (...args: unknown[]) =>
+    getSharedCodexAppServerClientMock(...args),
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
 }));
 
 vi.mock("./auth-bridge.js", () => ({
@@ -385,12 +388,14 @@ describe("runCodexAppServerSideQuestion", () => {
       "developerInstructions",
       "ephemeral",
       "model",
+      "personality",
       "sandbox",
       "threadId",
       "threadSource",
     ]);
     expect(forkParams?.threadId).toBe("parent-thread");
     expect(forkParams?.model).toBe("gpt-5.5");
+    expect(forkParams?.personality).toBe("none");
     expect(forkParams?.approvalPolicy).toBe("on-request");
     expect(forkParams?.sandbox).toBe("workspace-write");
     expect(forkParams?.ephemeral).toBe(true);
@@ -435,6 +440,7 @@ describe("runCodexAppServerSideQuestion", () => {
         input: [{ type: "text", text: "What changed?", text_elements: [] }],
         cwd: "/tmp/workspace",
         model: "gpt-5.5",
+        personality: "none",
         effort: null,
         collaborationMode: {
           mode: "default",
@@ -676,6 +682,7 @@ describe("runCodexAppServerSideQuestion", () => {
       },
       threadId: "side-thread",
       turnId: "turn-1",
+      autoApprove: false,
       paramsForRun: {
         messageChannel: "discord",
         messageProvider: "discord-voice",
@@ -708,7 +715,13 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     await expect(
-      runCodexAppServerSideQuestion(sideParams(), { nativeHookRelay: { enabled: true } }),
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { loopDetection: { enabled: true } } } as never,
+          sessionKey: "agent:main:session-1",
+        }),
+        { nativeHookRelay: { enabled: true } },
+      ),
     ).rejects.toThrow("fork failed");
 
     expect(relayIdDuringFork).toBeDefined();
@@ -734,7 +747,13 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     await expect(
-      runCodexAppServerSideQuestion(sideParams(), { nativeHookRelay: { enabled: true } }),
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { loopDetection: { enabled: true } } } as never,
+          sessionKey: "agent:main:session-1",
+        }),
+        { nativeHookRelay: { enabled: true } },
+      ),
     ).resolves.toEqual({ text: "Side answer." });
 
     const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
@@ -851,15 +870,21 @@ describe("runCodexAppServerSideQuestion", () => {
 
     startedAtMs = Date.now();
     await expect(
-      runCodexAppServerSideQuestion(sideParams(), {
-        pluginConfig: {
-          appServer: {
-            requestTimeoutMs,
-            turnCompletionIdleTimeoutMs: completionTimeoutMs,
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { loopDetection: { enabled: true } } } as never,
+          sessionKey: "agent:main:session-1",
+        }),
+        {
+          pluginConfig: {
+            appServer: {
+              requestTimeoutMs,
+              turnCompletionIdleTimeoutMs: completionTimeoutMs,
+            },
           },
+          nativeHookRelay: { enabled: true },
         },
-        nativeHookRelay: { enabled: true },
-      }),
+      ),
     ).resolves.toEqual({ text: "Side answer." });
 
     expect(relayIdDuringFork).toBeDefined();
@@ -1151,6 +1176,21 @@ describe("runCodexAppServerSideQuestion", () => {
     });
 
     expect(timeoutMs).toBe(120_000);
+  });
+
+  it("uses a 90 second default for generic side-thread dynamic tool calls", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-1",
+        tool: "session_status",
+        arguments: { sessionKey: "current" },
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(90_000);
   });
 
   it("cleans up notification handlers when side tool setup fails", async () => {

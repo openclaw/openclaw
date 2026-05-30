@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { externalCliDiscoveryForProviderAuth } from "../agents/auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
@@ -19,6 +20,7 @@ import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveProviderEndpoint } from "./provider-model-shared.js";
 
@@ -95,6 +97,14 @@ export {
 } from "../secrets/provider-env-vars.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
+  buildOpenAICodexCredentialExtra,
+  decodeOpenAICodexJwtPayload,
+  resolveOpenAICodexAccessTokenExpiry,
+  resolveOpenAICodexAuthIdentity,
+  resolveOpenAICodexImportProfileName,
+  type OpenAICodexAuthIdentity,
+} from "./provider-openai-codex-auth.js";
+export {
   generateHexPkceVerifierChallenge,
   generatePkceVerifierChallenge,
   toFormUrlEncoded,
@@ -151,8 +161,8 @@ function parseCopilotTokenResponse(value: unknown): {
   if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
     expiresAtMs = expiresAt < 100_000_000_000 ? expiresAt * 1000 : expiresAt;
   } else if (typeof expiresAt === "string" && expiresAt.trim().length > 0) {
-    const parsed = Number.parseInt(expiresAt, 10);
-    if (!Number.isFinite(parsed)) {
+    const parsed = parseStrictNonNegativeInteger(expiresAt);
+    if (parsed === undefined) {
       throw new Error("Copilot token response has invalid expires_at");
     }
     expiresAtMs = parsed < 100_000_000_000 ? parsed * 1000 : parsed;
@@ -288,6 +298,7 @@ export function listUsableProviderAuthProfileIds(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): { agentDir: string; profileIds: string[] } {
   try {
     const { agentDir, profileIds } = resolveUsableProviderAuthProfiles(params);
@@ -302,6 +313,7 @@ export function isProviderAuthProfileConfigured(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): boolean {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
@@ -311,6 +323,7 @@ export async function resolveProviderAuthProfileApiKey(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): Promise<string | undefined> {
   const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
@@ -335,9 +348,19 @@ function resolveUsableProviderAuthProfiles(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   allowKeychainPrompt?: boolean;
+  includeExternalCliAuth?: boolean;
 }): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
-  const store = loadAuthProfileStoreForSecretsRuntime(agentDir);
+  const externalCli = params.includeExternalCliAuth
+    ? externalCliDiscoveryForProviderAuth({
+        cfg: params.cfg,
+        provider: params.provider,
+        allowKeychainPrompt: params.allowKeychainPrompt,
+      })
+    : undefined;
+  const store = externalCli
+    ? loadAuthProfileStoreForSecretsRuntime(agentDir, { externalCli })
+    : loadAuthProfileStoreForSecretsRuntime(agentDir);
   const profileIds = resolveAuthProfileOrder({
     cfg: params.cfg,
     store,

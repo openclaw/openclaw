@@ -3,6 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   installVitestNoOutputWatchdog,
   resolveDirectNodeVitestArgs,
+  resolveExplicitTestFileNoPassArgs,
+  resolveImplicitVitestArgs,
+  resolveMissingVitestDependencyMessage,
+  resolveMissingExplicitTestFiles,
+  resolveRunVitestSpawnEnv,
+  resolveTestProjectsDelegationArgs,
+  resolveTestProjectsRunnerEnv,
+  resolveVitestCliEntry,
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
@@ -26,6 +34,251 @@ describe("scripts/run-vitest", () => {
     expect(resolveDirectNodeVitestArgs(["exec", "vitest", "run"])).toBeNull();
   });
 
+  it("reports an actionable error when Vitest cannot be resolved", () => {
+    const error = new Error("Cannot find module 'vitest/package.json'");
+    (error as NodeJS.ErrnoException).code = "MODULE_NOT_FOUND";
+
+    expect(() =>
+      resolveVitestCliEntry({
+        baseDir: "/repo",
+        fsImpl: { existsSync: () => false },
+        requireResolve: () => {
+          throw error;
+        },
+      }),
+    ).toThrow(
+      [
+        "[vitest] node_modules is missing; Vitest cannot be resolved.",
+        "Install dependencies before running scripts/run-vitest.mjs:",
+        "  pnpm install --frozen-lockfile",
+        "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
+      ].join("\n"),
+    );
+  });
+
+  it("distinguishes missing Vitest from a completely missing dependency install", () => {
+    expect(
+      resolveMissingVitestDependencyMessage("/repo", {
+        existsSync: (filePath: string) => filePath.replaceAll("\\", "/").endsWith("node_modules"),
+      }),
+    ).toContain("[vitest] Vitest is not installed in node_modules.");
+  });
+
+  it("routes explicit unit ui tests through the narrow unit ui config", () => {
+    expect(
+      resolveImplicitVitestArgs([
+        "ui/src/ui/controllers/chat.test.ts",
+        "-t",
+        "keeps optimistic user attachment previews",
+      ]),
+    ).toEqual([
+      "--config",
+      "test/vitest/vitest.unit-ui.config.ts",
+      "ui/src/ui/controllers/chat.test.ts",
+      "-t",
+      "keeps optimistic user attachment previews",
+    ]);
+  });
+
+  it("does not override explicit vitest configs", () => {
+    const argv = [
+      "--config",
+      "test/vitest/vitest.ui.config.ts",
+      "ui/src/ui/controllers/chat.test.ts",
+    ];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("routes explicit tooling tests through the tooling config", () => {
+    expect(resolveImplicitVitestArgs(["run", "test/scripts/run-vitest.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/scripts/run-vitest.test.ts",
+    ]);
+  });
+
+  it("keeps tooling-excluded explicit tests on existing routing", () => {
+    const argv = ["run", "test/scripts/openclaw-e2e-instance.test.ts"];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("keeps boundary tests on existing routing", () => {
+    const argv = ["run", "test/web-provider-boundary.test.ts"];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("fails explicit test-file runs when scoped configs would otherwise pass with no tests", () => {
+    expect(
+      resolveExplicitTestFileNoPassArgs([
+        "run",
+        "--config",
+        "test/vitest/vitest.tooling.config.ts",
+        "test/scripts/run-vitest.test.ts",
+      ]),
+    ).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/scripts/run-vitest.test.ts",
+      "--passWithNoTests=false",
+    ]);
+  });
+
+  it("inserts explicit no-test failure before Vitest passthrough args", () => {
+    expect(
+      resolveExplicitTestFileNoPassArgs(["run", "test/scripts/run-vitest.test.ts", "--", "-x"]),
+    ).toEqual(["run", "test/scripts/run-vitest.test.ts", "--passWithNoTests=false", "--", "-x"]);
+  });
+
+  it("does not force no-test failure for globs or basename filters", () => {
+    const argv = ["run", "run-vitest.test.ts", "test/**/*.test.ts"];
+    expect(resolveExplicitTestFileNoPassArgs(argv)).toBe(argv);
+  });
+
+  it("delegates bare explicit test files to the project router", () => {
+    const file = "test/scripts/run-vitest.test.ts";
+    for (const [argv, expected] of [
+      [[file], [file]],
+      [["run", file], [file]],
+      [
+        ["run", file, "--reporter=verbose"],
+        [file, "--reporter=verbose"],
+      ],
+      [
+        ["--reporter=verbose", "run", file],
+        ["--reporter=verbose", file],
+      ],
+      [
+        ["run", file, "--", "--watch"],
+        [file, "--", "--watch"],
+      ],
+      [
+        ["run", file, "--", "--reporter=verbose"],
+        [file, "--", "--reporter=verbose"],
+      ],
+    ] as const) {
+      expect(resolveTestProjectsDelegationArgs([...argv])).toEqual(expected);
+    }
+  });
+
+  it("keeps direct Vitest runs when project routing could change option semantics", () => {
+    const directArgvCases = [
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.tooling.config.ts",
+        "test/scripts/run-vitest.test.ts",
+      ],
+      ["--root", "packages/example", "src/example.test.ts"],
+      ["--project", "tooling", "test/scripts/run-vitest.test.ts"],
+      ["watch", "test/scripts/run-vitest.test.ts"],
+      ["dev", "test/scripts/run-vitest.test.ts"],
+      ["--watch", "test/scripts/run-vitest.test.ts"],
+      ["--run=false", "test/scripts/run-vitest.test.ts"],
+      ["--no-run", "test/scripts/run-vitest.test.ts"],
+      ["--run", "false", "test/scripts/run-vitest.test.ts"],
+      ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
+      ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
+    ];
+    for (const argv of directArgvCases) {
+      expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
+    }
+  });
+
+  it("reports missing explicit test files before Vitest can silently ignore them", () => {
+    const fsImpl = {
+      existsSync: (filePath: string) =>
+        filePath.replaceAll("\\", "/").endsWith("src/agents/bash-tools.test.ts"),
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["src/agents/bash-tools.test.ts", "test/agents/bash-tools.exec.background-abort.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual(["test/agents/bash-tools.exec.background-abort.test.ts"]);
+  });
+
+  it("does not treat option values or glob patterns as explicit missing files", () => {
+    const fsImpl = {
+      existsSync: () => false,
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        [
+          "-t",
+          "missing.test.ts",
+          "basename-filter.test.ts",
+          "src/**/*.test.ts",
+          "--config",
+          "missing.config.ts",
+          "--exclude",
+          "ignored.test.ts",
+          "--bail",
+          "1",
+          "--mode",
+          "test",
+          "--mergeReports",
+          "reports.test.ts",
+          "--coverage.exclude",
+          "coverage.test.ts",
+        ],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+  });
+
+  it("skips missing-file preflight when Vitest controls path resolution", () => {
+    const fsImpl = {
+      existsSync: () => false,
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["--config", "test/vitest/vitest.gateway.config.ts", "server/health-state.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["--root", "packages/example", "src/example.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+    expect(
+      resolveMissingExplicitTestFiles(["--dir=src", "example.test.ts"], "/repo", fsImpl),
+    ).toEqual([]);
+  });
+
+  it("keeps the run subcommand first when routing unit ui tests", () => {
+    expect(resolveImplicitVitestArgs(["run", "ui/src/ui/controllers/chat.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.unit-ui.config.ts",
+      "ui/src/ui/controllers/chat.test.ts",
+    ]);
+  });
+
+  it("routes explicit non-e2e ui tests through the ui config", () => {
+    expect(resolveImplicitVitestArgs(["run", "ui/src/ui/app-gateway.node.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.ui.config.ts",
+      "ui/src/ui/app-gateway.node.test.ts",
+    ]);
+  });
+
+  it("keeps mixed unit ui and broader ui targets on existing routing", () => {
+    const argv = ["ui/src/ui/controllers/chat.test.ts", "ui/src/ui/app-gateway.node.test.ts"];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
   it("allows opting back into Maglev explicitly", () => {
     expect(
       resolveVitestNodeArgs({
@@ -43,6 +296,99 @@ describe("scripts/run-vitest", () => {
     expect(
       resolveVitestNoOutputTimeoutMs({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" }),
     ).toBeNull();
+  });
+
+  it("defaults direct non-watch runs to the stall watchdog", () => {
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", "-t", "watch"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch=false"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch", "false"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--no-watch"])).toEqual({
+      PATH: "/usr/bin",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+    });
+    expect(resolveRunVitestSpawnEnv({ CI: "true", PATH: "/usr/bin" }, ["src/foo.test.ts"])).toEqual(
+      {
+        CI: "true",
+        PATH: "/usr/bin",
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+      },
+    );
+    expect(
+      resolveRunVitestSpawnEnv({ OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0", PATH: "/usr/bin" }, [
+        "run",
+      ]),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("does not default implicit interactive runs to the stall watchdog", () => {
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["src/foo.test.ts"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
+        "--config",
+        "test/vitest/vitest.unit.config.ts",
+        "-t",
+        "watch",
+      ]),
+    ).toEqual({
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("does not default explicit watch runs to the stall watchdog", () => {
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", "--watch"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["-w"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--watch=0"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["--run=false"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["watch"])).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["dev"])).toEqual({
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("does not force the stall watchdog into delegated runner environments", () => {
+    expect(resolveTestProjectsRunnerEnv({ PATH: "/usr/bin" })).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveTestProjectsRunnerEnv({
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
+        PATH: "/usr/bin",
+      }),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
+      PATH: "/usr/bin",
+    });
   });
 
   it("spawns vitest in a detached process group on Unix hosts", () => {

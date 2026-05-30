@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { normalizeStringEntries, sortUniqueStrings } from "../shared/string-normalization.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
@@ -60,6 +65,7 @@ export const SERVICE_AUDIT_CODES = {
   systemdAfterNetworkOnline: "systemd-after-network-online",
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
+  systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
 } as const;
 
 export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean {
@@ -78,10 +84,12 @@ function parseSystemdUnit(content: string): {
   after: Set<string>;
   wants: Set<string>;
   restartSec?: string;
+  killMode?: string;
 } {
   const after = new Set<string>();
   const wants = new Set<string>();
   let restartSec: string | undefined;
+  let killMode: string | undefined;
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -117,21 +125,34 @@ function parseSystemdUnit(content: string): {
       }
     } else if (key === "RestartSec") {
       restartSec = value;
+    } else if (key === "KillMode") {
+      killMode = value;
     }
   }
 
-  return { after, wants, restartSec };
+  return { after, wants, restartSec, killMode };
 }
 
 function isRestartSecPreferred(value: string | undefined): boolean {
   if (!value) {
     return false;
   }
-  const parsed = Number.parseFloat(value);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseSystemdRestartSecSeconds(value);
+  if (parsed === undefined) {
     return false;
   }
   return Math.abs(parsed - 5) < 0.01;
+}
+
+function parseSystemdRestartSecSeconds(value: string): number | undefined {
+  const match = value
+    .trim()
+    .match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))(?:\s*(?:s|sec|secs|second|seconds))?$/iu);
+  if (!match) {
+    return undefined;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 async function auditSystemdUnit(
@@ -168,6 +189,16 @@ async function auditSystemdUnit(
       code: SERVICE_AUDIT_CODES.systemdRestartSec,
       message: "RestartSec does not match the recommended 5s",
       detail: unitPath,
+      level: "recommended",
+    });
+  }
+  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode);
+  if (killMode === "process" || killMode === "none") {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+      message:
+        "KillMode is process/none; service child processes can survive gateway stops and restarts.",
+      detail: `${unitPath}: ${killMode}`,
       level: "recommended",
     });
   }
@@ -218,14 +249,25 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   }
 }
 
-function parseGatewayPortArg(value: string | undefined): number | undefined {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 65535 ? parsed : undefined;
+type GatewayServiceCommandPort =
+  | { kind: "missing" }
+  | { kind: "valid"; port: number }
+  | { kind: "invalid"; raw: string };
+
+function parseGatewayPortArg(value: string | undefined): GatewayServiceCommandPort {
+  const raw = value?.trim() ?? "";
+  const port = parseTcpPort(raw);
+  if (port !== null) {
+    return { kind: "valid", port };
+  }
+  return raw ? { kind: "invalid", raw } : { kind: "missing" };
 }
 
-export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+function readGatewayServiceCommandPortState(
+  programArguments?: string[],
+): GatewayServiceCommandPort {
   if (!programArguments || programArguments.length === 0) {
-    return undefined;
+    return { kind: "missing" };
   }
   for (let index = 0; index < programArguments.length; index += 1) {
     const arg = programArguments[index];
@@ -236,7 +278,12 @@ export function readGatewayServiceCommandPort(programArguments?: string[]): numb
       return parseGatewayPortArg(arg.slice("--port=".length));
     }
   }
-  return undefined;
+  return { kind: "missing" };
+}
+
+export function readGatewayServiceCommandPort(programArguments?: string[]): number | undefined {
+  const servicePort = readGatewayServiceCommandPortState(programArguments);
+  return servicePort.kind === "valid" ? servicePort.port : undefined;
 }
 
 function auditGatewayServicePort(params: {
@@ -252,14 +299,21 @@ function auditGatewayServicePort(params: {
   ) {
     return;
   }
-  const servicePort = readGatewayServiceCommandPort(params.programArguments);
-  if (servicePort === undefined || servicePort === params.expectedPort) {
+  const servicePort = readGatewayServiceCommandPortState(params.programArguments);
+  if (servicePort.kind === "missing") {
     return;
   }
+  if (servicePort.kind === "valid" && servicePort.port === params.expectedPort) {
+    return;
+  }
+  const detail =
+    servicePort.kind === "valid"
+      ? `${servicePort.port} -> ${params.expectedPort}`
+      : `${servicePort.raw} -> ${params.expectedPort}`;
   params.issues.push({
     code: SERVICE_AUDIT_CODES.gatewayPortMismatch,
     message: "Gateway service port does not match current gateway config.",
-    detail: `${servicePort} -> ${params.expectedPort}`,
+    detail,
     level: "recommended",
   });
 }
@@ -350,7 +404,7 @@ function collectInlineProxyEnvKeys(command: GatewayServiceCommand): string[] {
     }
     inlineKeys.push(normalized);
   }
-  return [...new Set(inlineKeys)].toSorted();
+  return sortUniqueStrings(inlineKeys);
 }
 
 function auditProxyServiceEnvironment(
@@ -424,19 +478,13 @@ function auditGatewayServicePath(
   }
 
   const expected = expectedServicePath?.trim()
-    ? expectedServicePath
-        .split(getPathModule(platform).delimiter)
-        .map((entry) => entry.trim())
-        .filter(Boolean)
+    ? normalizeStringEntries(expectedServicePath.split(getPathModule(platform).delimiter))
     : getMinimalServicePathPartsFromEnv({
         platform,
         env,
         includeMissingUserBinDefaults: false,
       });
-  const parts = servicePath
-    .split(getPathModule(platform).delimiter)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const parts = normalizeStringEntries(servicePath.split(getPathModule(platform).delimiter));
   const normalizedParts = new Set(parts.map((entry) => normalizeServicePathEntry(entry, platform)));
   const normalizedExpected = new Set(
     expected.map((entry) => normalizeServicePathEntry(entry, platform)),

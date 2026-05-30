@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { formatChannelProgressDraftLine } from "../plugin-sdk/channel-streaming.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 
@@ -42,7 +42,9 @@ import {
   createAgentEventHandler,
   createChatRunState,
   createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
+  type AgentEventHandlerOptions,
 } from "./server-chat.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -78,6 +80,7 @@ describe("agent event handler", () => {
     resolveSessionKeyForRun?: (runId: string) => string | undefined;
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
+    clearTrackedActiveRun?: AgentEventHandlerOptions["clearTrackedActiveRun"];
   }) {
     const nowSpy =
       params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -85,10 +88,13 @@ describe("agent event handler", () => {
     const broadcastToConnIds = vi.fn();
     const nodeSendToSession = vi.fn();
     const clearAgentRunContext = vi.fn();
+    const clearTrackedActiveRun =
+      vi.fn<NonNullable<AgentEventHandlerOptions["clearTrackedActiveRun"]>>();
     const agentRunSeq = new Map<string, number>();
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -100,9 +106,11 @@ describe("agent event handler", () => {
       clearAgentRunContext,
       toolEventRecipients,
       sessionEventSubscribers,
+      sessionMessageSubscribers,
       loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
+      clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
     });
 
     return {
@@ -111,10 +119,12 @@ describe("agent event handler", () => {
       broadcastToConnIds,
       nodeSendToSession,
       clearAgentRunContext,
+      clearTrackedActiveRun,
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
       sessionEventSubscribers,
+      sessionMessageSubscribers,
       handler,
     };
   }
@@ -1519,6 +1529,96 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("loads selected-agent global session snapshots for tool events", () => {
+    const { broadcastToConnIds, chatRunState, sessionEventSubscribers, handler } = createHarness();
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "global",
+      kind: "global",
+      model: "work-model",
+      goal: {
+        schemaVersion: 1,
+        id: "goal-work",
+        objective: "ship scoped goals",
+        status: "active",
+        createdAt: 1_000,
+        updatedAt: 1_100,
+        tokenStart: 0,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      },
+      status: "running",
+      updatedAt: 1_200,
+    });
+    chatRunState.registry.add("run-global-tool", {
+      sessionKey: "global",
+      agentId: "work",
+      clientRunId: "client-global-tool",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "run-global-tool",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: { phase: "start", name: "exec", toolCallId: "tool-global-1" },
+    });
+
+    expect(loadGatewaySessionRow).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockPayload(broadcastToConnIds, 0, 1, "session tool payload")).toEqual(
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+        model: "work-model",
+        goal: expect.objectContaining({
+          objective: "ship scoped goals",
+          status: "active",
+        }),
+        status: "running",
+      }),
+    );
+  });
+
+  it("does not duplicate tool events to clients subscribed by run and session", () => {
+    const { broadcastToConnIds, sessionEventSubscribers, toolEventRecipients, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-dedupe",
+      });
+
+    registerAgentRunContext("run-session-dedupe-tool", {
+      sessionKey: "session-dedupe",
+      verboseLevel: "off",
+    });
+    toolEventRecipients.add("run-session-dedupe-tool", "conn-overlap");
+    toolEventRecipients.add("run-session-dedupe-tool", "conn-run-only");
+    sessionEventSubscribers.subscribe("conn-overlap");
+    sessionEventSubscribers.subscribe("conn-session-only");
+
+    handler({
+      runId: "run-session-dedupe-tool",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-session-dedupe-1",
+        args: { command: "echo hi" },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "run tool event")).toBe("agent");
+    expect(requireMockArg(broadcastToConnIds, 0, 2, "run tool recipients")).toEqual(
+      new Set(["conn-overlap", "conn-run-only"]),
+    );
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockArg(broadcastToConnIds, 1, 2, "session tool recipients")).toEqual(
+      new Set(["conn-session-only"]),
+    );
+  });
+
   it("suppresses heartbeat tool events for Control UI and verbose node subscribers", () => {
     const {
       broadcastToConnIds,
@@ -1803,6 +1903,95 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("clears tracked active runs before terminal sessions.changed broadcasts", () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-finished",
+      kind: "direct",
+      updatedAt: 1_650,
+      status: "running",
+      startedAt: 900,
+    });
+    const {
+      broadcastToConnIds,
+      clearTrackedActiveRun,
+      chatRunState,
+      sessionEventSubscribers,
+      handler,
+    } = createHarness();
+    sessionEventSubscribers.subscribe("conn-session");
+    chatRunState.registry.add("provider-run", {
+      sessionKey: "session-finished",
+      clientRunId: "client-run",
+    });
+
+    handler({
+      runId: "provider-run",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_800,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    expect(clearTrackedActiveRun).toHaveBeenCalledWith({
+      runId: "provider-run",
+      clientRunId: "client-run",
+      sessionKey: "session-finished",
+    });
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "sessions changed event")).toBe(
+      "sessions.changed",
+    );
+    expect(clearTrackedActiveRun.mock.invocationCallOrder[0]).toBeLessThan(
+      broadcastToConnIds.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("keeps chat send retry guards while hiding terminal session projection across session aliases", () => {
+    const trackedActiveRuns = new Map<
+      string,
+      { sessionKey: string; projectSessionActive?: boolean }
+    >([
+      ["provider-run", { sessionKey: "session-finished" }],
+      ["client-run", { sessionKey: "requested-session" }],
+    ]);
+    const { chatRunState, handler } = createHarness({
+      clearTrackedActiveRun: ({ runId, clientRunId }) => {
+        for (const candidateRunId of new Set([runId, clientRunId])) {
+          const entry = trackedActiveRuns.get(candidateRunId);
+          if (entry) {
+            entry.projectSessionActive = false;
+          }
+        }
+      },
+    });
+    chatRunState.registry.add("provider-run", {
+      sessionKey: "session-finished",
+      clientRunId: "client-run",
+    });
+
+    handler({
+      runId: "provider-run",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_800,
+      data: {
+        phase: "end",
+        startedAt: 900,
+        endedAt: 1_700,
+      },
+    });
+
+    const providerGuard = trackedActiveRuns.get("provider-run");
+    const retryGuard = trackedActiveRuns.get("client-run");
+    expect(providerGuard?.projectSessionActive).toBe(false);
+    expect(retryGuard).toBeDefined();
+    expect(retryGuard?.sessionKey).toBe("requested-session");
+    expect(retryGuard?.projectSessionActive).toBe(false);
+  });
+
   it("keeps aborted chat run markers through terminal lifecycle cleanup", () => {
     const { broadcast, chatRunState, handler } = createHarness();
     chatRunState.registry.add("run-aborted", {
@@ -1900,6 +2089,47 @@ describe("agent event handler", () => {
     expect(requireMockArg(broadcastToConnIds, 0, 3, "sessions changed options")).toEqual({
       dropIfSlow: true,
     });
+  });
+
+  it("omits goal state from unscoped global lifecycle snapshots", () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "global",
+      kind: "global",
+      updatedAt: 1_650,
+      status: "running",
+      goal: {
+        schemaVersion: 1,
+        id: "goal-default",
+        objective: "Wrong agent goal",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 2,
+        tokenStart: 0,
+        tokensUsed: 42,
+        continuationTurns: 0,
+      },
+    });
+
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "global",
+    });
+
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "run-global",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_800,
+      data: { phase: "end", endedAt: 1_700 },
+    });
+
+    const payload = requireRecord(
+      requireMockArg(broadcastToConnIds, 0, 1, "sessions changed payload"),
+      "sessions changed payload",
+    );
+    expect(payload).not.toHaveProperty("goal");
+    expect(requireRecord(payload.session, "nested session")).not.toHaveProperty("goal");
   });
 
   it("keeps tool output for Control UI recipients when verbose is on", () => {
@@ -2001,6 +2231,139 @@ describe("agent event handler", () => {
     expect(nodeCalls).toHaveLength(1);
     const nodePayload = nodeCalls[0]?.[2] as { runId?: string };
     expect(nodePayload.runId).toBe("run-fallback-client");
+  });
+
+  it("keeps selected-agent global chat events scoped to the linked agent", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-global-main", {
+      sessionKey: "global",
+      agentId: "main",
+      clientRunId: "client-global-main",
+    });
+
+    handler({
+      runId: "run-global-main",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "main global reply" },
+    });
+
+    const chatPayload = chatBroadcastCalls(broadcast)[0]?.[1] as {
+      agentId?: string;
+      sessionKey?: string;
+    };
+    expect(chatPayload).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "global",
+      }),
+    );
+    const nodeCalls = sessionChatCalls(nodeSendToSession);
+    expect(nodeCalls[0]?.[0]).toBe("agent:main:global");
+    expect(nodeCalls.map(([sessionKey]) => sessionKey)).toContain("global");
+  });
+
+  it("persists selected-agent global lifecycle state with the linked agent", () => {
+    const { broadcastToConnIds, chatRunState, handler, sessionEventSubscribers } = createHarness();
+    sessionEventSubscribers.subscribe("conn-1");
+    chatRunState.registry.add("run-global-work", {
+      sessionKey: "global",
+      agentId: "work",
+      clientRunId: "client-global-work",
+    });
+
+    handler({
+      runId: "run-global-work",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+      }),
+    );
+    expect(loadGatewaySessionRow).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  it("routes hidden selected-agent global chat events only to matching subscribers", () => {
+    const { broadcastToConnIds, chatRunState, handler, sessionMessageSubscribers } =
+      createHarness();
+    sessionMessageSubscribers.subscribe("conn-main", "agent:main:global");
+    sessionMessageSubscribers.subscribe("conn-work", "agent:work:global");
+    chatRunState.registry.add("run-hidden-main", {
+      sessionKey: "global",
+      agentId: "main",
+      clientRunId: "client-hidden-main",
+    });
+    registerAgentRunContext("run-hidden-main", {
+      sessionKey: "global",
+      isControlUiVisible: false,
+    });
+
+    handler({
+      runId: "run-hidden-main",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "hidden main global reply" },
+    });
+
+    const chatCall = broadcastToConnIds.mock.calls.find(([event]) => event === "chat");
+    expect(chatCall?.[2]).toEqual(new Set(["conn-main"]));
+    expect(chatCall?.[1]).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "global",
+      }),
+    );
+  });
+
+  it("routes hidden bare global chat events to the configured default agent subscriber", () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+    });
+    const { broadcastToConnIds, chatRunState, handler, sessionMessageSubscribers } =
+      createHarness();
+    sessionMessageSubscribers.subscribe("conn-main", "agent:main:global");
+    sessionMessageSubscribers.subscribe("conn-ops", "agent:ops:global");
+    chatRunState.registry.add("run-hidden-default", {
+      sessionKey: "global",
+      clientRunId: "client-hidden-default",
+    });
+    registerAgentRunContext("run-hidden-default", {
+      sessionKey: "global",
+      isControlUiVisible: false,
+    });
+
+    handler({
+      runId: "run-hidden-default",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "hidden default global reply" },
+    });
+
+    const chatCall = broadcastToConnIds.mock.calls.find(([event]) => event === "chat");
+    expect(chatCall?.[2]).toEqual(new Set(["conn-ops"]));
+    expect(chatCall?.[1]).toEqual(
+      expect.objectContaining({
+        sessionKey: "global",
+      }),
+    );
   });
 
   it("keeps chat-linked run remapping alive across per-attempt lifecycle errors", () => {
@@ -2417,6 +2780,46 @@ describe("agent event handler", () => {
     const persistEvent = requireRecord(persistParams.event, "persist lifecycle event");
     expect(persistEvent.runId).toBe("run-hidden");
     expect(requireRecord(persistEvent.data, "persist lifecycle event data").phase).toBe("end");
+  });
+
+  it("sends non-control-UI-visible live chat only to exact session message subscribers", () => {
+    const { broadcast, broadcastToConnIds, nodeSendToSession, sessionMessageSubscribers, handler } =
+      createHarness({
+        resolveSessionKeyForRun: () => "session-hidden",
+      });
+    sessionMessageSubscribers.subscribe("conn-selected", "session-hidden");
+    sessionMessageSubscribers.subscribe("conn-other", "session-other");
+    registerAgentRunContext("run-hidden", {
+      sessionKey: "session-hidden",
+      isControlUiVisible: false,
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-hidden",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "visible only to the selected session" },
+    });
+    emitLifecycleEnd(handler, "run-hidden", 2);
+
+    expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "hidden chat delta event")).toBe("chat");
+    expect(requireMockArg(broadcastToConnIds, 0, 2, "hidden chat delta recipients")).toEqual(
+      new Set(["conn-selected"]),
+    );
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "hidden chat final event")).toBe("chat");
+    const finalPayload = requireMockPayload(broadcastToConnIds, 1, 1, "hidden chat final payload");
+    expectPayloadFields(finalPayload, {
+      runId: "run-hidden",
+      sessionKey: "session-hidden",
+      state: "final",
+    });
+    expect(requireMockArg(broadcastToConnIds, 1, 2, "hidden chat final recipients")).toEqual(
+      new Set(["conn-selected"]),
+    );
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {

@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { resetAgentEventsForTest } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  resetAgentEventsForTest,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -26,6 +29,8 @@ import { createCodexTestModel } from "./test-support.js";
 const THREAD_ID = "thread-1";
 const TURN_ID = "turn-1";
 const tempDirs = new Set<string>();
+const tinyPngBase64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 
@@ -102,6 +107,7 @@ afterEach(async () => {
   resetGlobalHookRunner();
   resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const tempDir of tempDirs) {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -516,6 +522,136 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.toolMediaUrls).toEqual([savedPath]);
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("saves raw Codex image-generation results as reply media", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
+    tempDirs.add(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "ig_raw_1",
+          status: "generating",
+          result: tinyPngBase64,
+          revised_prompt: "A tiny blue square",
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const mediaUrl = result.toolMediaUrls?.[0];
+
+    expect(result.assistantTexts).toStrictEqual([]);
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+    expect(mediaUrl?.endsWith(".png")).toBe(true);
+    await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+      Buffer.from(tinyPngBase64, "base64"),
+    );
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+  });
+
+  it("keeps raw image-generation results replay-invalid when media save fails", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const projector = await createProjector({
+      ...(await createParams()),
+      config: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+    } as EmbeddedRunAttemptParams);
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "ig_raw_capped",
+          status: "completed",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMediaUrls).toBeUndefined();
+    expect(result.replayMetadata).toStrictEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server raw image generation result exceeds media limit",
+      expect.objectContaining({ itemId: "ig_raw_capped" }),
+    );
+  });
+
+  it("dedupes raw and typed Codex image-generation media for the same item", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
+    tempDirs.add(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const projector = await createProjector();
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+
+    await projector.handleNotification(
+      forCurrentTurn("rawResponseItem/completed", {
+        item: {
+          type: "image_generation_call",
+          id: "ig_123",
+          status: "generating",
+          result: tinyPngBase64,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          result: tinyPngBase64,
+          savedPath,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMediaUrls).toHaveLength(1);
+    expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
+  });
+
+  it("preserves distinct raw image-generation items with identical image bytes", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
+    tempDirs.add(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const projector = await createProjector();
+
+    for (const id of ["ig_raw_1", "ig_raw_2"]) {
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "image_generation_call",
+            id,
+            status: "generating",
+            result: tinyPngBase64,
+          },
+        }),
+      );
+    }
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMediaUrls).toHaveLength(2);
+    expect(new Set(result.toolMediaUrls)).toHaveLength(2);
   });
 
   it("does not append native Codex image-generation media after explicit media delivery", async () => {
@@ -718,7 +854,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
     expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Run /codex account");
+    expect(result.promptError).toContain("Wait until the reset time");
     expect(result.promptErrorSource).toBe("prompt");
   });
 
@@ -1150,7 +1286,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(onReasoningStream).toHaveBeenCalledWith({ text: "thinking" });
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "thinking",
+      isReasoningSnapshot: true,
+    });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
     expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
       "patch (in_progress)",
@@ -1173,6 +1312,94 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
     expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
+  });
+
+  it("streams accumulated reasoning snapshots grouped by Codex reasoning indexes", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 1,
+        delta: "Checking ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 0,
+        delta: "Reading ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 0,
+        delta: "files",
+      }),
+    );
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(3);
+    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
+      text: "Checking ",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
+      text: "Reading \n\nChecking ",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
+      text: "Reading files\n\nChecking ",
+      isReasoningSnapshot: true,
+    });
+  });
+
+  it("streams accumulated reasoning summaries grouped by summary section", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 1,
+        delta: "Second",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "First ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "section",
+      }),
+    );
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(3);
+    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
+      text: "Second",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
+      text: "First \n\nSecond",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
+      text: "First section\n\nSecond",
+      isReasoningSnapshot: true,
+    });
   });
 
   it("synthesizes normalized tool progress for Codex-native tool items", async () => {
@@ -2113,6 +2340,53 @@ describe("CodexAppServerEventProjector", () => {
         });
       }),
     ).toBe(false);
+  });
+
+  it("carries async-started dynamic tool metadata into attempt results", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-image-1",
+      tool: "image_generate",
+      arguments: { action: "generate", prompt: "lighthouse" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-image-1",
+      tool: "image_generate",
+      asyncStarted: true,
+      success: true,
+      sideEffectEvidence: true,
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+    });
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-image-1",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { action: "generate", prompt: "lighthouse" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "Background task started." }],
+          success: true,
+          durationMs: 10,
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.toolMetas).toEqual([
+      {
+        toolName: "image_generate",
+        meta: "lighthouse",
+        asyncStarted: true,
+      },
+    ]);
+    expect(result.replayMetadata).toEqual({
+      hadPotentialSideEffects: true,
+      replaySafe: false,
+    });
   });
 
   it("emits verbose summaries for transcript-recorded dynamic tool calls", async () => {

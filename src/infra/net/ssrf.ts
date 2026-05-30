@@ -1,6 +1,5 @@
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
-import type { Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
@@ -14,7 +13,9 @@ import {
   isLegacyIpv4Literal,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
-} from "../../shared/net/ip.js";
+} from "@openclaw/net-policy/ip";
+import type { Dispatcher } from "undici";
+import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
 import { normalizeHostname } from "./hostname.js";
 import {
   createHttp1Agent,
@@ -62,12 +63,11 @@ export type SsrFPolicy = {
 };
 
 function normalizeSsrFPolicyHostnames(values?: string[]): string[] {
-  if (!values || values.length === 0) {
-    return [];
-  }
-  return Array.from(
-    new Set(values.map((value) => normalizeHostname(value)).filter(Boolean)),
-  ).toSorted();
+  return normalizePolicyHostnames(values).toSorted();
+}
+
+function normalizePolicyHostnames(values?: string[]): string[] {
+  return normalizeUniqueStringEntries(values?.map((value) => normalizeHostname(value)));
 }
 
 function normalizeSsrFPolicyForComparison(policy?: SsrFPolicy) {
@@ -211,23 +211,11 @@ const BLOCKED_HOSTNAMES = new Set([
 ]);
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
-  if (!values || values.length === 0) {
-    return new Set<string>();
-  }
-  return new Set(values.map((value) => normalizeHostname(value)).filter(Boolean));
+  return new Set(normalizePolicyHostnames(values));
 }
 
 export function normalizeHostnameAllowlist(values?: string[]): string[] {
-  if (!values || values.length === 0) {
-    return [];
-  }
-  return Array.from(
-    new Set(
-      values
-        .map((value) => normalizeHostname(value))
-        .filter((value) => value !== "*" && value !== "*." && value.length > 0),
-    ),
-  );
+  return normalizePolicyHostnames(values).filter((value) => value !== "*" && value !== "*.");
 }
 
 export function isPrivateNetworkAllowedByPolicy(policy?: SsrFPolicy): boolean {

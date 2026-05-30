@@ -114,6 +114,20 @@ Example schema:
 
 ## Policy knobs
 
+### `tools.exec.mode`
+
+`tools.exec.mode` is the preferred normalized policy surface for host exec.
+Values are:
+
+- `deny` - block host exec.
+- `allowlist` - run only allowlisted commands without asking.
+- `ask` - use allowlist policy and ask on misses.
+- `auto` - use allowlist policy, run deterministic matches directly, and send approval misses through OpenClaw's native auto reviewer before falling back to a human approval route.
+- `full` - run host exec without approval prompts.
+
+Legacy `tools.exec.security` / `tools.exec.ask` remain supported and still win
+when set at the narrower session or agent scope.
+
 ### `exec.security`
 
 <ParamField path="security" type='"deny" | "allowlist" | "full"'>
@@ -207,13 +221,15 @@ YOLO is the default host behavior unless you tighten it explicitly:
 
 CLI-backed providers that expose their own noninteractive permission mode
 can follow this policy. Claude CLI adds
-`--permission-mode bypassPermissions` when OpenClaw's requested exec
-policy is YOLO. Override that backend behavior with explicit Claude args
-under `agents.defaults.cliBackends.claude-cli.args` / `resumeArgs` -
-for example `--permission-mode default`, `acceptEdits`, or
-`bypassPermissions`.
+`--permission-mode bypassPermissions` when OpenClaw's effective exec
+policy is YOLO. For OpenClaw-managed Claude live sessions, OpenClaw's
+effective exec policy is authoritative over Claude's native permission mode:
+YOLO normalizes live launches to `--permission-mode bypassPermissions`, and
+restrictive effective exec policy normalizes live launches to
+`--permission-mode default`, even if raw Claude backend args specify another
+mode.
 
-If you want a more conservative setup, tighten either layer back to
+If you want a more conservative setup, tighten OpenClaw exec policy back to
 `allowlist` / `on-miss` or `deny`.
 
 ### Persistent gateway-host "never prompt" setup
@@ -287,7 +303,10 @@ EOF
 ### Session-only shortcut
 
 - `/exec security=full ask=off` changes only the current session.
-- `/elevated full` is a break-glass shortcut that also skips exec approvals for that session.
+- `/elevated full` is a break-glass shortcut that skips exec approvals only when
+  both the requested policy and the host approvals file resolve to
+  `security: "full"` and `ask: "off"`. A stricter host file, such as
+  `ask: "always"`, still prompts.
 
 If the host approvals file stays stricter than config, the stricter host
 policy still wins.

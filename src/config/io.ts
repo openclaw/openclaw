@@ -7,6 +7,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { isVerbose } from "../global-state.js";
 import { loadDotEnv } from "../infra/dotenv.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
@@ -25,6 +26,7 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { collectManifestModelIdNormalizationPolicies } from "../shared/provider-model-id-normalization.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
@@ -221,6 +223,10 @@ export type ConfigWriteOptions = {
    * Avoids rereading the full config just to prepare an immediate write.
    */
   baseSnapshot?: ConfigFileSnapshot;
+  /**
+   * Plugin metadata paired with baseSnapshot when the caller already read it.
+   */
+  basePluginMetadataSnapshot?: PluginMetadataSnapshot;
   /**
    * Internal one-shot CLI fast path. When no runtime snapshot is active, skip
    * the post-write runtime snapshot refresh/reload tail entirely.
@@ -956,6 +962,7 @@ export type ConfigSnapshotReadOptions = {
   observe?: boolean;
   skipPluginValidation?: boolean;
   preservedLegacyRootKeys?: readonly string[];
+  suppressFutureVersionWarning?: boolean;
 };
 
 function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
@@ -997,6 +1004,13 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
   }
 }
 
+function shouldSuppressFutureVersionWarningForEnv(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
+    isTruthyEnvValue(env.OPENCLAW_UPDATE_POST_CORE)
+  );
+}
+
 function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
   if (deps.configPath) {
     return deps.configPath;
@@ -1005,16 +1019,17 @@ function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
 }
 
 function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
+  const env = overrides.env ?? process.env;
   return {
     fs: overrides.fs ?? fs,
     json5: overrides.json5 ?? JSON5,
-    env: overrides.env ?? process.env,
-    homedir:
-      overrides.homedir ?? (() => resolveRequiredHomeDir(overrides.env ?? process.env, os.homedir)),
+    env,
+    homedir: overrides.homedir ?? (() => resolveRequiredHomeDir(env, os.homedir)),
     configPath: overrides.configPath ?? "",
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
-    suppressFutureVersionWarning: overrides.suppressFutureVersionWarning ?? false,
+    suppressFutureVersionWarning:
+      overrides.suppressFutureVersionWarning ?? shouldSuppressFutureVersionWarningForEnv(env),
     observe: overrides.observe ?? true,
   };
 }
@@ -1032,6 +1047,12 @@ export function parseConfigJson5(
   raw: string,
   json5: { parse: (value: string) => unknown } = JSON5,
 ): ParseConfigJson5Result {
+  try {
+    return { ok: true, parsed: JSON.parse(raw) };
+  } catch {
+    // Keep JSON5 compatibility for authored config, but avoid the slower parser
+    // on the JSON files OpenClaw writes itself.
+  }
   try {
     return { ok: true, parsed: json5.parse(raw) };
   } catch (err) {
@@ -2075,6 +2096,7 @@ export function createConfigIO(
     return {
       snapshot: result.snapshot,
       writeOptions: {
+        basePluginMetadataSnapshot: result.pluginMetadataSnapshot,
         envSnapshotForRestore: result.envSnapshotForRestore,
         expectedConfigPath: configPath,
         unsetPaths: resolveManagedUnsetPathsForWrite(undefined),
@@ -2130,7 +2152,13 @@ export function createConfigIO(
     clearConfigCache();
     const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
     let persistCandidate: unknown = cfg;
-    const snapshot = options.baseSnapshot ?? (await readConfigFileSnapshotInternal()).snapshot;
+    const snapshotRead = options.baseSnapshot
+      ? {
+          snapshot: options.baseSnapshot,
+          pluginMetadataSnapshot: options.basePluginMetadataSnapshot,
+        }
+      : await readConfigFileSnapshotInternal();
+    const snapshot = snapshotRead.snapshot;
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
@@ -2142,6 +2170,9 @@ export function createConfigIO(
         unsetPaths,
         explicitSetPaths: options.explicitSetPaths,
         explicitSetValueSource: options.explicitSetValueSource,
+        modelIdNormalizationPolicies: snapshotRead.pluginMetadataSnapshot
+          ? collectManifestModelIdNormalizationPolicies(snapshotRead.pluginMetadataSnapshot.plugins)
+          : undefined,
       });
       try {
         const resolvedIncludes = resolveConfigIncludes(
@@ -2310,7 +2341,15 @@ export function createConfigIO(
       if (isVitest && !shouldLogInVitest) {
         return;
       }
-      deps.logger.warn(`Config write anomaly: ${configPath} (${suspiciousReasons.join(", ")})`);
+      const shouldLogBenignMissingMeta =
+        isVerbose() || deps.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1" || shouldLogInVitest;
+      const visibleReasons = shouldLogBenignMissingMeta
+        ? suspiciousReasons
+        : suspiciousReasons.filter((reason) => reason !== "missing-meta-before-write");
+      if (visibleReasons.length === 0) {
+        return;
+      }
+      deps.logger.warn(`Config write anomaly: ${configPath} (${visibleReasons.join(", ")})`);
     };
     const previousMetadata = resolveConfigStatMetadata(previousStat);
     const auditRecordBase = createConfigWriteAuditRecordBase({
@@ -2516,21 +2555,34 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   return coerceConfig(applyMergePatch(projectedSource, runtimePatch));
 }
 
-export function loadConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
+export function loadConfig(options?: {
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+}): OpenClawConfig {
+  const loadFresh = () =>
+    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig();
+  if (options?.pin === false) {
+    return loadFresh();
+  }
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
-  return loadPinnedRuntimeConfig(() =>
-    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig(),
-  );
+  return loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
+export function getRuntimeConfig(options?: {
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+}): OpenClawConfig {
   return loadConfig(options);
 }
 
-export async function readBestEffortConfig(): Promise<OpenClawConfig> {
-  return await createConfigIO().readBestEffortConfig();
+export async function readBestEffortConfig(options?: {
+  skipPluginValidation?: boolean;
+}): Promise<OpenClawConfig> {
+  return await createConfigIO(
+    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
+  ).readBestEffortConfig();
 }
 
 export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
@@ -2544,6 +2596,7 @@ export async function readConfigFileSnapshot(
     ...(options.measure ? { measure: options.measure } : {}),
     ...(options.observe === false ? { observe: false } : {}),
     ...(options.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    ...(options.suppressFutureVersionWarning ? { suppressFutureVersionWarning: true } : {}),
     ...(options.preservedLegacyRootKeys
       ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
       : {}),
@@ -2613,10 +2666,17 @@ export async function writeConfigFile(
     const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
-  const baseSnapshot = options.baseSnapshot ?? (await io.readConfigFileSnapshot());
+  const baseSnapshotRead = options.baseSnapshot
+    ? {
+        snapshot: options.baseSnapshot,
+        pluginMetadataSnapshot: options.basePluginMetadataSnapshot,
+      }
+    : await io.readConfigFileSnapshotWithPluginMetadata();
+  const baseSnapshot = baseSnapshotRead.snapshot;
   let runtimePreflightResult: unknown;
   const writeResult = await io.writeConfigFile(nextCfg, {
     baseSnapshot,
+    basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,
       expectedConfigPath: options.expectedConfigPath,

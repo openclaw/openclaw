@@ -107,7 +107,7 @@ const SecretsFileProviderSchema = z
   })
   .strict();
 
-const SecretsExecProviderSchema = z
+const SecretsManualExecProviderSchema = z
   .object({
     source: z.literal("exec"),
     command: z
@@ -144,7 +144,24 @@ const SecretsExecProviderSchema = z
   })
   .strict();
 
-export const SecretProviderSchema = z.discriminatedUnion("source", [
+const SecretsPluginIntegrationExecProviderSchema = z
+  .object({
+    source: z.literal("exec"),
+    pluginIntegration: z
+      .object({
+        pluginId: z.string().min(1).max(128),
+        integrationId: z.string().min(1).max(128),
+      })
+      .strict(),
+  })
+  .strict();
+
+const SecretsExecProviderSchema = z.union([
+  SecretsManualExecProviderSchema,
+  SecretsPluginIntegrationExecProviderSchema,
+]);
+
+export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
@@ -462,6 +479,7 @@ const ModelProviderSchema = z
     contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    region: z.string().min(1).optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,

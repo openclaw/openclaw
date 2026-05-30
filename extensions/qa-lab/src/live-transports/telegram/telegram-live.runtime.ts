@@ -5,7 +5,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -21,8 +26,11 @@ import {
   startQaCredentialLeaseHeartbeat,
   type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
+import {
+  appendQaLiveLaneIssue as appendLiveLaneIssue,
+  buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+} from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
-import { appendLiveLaneIssue, buildLiveLaneArtifactsError } from "../shared/live-lane-helpers.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
@@ -133,6 +141,12 @@ type TelegramQaScenarioResult = {
   rttMs?: number;
   requestStartedAt?: string;
   responseObservedAt?: string;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs: number;
+    requestStartedAt: string;
+    responseObservedAt: string;
+    source: "request-to-observed-message";
+  };
   sentMessageId?: number;
   responseMessageId?: number;
 };
@@ -524,10 +538,6 @@ function isTruthyOptIn(value: string | undefined) {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function readConfigRecord(root: Record<string, unknown>, key: string): Record<string, unknown> {
   const value = root[key];
   if (!isRecord(value)) {
@@ -563,11 +573,11 @@ function parsePositiveTelegramQaEnvMs(env: NodeJS.ProcessEnv, name: string, fall
   if (raw === undefined) {
     return fallbackMs;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
     return fallbackMs;
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 function resolveTelegramQaCanaryTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
@@ -702,7 +712,7 @@ function buildTelegramQaConfig(
     sutAccountId: string;
   },
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "telegram"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "telegram"]);
   const pluginEntries = {
     ...baseCfg.plugins?.entries,
     telegram: { enabled: true },
@@ -717,7 +727,7 @@ function buildTelegramQaConfig(
           ...baseCfg.agents?.defaults?.models,
           "openai/gpt-5.5": {
             ...baseCfg.agents?.defaults?.models?.["openai/gpt-5.5"],
-            agentRuntime: { id: "pi" },
+            agentRuntime: { id: "openclaw" },
           },
         },
         skipBootstrap: true,
@@ -766,6 +776,7 @@ async function callTelegramApi<T>(
   body?: Record<string, unknown>,
   timeoutMs = 15_000,
 ): Promise<T> {
+  const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 15_000);
   const { response, release } = await fetchWithSsrFGuard({
     url: `https://api.telegram.org/bot${token}/${method}`,
     init: {
@@ -775,7 +786,7 @@ async function callTelegramApi<T>(
       },
       body: JSON.stringify(body ?? {}),
     },
-    signal: AbortSignal.timeout(timeoutMs),
+    timeoutMs: requestTimeoutMs,
     policy: { hostnameAllowlist: ["api.telegram.org"] },
     auditContext: "qa-lab-telegram-live",
   });
@@ -798,6 +809,7 @@ function isRecoverableTelegramQaPollError(error: unknown): boolean {
     message.includes("fetch failed") ||
     message.includes("aborted due to timeout") ||
     message.includes("operation was aborted") ||
+    message.includes("request timed out") ||
     message.includes("aborterror") ||
     message.includes("econnreset") ||
     message.includes("etimedout") ||
@@ -1743,6 +1755,12 @@ export async function runTelegramQaLive(params: {
           rttMs: canaryTiming.rttMs,
           requestStartedAt: canaryTiming.requestStartedAt,
           responseObservedAt: canaryTiming.responseObservedAt,
+          rttMeasurement: {
+            finalMatchedReplyRttMs: canaryTiming.rttMs,
+            requestStartedAt: canaryTiming.requestStartedAt,
+            responseObservedAt: canaryTiming.responseObservedAt,
+            source: "request-to-observed-message",
+          },
           sentMessageId: redactPublicMetadata ? undefined : canaryTiming.sentMessageId,
           responseMessageId: redactPublicMetadata ? undefined : canaryTiming.responseMessageId,
         });
@@ -1885,6 +1903,12 @@ export async function runTelegramQaLive(params: {
               rttMs,
               requestStartedAt: firstRequestStartedAt,
               responseObservedAt: new Date(lastMatched.observedAtMs).toISOString(),
+              rttMeasurement: {
+                finalMatchedReplyRttMs: rttMs,
+                requestStartedAt: new Date(lastRequestStartedAtMs).toISOString(),
+                responseObservedAt: new Date(lastMatched.observedAtMs).toISOString(),
+                source: "request-to-observed-message",
+              },
               sentMessageId: redactPublicMetadata ? undefined : lastSentMessageId,
               responseMessageId: redactPublicMetadata ? undefined : lastMatched.message.messageId,
             } satisfies TelegramQaScenarioResult;
