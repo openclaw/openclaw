@@ -5,6 +5,7 @@ import {
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
 import { shouldRemoveDeadOwnerOrExpiredLock } from "../infra/stale-lock-file.js";
+import { getProcessStartTime } from "../shared/pid-alive.js";
 
 export type FileLockOptions = {
   retries: {
@@ -86,7 +87,14 @@ export async function acquireFileLock(
       retry: options.retries,
       staleRecovery: "remove-if-unchanged",
       allowReentrant: true,
-      payload: () => ({ pid: process.pid, createdAt: new Date().toISOString() }),
+      // Record the owner's process start time so the staleness check can
+      // detect PID recycling (e.g. the app is always PID 2 in a container, so
+      // a live PID does not prove the original owner survived a restart).
+      payload: () => ({
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        startTime: getProcessStartTime(process.pid) ?? undefined,
+      }),
       shouldReclaim: shouldReclaimPluginLock,
       shouldRemoveStaleLock: (snapshot) =>
         shouldRemoveDeadOwnerOrExpiredLock({
