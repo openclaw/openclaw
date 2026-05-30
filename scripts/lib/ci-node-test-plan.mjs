@@ -91,7 +91,17 @@ function resolveCommandShardName(file) {
     ) {
       return "agentic-commands-doctor-runtime";
     }
-    return "agentic-commands-doctor-misc";
+    if (name.endsWith(".e2e.test.ts")) {
+      return "agentic-commands-doctor-misc-e2e";
+    }
+    if (
+      name.startsWith("doctor-platform-notes") ||
+      name.startsWith("doctor-sandbox") ||
+      name.startsWith("doctor-whatsapp")
+    ) {
+      return "agentic-commands-doctor-misc-platform";
+    }
+    return "agentic-commands-doctor-misc-core";
   }
   if (
     name.startsWith("auth-choice") ||
@@ -127,7 +137,9 @@ function createAgenticCommandSplitShards() {
     "agentic-commands-doctor-auth",
     "agentic-commands-doctor-config",
     "agentic-commands-doctor-cron",
-    "agentic-commands-doctor-misc",
+    "agentic-commands-doctor-misc-core",
+    "agentic-commands-doctor-misc-e2e",
+    "agentic-commands-doctor-misc-platform",
     "agentic-commands-doctor-runtime",
     "agentic-commands-doctor-shared",
     "agentic-commands-models",
@@ -183,10 +195,40 @@ function resolveInfraStateShardName(file) {
   if (name < "g") {
     return "core-runtime-infra-misc-a-f";
   }
-  if (name < "p") {
-    return "core-runtime-infra-misc-g-o";
+  if (name.startsWith("gateway")) {
+    return "core-runtime-infra-misc-gateway";
   }
-  return "core-runtime-infra-misc-p-z";
+  if (name < "m") {
+    return "core-runtime-infra-misc-g-l";
+  }
+  if (name < "p") {
+    return "core-runtime-infra-misc-m-o";
+  }
+  if (
+    name.startsWith("parse") ||
+    name.startsWith("path") ||
+    name.startsWith("plain") ||
+    name.startsWith("plugin") ||
+    name.startsWith("ports") ||
+    name.startsWith("prototype")
+  ) {
+    return "core-runtime-infra-misc-path-ports";
+  }
+  if (
+    name.startsWith("process") ||
+    name.startsWith("replace") ||
+    name.startsWith("resolve") ||
+    name.startsWith("restart") ||
+    name.startsWith("retry") ||
+    name.startsWith("run") ||
+    name.startsWith("runtime")
+  ) {
+    return "core-runtime-infra-misc-process-restart";
+  }
+  if (name < "t") {
+    return "core-runtime-infra-misc-s-system";
+  }
+  return "core-runtime-infra-misc-t-z";
 }
 
 function createInfraStateSplitShards() {
@@ -202,8 +244,13 @@ function createInfraStateSplitShards() {
     "core-runtime-infra-exec",
     "core-runtime-infra-heartbeat",
     "core-runtime-infra-misc-a-f",
-    "core-runtime-infra-misc-g-o",
-    "core-runtime-infra-misc-p-z",
+    "core-runtime-infra-misc-g-l",
+    "core-runtime-infra-misc-gateway",
+    "core-runtime-infra-misc-m-o",
+    "core-runtime-infra-misc-path-ports",
+    "core-runtime-infra-misc-process-restart",
+    "core-runtime-infra-misc-s-system",
+    "core-runtime-infra-misc-t-z",
     "core-runtime-infra-network",
     "core-runtime-infra-outbound",
     "core-runtime-infra-package-provider",
