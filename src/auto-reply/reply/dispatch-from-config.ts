@@ -138,6 +138,7 @@ import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
   isExplicitSourceReplyCommand,
+  isUnauthorizedTextSlashCommand,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
@@ -1691,10 +1692,12 @@ export async function dispatchReplyFromConfig(
       ? { ...result, sourceReplyDeliveryMode }
       : result;
   const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
+  const unauthorizedTextSlashSourceReplyCtx =
+    (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
   const shouldDeliverPluginBindingReply =
     !suppressAutomaticSourceDelivery ||
-    ctx.InboundEventKind !== "room_event" ||
-    explicitCommandTurnCtx;
+    explicitCommandTurnCtx ||
+    (ctx.InboundEventKind !== "room_event" && !unauthorizedTextSlashSourceReplyCtx);
 
   const inboundDedupeClaim = claimInboundDedupe(ctx);
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {

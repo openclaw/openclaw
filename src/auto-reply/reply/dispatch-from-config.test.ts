@@ -5427,7 +5427,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
   });
 
-  it("keeps unauthorized plugin-owned binding slash text routed to the bound plugin", async () => {
+  it("keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
       ((hookName?: string) =>
@@ -5436,7 +5436,7 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
     hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
       status: "handled",
-      result: { handled: true },
+      result: { handled: true, reply: { text: "do not leak slash reply" } },
     });
     sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-command-escape-denied",
@@ -5467,6 +5467,7 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
+      ChatType: "channel",
       CommandSource: "text",
       CommandAuthorized: false,
       WasMentioned: false,
@@ -5480,7 +5481,11 @@ describe("dispatchReplyFromConfig", () => {
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(result).toEqual({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-command-escape-denied");
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
       "openclaw-codex-app-server",
@@ -5491,6 +5496,7 @@ describe("dispatchReplyFromConfig", () => {
     );
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("delivers plugin-owned binding replies returned by the owning inbound claim hook", async () => {
