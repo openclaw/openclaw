@@ -1,4 +1,4 @@
-import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
+import { EmbeddedBlockChunker, formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
@@ -275,7 +275,9 @@ export function createDiscordDraftPreviewController(params: {
       reasoningProgressRawText = mergeReasoningProgressText(reasoningProgressRawText, text, {
         snapshot: options?.snapshot === true,
       });
-      const normalized = normalizeReasoningProgressLine(reasoningProgressRawText);
+      const normalized = normalizeReasoningProgressLine(
+        formatReasoningMessage(reasoningProgressRawText),
+      );
       if (!normalized) {
         return;
       }

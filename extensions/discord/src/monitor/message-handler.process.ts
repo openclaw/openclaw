@@ -1,10 +1,6 @@
 import path from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
-import {
-  formatReasoningMessage,
-  resolveAckReaction,
-  resolveHumanDelayConfig,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
@@ -954,8 +950,7 @@ export async function processDiscordMessage(
           : undefined,
         onReasoningStream: async (payload) => {
           await statusReactions.setThinking();
-          const formattedText = payload?.text ? formatReasoningMessage(payload.text) : undefined;
-          await draftPreview.pushReasoningProgress(formattedText, {
+          await draftPreview.pushReasoningProgress(payload?.text, {
             snapshot: payload?.isReasoningSnapshot === true,
           });
         },
