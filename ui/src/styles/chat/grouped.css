@@ -39,7 +39,9 @@
 }
 
 .chat-group.user .chat-group-footer {
+  align-self: flex-end;
   justify-content: flex-end;
+  text-align: right;
 }
 
 /* Footer at bottom of message group (role + time) */
@@ -48,8 +50,10 @@
   gap: 8px;
   row-gap: 5px;
   align-items: center;
+  align-self: flex-start;
   flex-wrap: wrap;
   margin-top: 6px;
+  max-width: 100%;
 }
 
 .chat-sender-name {
@@ -175,8 +179,9 @@
   font-weight: 600;
   font-size: 13px;
   flex-shrink: 0;
-  align-self: flex-end;
-  margin-bottom: 4px;
+  align-self: flex-start;
+  margin-top: 2px;
+  margin-bottom: 0;
   border: 1px solid var(--border);
 }
 

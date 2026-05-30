@@ -1555,6 +1555,22 @@ export async function readLatestRecentSessionUsageFromTranscriptAsync(
   }
 }
 
+type SessionUsageSnapshotCacheEntry = {
+  mtimeMs: number;
+  size: number;
+  snapshot: SessionTranscriptUsageSnapshot | null;
+};
+const sessionUsageSnapshotCache = new Map<string, SessionUsageSnapshotCacheEntry>();
+const MAX_SESSION_USAGE_SNAPSHOT_CACHE_ENTRIES = 5000;
+
+/**
+ * Read aggregate usage from a session transcript tail, caching by file
+ * mtime+size. `sessions.list` calls this once per session, so without the
+ * cache a single listing re-read (open + 256KB read + parse) every transcript
+ * on the main thread — blocking the event loop long enough to stall unrelated
+ * RPC callbacks (e.g. chat.history's transcript read). Unchanged transcripts
+ * now hit the cache and only cost a stat.
+ */
 export function readRecentSessionUsageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -1566,14 +1582,30 @@ export function readRecentSessionUsageFromTranscript(
   if (!filePath) {
     return null;
   }
+  const readLenCap = Math.max(1024, Math.floor(maxBytes));
+  const cacheKey = `${filePath}\t${readLenCap}`;
+  let stat: fs.Stats | null = null;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    sessionUsageSnapshotCache.delete(cacheKey);
+    return null;
+  }
+  const cached = sessionUsageSnapshotCache.get(cacheKey);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    // LRU bump
+    sessionUsageSnapshotCache.delete(cacheKey);
+    sessionUsageSnapshotCache.set(cacheKey, cached);
+    return cached.snapshot;
+  }
 
-  return withOpenTranscriptFd(filePath, (fd) => {
-    const stat = fs.fstatSync(fd);
-    if (stat.size === 0) {
+  const snapshot = withOpenTranscriptFd(filePath, (fd) => {
+    const fdStat = fs.fstatSync(fd);
+    if (fdStat.size === 0) {
       return null;
     }
-    const readLen = Math.min(stat.size, Math.max(1024, Math.floor(maxBytes)));
-    const readStart = Math.max(0, stat.size - readLen);
+    const readLen = Math.min(fdStat.size, readLenCap);
+    const readStart = Math.max(0, fdStat.size - readLen);
     const buf = Buffer.alloc(readLen);
     const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
     if (bytesRead <= 0) {
@@ -1586,6 +1618,20 @@ export function readRecentSessionUsageFromTranscript(
       .join("\n");
     return extractAggregateUsageFromTranscriptChunk(chunk);
   });
+
+  sessionUsageSnapshotCache.set(cacheKey, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    snapshot: snapshot ?? null,
+  });
+  while (sessionUsageSnapshotCache.size > MAX_SESSION_USAGE_SNAPSHOT_CACHE_ENTRIES) {
+    const oldestKey = sessionUsageSnapshotCache.keys().next().value;
+    if (typeof oldestKey !== "string" || !oldestKey) {
+      break;
+    }
+    sessionUsageSnapshotCache.delete(oldestKey);
+  }
+  return snapshot;
 }
 
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];

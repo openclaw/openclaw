@@ -7,6 +7,12 @@ import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "./control-plane-audit.js";
 import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
+import {
+  gwPerfEnabled,
+  gwPerfLog,
+  gwPerfNow,
+  gwPerfSetCurrentMethod,
+} from "./gateway-perf-trace.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import {
   createCoreGatewayMethodDescriptors,
@@ -655,17 +661,46 @@ export async function handleGatewayRequest(
     );
     return;
   }
+  // Diagnostic, env-gated (OPENCLAW_GW_PERF=1): split this request's wall-clock
+  // into received -> handler-start -> response-sent -> handler-end so a slow
+  // RPC can be attributed to handler work vs queue/transport.
+  const perfTracing = gwPerfEnabled();
+  const recvAtMs = perfTracing ? gwPerfNow() : 0;
+  let respondedAtMs = 0;
+  const tracedRespond: typeof respond = perfTracing
+    ? (ok, result, error) => {
+        if (respondedAtMs === 0) {
+          respondedAtMs = gwPerfNow();
+        }
+        return respond(ok, result, error);
+      }
+    : respond;
   const invokeHandler = () =>
     handler({
       req,
       params: (req.params ?? {}) as Record<string, unknown>,
       client,
       isWebchatConnect,
-      respond,
+      respond: tracedRespond,
       context,
     });
   // All handlers run inside a request scope so that plugin runtime
   // subagent methods (e.g. context engine tools spawning sub-agents
   // during tool execution) can dispatch back into the gateway.
+  const handlerStartMs = perfTracing ? gwPerfNow() : 0;
+  if (perfTracing) {
+    gwPerfSetCurrentMethod(req.method);
+  }
   await withPluginRuntimeGatewayRequestScope({ context, client, isWebchatConnect }, invokeHandler);
+  if (perfTracing) {
+    const doneMs = gwPerfNow();
+    gwPerfLog({
+      kind: "dispatch",
+      method: req.method,
+      preHandlerMs: Math.round((handlerStartMs - recvAtMs) * 100) / 100,
+      respondMs: respondedAtMs ? Math.round((respondedAtMs - handlerStartMs) * 100) / 100 : null,
+      handlerMs: Math.round((doneMs - handlerStartMs) * 100) / 100,
+      totalMs: Math.round((doneMs - recvAtMs) * 100) / 100,
+    });
+  }
 }

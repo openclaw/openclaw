@@ -150,6 +150,7 @@ import {
   titleForTab,
   type Tab,
 } from "./navigation.ts";
+import { beginRenderPhases, endRenderPhases } from "./perf/render-phase-profiler.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import "./components/dashboard-header.ts";
@@ -655,9 +656,12 @@ function renderMeasured<T>(
   render: () => T,
 ): T {
   const startedAtMs = controlUiNowMs();
+  beginRenderPhases();
   const result = render();
+  const phases = endRenderPhases();
   recordControlUiRenderTiming(state, surface, {
     ...payload,
+    ...(Object.keys(phases).length > 0 ? { phases } : {}),
     durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
   });
   return result;

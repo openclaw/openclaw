@@ -253,7 +253,12 @@ async function unsubscribeSelectedSessionMessageBestEffort(
 
 function sessionPatchTargetsCurrentChatRun(
   state: SessionsState & { sessionKey: string },
-  options: { changedSessionKey: string; eventRunId?: string },
+  options: {
+    changedSessionKey: string;
+    eventRunId?: string;
+    eventUpdatedAt?: number | null;
+    explicitInactiveRun?: boolean;
+  },
 ): boolean {
   if (state.sessionKey !== options.changedSessionKey) {
     return false;
@@ -266,7 +271,16 @@ function sessionPatchTargetsCurrentChatRun(
     return false;
   }
   if (options.eventRunId === undefined && state.chatRunId) {
-    return false;
+    if (!options.explicitInactiveRun) {
+      return false;
+    }
+    if (
+      typeof options.eventUpdatedAt === "number" &&
+      typeof state.chatStreamStartedAt === "number" &&
+      options.eventUpdatedAt < state.chatStreamStartedAt
+    ) {
+      return false;
+    }
   }
   return true;
 }
@@ -634,6 +648,11 @@ export function applySessionsChangedEvent(
       : [nextRow, ...previousRows];
   const sessions = nextRows.toSorted(compareSessionRowsByUpdatedAt);
   const eventTs = typeof payload.ts === "number" && Number.isFinite(payload.ts) ? payload.ts : null;
+  const eventUpdatedAt =
+    typeof source.updatedAt === "number" && Number.isFinite(source.updatedAt)
+      ? source.updatedAt
+      : eventTs;
+  const explicitInactiveRun = hasOwn(source, "hasActiveRun") && source.hasActiveRun === false;
   const eventRunId =
     typeof payload.clientRunId === "string" && payload.clientRunId.trim()
       ? payload.clientRunId.trim()
@@ -655,6 +674,8 @@ export function applySessionsChangedEvent(
     sessionPatchTargetsCurrentChatRun(state, {
       changedSessionKey: key,
       eventRunId,
+      eventUpdatedAt,
+      explicitInactiveRun,
     }) &&
     reconcileChatRunFromCurrentSessionRow(state, {
       publishRunStatus: false,

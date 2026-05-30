@@ -121,6 +121,7 @@ import {
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
+import { GwPerfSteps, gwPerfLog } from "../gateway-perf-trace.js";
 import {
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
@@ -2363,6 +2364,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       limit?: number;
       maxChars?: number;
     };
+    const perf = new GwPerfSteps();
     const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
     const requestedAgentId = resolveRequestedChatAgentId({
       cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
@@ -2371,6 +2373,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey, sessionLoadOptions);
+    perf.mark("loadSessionEntry");
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: sessionKey,
@@ -2387,6 +2390,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: selectedAgent.agentId,
     });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    perf.mark("resolveModel");
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -2400,6 +2404,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           })
         : [];
+    perf.mark("readMessages");
     const overreadContextMessage = localMessages.length > max ? localMessages[0] : undefined;
     const localMessagesWithBoundaryFilter = dropLocalHistoryOverreadContextMessage(
       dropPreSessionStartAnnouncePairs(
@@ -2413,6 +2418,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       provider: resolvedSessionModel.provider,
       localMessages: localMessagesWithBoundaryFilter,
     });
+    perf.mark("cliImports");
     // Drop subagent_announce pairs (user inter-session announce + adjacent
     // assistant) whose record timestamp predates the current session's
     // sessionStartedAt. Run after CLI history imports too, because those
@@ -2428,18 +2434,22 @@ export const chatHandlers: GatewayRequestHandlers = {
         maxMessages: max,
       }),
     );
+    perf.mark("projectCanvas");
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
       maxSingleMessageBytes: perMessageHardCap,
     });
+    perf.mark("replaceOversized");
     scheduleChatHistoryManagedImageCleanup({
       sessionKey,
       ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
       context,
     });
+    perf.mark("scheduleImageCleanup");
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+    perf.mark("budget");
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
     if (placeholderCount > 0) {
       chatHistoryPlaceholderEmitCount += placeholderCount;
@@ -2465,6 +2475,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    perf.mark("resolveThinking");
+    gwPerfLog({
+      kind: "chat.history.steps",
+      sessionKey,
+      messages: bounded.messages.length,
+      totalMs: perf.totalMs(),
+      steps: perf.toObject(),
+    });
     respond(true, {
       sessionKey,
       sessionId,

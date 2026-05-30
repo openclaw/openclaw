@@ -162,6 +162,23 @@ describe("grouped chat width styles", () => {
     expect(css).toContain("max-width: var(--chat-message-max-width, min(900px, 68%));");
   });
 
+  it("keeps grouped chat avatars aligned with the first message bubble", () => {
+    const css = readGroupedChatCss();
+
+    expect(css).toMatch(/\.chat-avatar \{[\s\S]*align-self: flex-start;/);
+    expect(css).toMatch(/\.chat-avatar \{[\s\S]*margin-top: 2px;/);
+    expect(css).toMatch(/\.chat-avatar \{[\s\S]*margin-bottom: 0;/);
+  });
+
+  it("keeps grouped chat metadata beneath the bubble and aligned to the message side", () => {
+    const css = readGroupedChatCss();
+
+    expect(css).toMatch(/\.chat-group-footer \{[\s\S]*align-self: flex-start;/);
+    expect(css).toMatch(
+      /\.chat-group\.user \.chat-group-footer \{[\s\S]*align-self: flex-end;[\s\S]*text-align: right;/,
+    );
+  });
+
   it("excludes tool shells from light hover without overriding user bubble hover", () => {
     const css = readGroupedChatCss();
 

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
@@ -2089,6 +2092,80 @@ describe("agent event handler", () => {
     expect(requireMockArg(broadcastToConnIds, 0, 3, "sessions changed options")).toEqual({
       dropIfSlow: true,
     });
+  });
+
+  it("broadcasts recovered done status for late internal webchat errors with persisted assistant output", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-broadcast-recovery-"));
+    try {
+      const sessionFile = path.join(dir, "session.jsonl");
+      fs.writeFileSync(
+        sessionFile,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "done" }],
+            stopReason: "stop",
+            timestamp: 1_500,
+          },
+        })}\n`,
+      );
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "session-late-error",
+        kind: "direct",
+        updatedAt: 1_000,
+        status: "running",
+        startedAt: 1_100,
+        sessionId: "session",
+      });
+      vi.mocked(loadSessionEntry).mockReturnValue({
+        cfg: {},
+        storePath: path.join(dir, "sessions.json"),
+        store: {},
+        entry: {
+          sessionId: "session",
+          sessionFile,
+          route: { channel: "webchat" },
+          updatedAt: 1_000,
+          startedAt: 1_100,
+          status: "running",
+          abortedLastRun: true,
+        },
+        canonicalKey: "session-late-error",
+        legacyKey: undefined,
+      });
+      const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
+        resolveSessionKeyForRun: () => "session-late-error",
+        lifecycleErrorRetryGraceMs: 0,
+      });
+      sessionEventSubscribers.subscribe("conn-session");
+
+      handler({
+        runId: "run-late-error",
+        seq: 2,
+        stream: "lifecycle",
+        ts: 2_000,
+        data: {
+          phase: "error",
+          startedAt: 1_100,
+          endedAt: 1_900,
+          error: "late abort after assistant persisted",
+        },
+      });
+
+      expectPayloadFields(requireMockArg(broadcastToConnIds, 0, 1, "sessions changed payload"), {
+        sessionKey: "session-late-error",
+        phase: "error",
+        status: "done",
+        startedAt: 1_100,
+        endedAt: 1_900,
+        runtimeMs: 800,
+        updatedAt: 1_900,
+        abortedLastRun: false,
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("omits goal state from unscoped global lifecycle snapshots", () => {

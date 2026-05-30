@@ -882,7 +882,9 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     return;
   }
   if (shouldReplayDeferredSessionMessageReload && !historyReloaded) {
-    void loadChatHistory(host as unknown as ChatState);
+    void loadChatHistory(host as unknown as ChatState, {
+      clearError: state !== "error",
+    });
   }
 }
 

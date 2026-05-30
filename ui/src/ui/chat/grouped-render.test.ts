@@ -539,6 +539,35 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
+  it("renders message bubbles before group metadata", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(container, [
+      createMessageGroup(
+        {
+          role: "user",
+          content: "hello from user",
+          timestamp: 1000,
+        },
+        "user",
+      ),
+      createMessageGroup(
+        {
+          role: "assistant",
+          content: "hello from assistant",
+          timestamp: 1001,
+        },
+        "assistant",
+      ),
+    ]);
+
+    for (const role of ["user", "assistant"]) {
+      const group = expectElement(container, `.chat-group.${role}`, HTMLElement);
+      const bubble = expectElement(group, ".chat-bubble", HTMLElement);
+      const footer = expectElement(group, ".chat-group-footer", HTMLElement);
+      expect(bubble.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    }
+  });
+
   it("reserves bubble space when assistant message actions render", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {

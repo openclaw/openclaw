@@ -28,6 +28,8 @@ const publicSurfaceLocationCache = new Map<
   }
 >();
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+const PUBLIC_SURFACE_ALIAS_IMPORT_RE =
+  /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(?:openclaw\/|@openclaw\/|\.{1,2}\/[^"']+\.js["'])/u;
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
@@ -43,11 +45,20 @@ function isSourceArtifactPath(modulePath: string): boolean {
   }
 }
 
+function sourceArtifactNeedsAliasLoader(modulePath: string): boolean {
+  try {
+    return PUBLIC_SURFACE_ALIAS_IMPORT_RE.test(fs.readFileSync(modulePath, "utf8"));
+  } catch {
+    return true;
+  }
+}
+
 function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: boolean }): boolean {
   return (
     !params.tryNative &&
     isSourceArtifactPath(params.modulePath) &&
-    typeof sourceArtifactRequire.extensions?.[".ts"] === "function"
+    typeof sourceArtifactRequire.extensions?.[".ts"] === "function" &&
+    !sourceArtifactNeedsAliasLoader(params.modulePath)
   );
 }
 

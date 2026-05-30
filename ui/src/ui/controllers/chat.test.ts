@@ -1044,6 +1044,22 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatLoading).toBe(false);
   });
 
+  it("can preserve an existing visible error while reloading history", async () => {
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages: [] }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+      lastError: "LLM request failed: network connection error.",
+    });
+
+    await loadChatHistory(state, { clearError: false });
+
+    expect(state.lastError).toBe("LLM request failed: network connection error.");
+    expect(state.chatLoading).toBe(false);
+  });
+
   it("keeps assistant message when text field has real content but content is NO_REPLY", async () => {
     const messages = [{ role: "assistant", text: "real reply", content: "NO_REPLY" }];
     const mockClient = {
@@ -1770,6 +1786,70 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatLoading).toBe(false);
   });
 
+  it("does not coalesce default same-session loads so event-driven refreshes can fetch new transcript state", async () => {
+    const firstRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const secondRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockReturnValueOnce(secondRequest.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "visible old" }] }],
+    });
+
+    const firstLoad = loadChatHistory(state);
+    const secondLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+
+    firstRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "stale" }] }],
+      thinkingLevel: "high",
+    });
+    await firstLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible old" }] },
+    ]);
+
+    secondRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh" }] }],
+      thinkingLevel: "low",
+    });
+    await secondLoad;
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+  });
+
+  it("coalesces explicit duplicate same-session loads", async () => {
+    const historyRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => historyRequest.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const firstLoad = loadChatHistory(state, { coalesce: true });
+    const secondLoad = loadChatHistory(state, { coalesce: true });
+
+    expect(request).toHaveBeenCalledTimes(1);
+
+    historyRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "shared" }] }],
+      thinkingLevel: "minimal",
+    });
+    await Promise.all([firstLoad, secondLoad]);
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "shared" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("minimal");
+  });
+
   it("ignores stale history responses after switching sessions", async () => {
     const mainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
     const otherRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
@@ -1817,6 +1897,68 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatThinkingLevel).toBe("low");
   });
 
+  it("starts a fresh history load after switching back to a session with an older in-flight load", async () => {
+    const firstMainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const otherRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const secondMainRequest = createDeferred<{
+      messages: Array<unknown>;
+      thinkingLevel?: string;
+    }>();
+    let mainRequestCount = 0;
+    const request = vi.fn((_method: string, params?: { sessionKey?: string }) => {
+      if (params?.sessionKey === "main") {
+        mainRequestCount += 1;
+        return mainRequestCount === 1 ? firstMainRequest.promise : secondMainRequest.promise;
+      }
+      if (params?.sessionKey === "other") {
+        return otherRequest.promise;
+      }
+      throw new Error(`Unexpected sessionKey: ${String(params?.sessionKey)}`);
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "visible old" }] }],
+    });
+
+    const firstMainLoad = loadChatHistory(state);
+    state.sessionKey = "other";
+    const otherLoad = loadChatHistory(state);
+    state.sessionKey = "main";
+    const secondMainLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(3);
+
+    firstMainRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "first main" }] }],
+      thinkingLevel: "high",
+    });
+    await firstMainLoad;
+    otherRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "other history" }] }],
+      thinkingLevel: "minimal",
+    });
+    await otherLoad;
+
+    expect(state.chatLoading).toBe(true);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible old" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBeNull();
+
+    secondMainRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "second main" }] }],
+      thinkingLevel: "low",
+    });
+    await secondMainLoad;
+
+    expect(state.chatLoading).toBe(false);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "second main" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+  });
+
   it("ignores stale global history responses after switching selected agents", async () => {
     const workRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
     const request = vi.fn((_method: string, params?: { agentId?: string; sessionKey?: string }) => {
@@ -1847,5 +1989,58 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "visible old" }] },
     ]);
     expect(state.chatThinkingLevel).toBeNull();
+  });
+
+  it("does not coalesce global history loads across selected agents", async () => {
+    const workRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const mainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn((_method: string, params?: { agentId?: string; sessionKey?: string }) => {
+      if (params?.sessionKey === "global" && params.agentId === "work") {
+        return workRequest.promise;
+      }
+      if (params?.sessionKey === "global" && params.agentId === "main") {
+        return mainRequest.promise;
+      }
+      throw new Error(`Unexpected request: ${JSON.stringify(params)}`);
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "visible old" }] }],
+    });
+
+    const workLoad = loadChatHistory(state);
+    state.assistantAgentId = "main";
+    const mainLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map(([, params]) => params)).toEqual([
+      expect.objectContaining({ sessionKey: "global", agentId: "work" }),
+      expect.objectContaining({ sessionKey: "global", agentId: "main" }),
+    ]);
+
+    workRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "work history" }] }],
+      thinkingLevel: "high",
+    });
+    await workLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "visible old" }] },
+    ]);
+
+    mainRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "main history" }] }],
+      thinkingLevel: "low",
+    });
+    await mainLoad;
+
+    expect(state.chatLoading).toBe(false);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "main history" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
   });
 });

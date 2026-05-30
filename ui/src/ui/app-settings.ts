@@ -66,6 +66,7 @@ import {
   tabFromPath,
   type Tab,
 } from "./navigation.ts";
+import { parseAgentSessionKey } from "./session-key.ts";
 import {
   normalizeTextScale,
   saveLocalUserIdentity,
@@ -628,11 +629,29 @@ export function onPopState(host: SettingsHost) {
 
   const url = new URL(window.location.href);
   const session = normalizeOptionalString(url.searchParams.get("session"));
-  if (session) {
+  const previousTab = host.tab;
+  const previousSessionKey = host.sessionKey;
+  const previousAgentId = parseAgentSessionKey(previousSessionKey)?.agentId ?? null;
+  const nextAgentId = session ? (parseAgentSessionKey(session)?.agentId ?? null) : null;
+  const isConnectedChatSessionChange =
+    resolved === "chat" &&
+    previousTab === "chat" &&
+    session !== undefined &&
+    previousSessionKey !== session &&
+    host.connected;
+  const shouldSwitchChatSession = isConnectedChatSessionChange && previousAgentId === nextAgentId;
+  if (session && !shouldSwitchChatSession) {
     applySessionSelection(host, session);
   }
 
   setTabFromRoute(host, resolved);
+  if (shouldSwitchChatSession) {
+    void import("./app-render.helpers.ts").then(({ switchChatSession }) => {
+      switchChatSession(host as unknown as Parameters<typeof switchChatSession>[0], session);
+    });
+  } else if (isConnectedChatSessionChange) {
+    void refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
+  }
 }
 
 export function setTabFromRoute(host: SettingsHost, next: Tab) {
@@ -688,7 +707,15 @@ function applyTabSelection(
     host as unknown as Parameters<typeof startDebugPolling>[0],
   );
 
-  if (options.refreshPolicy === "always" || host.connected) {
+  // Re-selecting chat while already on chat happens during session switches and
+  // must not refire the full chat bootstrap burst. Other tabs keep the existing
+  // refreshPolicy "always" behavior so users can click the active tab to refresh.
+  const tabChanged = prev !== next;
+  const shouldRefresh =
+    options.refreshPolicy === "always"
+      ? tabChanged || next !== "chat"
+      : tabChanged && host.connected;
+  if (shouldRefresh) {
     void refreshActiveTab(host);
   }
 

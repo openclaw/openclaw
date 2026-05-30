@@ -1951,7 +1951,7 @@ describe("handleAbortChat", () => {
     expect(hasAbortableSessionRun(host)).toBe(false);
   });
 
-  it("ignores stale running status once the gateway reports no active run", () => {
+  it("ignores stale running status once active-run tracking is cleared", () => {
     const host = makeHost({
       chatRunId: null,
       sessionKey: "agent:main",

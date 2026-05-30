@@ -795,7 +795,7 @@ describe("createChatSession", () => {
       { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
     ]);
     expect(state.chatMessages).toStrictEqual([]);
-    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state, { coalesce: true });
   });
 
   it("preserves draft and attachment edits made while session creation is in flight", async () => {
@@ -818,7 +818,7 @@ describe("createChatSession", () => {
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
     expect(state.chatMessage).toBe("updated draft");
     expect(state.chatAttachments).toBe(updatedAttachments);
-    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state, { coalesce: true });
   });
 
   it("ignores a stale create response after the active session changes", async () => {
@@ -980,15 +980,9 @@ describe("switchChatSession", () => {
       client: undefined,
       agentId: "main",
     });
-    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state, { coalesce: true });
     expect(syncSelectedSessionMessageSubscriptionMock).toHaveBeenCalledWith(state);
-    expect(loadSessionsMock).toHaveBeenCalledWith(state, {
-      activeMinutes: 120,
-      limit: 50,
-      includeGlobal: true,
-      includeUnknown: true,
-      showArchived: false,
-    });
+    expect(loadSessionsMock).not.toHaveBeenCalled();
     expect(
       (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
         .announceSessionSwitch,
@@ -1041,6 +1035,58 @@ describe("switchChatSession", () => {
     expect(state.chatQueue).toEqual([{ id: "queued-1", text: "message B", createdAt: 1 }]);
   });
 
+  it("preserves chat avatar state when switching between sessions for the same agent", async () => {
+    const settings = createSettings();
+    const state = {
+      sessionKey: "agent:main:first",
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: [],
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: "blob:main-avatar",
+      chatAvatarSource: "/avatars/main.png",
+      chatAvatarStatus: "local",
+      chatAvatarReason: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatRunId: null,
+      sessionsShowArchived: false,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      settings,
+      announceSessionSwitch: vi.fn(),
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+      client: { request: vi.fn() },
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+
+    switchChatSession(state, "agent:main:second");
+    await Promise.resolve();
+
+    expect(state.chatAvatarUrl).toBe("blob:main-avatar");
+    expect(state.chatAvatarSource).toBe("/avatars/main.png");
+    expect(state.chatAvatarStatus).toBe("local");
+    expect(state.chatAvatarReason).toBeNull();
+    expect(refreshChatAvatarMock).not.toHaveBeenCalled();
+    expect(refreshSlashCommandsMock).not.toHaveBeenCalled();
+  });
+
   it("does not force agentId=main for plain session keys", async () => {
     const settings = createSettings();
     const state = {
@@ -1087,10 +1133,7 @@ describe("switchChatSession", () => {
       (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
         .announceSessionSwitch,
     ).not.toHaveBeenCalled();
-    expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
-      client: state.client,
-      agentId: undefined,
-    });
+    expect(refreshSlashCommandsMock).not.toHaveBeenCalled();
   });
 });
 

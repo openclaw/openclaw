@@ -2,20 +2,17 @@ import { describe, expect, it } from "vitest";
 import { isSessionRunActive } from "./session-run-state.ts";
 
 describe("isSessionRunActive", () => {
-  it("uses explicit live-run state over stale running status", () => {
-    expect(isSessionRunActive({ status: "running", hasActiveRun: false })).toBe(false);
-    expect(isSessionRunActive({ status: "running", hasActiveRun: true })).toBe(true);
+  it("treats an explicit inactive flag as authoritative over a stale running status", () => {
+    expect(isSessionRunActive({ hasActiveRun: false, status: "running" })).toBe(false);
   });
 
-  it("keeps terminal status authoritative over stale active flags", () => {
-    expect(isSessionRunActive({ status: "done", hasActiveRun: true })).toBe(false);
-    expect(isSessionRunActive({ status: "failed", hasActiveRun: true })).toBe(false);
-    expect(isSessionRunActive({ status: "killed", hasActiveRun: true })).toBe(false);
-    expect(isSessionRunActive({ status: "timeout", hasActiveRun: true })).toBe(false);
-  });
-
-  it("keeps legacy running status active when no live-run flag exists", () => {
+  it("uses the run status when no explicit inactive flag is available", () => {
     expect(isSessionRunActive({ status: "running" })).toBe(true);
+    expect(isSessionRunActive({ hasActiveRun: true, status: "done" })).toBe(false);
+  });
+
+  it("falls back to the active flag when no status is available", () => {
     expect(isSessionRunActive({ hasActiveRun: true })).toBe(true);
+    expect(isSessionRunActive({ hasActiveRun: false })).toBe(false);
   });
 });

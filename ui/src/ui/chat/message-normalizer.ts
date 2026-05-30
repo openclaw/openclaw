@@ -210,6 +210,96 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
+function readTrimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+const VISIBLE_ERROR_SECRET_PATTERNS: RegExp[] = [
+  /\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g,
+  /[?&](?:access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|api[-_]?key|client[-_]?secret|token|key|secret|password|pass|passwd|auth|signature)=([^&\s"'<>]+)/gi,
+  /"(?:apiKey|token|secret|password|passwd|accessToken|refreshToken)"\s*:\s*"([^"]+)"/g,
+  /--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd)\s+(["']?)([^\s"']+)\1/g,
+  /Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)/gi,
+  /Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)/gi,
+  /(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)/gi,
+  /\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b/gi,
+  /(^|[\s,;])(?:access_token|refresh_token|auth[-_]?token|api[-_]?key|client[-_]?secret|token|secret|password|passwd)=([^\s&#]+)/gi,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----/g,
+  /\b(sk-[A-Za-z0-9_-]{8,})\b/g,
+  /\b(ghp_[A-Za-z0-9]{20,})\b/g,
+  /\b(github_pat_[A-Za-z0-9_]{20,})\b/g,
+  /\b(xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
+  /\b(xapp-[A-Za-z0-9-]{10,})\b/g,
+  /\b(gsk_[A-Za-z0-9_-]{10,})\b/g,
+  /\b(AIza[0-9A-Za-z\-_]{20,})\b/g,
+  /\b(ya29\.[0-9A-Za-z_\-./+=]{10,})\b/g,
+  /\b(1\/\/0[0-9A-Za-z_\-./+=]{10,})\b/g,
+  /\b(pplx-[A-Za-z0-9_-]{10,})\b/g,
+  /\b(npm_[A-Za-z0-9]{10,})\b/g,
+  /\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b/g,
+  /\b(\d{6,}:[A-Za-z0-9_-]{20,})\b/g,
+];
+
+function maskVisibleSecret(token: string): string {
+  if (token.length < 18) {
+    return "***";
+  }
+  return `${token.slice(0, 6)}...${token.slice(-4)}`;
+}
+
+function redactVisibleErrorMatch(match: string, groups: string[]): string {
+  if (match.includes("PRIVATE KEY-----")) {
+    const lines = match.split(/\r?\n/).filter(Boolean);
+    if (lines.length < 2) {
+      return "***";
+    }
+    return `${lines[0]}\n...redacted...\n${lines[lines.length - 1]}`;
+  }
+  let token = match;
+  for (let index = groups.length - 1; index >= 0; index -= 1) {
+    const value = groups[index];
+    if (typeof value === "string" && value.length > 0) {
+      token = value;
+      break;
+    }
+  }
+  const masked = maskVisibleSecret(token);
+  return token === match ? masked : match.replace(token, masked);
+}
+
+function redactVisibleErrorText(text: string): string {
+  let next = text;
+  for (const pattern of VISIBLE_ERROR_SECRET_PATTERNS) {
+    next = next.replace(pattern, (...args: string[]) =>
+      redactVisibleErrorMatch(args[0] ?? "", args.slice(1, -2)),
+    );
+  }
+  return next;
+}
+
+function fallbackAssistantErrorContent(
+  message: Record<string, unknown>,
+  content: MessageContentItem[],
+): MessageContentItem[] {
+  if (content.length > 0) {
+    return content;
+  }
+  if (message.stopReason !== "error") {
+    return content;
+  }
+  const errorText =
+    readTrimmedString(message.errorMessage) ?? "Assistant turn failed before producing content.";
+  const provider = readTrimmedString(message.provider);
+  const model = readTrimmedString(message.model);
+  const target = provider && model ? ` (${provider}/${model})` : "";
+  return [
+    {
+      type: "text",
+      text: `Assistant failed${target}: ${redactVisibleErrorText(errorText)}`,
+    },
+  ];
+}
+
 export function stripMessageDisplayMetadataText(text: string): string {
   return stripInboundMetadata(text);
 }
@@ -446,6 +536,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
 
   content = stripMessageDisplayMetadata(content);
+  if (isAssistantMessage) {
+    content = fallbackAssistantErrorContent(m, content);
+  }
 
   return {
     role,

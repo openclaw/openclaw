@@ -1564,6 +1564,134 @@ describe("applySessionsChangedEvent", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
+  it("clears the local chat run when active-run tracking ends but status is stale running", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 1,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "run-1",
+      status: "running",
+      hasActiveRun: false,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "interrupted",
+        runId: "run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "killed",
+    });
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("clears the local chat run when active-run tracking ends without a run id", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 10,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      status: "running",
+      hasActiveRun: false,
+      updatedAt: 11,
+      ts: 11,
+    });
+
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "interrupted",
+        runId: "run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "killed",
+    });
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
   it("clears the local chat run when a lifecycle patch maps the client run id", () => {
     const requestUpdate = vi.fn();
     const state: SessionsState & {

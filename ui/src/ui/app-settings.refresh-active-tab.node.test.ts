@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   loadAgentSkillsMock: vi.fn(async () => {}),
   loadAgentsMock: vi.fn(async () => {}),
   loadChannelsMock: vi.fn<(hostValue: unknown, _probe: boolean) => Promise<void>>(async () => {}),
+  loadChatHistoryMock: vi.fn(async () => {}),
   loadConfigMock: vi.fn(async () => {}),
   loadConfigSchemaMock: vi.fn(async () => {}),
   loadCronStatusMock: vi.fn(async () => {}),
@@ -90,6 +91,9 @@ vi.mock("./controllers/agents.ts", () => ({
 vi.mock("./controllers/channels.ts", () => ({
   loadChannels: mocks.loadChannelsMock,
 }));
+vi.mock("./controllers/chat.ts", () => ({
+  loadChatHistory: mocks.loadChatHistoryMock,
+}));
 vi.mock("./controllers/config.ts", () => ({
   loadConfig: mocks.loadConfigMock,
   loadConfigSchema: mocks.loadConfigSchemaMock,
@@ -134,10 +138,10 @@ vi.mock("./controllers/workboard.ts", () => ({
   loadWorkboard: mocks.loadWorkboardMock,
 }));
 
-import { loadChannelsTab, refreshActiveTab, setTab } from "./app-settings.ts";
+import { loadChannelsTab, onPopState, refreshActiveTab, setTab } from "./app-settings.ts";
 
 function createHost() {
-  return {
+  const host = {
     tab: "agents",
     connected: true,
     client: {},
@@ -148,6 +152,8 @@ function createHost() {
       agents: [{ id: "agent-a" }, { id: "agent-b" }],
     },
     chatHasAutoScrolled: false,
+    chatQueue: [],
+    chatQueueBySession: {},
     logsAtBottom: false,
     eventLog: [],
     eventLogBuffer: [],
@@ -159,7 +165,13 @@ function createHost() {
     sessionKey: "main",
     settings: {},
     basePath: "",
+    applySettings: vi.fn((nextSettings: Record<string, unknown>) => {
+      host.settings = nextSettings;
+    }),
+    resetChatInputHistoryNavigation: vi.fn(),
+    resetChatScroll: vi.fn(),
   };
+  return host;
 }
 
 type BufferedPerformanceEvent = {
@@ -298,6 +310,72 @@ describe("refreshActiveTab", () => {
     });
 
     sessions.resolve();
+  });
+
+  it("refreshes non-chat tabs when reselecting the current tab", async () => {
+    const host = createHost();
+    host.tab = "sessions";
+
+    setTab(host as never, "sessions");
+    await Promise.resolve();
+
+    expect(mocks.loadSessionsMock).toHaveBeenCalledWith(host);
+  });
+
+  it("does not rerun chat bootstrap when reselecting the current chat tab", async () => {
+    const host = createHost();
+    host.tab = "chat";
+
+    setTab(host as never, "chat");
+    await Promise.resolve();
+
+    expect(mocks.refreshChatMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads only chat history for same-agent same-tab route session changes", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.sessionKey = "agent:main:first";
+    try {
+      vi.stubGlobal("window", {
+        location: {
+          href: "https://control.test/chat?session=agent%3Amain%3Asecond",
+          pathname: "/chat",
+        },
+      });
+
+      onPopState(host as never);
+      await vi.waitFor(() => {
+        expect(host.sessionKey).toBe("agent:main:second");
+        expect(mocks.loadChatHistoryMock).toHaveBeenCalledWith(host, { coalesce: true });
+      });
+      expect(mocks.refreshChatMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reruns chat refresh for cross-agent same-tab route session changes", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    host.sessionKey = "agent:main:first";
+    try {
+      vi.stubGlobal("window", {
+        location: {
+          href: "https://control.test/chat?session=agent%3Awork%3Asecond",
+          pathname: "/chat",
+        },
+      });
+
+      onPopState(host as never);
+      await Promise.resolve();
+
+      expect(host.sessionKey).toBe("agent:work:second");
+      expect(mocks.refreshChatMock).toHaveBeenCalledWith(host);
+      expect(mocks.loadChatHistoryMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("loads config before rendering session Workboard actions", async () => {

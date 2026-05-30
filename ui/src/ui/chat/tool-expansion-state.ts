@@ -4,73 +4,102 @@ import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { extractToolCards } from "./tool-cards.ts";
 
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
-const initializedToolCardsBySession = new Map<string, Set<string>>();
-const lastAutoExpandPrefBySession = new Map<string, boolean>();
+const manuallyToggledBySession = new Map<string, Set<string>>();
 
 export function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
   return getOrCreateSessionCacheValue(expandedToolCardsBySession, sessionKey, () => new Map());
 }
 
-function getInitializedToolCards(sessionKey: string): Set<string> {
-  return getOrCreateSessionCacheValue(initializedToolCardsBySession, sessionKey, () => new Set());
+function getManuallyToggledToolCards(sessionKey: string): Set<string> {
+  return getOrCreateSessionCacheValue(manuallyToggledBySession, sessionKey, () => new Set());
+}
+
+/**
+ * Record that the user opened/closed a tool card by hand. Manually toggled
+ * cards keep their state and stop following the auto "only the last card in
+ * the turn stays open" rule until the card scrolls out of the transcript.
+ */
+export function markToolCardManuallyToggled(sessionKey: string, disclosureId: string) {
+  getManuallyToggledToolCards(sessionKey).add(disclosureId);
 }
 
 export function resetToolExpansionStateForTest() {
   expandedToolCardsBySession.clear();
-  initializedToolCardsBySession.clear();
-  lastAutoExpandPrefBySession.clear();
+  manuallyToggledBySession.clear();
 }
 
+function isToolEntryMessage(message: unknown): boolean {
+  const record = message as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role : "unknown";
+  const normalizedRole = normalizeRoleForGrouping(role);
+  return (
+    isToolResultMessage(message) ||
+    normalizedRole === "tool" ||
+    role.toLowerCase() === "toolresult" ||
+    role.toLowerCase() === "tool_result" ||
+    typeof record.toolCallId === "string" ||
+    typeof record.tool_call_id === "string"
+  );
+}
+
+/** Collect tool disclosure ids for one group, in the order they render. */
+function collectGroupDisclosureIds(group: MessageGroup): string[] {
+  const ids: string[] = [];
+  for (const entry of group.messages) {
+    const cards = extractToolCards(entry.message, entry.key);
+    for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
+      ids.push(`${entry.key}:toolcard:${cardIndex}`);
+    }
+    if (isToolEntryMessage(entry.message)) {
+      ids.push(`toolmsg:${entry.key}`);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Keep the transcript clean: within each turn (message group) only the most
+ * recent tool card stays expanded; every earlier card collapses to a single
+ * row. Re-evaluated on every render so a turn's expanded card follows the
+ * latest streamed tool result. Cards the user toggled by hand are left alone.
+ *
+ * The `autoExpandToolCalls` preference no longer forces every card open; the
+ * last-card-only rule is always in effect.
+ */
 export function syncToolCardExpansionState(
   sessionKey: string,
   items: Array<ChatItem | MessageGroup>,
-  autoExpandToolCalls: boolean,
+  _autoExpandToolCalls: boolean,
 ) {
   const expanded = getExpandedToolCards(sessionKey);
-  const initialized = getInitializedToolCards(sessionKey);
-  const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
-  const currentToolCardIds = new Set<string>();
+  const manual = getManuallyToggledToolCards(sessionKey);
+  const live = new Set<string>();
+
   for (const item of items) {
     if (item.kind !== "group") {
       continue;
     }
-    for (const entry of item.messages) {
-      const cards = extractToolCards(entry.message, entry.key);
-      for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
-        const disclosureId = `${entry.key}:toolcard:${cardIndex}`;
-        currentToolCardIds.add(disclosureId);
-        if (initialized.has(disclosureId)) {
-          continue;
-        }
-        expanded.set(disclosureId, autoExpandToolCalls);
-        initialized.add(disclosureId);
-      }
-      const messageRecord = entry.message as Record<string, unknown>;
-      const role = typeof messageRecord.role === "string" ? messageRecord.role : "unknown";
-      const normalizedRole = normalizeRoleForGrouping(role);
-      const isToolMessage =
-        isToolResultMessage(entry.message) ||
-        normalizedRole === "tool" ||
-        role.toLowerCase() === "toolresult" ||
-        role.toLowerCase() === "tool_result" ||
-        typeof messageRecord.toolCallId === "string" ||
-        typeof messageRecord.tool_call_id === "string";
-      if (!isToolMessage) {
+    const disclosureIds = collectGroupDisclosureIds(item);
+    const lastId = disclosureIds.at(-1);
+    for (const disclosureId of disclosureIds) {
+      live.add(disclosureId);
+      if (manual.has(disclosureId)) {
         continue;
       }
-      const disclosureId = `toolmsg:${entry.key}`;
-      currentToolCardIds.add(disclosureId);
-      if (initialized.has(disclosureId)) {
-        continue;
-      }
-      expanded.set(disclosureId, autoExpandToolCalls);
-      initialized.add(disclosureId);
+      expanded.set(disclosureId, disclosureId === lastId);
     }
   }
-  if (autoExpandToolCalls && !previousAutoExpand) {
-    for (const toolCardId of currentToolCardIds) {
-      expanded.set(toolCardId, true);
+
+  // Forget cards that left the transcript so manual flags and stale state do
+  // not leak across reloads or session switches.
+  for (const id of [...manual]) {
+    if (!live.has(id)) {
+      manual.delete(id);
     }
   }
-  lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
+  for (const id of [...expanded.keys()]) {
+    if (!live.has(id)) {
+      expanded.delete(id);
+    }
+  }
 }

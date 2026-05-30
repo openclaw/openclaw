@@ -394,21 +394,84 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
-export async function loadChatHistory(state: ChatState) {
+type InFlightChatHistoryLoad = {
+  promise: Promise<void>;
+  version: number;
+};
+
+const inFlightChatHistoryLoads = new WeakMap<object, Map<string, InFlightChatHistoryLoad>>();
+
+/**
+ * Coalesce concurrent history loads for the same session. A single session
+ * switch fans out into two `loadChatHistory` calls — one direct, one from the
+ * subscription's initial event ~100ms later — and the gateway is often slow, so
+ * firing the request twice doubled the visible wait. Callers that arrive while a
+ * load for the same session is in flight share that one request instead.
+ */
+export async function loadChatHistory(
+  state: ChatState,
+  options: { clearError?: boolean; coalesce?: boolean } = {},
+): Promise<void> {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const { coalesce: shouldCoalesce, ...loadOptions } = options;
+  if (shouldCoalesce !== true) {
+    const requestAgentId = isSelectedGlobalEventSessionKey(state.sessionKey)
+      ? resolveSelectedAgentId(state)
+      : null;
+    return await runChatHistoryLoad(state, {
+      ...loadOptions,
+      requestAgentId,
+      requestVersion: beginChatHistoryRequest(state),
+    });
+  }
+  const stateKey = state as object;
+  let bySession = inFlightChatHistoryLoads.get(stateKey);
+  if (!bySession) {
+    bySession = new Map();
+    inFlightChatHistoryLoads.set(stateKey, bySession);
+  }
+  const sessions = bySession;
+  const sessionKey = state.sessionKey;
+  const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
+    ? resolveSelectedAgentId(state)
+    : null;
+  const loadKey = `${sessionKey}\u0000${requestAgentId ?? ""}`;
+  const existing = sessions.get(loadKey);
+  if (existing && isLatestChatHistoryRequest(state, existing.version)) {
+    return existing.promise;
+  }
+  const requestVersion = beginChatHistoryRequest(state);
+  const run = runChatHistoryLoad(state, { ...loadOptions, requestAgentId, requestVersion });
+  const entry = { promise: run, version: requestVersion };
+  sessions.set(loadKey, entry);
+  void run.then(() => {
+    if (sessions.get(loadKey) === entry) {
+      sessions.delete(loadKey);
+    }
+  });
+  return run;
+}
+
+async function runChatHistoryLoad(
+  state: ChatState,
+  options: { clearError?: boolean; requestAgentId?: string | null; requestVersion: number },
+) {
   if (!state.client || !state.connected) {
     return;
   }
   const sessionKey = state.sessionKey;
-  const requestVersion = beginChatHistoryRequest(state);
-  const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
-    ? resolveSelectedAgentId(state)
-    : null;
+  const requestVersion = options.requestVersion;
+  const requestAgentId = options.requestAgentId ?? null;
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  state.lastError = null;
+  if (options.clearError !== false) {
+    state.lastError = null;
+  }
   try {
     let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
     for (;;) {

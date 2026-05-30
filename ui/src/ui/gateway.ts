@@ -398,11 +398,11 @@ async function buildGatewayConnectDevice(params: {
   connectNonce: string | null;
 }): Promise<GatewayConnectDevice | undefined> {
   const { deviceIdentity } = params;
-  if (!deviceIdentity) {
+  if (!deviceIdentity || !params.connectNonce) {
     return undefined;
   }
   const signedAtMs = Date.now();
-  const nonce = params.connectNonce ?? "";
+  const nonce = params.connectNonce;
   const payload = buildDeviceAuthPayload({
     deviceId: deviceIdentity.deviceId,
     clientId: params.client.id,
@@ -746,20 +746,38 @@ export class GatewayBrowserClient {
     return !this.closed && this.ws === ws && this.connectGeneration === generation;
   }
 
-  private async sendConnect(ws: WebSocket, generation: number) {
+  private async sendConnect(
+    ws: WebSocket,
+    generation: number,
+    opts: { allowUnsignedStoredDeviceTokenFallback?: boolean } = {},
+  ) {
     if (!this.isActiveSocket(ws, generation) || ws.readyState !== WebSocket.OPEN) {
       return;
     }
     if (this.connectSent) {
       return;
     }
-    this.connectSent = true;
-    this.clearConnectTimer();
 
-    const plan = await this.buildConnectPlan(this.connectNonce);
+    const planNonce = this.connectNonce;
+    const plan = await this.buildConnectPlan(planNonce);
     if (!this.isActiveSocket(ws, generation) || ws.readyState !== WebSocket.OPEN) {
       return;
     }
+    if (this.connectSent) {
+      return;
+    }
+    const selectedDeviceToken =
+      plan.selectedAuth.resolvedDeviceToken ?? plan.selectedAuth.authDeviceToken;
+    const needsDeviceNonceForStoredToken =
+      plan.deviceIdentity && selectedDeviceToken && !plan.device && !plan.selectedAuth.authPassword;
+    if (needsDeviceNonceForStoredToken && opts.allowUnsignedStoredDeviceTokenFallback !== true) {
+      if (this.connectNonce && this.connectNonce !== planNonce) {
+        void this.sendConnect(ws, generation);
+      }
+      return;
+    }
+    this.connectSent = true;
+    this.clearConnectTimer();
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
     }
@@ -907,7 +925,7 @@ export class GatewayBrowserClient {
     this.clearConnectTimer();
     this.connectTimer = window.setTimeout(() => {
       this.connectTimer = null;
-      void this.sendConnect(ws, generation);
+      void this.sendConnect(ws, generation, { allowUnsignedStoredDeviceTokenFallback: true });
     }, 750);
   }
 

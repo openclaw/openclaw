@@ -2,8 +2,72 @@
    CHAT TEXT STYLING
    ============================================= */
 
-.chat-thinking {
+.chat-thinking-collapse {
   margin-bottom: 10px;
+  min-width: 0;
+}
+
+.chat-thinking-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  padding: 2px 6px 2px 2px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-size: var(--control-ui-text-xs);
+  font-weight: 500;
+  color: var(--muted);
+  transition: color 150ms ease;
+}
+
+.chat-thinking-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-thinking-summary:hover {
+  color: var(--text);
+}
+
+.chat-thinking-summary__icon,
+.chat-thinking-summary__chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0.65;
+}
+
+.chat-thinking-summary__icon {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-thinking-summary__chevron {
+  width: 12px;
+  height: 12px;
+  transition: transform 150ms ease;
+}
+
+.chat-thinking-summary__icon svg,
+.chat-thinking-summary__chevron svg {
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-thinking-collapse[open] .chat-thinking-summary__chevron {
+  transform: rotate(180deg);
+}
+
+.chat-thinking {
+  margin: 6px 0 0;
   padding: 10px 12px;
   border-radius: var(--radius-md);
   border: 1px dashed rgba(255, 255, 255, 0.18);

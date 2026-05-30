@@ -198,6 +198,13 @@ function currentSessionRow(host: RunLifecycleHost) {
   return host.sessionsResult?.sessions.find((row) => row.key === host.sessionKey);
 }
 
+function inactiveRunSessionStatus(row: { status?: SessionRunStatus }): SessionRunStatus {
+  if (!row.status || row.status === "running") {
+    return "killed";
+  }
+  return row.status;
+}
+
 export function reconcileChatRunFromCurrentSessionRow(
   host: RunLifecycleHost,
   options: { publishRunStatus?: boolean } = {},
@@ -216,9 +223,10 @@ export function reconcileChatRunFromCurrentSessionRow(
   if (row.hasActiveRun !== false && !terminalStatus) {
     return false;
   }
+  const sessionStatus = inactiveRunSessionStatus(row);
   reconcileChatRunLifecycle(host, {
-    outcome: row.status === "done" ? "done" : "interrupted",
-    sessionStatus: row.status === "done" ? "done" : (row.status ?? "killed"),
+    outcome: sessionStatus === "done" ? "done" : "interrupted",
+    sessionStatus,
     runId: host.chatRunId,
     sessionKey: host.sessionKey,
     clearLocalRun: true,

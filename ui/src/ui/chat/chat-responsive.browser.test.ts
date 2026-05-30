@@ -175,6 +175,10 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
                     <div class="chat-avatar user">V</div>
                     <div class="chat-group-messages">
                       <div class="chat-bubble"><div class="chat-text">Please keep every control visible at the smallest viewport.</div></div>
+                      <div class="chat-group-footer">
+                        <span class="chat-sender-name">You</span>
+                        <span class="chat-group-timestamp">May 26, 2026 09:20</span>
+                      </div>
                     </div>
                   </div>
                   <div class="chat-group assistant">
@@ -186,6 +190,10 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
                           <p>The chat shell should stay compact and readable.</p>
                           <pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre>
                         </div>
+                      </div>
+                      <div class="chat-group-footer">
+                        <span class="chat-sender-name">Assistant</span>
+                        <span class="chat-group-timestamp">May 26, 2026 09:21</span>
                       </div>
                     </div>
                   </div>
@@ -370,6 +378,28 @@ describeBrowserLayout("chat responsive browser layout", () => {
       await expectNoHorizontalOverflow(page);
       const code = await getBoundingBox(page, ".chat-text pre");
       expect(code.x + code.width).toBeLessThanOrEqual(width + 1);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("aligns avatars with the first bubble and keeps metadata below it", async () => {
+    const page = await openFixture(1366, 900);
+    try {
+      for (const role of ["user", "assistant"] as const) {
+        const prefix = `.chat-group.${role}`;
+        const avatar = await getRect(page, `${prefix} .chat-avatar`);
+        const bubble = await getRect(page, `${prefix} .chat-bubble`);
+        const footer = await getRect(page, `${prefix} .chat-group-footer`);
+
+        expect(Math.abs(avatar.top - bubble.top)).toBeLessThanOrEqual(3);
+        expect(footer.top).toBeGreaterThanOrEqual(bubble.bottom);
+        if (role === "user") {
+          expect(footer.right).toBeLessThanOrEqual(bubble.right + 1);
+        } else {
+          expect(footer.left).toBeGreaterThanOrEqual(bubble.left - 1);
+        }
+      }
     } finally {
       await page.close();
     }

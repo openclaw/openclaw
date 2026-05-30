@@ -48,6 +48,30 @@ type ResponsivenessPerformanceEntry = PerformanceEntry & {
   scripts?: LongAnimationFrameScriptTiming[];
 };
 
+type PerfLogSink = (entry: EventLogEntry) => void;
+
+// Events worth persisting to the desktop perf log file (RPC/render/stall
+// timings). Refresh start/end markers and other bookkeeping are skipped.
+const PERF_LOG_FORWARDED_EVENTS = new Set([
+  "control-ui.rpc",
+  "control-ui.render",
+  "control-ui.main-thread-block",
+  "control-ui.long-animation-frame",
+  "control-ui.longtask",
+  "control-ui.tab.visible",
+]);
+
+let perfLogSink: PerfLogSink | null = null;
+
+/**
+ * Install a sink that mirrors key performance events somewhere durable (the
+ * desktop app forwards them to a log file, since the webview has no console we
+ * can read). No-op on surfaces that never set a sink (e.g. the web build).
+ */
+export function setControlUiPerfLogSink(sink: PerfLogSink | null) {
+  perfLogSink = sink;
+}
+
 export function controlUiNowMs(): number {
   return typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
@@ -93,6 +117,13 @@ export function recordControlUiPerformanceEvent(
   opts?: { warn?: boolean; console?: boolean; maxBufferedEventsForType?: number },
 ) {
   const entry: EventLogEntry = { ts: Date.now(), event, payload };
+  if (perfLogSink && PERF_LOG_FORWARDED_EVENTS.has(event)) {
+    try {
+      perfLogSink(entry);
+    } catch {
+      // Never let a debug sink break the app.
+    }
+  }
   if (Array.isArray(host.eventLogBuffer)) {
     const existingBuffer =
       typeof opts?.maxBufferedEventsForType === "number"

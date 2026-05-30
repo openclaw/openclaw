@@ -461,6 +461,82 @@ describe("message-normalizer", () => {
       expect(result.content).toStrictEqual([]);
     });
 
+    it("renders assistant error messages when the transcript has no content blocks", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        provider: "local-openai",
+        model: "openai/gpt-5-5",
+        errorMessage: "403 This token has no access to model openai/gpt-5-5 (request id: req-1)",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "Assistant failed (local-openai/openai/gpt-5-5): 403 This token has no access to model openai/gpt-5-5 (request id: req-1)",
+        },
+      ]);
+    });
+
+    it("redacts obvious bearer secrets from fallback assistant errors", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "request failed with Bearer abcdefghijklmnop",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "Assistant failed: request failed with Bearer abcdef...mnop",
+        },
+      ]);
+    });
+
+    it("does not render stale non-error assistant error metadata", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [],
+        stopReason: "end_turn",
+        errorMessage: "stale background failure",
+      });
+
+      expect(result.content).toEqual([]);
+    });
+
+    it("redacts credential-shaped values from fallback assistant errors", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        stopReason: "error",
+        errorMessage:
+          "api_key=sk-1234567890abcdef Authorization: Basic dGVzdHNlY3JldHRva2Vu ghp_abcdefghijklmnopqrstuvwxyz AIza1234567890abcdefghijklmnop",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "Assistant failed: api_key=sk-123...cdef Authorization: Basic dGVzdH...b2Vu ghp_ab...wxyz AIza12...mnop",
+        },
+      ]);
+    });
+
+    it("redacts lowercase authorization headers from fallback assistant errors", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        stopReason: "error",
+        errorMessage:
+          "request headers included authorization: bearer eyJabcdefghijklmnopqrstuvwxyz0123456789 and authorization: basic dGVzdHNlY3JldHRva2Vu",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: "Assistant failed: request headers included authorization: bearer eyJabc...6789 and authorization: basic dGVzdH...b2Vu",
+        },
+      ]);
+    });
+
     it("uses current timestamp when not provided", () => {
       const result = normalizeMessage({ role: "user", content: "Test" });
       expect(result.timestamp).toBe(Date.now());
