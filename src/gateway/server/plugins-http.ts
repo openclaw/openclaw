@@ -14,7 +14,7 @@ import {
 } from "./plugins-http/path-context.js";
 import { matchedPluginRoutesRequireGatewayAuth } from "./plugins-http/route-auth.js";
 import { findMatchingPluginHttpRoutes } from "./plugins-http/route-match.js";
-
+import { handleZapierWebhook } from "../../zapier-bridge";
 export {
   isProtectedPluginRoutePathFromContext,
   resolvePluginRoutePathContext,
