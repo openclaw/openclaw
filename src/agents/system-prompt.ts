@@ -750,7 +750,8 @@ export function buildAgentSystemPrompt(params: {
       "On-demand list/status visibility for sub-agent runs in this requester session; do not use for wait loops",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
-    skill_research: "Create or revise pending Skill Workshop proposals; never applies skills",
+    skill_research:
+      "Create, update, revise, list, or inspect Skill Workshop proposals; never applies skills",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
   };
@@ -929,6 +930,8 @@ export function buildAgentSystemPrompt(params: {
         "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
         "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations. The final proposal artifact must go through `skill_research`.",
         "Use `action=create` for a new skill, `action=update` for an existing approved/live skill, and `action=revise` for an existing pending proposal.",
+        "For `action=revise`, pass `proposal_id` when known. If it is not known, pass the proposal or skill name in `name` so `skill_research` can resolve the pending proposal or return candidates.",
+        "Use `action=list` or `action=inspect` only when you need to find or read pending proposals before revising. Do not use filesystem search for proposal discovery.",
         "If the user names an existing skill, proposal, or workflow, inspect it first when available.",
         "Generated or researched skills are pending proposals by default. Do not apply, install, approve, enable, or write into live skills unless the user explicitly asks for that separate action.",
         "You may gather context first, but the durable proposal write must use `skill_research`.",

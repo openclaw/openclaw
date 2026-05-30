@@ -118,5 +118,45 @@ describe("skill_research tool", () => {
         "utf8",
       ),
     ).resolves.toContain('version: "v2"');
+
+    const listed = await tool.execute("call-3", {
+      action: "list",
+      status: "pending",
+      query: "weather",
+    });
+
+    expect((listed.content[0] as { text: string }).text).toContain("weather-planner");
+    expect(
+      (listed.details as { proposals: Array<{ id: string; skillKey: string }> }).proposals,
+    ).toEqual([
+      expect.objectContaining({
+        id: (result.details as { id: string }).id,
+        skillKey: "weather-planner",
+      }),
+    ]);
+
+    const inspected = await tool.execute("call-4", {
+      action: "inspect",
+      name: "weather-planner",
+    });
+
+    expect((inspected.content[0] as { text: string }).text).toContain(
+      "Proposal: " + (result.details as { id: string }).id,
+    );
+    expect((inspected.details as { proposalContent: string }).proposalContent).toContain(
+      "Check weather, alerts, and timing.",
+    );
+
+    const revisedByName = await tool.execute("call-5", {
+      action: "revise",
+      name: "weather-planner",
+      proposal_content: "# Weather Planner\n\nCheck weather, alerts, timing, and location.\n",
+    });
+
+    expect(revisedByName.details).toMatchObject({
+      id: (result.details as { id: string }).id,
+      proposedVersion: "v3",
+      scanState: "clean",
+    });
   });
 });

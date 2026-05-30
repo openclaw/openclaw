@@ -2,6 +2,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readLocalFileSafely, root, walkDirectory } from "../../infra/fs-safe.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   buildWorkspaceSkillStatus,
   resolveSkillStatusEntry,
@@ -123,6 +124,48 @@ export async function inspectSkillProposal(
   proposalId: string,
 ): Promise<SkillProposalReadResult | null> {
   return await readSkillProposal(proposalId);
+}
+
+export async function resolvePendingSkillProposal(input: {
+  proposalId?: string;
+  name?: string;
+}): Promise<SkillProposalReadResult> {
+  const proposalId = normalizeOptionalString(input.proposalId);
+  if (proposalId) {
+    const direct = await readRequiredProposal(proposalId);
+    if (direct.record.status !== "pending") {
+      throw new Error(
+        `Only pending proposals can be revised. Current status: ${direct.record.status}.`,
+      );
+    }
+    return direct;
+  }
+
+  const name = normalizeOptionalString(input.name);
+  if (!name) {
+    throw new Error("proposal_id or name required.");
+  }
+  const manifest = await listSkillProposals();
+  const matches = manifest.proposals.filter(
+    (proposal) => proposal.status === "pending" && proposalMatchesName(proposal, name),
+  );
+  if (matches.length === 0) {
+    throw new Error(`No pending skill proposal matched: ${name}`);
+  }
+  if (matches.length > 1) {
+    const candidates = matches
+      .slice(0, 8)
+      .map((proposal) => `${proposal.id} (${proposal.skillKey})`)
+      .join(", ");
+    throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
+  }
+  const matched = await readRequiredProposal(matches[0]!.id);
+  if (matched.record.status !== "pending") {
+    throw new Error(
+      `Only pending proposals can be revised. Current status: ${matched.record.status}.`,
+    );
+  }
+  return matched;
 }
 
 export async function proposeCreateSkill(
@@ -539,6 +582,36 @@ async function markProposalStale(record: SkillProposalRecord, reason: string): P
     statusReason: reason,
   };
   await updateSkillProposalRecord({ record: stale });
+}
+
+function proposalMatchesName(
+  proposal: SkillProposalManifest["proposals"][number],
+  name: string,
+): boolean {
+  const normalizedName = normalizeSkillIndexName(name);
+  const candidates = [
+    proposal.id,
+    proposal.skillName,
+    proposal.skillKey,
+    proposal.title,
+    proposal.description,
+  ];
+  return candidates.some((candidate) => {
+    if (!candidate) {
+      return false;
+    }
+    if (candidate === name || candidate.toLowerCase() === name.toLowerCase()) {
+      return true;
+    }
+    const normalizedCandidate = normalizeSkillIndexName(candidate);
+    return (
+      !!normalizedName &&
+      !!normalizedCandidate &&
+      (normalizedCandidate === normalizedName ||
+        normalizedCandidate.includes(normalizedName) ||
+        normalizedName.includes(normalizedCandidate))
+    );
+  });
 }
 
 function assertWritableSkillTarget(workspaceDir: string, skill: SkillStatusEntry): void {

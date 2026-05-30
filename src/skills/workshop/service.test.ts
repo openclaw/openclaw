@@ -13,6 +13,7 @@ import {
   proposeUpdateSkill,
   quarantineSkillProposal,
   rejectSkillProposal,
+  resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
 import { readSkillProposalManifest, resolveProposalDraftPath } from "./store.js";
@@ -174,6 +175,47 @@ describe("skill workshop proposals", () => {
       fs.readFile(path.join(workspaceDir, "skills", "draftable-skill", "SKILL.md"), "utf8"),
     ).resolves.toBe(
       '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nFinal body.\n',
+    );
+  });
+
+  it("resolves pending proposals by skill name for tool-driven revisions", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Named Proposal",
+      description: "Find this proposal",
+      content: "# Named\n\nOriginal body.\n",
+    });
+
+    const resolved = await resolvePendingSkillProposal({
+      name: "named-proposal",
+    });
+
+    expect(resolved.record.id).toBe(proposal.record.id);
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    await expect(resolvePendingSkillProposal({ name: "named-proposal" })).rejects.toThrow(
+      "No pending skill proposal matched",
+    );
+  });
+
+  it("requires explicit proposal ids for ambiguous pending proposal names", async () => {
+    const workspaceDir = await makeWorkspace();
+    await proposeCreateSkill({
+      workspaceDir,
+      name: "Gateway Pairing",
+      description: "First candidate",
+      content: "# Gateway\n\nFirst.\n",
+    });
+    await proposeCreateSkill({
+      workspaceDir,
+      name: "Gateway Pairing Triage",
+      description: "Second candidate",
+      content: "# Gateway\n\nSecond.\n",
+    });
+
+    await expect(resolvePendingSkillProposal({ name: "gateway-pairing" })).rejects.toThrow(
+      "Multiple pending skill proposals matched gateway-pairing",
     );
   });
 
