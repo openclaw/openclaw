@@ -112,10 +112,10 @@ function resolveActiveWorkspaceDir(options?: ResolveSkillsWorkspaceOptions): str
 }
 
 function resolveSkillsWorkspaceForCommand(
-  command: Command | undefined,
+  command: Command | null | undefined,
   opts?: { agent?: string },
 ): ReturnType<typeof resolveSkillsWorkspace> {
-  return resolveSkillsWorkspace({ agentId: resolveAgentOption(command, opts) });
+  return resolveSkillsWorkspace({ agentId: resolveAgentOption(command ?? undefined, opts) });
 }
 
 function resolveClawHubTargetWorkspaceDir(
@@ -652,7 +652,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.writeJson(record);
             return;
           }
-          defaultRuntime.writeStdout(`Rejected ${proposalActionOutput(record).id}\n`);
+          defaultRuntime.writeStdout(`Rejected ${record.id}\n`);
         } catch (err) {
           defaultRuntime.error(String(err));
           defaultRuntime.exit(1);
@@ -683,7 +683,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.writeJson(record);
             return;
           }
-          defaultRuntime.writeStdout(`Quarantined ${proposalActionOutput(record).id}\n`);
+          defaultRuntime.writeStdout(`Quarantined ${record.id}\n`);
         } catch (err) {
           defaultRuntime.error(String(err));
           defaultRuntime.exit(1);

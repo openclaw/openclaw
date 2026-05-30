@@ -37,7 +37,6 @@ import {
   type SkillProposalReadResult,
   type SkillProposalRecord,
   type SkillProposalScan,
-  type SkillProposalSource,
   type SkillProposalUpdateInput,
 } from "./types.js";
 
@@ -85,6 +84,8 @@ export async function proposeCreateSkill(
   });
   const now = new Date().toISOString();
   const id = createSkillProposalId(name);
+  const goal = normalizeOptionalString(input.goal);
+  const evidence = normalizeOptionalString(input.evidence);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
     id,
@@ -106,8 +107,8 @@ export async function proposeCreateSkill(
       source: "openclaw-workspace",
     },
     scan: scanProposalContent(proposalContent),
-    ...(normalizeOptionalString(input.goal) ? { goal: input.goal.trim() } : {}),
-    ...(normalizeOptionalString(input.evidence) ? { evidence: input.evidence.trim() } : {}),
+    ...(goal ? { goal } : {}),
+    ...(evidence ? { evidence } : {}),
   };
   await writeSkillProposal({ workspaceDir: input.workspaceDir, record, content: proposalContent });
   return { record, content: proposalContent };
@@ -138,6 +139,8 @@ export async function proposeUpdateSkill(
   });
   const now = new Date().toISOString();
   const id = createSkillProposalId(targetSkill.skillKey || targetSkill.name);
+  const goal = normalizeOptionalString(input.goal);
+  const evidence = normalizeOptionalString(input.evidence);
   const record: SkillProposalRecord = {
     schema: SKILL_WORKSHOP_SCHEMA,
     id,
@@ -160,8 +163,8 @@ export async function proposeUpdateSkill(
       currentContentHash: hashSkillProposalContent(currentContent),
     },
     scan: scanProposalContent(proposalContent),
-    ...(normalizeOptionalString(input.goal) ? { goal: input.goal.trim() } : {}),
-    ...(normalizeOptionalString(input.evidence) ? { evidence: input.evidence.trim() } : {}),
+    ...(goal ? { goal } : {}),
+    ...(evidence ? { evidence } : {}),
   };
   await writeSkillProposal({ workspaceDir: input.workspaceDir, record, content: proposalContent });
   return { record, content: proposalContent };
