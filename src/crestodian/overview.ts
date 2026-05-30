@@ -180,7 +180,9 @@ export async function loadCrestodianOverview(
   const probeGatewayWithStartupRetry = async () => {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       const result = await probeFn(gatewayUrl);
-      if (result.reachable || attempt >= maxRetries) return result;
+      if (result.reachable || attempt >= maxRetries) {
+        return result;
+      }
       await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
     }
     return probeFn(gatewayUrl);
