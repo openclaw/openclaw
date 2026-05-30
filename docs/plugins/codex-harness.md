@@ -573,18 +573,22 @@ progress. The guard uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs`
 when configured and defaults to five minutes otherwise. That same post-tool
 budget also extends the progress watchdog for the silent synthesis window before
 Codex emits the next current-turn event. Global app-server notifications, such
-as rate-limit updates, do not reset turn-idle progress. Completed `agentMessage`
-items and pre-tool raw assistant `rawResponseItem/completed` items arm the
-assistant-output release: if Codex then goes quiet without `turn/completed`,
-OpenClaw best-effort interrupts the native turn and releases the session lane.
-Replay-safe stdio app-server failures, including turn-completion idle timeouts
-without assistant, tool, active-item, or side-effect evidence, are retried once
-on a fresh app-server attempt. Unsafe timeouts still retire the stuck app-server
-client and release the OpenClaw session lane. They also clear the stale native
-thread binding and surface a recoverable timeout message for user or maintainer
-judgment instead of being replayed automatically. Timeout diagnostics include
-the last app-server notification method and, for raw assistant response items,
-the item type, role, id, and a bounded assistant text preview.
+as rate-limit updates, do not reset turn-idle progress. Reasoning completions,
+commentary `agentMessage` completions, and pre-tool raw reasoning or assistant
+progress can be followed by an automatic final reply, so they use the
+post-progress reply guard instead of releasing the session lane immediately.
+Only final/non-commentary completed `agentMessage` items and pre-tool raw
+assistant completions arm the assistant-output release: if Codex then goes quiet
+without `turn/completed`, OpenClaw best-effort interrupts the native turn and
+releases the session lane. Replay-safe stdio app-server failures, including
+turn-completion idle timeouts without assistant, tool, active-item, or
+side-effect evidence, are retried once on a fresh app-server attempt. Unsafe
+timeouts still retire the stuck app-server client and release the OpenClaw
+session lane. They also clear the stale native thread binding and surface a
+recoverable timeout message for user or maintainer judgment instead of being
+replayed automatically. Timeout diagnostics include the last app-server
+notification method and, for raw assistant response items, the item type, role,
+id, and a bounded assistant text preview.
 
 Environment overrides remain available for local testing:
 

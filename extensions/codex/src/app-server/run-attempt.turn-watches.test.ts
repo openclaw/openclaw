@@ -10,6 +10,7 @@ import {
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
@@ -38,6 +39,60 @@ setupRunAttemptTestHooks();
 
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+describe("createCodexAttemptTurnWatchController", () => {
+  it("reschedules the attempt watch when notification progress shortens its timeout", async () => {
+    const onTimeout = vi.fn();
+    const onAbort = vi.fn();
+    const controller = createCodexAttemptTurnWatchController({
+      threadId: "thread-1",
+      signal: new AbortController().signal,
+      getTurnId: () => "turn-1",
+      isCompleted: () => false,
+      isTerminalTurnNotificationQueued: () => false,
+      getActiveAppServerTurnRequests: () => 0,
+      getActiveTurnItemCount: () => 0,
+      turnCompletionIdleTimeoutMs: 500,
+      turnAssistantCompletionIdleTimeoutMs: 500,
+      turnAttemptIdleTimeoutMs: 200,
+      turnTerminalIdleTimeoutMs: 500,
+      interruptTimeoutMs: 5_000,
+      onInterruptTurn: vi.fn(),
+      onTimeout,
+      onMarkTimedOut: vi.fn(),
+      onAbort,
+      onCompleted: vi.fn(),
+      onResolveCompletion: vi.fn(),
+      onRecordEvent: vi.fn(),
+      onAttemptProgress: vi.fn(),
+      onProgressDiagnostic: vi.fn(),
+    });
+
+    try {
+      controller.armAttemptIdleWatch();
+      controller.touchActivity("turn:start", { attemptProgress: true });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      controller.noteNotificationReceived("response.output_text.delta", {
+        attemptProgress: true,
+        attemptTimeoutMs: 40,
+      });
+
+      await vi.waitFor(() => expect(onAbort).toHaveBeenCalledWith("turn_progress_idle_timeout"), {
+        interval: 5,
+        timeout: 120,
+      });
+      expect(onTimeout).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "progress",
+          timeoutMs: 40,
+          lastActivityReason: "notification:response.output_text.delta",
+        }),
+      );
+    } finally {
+      controller.clearAllTimers();
+    }
+  });
+});
 
 describe("runCodexAppServerAttempt turn watches", () => {
   it("releases the session when Codex never completes after a dynamic tool response", async () => {

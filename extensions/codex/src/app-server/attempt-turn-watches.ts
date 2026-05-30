@@ -156,6 +156,21 @@ export function createCodexAttemptTurnWatchController(params: {
     scheduleTerminalIdleWatch();
   }
 
+  function recordAttemptProgress(
+    reason: string,
+    options?: { details?: Record<string, unknown>; attemptTimeoutMs?: number },
+  ) {
+    attemptIdleTimeoutOverrideMs =
+      options?.attemptTimeoutMs !== undefined
+        ? Math.max(1, Math.floor(options.attemptTimeoutMs))
+        : undefined;
+    attemptLastProgressAt = completionLastActivityAt;
+    attemptLastProgressReason = reason;
+    attemptLastProgressDetails = options?.details;
+    params.onAttemptProgress(reason, options?.details);
+    scheduleAttemptIdleWatch();
+  }
+
   function fireAssistantCompletionIdleRelease() {
     if (params.isCompleted() || params.signal.aborted || !assistantCompletionIdleWatchArmed) {
       return;
@@ -376,14 +391,7 @@ export function createCodexAttemptTurnWatchController(params: {
       completionLastActivityDetails = options?.details;
       completionIdleTimeoutOverrideMs = undefined;
       if (options?.attemptProgress) {
-        attemptIdleTimeoutOverrideMs =
-          options.attemptTimeoutMs !== undefined
-            ? Math.max(1, Math.floor(options.attemptTimeoutMs))
-            : undefined;
-        attemptLastProgressAt = completionLastActivityAt;
-        attemptLastProgressReason = reason;
-        attemptLastProgressDetails = options.details;
-        params.onAttemptProgress(reason, options.details);
+        recordAttemptProgress(reason, options);
       }
       params.onProgressDiagnostic(reason);
       if (options?.arm) {
@@ -406,14 +414,7 @@ export function createCodexAttemptTurnWatchController(params: {
         completionLastActivityDetails = options.details;
       }
       if (options?.attemptProgress) {
-        attemptIdleTimeoutOverrideMs =
-          options.attemptTimeoutMs !== undefined
-            ? Math.max(1, Math.floor(options.attemptTimeoutMs))
-            : undefined;
-        attemptLastProgressAt = completionLastActivityAt;
-        attemptLastProgressReason = completionLastActivityReason;
-        attemptLastProgressDetails = options.details;
-        params.onAttemptProgress(completionLastActivityReason, options.details);
+        recordAttemptProgress(completionLastActivityReason, options);
       }
     },
     extendAttemptIdleWatch: (timeoutMs: number) => {
