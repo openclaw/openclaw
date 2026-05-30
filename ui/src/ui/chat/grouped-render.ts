@@ -1548,6 +1548,7 @@ function renderGroupedMessage(
         : undefined;
   const shouldFetchFullMessage = Boolean(
     sidebarMessageId &&
+    !m.openclawMessageToolMirror &&
     (transcriptMeta?.truncated === true || markdown?.includes("\n...(truncated)...")),
   );
 

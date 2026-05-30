@@ -2267,4 +2267,31 @@ describe("grouped chat rendering", () => {
     expect(sidebar.kind).toBe("markdown");
     expect(sidebar.fullMessageRequest).toBeUndefined();
   });
+
+  it("does not add a full-message request for mirrored message-tool replies", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "mirrored text\n...(truncated)..." }],
+        openclawMessageToolMirror: { toolName: "message", toolCallId: "call-1" },
+        __openclaw: { id: "msg-tool-result", seq: 2, truncated: true },
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        onOpenSidebar,
+      },
+    );
+
+    const expandButton = container.querySelector<HTMLButtonElement>(".chat-expand-btn");
+    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
+    expandButton!.click();
+
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.kind).toBe("markdown");
+    expect(sidebar.fullMessageRequest).toBeUndefined();
+  });
 });
