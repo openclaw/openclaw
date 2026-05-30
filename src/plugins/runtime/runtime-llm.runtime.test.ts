@@ -25,15 +25,15 @@ const cfg = {
   },
 } satisfies OpenClawConfig;
 
-function createPreparedModel(modelId = "gpt-5.5") {
+function createPreparedModel(modelId = "gpt-5.5", provider = "openai") {
   return {
     selection: {
-      provider: "openai",
+      provider,
       modelId,
       agentDir: "/tmp/openclaw-agent",
     },
     model: {
-      provider: "openai",
+      provider,
       id: modelId,
       name: modelId,
       api: "openai",
@@ -638,6 +638,58 @@ describe("runtime.llm.complete", () => {
       caller: { kind: "plugin", id: "trusted-plugin" },
       purpose: "identity-test",
     });
+  });
+
+  it("re-estimates generated Codex explicit zero cost when configured pricing is nonzero", async () => {
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce(
+      createPreparedModel("gpt-5.5", "openai-codex"),
+    );
+    hoisted.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [{ type: "text", text: "done" }],
+      usage: {
+        input: 1000,
+        output: 500,
+        cacheRead: 2000,
+        total: 3500,
+        cost: { total: 0 },
+      },
+    });
+
+    const llm = createRuntimeLlm({
+      getConfig: () =>
+        ({
+          agents: { defaults: { model: "openai-codex/gpt-5.5" } },
+          models: {
+            providers: {
+              "openai-codex": {
+                baseUrl: "https://chatgpt.com/backend-api",
+                models: [
+                  {
+                    id: "gpt-5.5",
+                    name: "gpt-5.5",
+                    reasoning: true,
+                    input: ["text"],
+                    contextWindow: 128_000,
+                    maxTokens: 4096,
+                    cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+                  },
+                ],
+              },
+            },
+          },
+        }) satisfies OpenClawConfig,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+      },
+    });
+
+    const result = await llm.complete({
+      messages: [{ role: "user", content: "Ping" }],
+      purpose: "test-purpose",
+    });
+
+    expect(result.usage.costUsd).toBeCloseTo(0.003, 8);
   });
 
   it("denies plugin model overrides by default", async () => {

@@ -25,8 +25,10 @@ import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import {
   estimateUsageCost,
+  resolveExplicitZeroCostSource,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
+  resolveUsageCostUsd,
 } from "../utils/usage-format.js";
 import { formatErrorMessage } from "./errors.js";
 import { replaceFileAtomic } from "./replace-file.js";
@@ -1155,23 +1157,34 @@ async function scanTranscriptFile(params: {
         // instead of the stale flat-rate breakdown from the transport layer.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
-      } else if (
-        !isModelPricingKnown(cost) &&
-        (entry.costTotal === undefined || entry.costTotal === 0) &&
-        computeUsageTokenTotals(entry.usage).totalTokens > 0
-      ) {
-        // Pricing for this model is unknown: it has no positive per-token rate and no
-        // trustworthy recorded cost. The transport either recorded nothing or a
-        // fabricated $0 derived from an all-zero/default catalog entry. Surface this
-        // token-burning turn as a missing-cost entry instead of recording a confident
-        // $0, so budget and spike safeguards that read totalCost are not left blind to
-        // it. A turn carrying a real positive recorded cost is preserved by the guard
-        // above.
-        entry.costTotal = undefined;
-        entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
-        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+      } else {
+        const resolvedCost = resolveUsageCostUsd({
+          explicitCostUsd: entry.costTotal,
+          usage: entry.usage,
+          cost,
+          explicitZeroCostSource: resolveExplicitZeroCostSource({ provider: entry.provider }),
+        });
+        if (resolvedCost !== entry.costTotal) {
+          entry.costTotal = resolvedCost;
+          entry.costBreakdown = undefined;
+        } else if (
+          !isModelPricingKnown(cost) &&
+          (entry.costTotal === undefined || entry.costTotal === 0) &&
+          computeUsageTokenTotals(entry.usage).totalTokens > 0
+        ) {
+          // Pricing for this model is unknown: it has no positive per-token rate and no
+          // trustworthy recorded cost. The transport either recorded nothing or a
+          // fabricated $0 derived from an all-zero/default catalog entry. Surface this
+          // token-burning turn as a missing-cost entry instead of recording a confident
+          // $0, so budget and spike safeguards that read totalCost are not left blind to
+          // it. A turn carrying a real positive recorded cost is preserved by the guard
+          // above.
+          entry.costTotal = undefined;
+          entry.costBreakdown = undefined;
+        } else if (entry.costTotal === undefined) {
+          // Fill in missing cost estimates.
+          entry.costTotal = resolvedCost;
+        }
       }
     }
 
@@ -2525,15 +2538,18 @@ export async function loadSessionLogs(params: {
               (usage.cacheRead ?? 0) +
               (usage.cacheWrite ?? 0);
           const breakdown = extractCostBreakdown(usageRaw);
-          if (breakdown?.total !== undefined) {
-            cost = breakdown.total;
-          } else {
-            const costConfig = resolveCost({
-              provider: message.provider as string | undefined,
-              model: message.model as string | undefined,
-            });
-            cost = estimateUsageCost({ usage, cost: costConfig });
-          }
+          const provider = message.provider as string | undefined;
+          const model = message.model as string | undefined;
+          const costConfig = resolveCost({
+            provider,
+            model,
+          });
+          cost = resolveUsageCostUsd({
+            explicitCostUsd: breakdown?.total,
+            usage,
+            cost: costConfig,
+            explicitZeroCostSource: resolveExplicitZeroCostSource({ provider }),
+          });
         }
       }
 

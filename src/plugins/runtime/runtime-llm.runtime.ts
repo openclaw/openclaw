@@ -8,7 +8,11 @@ import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { asFiniteNumber } from "../../shared/number-coercion.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import {
+  resolveExplicitZeroCostSource,
+  resolveModelCostConfig,
+  resolveUsageCostUsd,
+} from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type {
@@ -199,9 +203,12 @@ function buildUsage(params: {
     model: params.model,
     config: params.cfg,
   });
-  const costUsd =
-    readExplicitCostUsd(params.rawUsage) ??
-    estimateUsageCost({ usage: params.normalized, cost: costConfig });
+  const costUsd = resolveUsageCostUsd({
+    explicitCostUsd: readExplicitCostUsd(params.rawUsage),
+    usage: params.normalized,
+    cost: costConfig,
+    explicitZeroCostSource: resolveExplicitZeroCostSource({ provider: params.provider }),
+  });
   return {
     ...(params.normalized?.input !== undefined ? { inputTokens: params.normalized.input } : {}),
     ...(params.normalized?.output !== undefined ? { outputTokens: params.normalized.output } : {}),

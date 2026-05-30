@@ -14,6 +14,8 @@ import {
   estimateUsageCost,
   formatTokenCount,
   formatUsd,
+  resolveExplicitZeroCostSource,
+  resolveUsageCostUsd,
   resolveModelCostConfig,
   resolveModelCostConfigFingerprint,
   type PricingTier,
@@ -123,6 +125,46 @@ describe("usage-format", () => {
     });
 
     expect(total).toBeCloseTo(0.003);
+  });
+
+  it("preserves explicit zero by default when pricing is known", () => {
+    expect(
+      resolveUsageCostUsd({
+        explicitCostUsd: 0,
+        usage: { input: 1000, output: 500, cacheRead: 2000 },
+        cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+      }),
+    ).toBe(0);
+  });
+
+  it("recomputes generated Codex explicit zero when pricing is known", () => {
+    expect(
+      resolveUsageCostUsd({
+        explicitCostUsd: 0,
+        usage: { input: 1000, output: 500, cacheRead: 2000 },
+        cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+        explicitZeroCostSource: resolveExplicitZeroCostSource({ provider: "openai-codex" }),
+      }),
+    ).toBeCloseTo(0.003);
+  });
+
+  it("treats generated Codex all-zero pricing as missing cost for token usage", () => {
+    expect(
+      resolveUsageCostUsd({
+        explicitCostUsd: 0,
+        usage: { input: 1000, output: 500 },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        explicitZeroCostSource: resolveExplicitZeroCostSource({ provider: "codex" }),
+      }),
+    ).toBeUndefined();
+
+    expect(
+      resolveUsageCostUsd({
+        usage: { input: 1000, output: 500 },
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        explicitZeroCostSource: resolveExplicitZeroCostSource({ provider: "codex" }),
+      }),
+    ).toBeUndefined();
   });
 
   it("returns undefined when model pricing is not configured", () => {
