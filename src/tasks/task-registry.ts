@@ -280,7 +280,17 @@ function persistTaskUpsert(task: TaskRecord) {
     return;
   }
   if (store.upsertTask) {
+    if (deliveryState && !store.upsertDeliveryState) {
+      store.saveSnapshot({
+        tasks,
+        deliveryStates: taskDeliveryStates,
+      });
+      return;
+    }
     store.upsertTask(task);
+    if (deliveryState && store.upsertDeliveryState) {
+      store.upsertDeliveryState(deliveryState);
+    }
     return;
   }
   store.saveSnapshot({
@@ -1662,10 +1672,13 @@ export function createTaskRecord(params: {
     record.cleanupAfter = resolveTaskCleanupAfter(record);
   }
   tasks.set(taskId, record);
-  upsertTaskDeliveryState({
-    taskId,
-    requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
-  });
+  const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  if (requesterOrigin) {
+    taskDeliveryStates.set(taskId, {
+      taskId,
+      requesterOrigin,
+    });
+  }
   addRunIdIndex(taskId, record.runId);
   addOwnerKeyIndex(taskId, record);
   addParentFlowIdIndex(taskId, record);
