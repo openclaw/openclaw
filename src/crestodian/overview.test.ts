@@ -75,4 +75,47 @@ describe("loadCrestodianOverview", () => {
     expect(startup).not.toContain("Claude Code:");
     expect(startup).not.toContain("API keys:");
   });
+
+  it("retries the gateway probe on unreachable and returns reachable after delayed success", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      gateway: { port: 19001 },
+    };
+    const snapshot: ConfigFileSnapshot = {
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: runtimeConfig,
+      sourceConfig: runtimeConfig,
+      resolved: runtimeConfig,
+      valid: true,
+      runtimeConfig,
+      config: runtimeConfig,
+      hash: "test-hash",
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    };
+
+    let callCount = 0;
+    const overview = await loadCrestodianOverview({
+      env: { OPENCLAW_TEST_FAST: "1" },
+      deps: {
+        readConfigFileSnapshot: async () => snapshot,
+        resolveConfigPath: () => "/tmp/openclaw.json",
+        probeLocalCommand: async (cmd) => ({ command: cmd, found: false }),
+        probeGatewayUrl: async (url) => {
+          callCount++;
+          // First attempt unreachable, second succeeds — simulates delayed gateway startup.
+          return callCount >= 2
+            ? { reachable: true, url }
+            : { reachable: false, url, error: "ECONNREFUSED" };
+        },
+        gatewayStartupRetries: 2,
+        gatewayStartupRetryDelayMs: 0,
+      },
+    });
+
+    expect(overview.gateway.reachable).toBe(true);
+    expect(callCount).toBe(2);
+  });
 });

@@ -19,6 +19,9 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { probeGatewayUrl, probeLocalCommand, type LocalCommandProbe } from "./probes.js";
 
+const CRESTODIAN_GATEWAY_STARTUP_RETRIES = 1;
+const CRESTODIAN_GATEWAY_STARTUP_RETRY_DELAY_MS = 1_000;
+
 type CrestodianAgentSummary = {
   id: string;
   name?: string;
@@ -79,6 +82,10 @@ type CrestodianOverviewDependencies = {
   probeLocalCommand?: typeof probeLocalCommand;
   probeGatewayUrl?: typeof probeGatewayUrl;
   resolveOpenClawReferencePaths?: typeof resolveOpenClawReferencePaths;
+  /** Number of additional probe attempts after the first one on gateway unreachable (default 1). */
+  gatewayStartupRetries?: number;
+  /** Delay in ms between startup retry attempts (default 1000). */
+  gatewayStartupRetryDelayMs?: number;
 };
 
 function issueMessages(snapshot: ConfigFileSnapshot): string[] {
@@ -167,10 +174,25 @@ export async function loadCrestodianOverview(
   }
   const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
   const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
+  const probeFn = deps.probeGatewayUrl ?? probeGatewayUrl;
+  const maxRetries = deps.gatewayStartupRetries ?? CRESTODIAN_GATEWAY_STARTUP_RETRIES;
+  const retryDelayMs = deps.gatewayStartupRetryDelayMs ?? CRESTODIAN_GATEWAY_STARTUP_RETRY_DELAY_MS;
+  const probeGatewayWithStartupRetry = async () => {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const result = await probeFn(gatewayUrl);
+      if (result.reachable || attempt >= maxRetries) return result;
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, retryDelayMs);
+        // Allow the process to exit even if this timer is pending.
+        if (t.unref) t.unref();
+      });
+    }
+    return probeFn(gatewayUrl);
+  };
   const [codex, claude, gateway, references] = await Promise.all([
     commandProbe("codex"),
     commandProbe("claude"),
-    (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
+    probeGatewayWithStartupRetry(),
     resolveFastTestReferences(env) ??
       resolveReferences({
         argv1: process.argv[1],
