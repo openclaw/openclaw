@@ -26,6 +26,7 @@ import {
 } from "./sdk-alias.js";
 import {
   findUndeclaredPluginToolNames,
+  isWildcardToolContract,
   normalizePluginToolContractNames,
 } from "./tool-contracts.js";
 import type { OpenClawPluginDefinition, OpenClawPluginModule } from "./types.js";
@@ -504,19 +505,24 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
         })),
       );
       const declaredToolNames = normalizePluginToolContractNames(record.contracts);
+      const isWildcard = isWildcardToolContract(record.contracts);
       for (const tool of captured.tools) {
-        const undeclared = findUndeclaredPluginToolNames({
-          declaredNames: declaredToolNames,
-          toolNames: [tool.name],
-        });
-        if (undeclared.length > 0) {
-          registry.diagnostics.push({
-            level: "error",
-            pluginId: record.id,
-            source: record.source,
-            message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+        if (isWildcard) {
+          // Wildcard contract — all tool names are allowed
+        } else {
+          const undeclared = findUndeclaredPluginToolNames({
+            declaredNames: declaredToolNames,
+            toolNames: [tool.name],
           });
-          continue;
+          if (undeclared.length > 0) {
+            registry.diagnostics.push({
+              level: "error",
+              pluginId: record.id,
+              source: record.source,
+              message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+            });
+            continue;
+          }
         }
         registry.tools.push({
           pluginId: record.id,
