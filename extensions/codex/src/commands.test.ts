@@ -3767,15 +3767,19 @@ describe("codex command", () => {
     });
   });
 
-  it("sets per-binding model, fast mode, and permissions", async () => {
+  it("sets per-binding model, plan mode, Codex think, fast mode, and permissions", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const setCodexConversationModel = vi.fn(async () => "Codex model set to gpt-5.4.");
+    const setCodexConversationPlanMode = vi.fn(async () => "Codex plan mode enabled.");
+    const setCodexConversationReasoningEffort = vi.fn(async () => "Codex think set to xhigh.");
     const setCodexConversationFastMode = vi.fn(async () => "Codex fast mode enabled.");
     const setCodexConversationPermissions = vi.fn(
       async () => "Codex permissions set to full access.",
     );
     const deps = createDeps({
       setCodexConversationModel,
+      setCodexConversationPlanMode,
+      setCodexConversationReasoningEffort,
       setCodexConversationFastMode,
       setCodexConversationPermissions,
     });
@@ -3783,6 +3787,12 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createContext("model gpt-5.4", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Codex model set to gpt-5.4." });
+    await expect(
+      handleCodexCommand(createContext("plan on", sessionFile), { deps }),
+    ).resolves.toEqual({ text: "Codex plan mode enabled." });
+    await expect(
+      handleCodexCommand(createContext("think xhigh", sessionFile), { deps }),
+    ).resolves.toEqual({ text: "Codex think set to xhigh." });
     await expect(
       handleCodexCommand(createContext("fast on", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Codex fast mode enabled." });
@@ -3796,6 +3806,14 @@ describe("codex command", () => {
       model: "gpt-5.4",
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       config: {},
+    });
+    expect(setCodexConversationPlanMode).toHaveBeenCalledWith({
+      sessionFile,
+      mode: "plan",
+    });
+    expect(setCodexConversationReasoningEffort).toHaveBeenCalledWith({
+      sessionFile,
+      effort: "xhigh",
     });
     expect(setCodexConversationFastMode).toHaveBeenCalledWith({
       sessionFile,
@@ -3848,15 +3866,27 @@ describe("codex command", () => {
     expect(setCodexConversationModel).not.toHaveBeenCalled();
   });
 
-  it("rejects extra fast and permissions arguments", async () => {
+  it("rejects extra plan, think, fast, and permissions arguments", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const setCodexConversationPlanMode = vi.fn();
+    const setCodexConversationReasoningEffort = vi.fn();
     const setCodexConversationFastMode = vi.fn();
     const setCodexConversationPermissions = vi.fn();
     const deps = createDeps({
+      setCodexConversationPlanMode,
+      setCodexConversationReasoningEffort,
       setCodexConversationFastMode,
       setCodexConversationPermissions,
     });
 
+    await expect(
+      handleCodexCommand(createContext("plan on now", sessionFile), { deps }),
+    ).resolves.toEqual({ text: "Usage: /codex plan [on|off|status]" });
+    await expect(
+      handleCodexCommand(createContext("think xhigh now", sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: "Usage: /codex think [default|minimal|low|medium|high|xhigh|status]",
+    });
     await expect(
       handleCodexCommand(createContext("fast on now", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Usage: /codex fast [on|off|status]" });
@@ -3864,6 +3894,8 @@ describe("codex command", () => {
       handleCodexCommand(createContext("permissions yolo now", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Usage: /codex permissions [default|yolo|status]" });
 
+    expect(setCodexConversationPlanMode).not.toHaveBeenCalled();
+    expect(setCodexConversationReasoningEffort).not.toHaveBeenCalled();
     expect(setCodexConversationFastMode).not.toHaveBeenCalled();
     expect(setCodexConversationPermissions).not.toHaveBeenCalled();
   });
@@ -3871,6 +3903,8 @@ describe("codex command", () => {
   it("rejects malformed control arguments before requiring a session file", async () => {
     const deps = createDeps({
       setCodexConversationModel: vi.fn(),
+      setCodexConversationPlanMode: vi.fn(),
+      setCodexConversationReasoningEffort: vi.fn(),
       setCodexConversationFastMode: vi.fn(),
       setCodexConversationPermissions: vi.fn(),
     });
@@ -3883,12 +3917,20 @@ describe("codex command", () => {
     await expect(handleCodexCommand(createContext("fast on now"), { deps })).resolves.toEqual({
       text: "Usage: /codex fast [on|off|status]",
     });
+    await expect(handleCodexCommand(createContext("plan on now"), { deps })).resolves.toEqual({
+      text: "Usage: /codex plan [on|off|status]",
+    });
+    await expect(handleCodexCommand(createContext("think xhigh now"), { deps })).resolves.toEqual({
+      text: "Usage: /codex think [default|minimal|low|medium|high|xhigh|status]",
+    });
     await expect(
       handleCodexCommand(createContext("permissions yolo now"), { deps }),
     ).resolves.toEqual({
       text: "Usage: /codex permissions [default|yolo|status]",
     });
     expect(deps.setCodexConversationModel).not.toHaveBeenCalled();
+    expect(deps.setCodexConversationPlanMode).not.toHaveBeenCalled();
+    expect(deps.setCodexConversationReasoningEffort).not.toHaveBeenCalled();
     expect(deps.setCodexConversationFastMode).not.toHaveBeenCalled();
     expect(deps.setCodexConversationPermissions).not.toHaveBeenCalled();
   });
@@ -3943,6 +3985,8 @@ describe("codex command", () => {
         threadId: "thread-123",
         cwd: "/repo",
         model: "gpt-5.4",
+        collaborationMode: "plan",
+        reasoningEffort: "xhigh",
         serviceTier: "fast",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
@@ -3984,6 +4028,8 @@ describe("codex command", () => {
         "- Thread: thread-123",
         "- Workspace: /repo",
         "- Model: gpt-5.4",
+        "- Plan: on",
+        "- Think: xhigh",
         "- Fast: on",
         "- Permissions: full access",
         "- Active run: turn-1",

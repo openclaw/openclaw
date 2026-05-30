@@ -43,12 +43,18 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
+  type CodexAppServerCollaborationMode,
+  type CodexAppServerReasoningEffort,
+  type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
-import { CODEX_NATIVE_PERSONALITY_NONE } from "./app-server/thread-lifecycle.js";
+import {
+  CODEX_NATIVE_PERSONALITY_NONE,
+  resolveReasoningEffort,
+} from "./app-server/thread-lifecycle.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
@@ -97,6 +103,8 @@ type CodexConversationStartParams = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  collaborationMode?: CodexAppServerCollaborationMode;
+  reasoningEffort?: CodexAppServerReasoningEffort;
 };
 
 type BoundTurnResult = {
@@ -180,6 +188,8 @@ export async function startCodexConversationThread(
       approvalPolicy: params.approvalPolicy,
       sandbox: params.sandbox,
       serviceTier: params.serviceTier,
+      collaborationMode: params.collaborationMode ?? existingBinding?.collaborationMode,
+      reasoningEffort: params.reasoningEffort ?? existingBinding?.reasoningEffort,
       config: params.config,
       sessionKey: params.sessionKey,
     });
@@ -195,6 +205,8 @@ export async function startCodexConversationThread(
       approvalPolicy: params.approvalPolicy,
       sandbox: params.sandbox,
       serviceTier: params.serviceTier,
+      collaborationMode: params.collaborationMode ?? existingBinding?.collaborationMode,
+      reasoningEffort: params.reasoningEffort ?? existingBinding?.reasoningEffort,
       config: params.config,
       sessionKey: params.sessionKey,
     });
@@ -315,6 +327,8 @@ type CodexThreadBindingParams = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  collaborationMode?: CodexAppServerCollaborationMode;
+  reasoningEffort?: CodexAppServerReasoningEffort;
   config?: CodexAppServerAuthProfileLookup["config"];
   agentId?: string;
   sessionKey?: string;
@@ -396,6 +410,8 @@ async function writeThreadBindingFromResponse(
         modelProvider: response.modelProvider ?? params.modelProvider,
         ...resolved.agentLookup,
       }),
+      collaborationMode: params.collaborationMode,
+      reasoningEffort: params.reasoningEffort,
       approvalPolicy: resolved.execPolicy?.touched
         ? runtimeApprovalPolicy
         : (params.approvalPolicy ?? runtimeApprovalPolicy),
@@ -493,6 +509,10 @@ async function runBoundTurn(params: {
   const notificationCleanup = client.addNotificationHandler((notification) =>
     collector.handleNotification(notification),
   );
+  const reasoningEffort = binding.reasoningEffort
+    ? resolveReasoningEffort(binding.reasoningEffort, binding.model ?? "")
+    : null;
+  const collaborationMode = buildBoundConversationCollaborationMode(binding, reasoningEffort);
   const requestCleanup = client.addRequestHandler(
     async (request): Promise<JsonValue | undefined> => {
       if (request.method === "item/tool/call") {
@@ -549,6 +569,8 @@ async function runBoundTurn(params: {
         ),
         ...(binding.model ? { model: binding.model } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
+        ...(reasoningEffort ? { effort: reasoningEffort } : {}),
+        ...(collaborationMode ? { collaborationMode } : {}),
         ...((binding.serviceTier ?? runtime.serviceTier)
           ? { serviceTier: binding.serviceTier ?? runtime.serviceTier }
           : {}),
@@ -622,6 +644,8 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
       approvalPolicy: useCurrentRuntimePolicy ? undefined : binding?.approvalPolicy,
       sandbox: useCurrentRuntimePolicy ? undefined : binding?.sandbox,
       serviceTier: binding?.serviceTier,
+      collaborationMode: binding?.collaborationMode,
+      reasoningEffort: binding?.reasoningEffort,
       config: params.config,
       sessionKey: params.sessionKey,
     });
@@ -674,6 +698,32 @@ function readSessionExecOverrides(params: {
   return {
     security: entry.execSecurity,
     ask: entry.execAsk,
+  };
+}
+
+function buildBoundConversationCollaborationMode(
+  binding: CodexAppServerThreadBinding,
+  reasoningEffort: CodexAppServerReasoningEffort | null,
+):
+  | {
+      mode: CodexAppServerCollaborationMode;
+      settings: {
+        model: string | null;
+        reasoning_effort: CodexAppServerReasoningEffort | null;
+        developer_instructions: string | null;
+      };
+    }
+  | undefined {
+  if (!binding.collaborationMode && !reasoningEffort) {
+    return undefined;
+  }
+  return {
+    mode: binding.collaborationMode ?? "default",
+    settings: {
+      model: binding.model ?? null,
+      reasoning_effort: reasoningEffort,
+      developer_instructions: null,
+    },
   };
 }
 

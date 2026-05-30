@@ -36,6 +36,8 @@ export type CodexAppServerThreadBinding = {
   authProfileId?: string;
   model?: string;
   modelProvider?: string;
+  collaborationMode?: CodexAppServerCollaborationMode;
+  reasoningEffort?: CodexAppServerReasoningEffort;
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
@@ -52,6 +54,9 @@ export type CodexAppServerThreadBinding = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type CodexAppServerCollaborationMode = "default" | "plan";
+export type CodexAppServerReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export type CodexAppServerContextEngineBinding = {
   schemaVersion: 1;
@@ -105,6 +110,8 @@ export async function readCodexAppServerBinding(
         authProfileId,
         modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
       }),
+      collaborationMode: readCollaborationMode(parsed.collaborationMode),
+      reasoningEffort: readReasoningEffort(parsed.reasoningEffort),
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
@@ -171,6 +178,8 @@ export async function writeCodexAppServerBinding(
       authProfileId: binding.authProfileId,
       modelProvider: binding.modelProvider,
     }),
+    collaborationMode: binding.collaborationMode,
+    reasoningEffort: binding.reasoningEffort,
     approvalPolicy: binding.approvalPolicy,
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
@@ -191,6 +200,20 @@ export async function writeCodexAppServerBinding(
     resolveCodexAppServerBindingPath(sessionFile),
     `${JSON.stringify(payload, null, 2)}\n`,
   );
+}
+
+function readCollaborationMode(value: unknown): CodexAppServerCollaborationMode | undefined {
+  return value === "default" || value === "plan" ? value : undefined;
+}
+
+function readReasoningEffort(value: unknown): CodexAppServerReasoningEffort | undefined {
+  return value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+    ? value
+    : undefined;
 }
 
 function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBinding | undefined {

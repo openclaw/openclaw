@@ -412,6 +412,16 @@ Common forms:
 - `/codex threads [filter]` lists recent Codex app-server threads.
 - `/codex resume <thread-id>` attaches the current OpenClaw session to an
   existing Codex thread.
+- `/codex model [model]` shows or changes the model for the attached Codex
+  thread.
+- `/codex plan [on|off|status]` toggles native Codex plan mode for the attached
+  thread.
+- `/codex think [default|minimal|low|medium|high|xhigh|status]` sets a
+  Codex-native reasoning effort override for the attached thread.
+- `/codex fast [on|off|status]` toggles the Codex service tier preference for
+  the attached thread.
+- `/codex permissions [default|yolo|status]` changes the native Codex approval
+  and sandbox preference for the attached thread.
 - `/codex compact` asks Codex app-server to compact the attached thread.
 - `/codex review` starts Codex native review for the attached thread.
 - `/codex diagnostics [note]` asks before sending Codex feedback for the

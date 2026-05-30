@@ -12,6 +12,8 @@ import {
   setCodexConversationFastMode,
   setCodexConversationModel,
   setCodexConversationPermissions,
+  setCodexConversationPlanMode,
+  setCodexConversationReasoningEffort,
 } from "./conversation-control.js";
 
 let tempDir: string;
@@ -62,6 +64,34 @@ describe("codex conversation controls", () => {
     expect(binding?.serviceTier).toBe("priority");
     expect(binding?.approvalPolicy).toBe("on-request");
     expect(binding?.sandbox).toBe("workspace-write");
+  });
+
+  it("persists plan mode and Codex think overrides for later bound turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "gpt-5.4",
+    });
+
+    await expect(setCodexConversationPlanMode({ sessionFile, mode: "plan" })).resolves.toBe(
+      "Codex plan mode enabled.",
+    );
+    await expect(
+      setCodexConversationReasoningEffort({ sessionFile, effort: "xhigh" }),
+    ).resolves.toBe("Codex think set to xhigh.");
+
+    let binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.collaborationMode).toBe("plan");
+    expect(binding?.reasoningEffort).toBe("xhigh");
+
+    await expect(
+      setCodexConversationReasoningEffort({ sessionFile, effort: "default" }),
+    ).resolves.toBe("Codex think reset to default.");
+
+    binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.collaborationMode).toBe("plan");
+    expect(binding?.reasoningEffort).toBeUndefined();
   });
 
   it("does not persist public OpenAI provider after model changes on native auth bindings", async () => {

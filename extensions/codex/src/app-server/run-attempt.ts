@@ -1854,6 +1854,8 @@ export async function runCodexAppServerAttempt(
       cwd: codexExecutionCwd,
       appServer: pluginAppServer,
       promptText: codexTurnPromptText,
+      collaborationMode: thread.collaborationMode,
+      reasoningEffort: thread.reasoningEffort,
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
       turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,

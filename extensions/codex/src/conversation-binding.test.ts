@@ -639,6 +639,8 @@ describe("codex conversation binding", () => {
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
         serviceTier: "fast",
+        collaborationMode: "plan",
+        reasoningEffort: "minimal",
       }),
     );
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -735,6 +737,15 @@ describe("codex conversation binding", () => {
     expect(requests[2]?.params.threadId).toBe("thread-new");
     expect(requests[2]?.params.approvalPolicy).toBe("on-request");
     expect(requests[2]?.params.serviceTier).toBe("priority");
+    expect(requests[2]?.params.effort).toBe("low");
+    expect(requests[2]?.params.collaborationMode).toEqual({
+      mode: "plan",
+      settings: {
+        model: "gpt-5.4-mini",
+        reasoning_effort: "low",
+        developer_instructions: null,
+      },
+    });
     const savedBinding = JSON.parse(
       await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
     );
@@ -743,6 +754,8 @@ describe("codex conversation binding", () => {
     expect(savedBinding.approvalPolicy).toBe("on-request");
     expect(savedBinding.sandbox).toBe("workspace-write");
     expect(savedBinding.serviceTier).toBe("priority");
+    expect(savedBinding.collaborationMode).toBe("plan");
+    expect(savedBinding.reasoningEffort).toBe("minimal");
     expect(savedBinding).not.toHaveProperty("modelProvider");
   });
 

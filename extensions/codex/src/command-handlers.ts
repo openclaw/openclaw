@@ -58,13 +58,19 @@ import {
   startCodexConversationThread,
 } from "./conversation-binding.js";
 import {
+  formatPlanMode,
   formatPermissionsMode,
+  formatReasoningEffort,
   parseCodexFastModeArg,
   parseCodexPermissionsModeArg,
+  parseCodexPlanModeArg,
+  parseCodexReasoningEffortArg,
   readCodexConversationActiveTurn,
   setCodexConversationFastMode,
   setCodexConversationModel,
   setCodexConversationPermissions,
+  setCodexConversationPlanMode,
+  setCodexConversationReasoningEffort,
   steerCodexConversationTurn,
   stopCodexConversationTurn,
 } from "./conversation-control.js";
@@ -91,6 +97,8 @@ export type CodexCommandDeps = {
   setCodexConversationFastMode: typeof setCodexConversationFastMode;
   setCodexConversationModel: typeof setCodexConversationModel;
   setCodexConversationPermissions: typeof setCodexConversationPermissions;
+  setCodexConversationPlanMode: typeof setCodexConversationPlanMode;
+  setCodexConversationReasoningEffort: typeof setCodexConversationReasoningEffort;
   steerCodexConversationTurn: typeof steerCodexConversationTurn;
   stopCodexConversationTurn: typeof stopCodexConversationTurn;
   listCodexCliSessionsOnNode: ListCodexCliSessionsOnNodeFn;
@@ -137,6 +145,8 @@ const defaultCodexCommandDeps: CodexCommandDeps = {
   setCodexConversationFastMode,
   setCodexConversationModel,
   setCodexConversationPermissions,
+  setCodexConversationPlanMode,
+  setCodexConversationReasoningEffort,
   steerCodexConversationTurn,
   stopCodexConversationTurn,
   listCodexCliSessionsOnNode: async () => {
@@ -445,6 +455,12 @@ export async function handleCodexSubcommand(
   }
   if (normalized === "model") {
     return { text: await setConversationModel(deps, ctx, options.pluginConfig, rest) };
+  }
+  if (normalized === "plan") {
+    return { text: await setConversationPlanMode(deps, ctx, rest) };
+  }
+  if (normalized === "think") {
+    return { text: await setConversationReasoningEffort(deps, ctx, rest) };
   }
   if (normalized === "fast") {
     if (isMenuVerb(rest)) {
@@ -767,6 +783,8 @@ async function describeConversationBinding(
     `- Thread: ${formatCodexDisplayText(threadBinding?.threadId ?? "unknown")}`,
     `- Workspace: ${formatCodexDisplayText(data.workspaceDir)}`,
     `- Model: ${formatCodexDisplayText(threadBinding?.model ?? "default")}`,
+    `- Plan: ${formatPlanMode(threadBinding?.collaborationMode)}`,
+    `- Think: ${formatReasoningEffort(threadBinding?.reasoningEffort)}`,
     `- Fast: ${isCodexFastServiceTier(threadBinding?.serviceTier) ? "on" : "off"}`,
     `- Permissions: ${threadBinding ? formatPermissionsMode(threadBinding) : "default"}`,
     `- Active run: ${formatCodexDisplayText(active ? active.turnId : "none")}`,
@@ -981,6 +999,52 @@ async function setConversationFastMode(
     enabled: parsed,
     agentDir: target.agentDir,
     config: ctx.config,
+  });
+}
+
+async function setConversationPlanMode(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  args: string[],
+): Promise<string> {
+  if (args.length > 1) {
+    return "Usage: /codex plan [on|off|status]";
+  }
+  const sessionFile = await resolveControlSessionFile(ctx);
+  if (!sessionFile) {
+    return "Cannot set Codex plan mode because this command did not include an OpenClaw session file.";
+  }
+  const value = args[0];
+  const parsed = parseCodexPlanModeArg(value);
+  if (value && !parsed && value.trim().toLowerCase() !== "status") {
+    return "Usage: /codex plan [on|off|status]";
+  }
+  return await deps.setCodexConversationPlanMode({
+    sessionFile,
+    mode: parsed,
+  });
+}
+
+async function setConversationReasoningEffort(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  args: string[],
+): Promise<string> {
+  if (args.length > 1) {
+    return "Usage: /codex think [default|minimal|low|medium|high|xhigh|status]";
+  }
+  const sessionFile = await resolveControlSessionFile(ctx);
+  if (!sessionFile) {
+    return "Cannot set Codex think because this command did not include an OpenClaw session file.";
+  }
+  const value = args[0];
+  const parsed = parseCodexReasoningEffortArg(value);
+  if (value && !parsed && value.trim().toLowerCase() !== "status") {
+    return "Usage: /codex think [default|minimal|low|medium|high|xhigh|status]";
+  }
+  return await deps.setCodexConversationReasoningEffort({
+    sessionFile,
+    effort: parsed,
   });
 }
 

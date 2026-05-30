@@ -49,9 +49,11 @@ import {
   isCodexAppServerNativeAuthProfile,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
+  type CodexAppServerCollaborationMode,
   type CodexAppServerAuthProfileLookup,
   type CodexAppServerContextEngineBinding,
   type CodexAppServerContextEngineProjectionBinding,
+  type CodexAppServerReasoningEffort,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 
@@ -571,6 +573,8 @@ export async function startOrResumeThread(params: {
               authProfileId: boundAuthProfileId,
               model: params.params.modelId,
               modelProvider: response.modelProvider ?? fallbackModelProvider,
+              collaborationMode: binding.collaborationMode,
+              reasoningEffort: binding.reasoningEffort,
               dynamicToolsFingerprint,
               dynamicToolsContainDeferred,
               userMcpServersFingerprint,
@@ -1045,8 +1049,13 @@ export function buildTurnStartParams(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
+    collaborationMode?: CodexAppServerCollaborationMode;
+    reasoningEffort?: CodexAppServerReasoningEffort;
   },
 ): CodexTurnStartParams {
+  const effort = options.reasoningEffort
+    ? resolveReasoningEffort(options.reasoningEffort, params.modelId)
+    : resolveReasoningEffort(params.thinkLevel, params.modelId);
   return {
     threadId: options.threadId,
     input: buildUserInput(params, options.promptText),
@@ -1058,9 +1067,11 @@ export function buildTurnStartParams(
     model: params.modelId,
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+    effort,
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
+      mode: options.collaborationMode,
+      reasoningEffort: effort,
       turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
       skillsCollaborationInstructions: options.skillsCollaborationInstructions,
       memoryCollaborationInstructions: options.memoryCollaborationInstructions,
@@ -1087,6 +1098,8 @@ type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaboratio
 export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
   options: {
+    mode?: CodexAppServerCollaborationMode;
+    reasoningEffort?: CodexAppServerReasoningEffort | null;
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
@@ -1094,10 +1107,11 @@ export function buildTurnCollaborationMode(
   } = {},
 ): CodexTurnCollaborationMode {
   return {
-    mode: "default",
+    mode: options.mode ?? "default",
     settings: {
       model: params.modelId,
-      reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+      reasoning_effort:
+        options.reasoningEffort ?? resolveReasoningEffort(params.thinkLevel, params.modelId),
       developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };

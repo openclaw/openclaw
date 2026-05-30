@@ -9,6 +9,8 @@ import type { CodexServiceTier, CodexThreadResumeResponse } from "./app-server/p
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
+  type CodexAppServerCollaborationMode,
+  type CodexAppServerReasoningEffort,
 } from "./app-server/session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
@@ -25,6 +27,7 @@ type ActiveTurn = {
 type CodexAppServerBindingLookup = NonNullable<Parameters<typeof readCodexAppServerBinding>[1]>;
 
 type PermissionsMode = "default" | "yolo";
+type PlanMode = "default" | "plan";
 
 const CODEX_CONVERSATION_CONTROL_STATE = Symbol.for("openclaw.codex.conversationControl");
 
@@ -153,6 +156,8 @@ export async function setCodexConversationModel(params: {
       cwd: response.thread.cwd ?? binding.cwd,
       model: response.model ?? model,
       modelProvider: response.modelProvider ?? binding.modelProvider,
+      collaborationMode: binding.collaborationMode,
+      reasoningEffort: binding.reasoningEffort,
       approvalPolicy: binding.approvalPolicy,
       sandbox: binding.sandbox,
       serviceTier: binding.serviceTier ?? runtime.serviceTier,
@@ -215,6 +220,38 @@ export async function setCodexConversationPermissions(params: {
   return `Codex permissions set to ${params.mode === "yolo" ? "full access" : "default"}.`;
 }
 
+export async function setCodexConversationPlanMode(params: {
+  sessionFile: string;
+  mode?: PlanMode;
+}): Promise<string> {
+  const binding = await requireThreadBinding(params.sessionFile);
+  if (!params.mode) {
+    return `Codex plan mode: ${formatPlanMode(binding.collaborationMode)}.`;
+  }
+  await writeCodexAppServerBinding(params.sessionFile, {
+    ...binding,
+    collaborationMode: params.mode === "plan" ? "plan" : "default",
+  });
+  return `Codex plan mode ${params.mode === "plan" ? "enabled" : "disabled"}.`;
+}
+
+export async function setCodexConversationReasoningEffort(params: {
+  sessionFile: string;
+  effort?: CodexAppServerReasoningEffort | "default";
+}): Promise<string> {
+  const binding = await requireThreadBinding(params.sessionFile);
+  if (!params.effort) {
+    return `Codex think: ${formatReasoningEffort(binding.reasoningEffort)}.`;
+  }
+  await writeCodexAppServerBinding(params.sessionFile, {
+    ...binding,
+    reasoningEffort: params.effort === "default" ? undefined : params.effort,
+  });
+  return params.effort === "default"
+    ? "Codex think reset to default."
+    : `Codex think set to ${params.effort}.`;
+}
+
 export function parseCodexFastModeArg(arg: string | undefined): boolean | undefined {
   const normalized = arg?.trim().toLowerCase();
   if (!normalized || normalized === "status") {
@@ -243,6 +280,40 @@ export function parseCodexPermissionsModeArg(arg: string | undefined): Permissio
   return undefined;
 }
 
+export function parseCodexPlanModeArg(arg: string | undefined): PlanMode | undefined {
+  const normalized = arg?.trim().toLowerCase();
+  if (!normalized || normalized === "status") {
+    return undefined;
+  }
+  if (normalized === "on" || normalized === "true" || normalized === "plan") {
+    return "plan";
+  }
+  if (normalized === "off" || normalized === "false" || normalized === "default") {
+    return "default";
+  }
+  return undefined;
+}
+
+export function parseCodexReasoningEffortArg(
+  arg: string | undefined,
+): CodexAppServerReasoningEffort | "default" | undefined {
+  const normalized = arg?.trim().toLowerCase();
+  if (!normalized || normalized === "status") {
+    return undefined;
+  }
+  if (
+    normalized === "default" ||
+    normalized === "minimal" ||
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "xhigh"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
 export function formatPermissionsMode(binding: {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
@@ -250,6 +321,14 @@ export function formatPermissionsMode(binding: {
   return binding.approvalPolicy === "never" && binding.sandbox === "danger-full-access"
     ? "full access"
     : "default";
+}
+
+export function formatPlanMode(mode: CodexAppServerCollaborationMode | undefined): string {
+  return mode === "plan" ? "on" : "off";
+}
+
+export function formatReasoningEffort(effort: CodexAppServerReasoningEffort | undefined): string {
+  return effort ?? "default";
 }
 
 async function requireThreadBinding(sessionFile: string, lookup: CodexAppServerBindingLookup = {}) {

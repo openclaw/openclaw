@@ -36,7 +36,10 @@ import {
   CodexAppServerEventProjector,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
-import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
+import {
+  buildCodexPluginAppCacheKey,
+  resolveCodexPluginAppCacheEndpoint,
+} from "./plugin-app-cache-key.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
@@ -66,7 +69,11 @@ import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import * as sharedClientModule from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
-import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  buildTurnCollaborationMode,
+  buildTurnStartParams,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -4547,6 +4554,207 @@ describe("runCodexAppServerAttempt", () => {
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnRequestParams?.serviceTier).toBe("priority");
+  });
+
+  it("keys plugin app inventory by websocket credentials without exposing them", () => {
+    const first = resolveCodexPluginAppCacheEndpoint({
+      start: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "token-first",
+        headers: { Authorization: "Bearer first" },
+      },
+    });
+    const second = resolveCodexPluginAppCacheEndpoint({
+      start: {
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "token-second",
+        headers: { Authorization: "Bearer second" },
+      },
+    });
+
+    expect(first).not.toEqual(second);
+    expect(first).not.toContain("token-first");
+    expect(first).not.toContain("Bearer first");
+    expect(second).not.toContain("token-second");
+    expect(second).not.toContain("Bearer second");
+  });
+
+  it("builds resume and turn params from the currently selected OpenClaw model", () => {
+    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
+    const appServer = {
+      start: {
+        transport: "stdio" as const,
+        command: "codex",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+      },
+      requestTimeoutMs: 60_000,
+      turnCompletionIdleTimeoutMs: 60_000,
+      approvalPolicy: "on-request" as const,
+      approvalsReviewer: "guardian_subagent" as const,
+      sandbox: "danger-full-access" as const,
+      serviceTier: "flex" as const,
+    };
+
+    const resumeParams = buildThreadResumeParams(params, { threadId: "thread-1", appServer });
+    expect(resumeParams).toEqual({
+      threadId: "thread-1",
+      model: "gpt-5.4-codex",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "guardian_subagent",
+      config: {
+        "features.code_mode": true,
+        "features.code_mode_only": true,
+      },
+      sandbox: "danger-full-access",
+      serviceTier: "flex",
+      developerInstructions: resumeParams.developerInstructions,
+      persistExtendedHistory: true,
+    });
+    expect(resumeParams.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    const turnParams = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: "/tmp/workspace",
+      appServer,
+    });
+    expect(turnParams.threadId).toBe("thread-1");
+    expect(turnParams.cwd).toBe("/tmp/workspace");
+    expect(turnParams.model).toBe("gpt-5.4-codex");
+    expect(turnParams.approvalPolicy).toBe("on-request");
+    expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
+    expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+    expect(turnParams.serviceTier).toBe("flex");
+    expect(turnParams.collaborationMode).toEqual({
+      mode: "default",
+      settings: {
+        model: "gpt-5.4-codex",
+        reasoning_effort: "medium",
+        developer_instructions: null,
+      },
+    });
+  });
+
+  it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
+    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
+    params.trigger = "heartbeat";
+
+    const heartbeatCollaborationMode = buildTurnCollaborationMode(params);
+    expect(heartbeatCollaborationMode.mode).toBe("default");
+    expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
+    expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
+    );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "Use heartbeats to create useful proactive progress",
+    );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "If `heartbeat_respond` is not already available and `tool_search` is available",
+    );
+
+    params.trigger = "user";
+    expect(buildTurnCollaborationMode(params).settings.developer_instructions).toBeNull();
+  });
+
+  it("uses native Codex plan mode and normalized reasoning overrides for turn start", () => {
+    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
+    params.modelId = "gpt-5.4";
+    const appServer = {
+      start: {
+        transport: "stdio" as const,
+        command: "codex",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+      },
+      requestTimeoutMs: 60_000,
+      turnCompletionIdleTimeoutMs: 60_000,
+      approvalPolicy: "on-request" as const,
+      approvalsReviewer: "guardian_subagent" as const,
+      sandbox: "danger-full-access" as const,
+      serviceTier: "flex" as const,
+    };
+    const turnParams = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: "/tmp/workspace",
+      appServer,
+      collaborationMode: "plan",
+      reasoningEffort: "minimal",
+    });
+
+    expect(turnParams.effort).toBe("low");
+    expect(turnParams.collaborationMode).toEqual({
+      mode: "plan",
+      settings: {
+        model: "gpt-5.4",
+        reasoning_effort: "low",
+        developer_instructions: null,
+      },
+    });
+  });
+
+  it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
+    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
+    params.trigger = "cron";
+
+    const cronCollaborationMode = buildTurnCollaborationMode(params);
+    expect(cronCollaborationMode.mode).toBe("default");
+    expect(cronCollaborationMode.settings.model).toBe("gpt-5.4-codex");
+    expect(cronCollaborationMode.settings.reasoning_effort).toBe("medium");
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "This is an OpenClaw cron automation turn",
+    );
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "If it asks you to run an exact command, run that command before doing any investigation",
+    );
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "Use context already provided by the runtime",
+    );
+  });
+
+  it("preserves the bound auth profile when resume params omit authProfileId", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      authProfileId: "openai-codex:bound",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    delete params.authProfileId;
+    params.agentDir = path.join(tempDir, "agent");
+
+    const binding = await startOrResumeThread({
+      client: {
+        request: async (method: string) => {
+          if (method === "thread/resume") {
+            return threadStartResult("thread-existing");
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: {
+        start: {
+          transport: "stdio",
+          command: "codex",
+          args: ["app-server"],
+          headers: {},
+        },
+        requestTimeoutMs: 60_000,
+        turnCompletionIdleTimeoutMs: 60_000,
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        sandbox: "workspace-write",
+      },
+    });
+
+    expect(binding.authProfileId).toBe("openai-codex:bound");
   });
 
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {
