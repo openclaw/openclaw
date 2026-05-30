@@ -1,10 +1,9 @@
 /**
  * Session-scoped "known-bad candidate" cache for the model fallback chain.
  *
- * When a fallback candidate fails with a non-transient credential error
- * (`auth` / `auth_permanent`) the chain should not retry the same candidate on
- * every subsequent turn until the user fixes their auth — that wastes latency
- * and emits confusing repeated error logs.
+ * When explicitly enabled and a fallback candidate fails with a non-transient
+ * credential error (`auth` / `auth_permanent`), the chain can avoid retrying
+ * the same candidate on every subsequent turn until the user fixes their auth.
  *
  * This module records skip markers per `(sessionId, provider, model)` with a
  * short TTL. The cache is intentionally in-memory only: a process restart
@@ -19,12 +18,11 @@
 import { modelKey } from "./model-selection-normalize.js";
 
 /**
- * Default time-to-live for a skip marker. 60 seconds is short enough that a
- * user who fixes their auth quickly will see the candidate re-tried on the
- * next turn, and long enough to suppress the no-op retries within a typical
- * conversation burst.
+ * Default time-to-live for a skip marker. Disabled by default so existing
+ * fallback retry behavior stays unchanged unless an operator opts in with
+ * OPENCLAW_FALLBACK_SKIP_TTL_MS.
  */
-export const DEFAULT_FALLBACK_SKIP_TTL_MS = 60_000;
+export const DEFAULT_FALLBACK_SKIP_TTL_MS = 0;
 const FALLBACK_SKIP_TTL_ENV = "OPENCLAW_FALLBACK_SKIP_TTL_MS";
 const FALLBACK_SKIP_TTL_MIN_MS = 1_000;
 const FALLBACK_SKIP_TTL_MAX_MS = 10 * 60_000;
@@ -39,8 +37,11 @@ function resolveConfiguredSkipTtlMs(env: NodeJS.ProcessEnv = process.env): numbe
     return DEFAULT_FALLBACK_SKIP_TTL_MS;
   }
   const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  if (!Number.isFinite(parsed) || parsed < 0) {
     return DEFAULT_FALLBACK_SKIP_TTL_MS;
+  }
+  if (parsed === 0) {
+    return 0;
   }
   return Math.min(FALLBACK_SKIP_TTL_MAX_MS, Math.max(FALLBACK_SKIP_TTL_MIN_MS, parsed));
 }
@@ -148,6 +149,9 @@ export function markFallbackCandidateSkipped(params: {
   }
   const now = params.now ?? Date.now();
   const ttlMs = params.ttlMs ?? resolveConfiguredSkipTtlMs();
+  if (ttlMs <= 0) {
+    return;
+  }
   pruneAllExpired(now);
   const bucket = sessionBucket(params.sessionId, true);
   if (!bucket) {

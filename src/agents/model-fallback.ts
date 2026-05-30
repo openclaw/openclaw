@@ -29,6 +29,7 @@ import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import {
   FailoverError,
   buildFailoverRemediationHint,
+  buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
@@ -40,14 +41,14 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
-import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
-import { resolveAgentHarnessPolicy } from "./harness/policy.js";
-import { getRegisteredAgentHarness } from "./harness/registry.js";
 import {
   getFallbackCandidateSkipReason,
   isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
 } from "./fallback-skip-cache.js";
+import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   isModelFallbackDecisionLogEnabled,
@@ -1233,7 +1234,11 @@ export async function runWithModelFallback<T>(
             provider: candidate.provider,
             model: candidate.model,
           }) ?? "auth";
-        const error = `Skipping ${candidate.provider}/${candidate.model}: recent ${skipReason} failure in this session (run \`openclaw models auth login --provider ${candidate.provider} --force\` to re-authenticate)`;
+        const reauthCommand = buildProviderReauthCommand(candidate.provider);
+        const reauthHint = reauthCommand
+          ? `run \`${reauthCommand}\` to re-authenticate`
+          : "re-authenticate that provider";
+        const error = `Skipping ${candidate.provider}/${candidate.model}: recent ${skipReason} failure in this session (${reauthHint})`;
         attempts.push({
           provider: candidate.provider,
           model: candidate.model,

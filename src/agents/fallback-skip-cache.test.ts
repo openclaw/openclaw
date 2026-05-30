@@ -277,7 +277,7 @@ describe("fallback-skip-cache", () => {
     expect(buckets.has("later")).toBe(true);
   });
 
-  it("defaults to DEFAULT_FALLBACK_SKIP_TTL_MS when ttlMs is omitted", () => {
+  it("does not skip by default when ttlMs is omitted", () => {
     markFallbackCandidateSkipped({
       sessionId: "s1",
       provider: "anthropic",
@@ -285,23 +285,50 @@ describe("fallback-skip-cache", () => {
       reason: "auth",
       now: 1_000,
     });
-    // Just before default TTL: still skipped.
     expect(
       isFallbackCandidateSkipped({
         sessionId: "s1",
         provider: "anthropic",
         model: "claude-opus-4-7",
-        now: 1_000 + DEFAULT_FALLBACK_SKIP_TTL_MS - 1,
-      }),
-    ).toBe(true);
-    // Past default TTL: cleared.
-    expect(
-      isFallbackCandidateSkipped({
-        sessionId: "s1",
-        provider: "anthropic",
-        model: "claude-opus-4-7",
-        now: 1_000 + DEFAULT_FALLBACK_SKIP_TTL_MS + 1,
+        now: 1_000,
       }),
     ).toBe(false);
+    expect(DEFAULT_FALLBACK_SKIP_TTL_MS).toBe(0);
+  });
+
+  it("uses OPENCLAW_FALLBACK_SKIP_TTL_MS as an opt-in default TTL", () => {
+    const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+    process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";
+    try {
+      markFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        reason: "auth",
+        now: 1_000,
+      });
+      expect(
+        isFallbackCandidateSkipped({
+          sessionId: "s1",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          now: 60_000,
+        }),
+      ).toBe(true);
+      expect(
+        isFallbackCandidateSkipped({
+          sessionId: "s1",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          now: 61_001,
+        }),
+      ).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
+      } else {
+        process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = previous;
+      }
+    }
   });
 });

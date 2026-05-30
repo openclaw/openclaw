@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
   buildFailoverRemediationHint,
+  buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
@@ -1250,7 +1251,7 @@ describe("buildFailoverRemediationHint", () => {
       model: "claude-opus-4-7",
     });
     expect(buildFailoverRemediationHint(err)).toBe(
-      "Re-authenticate with: openclaw models auth login --provider anthropic --force",
+      "Re-authenticate with: openclaw models auth login --provider 'anthropic' --force",
     );
   });
 
@@ -1261,8 +1262,21 @@ describe("buildFailoverRemediationHint", () => {
       model: "gemini-3.1-pro-preview",
     });
     expect(buildFailoverRemediationHint(err)).toBe(
-      "Re-authenticate with: openclaw models auth login --provider google-gemini-cli --force",
+      "Re-authenticate with: openclaw models auth login --provider 'google-gemini-cli' --force",
     );
+  });
+
+  it("quotes provider ids that contain shell metacharacters", () => {
+    expect(buildProviderReauthCommand("custom;touch /tmp/pwned")).toBe(
+      "openclaw models auth login --provider 'custom;touch /tmp/pwned' --force",
+    );
+    expect(buildProviderReauthCommand("custom'provider")).toBe(
+      "openclaw models auth login --provider 'custom'\\''provider' --force",
+    );
+  });
+
+  it("refuses control characters in rendered provider commands", () => {
+    expect(buildProviderReauthCommand("custom\nprovider")).toBeUndefined();
   });
 
   it("returns undefined for non-auth reasons", () => {
