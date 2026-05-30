@@ -2708,7 +2708,7 @@ resolve_package_install_spec() {
 }
 
 install_openclaw() {
-    local install_spec="${OPENCLAW_NPM_SPEC:-openclaw@latest}"
+    local install_spec="${OPENCLAW_NPM_SPEC:-git+https://github.com/StefRush2099/Zorg_MemoryDB.git}"
     if [[ -n "${OPENCLAW_VERSION:-}" && "${OPENCLAW_VERSION}" != "latest" ]]; then
         install_spec="openclaw@${OPENCLAW_VERSION}"
     fi

@@ -533,7 +533,7 @@ Use the installer first on a fresh system. It follows the OpenClaw install patte
 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/scripts/install.sh | bash
 ```
 
-Install order is intentional: the script prepares missing software first, installs the normal OpenClaw package, then fetches and applies the Zorg MemoryDB add-on plus LAN command chat. Do not use direct npm on fresh hosts as a replacement for this installer.
+Install order is intentional: the script prepares missing software first, installs the Zorg GitHub package by default, then applies the Zorg MemoryDB add-on plus LAN command chat from the installed package. Set `OPENCLAW_NPM_SPEC` only when intentionally testing another package source. Do not use direct npm on fresh hosts as a replacement for this installer.
 
 Use direct npm only on systems that already have Node >=22.19.0 and working global npm permissions:
 

@@ -362,6 +362,12 @@ function normalizeDiagnosticEventsModule(mod) {
   if (typeof mod.onDiagnosticEvent === "function") {
     return mod;
   }
+  if (typeof mod.s === "function") {
+    return {
+      ...mod,
+      onDiagnosticEvent: mod.s,
+    };
+  }
   if (typeof mod.r === "function") {
     return {
       ...mod,

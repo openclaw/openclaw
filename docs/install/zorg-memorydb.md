@@ -4,7 +4,7 @@ Zorg MemoryDB extends OpenClaw with PostgreSQL-backed durable memory and the LAN
 
 ## What The Installer Adds
 
-The first-run installer prepares missing prerequisites, installs the normal OpenClaw package on the host, then runs `zorg/install-zorg-memorydb.sh` as the add-on step. The add-on script creates the OpenClaw workspace subdirectories for `zorg-memorydb` and `lan-chat`, applies the public-safe schema, seeds production rule records, imports packaged markdown rules into database tables, imports retired `memory/*.md` files into the database if they exist, and copies the LAN command chat source.
+The first-run installer prepares missing prerequisites, installs the Zorg GitHub package on the host by default, then runs `zorg/install-zorg-memorydb.sh` as the add-on step from that installed package. The add-on script creates the OpenClaw workspace subdirectories for `zorg-memorydb` and `lan-chat`, applies the public-safe schema, seeds production rule records, imports packaged markdown rules into database tables, imports retired `memory/*.md` files into the database if they exist, and copies the LAN command chat source.
 
 If the target Linux user does not have root or passwordless sudo, the bootstrap does not abort the whole OpenClaw install. It copies the packaged Zorg MemoryDB and LAN command chat files, builds the LAN chat source when npm is available, and warns that system packages such as PostgreSQL client/server must be installed as root before rerunning `zorg/install-zorg-memorydb.sh` to apply the database schema.
 
@@ -44,7 +44,7 @@ Use the installer first on a fresh system. It follows the OpenClaw install patte
 curl -fsSL --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/StefRush2099/Zorg_MemoryDB/main/scripts/install.sh | bash
 ```
 
-Install order is intentional: OpenClaw is installed first from the normal OpenClaw package, then the Zorg MemoryDB add-on and LAN command chat are applied from this repository. This is the supported first-run path for hosts with missing or old software.
+Install order is intentional: the installer installs `git+https://github.com/StefRush2099/Zorg_MemoryDB.git` by default, then applies the Zorg MemoryDB add-on and LAN command chat from that package. Override `OPENCLAW_NPM_SPEC` only when intentionally testing a different package source. This is the supported first-run path for hosts with missing or old software.
 
 Direct npm installs the OpenClaw package only unless the explicit existing-upgrade guard is set. Use direct npm only on systems that already have Node >=22.19.0 and working global npm permissions. For first-run installs, run the packaged Zorg add-on script as a separate step. Do not use direct npm as the first command on old hosts such as Node v12 systems; use the first-run installer above so Node is repaired before npm evaluates OpenClaw's dependency tree.
 
