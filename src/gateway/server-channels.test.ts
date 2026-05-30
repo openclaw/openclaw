@@ -21,6 +21,8 @@ import { createChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
   const computeBackoff = vi.fn(() => 10);
+  const hasBundledChannelRuntimeSetter = vi.fn(() => true);
+  const setBundledChannelRuntime = vi.fn();
   const sleepWithAbort = vi.fn((ms: number, abortSignal?: AbortSignal) => {
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => resolve(), ms);
@@ -34,13 +36,22 @@ const hoisted = vi.hoisted(() => {
       );
     });
   });
-  return { computeBackoff, sleepWithAbort };
+  return { computeBackoff, hasBundledChannelRuntimeSetter, setBundledChannelRuntime, sleepWithAbort };
 });
 
 vi.mock("../infra/backoff.js", () => ({
   computeBackoff: hoisted.computeBackoff,
   sleepWithAbort: hoisted.sleepWithAbort,
 }));
+
+vi.mock("../channels/plugins/bundled.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/plugins/bundled.js")>();
+  return {
+    ...actual,
+    hasBundledChannelRuntimeSetter: hoisted.hasBundledChannelRuntimeSetter,
+    setBundledChannelRuntime: hoisted.setBundledChannelRuntime,
+  };
+});
 
 type TestAccount = {
   enabled?: boolean;
@@ -144,7 +155,8 @@ function firstStartAccountContext(
 
 function installTestRegistry(
   ...plugins: Array<
-    ChannelPlugin<TestAccount> | { plugin: ChannelPlugin<TestAccount>; origin: string }
+    | ChannelPlugin<TestAccount>
+    | { plugin: ChannelPlugin<TestAccount>; origin: string; runtime?: PluginRuntime }
   >
 ) {
   const registry = createEmptyPluginRegistry();
@@ -153,6 +165,7 @@ function installTestRegistry(
     registry.channels.push({
       pluginId: plugin.id,
       ...("origin" in candidate ? { origin: candidate.origin as never } : {}),
+      ...("runtime" in candidate && candidate.runtime ? { runtime: candidate.runtime } : {}),
       source: "test",
       plugin,
     });
@@ -202,6 +215,9 @@ describe("server-channels auto restart", () => {
     previousRegistry = getActivePluginRegistry();
     vi.useFakeTimers();
     hoisted.computeBackoff.mockClear();
+    hoisted.hasBundledChannelRuntimeSetter.mockClear();
+    hoisted.hasBundledChannelRuntimeSetter.mockReturnValue(true);
+    hoisted.setBundledChannelRuntime.mockClear();
     hoisted.sleepWithAbort.mockClear();
   });
 
@@ -597,6 +613,36 @@ describe("server-channels auto restart", () => {
       "startup-channel-runtime",
     );
     expect(ctx?.channelRuntime).not.toBe(startupRuntime);
+  });
+
+  it("seeds loaded bundled channels with their full plugin runtime before startup", async () => {
+    const fullPluginRuntime = {
+      channel: createRuntimeChannel(),
+      marker: "full-plugin-runtime",
+    } as unknown as PluginRuntime & { marker: string };
+    const startupRuntime = {
+      runtimeContexts: createChannelRuntimeContextRegistry(),
+      marker: "startup-channel-runtime",
+    };
+    const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {
+      expect(hoisted.setBundledChannelRuntime).toHaveBeenCalledWith("discord", fullPluginRuntime);
+    });
+
+    installTestRegistry({
+      plugin: createTestPlugin({ startAccount }),
+      origin: "bundled",
+      runtime: fullPluginRuntime,
+    });
+    const manager = createManager({ resolveStartupChannelRuntime: () => startupRuntime });
+
+    await manager.startChannels();
+
+    expect(hoisted.hasBundledChannelRuntimeSetter).toHaveBeenCalledWith("discord");
+    expect(hoisted.setBundledChannelRuntime).toHaveBeenCalledWith("discord", fullPluginRuntime);
+    const ctx = firstStartAccountContext(startAccount);
+    expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
+      "startup-channel-runtime",
+    );
   });
 
   it("keeps the full runtime path for non-bundled channels", async () => {

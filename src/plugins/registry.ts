@@ -926,6 +926,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         existingRuntime.pluginName = record.name;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
+        existingRuntime.runtime = resolvePluginRuntime(record.id);
         const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
         if (existingSetup) {
           existingSetup.plugin = plugin;
@@ -984,6 +985,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       plugin,
       source: record.source,
       rootDir: record.rootDir,
+      runtime: resolvePluginRuntime(record.id),
     });
   };
 

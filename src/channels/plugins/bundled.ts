@@ -932,3 +932,11 @@ export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime):
   }
   setter(runtime);
 }
+
+export function hasBundledChannelRuntimeSetter(id: ChannelId): boolean {
+  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
+  return Boolean(
+    getLazyGeneratedBundledChannelEntryForRoot(id, rootScope, loadContext)?.entry
+      .setChannelRuntime,
+  );
+}

@@ -122,6 +122,7 @@ export type PluginChannelRegistration = {
   plugin: ChannelPlugin;
   source: string;
   rootDir?: string;
+  runtime?: PluginRuntime;
 };
 
 export type PluginChannelSetupRegistration = {
