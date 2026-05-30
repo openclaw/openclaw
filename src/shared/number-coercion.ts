@@ -105,7 +105,10 @@ export function asDateTimestampMs(value: unknown): number | undefined {
   });
 }
 
-export function isFutureDateTimestampMs(value: unknown, opts: { nowMs?: number } = {}): boolean {
+export function isFutureDateTimestampMs(
+  value: unknown,
+  opts: { nowMs?: number } = {},
+): value is number {
   const timestampMs = asDateTimestampMs(value);
   const nowMs = asDateTimestampMs(opts.nowMs ?? Date.now());
   return timestampMs !== undefined && nowMs !== undefined && timestampMs > nowMs;
