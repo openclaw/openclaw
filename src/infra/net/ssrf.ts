@@ -664,9 +664,19 @@ type ClosableDispatcher = {
   destroy?: () => void;
 };
 
-function destroyDispatcher(candidate: ClosableDispatcher): void {
+export function destroyDispatcher(candidate?: ClosableDispatcher | null): void {
+  if (!candidate) {
+    return;
+  }
   try {
-    candidate.destroy?.();
+    if (typeof candidate.destroy === "function") {
+      candidate.destroy();
+    } else if (typeof candidate.close === "function") {
+      const res = candidate.close();
+      if (res && typeof res.catch === "function") {
+        res.catch(() => {});
+      }
+    }
   } catch {
     // ignore dispatcher cleanup errors
   }

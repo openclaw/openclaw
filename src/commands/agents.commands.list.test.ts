@@ -121,7 +121,11 @@ describe("agentsListCommand", () => {
 
     expect(buildProviderStatusIndexMock).toHaveBeenCalledOnce();
     expect(buildProviderSummaryMetadataIndexMock).toHaveBeenCalledOnce();
-    expect(vi.mocked(runtime.log).mock.calls).toEqual([
+    // WHY: Normalizes Windows backslash path separators to match POSIX assertions in the test mock.
+    const normalizedLogCalls = vi
+      .mocked(runtime.log)
+      .mock.calls.map(([message]) => [String(message).replaceAll("\\", "/")]);
+    expect(normalizedLogCalls).toEqual([
       [
         [
           "Agents:",

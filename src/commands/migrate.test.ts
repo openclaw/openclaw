@@ -1289,7 +1289,7 @@ describe("migrateApplyCommand", () => {
     expect(backupCall?.[1]).toStrictEqual({ output: undefined, verify: true });
     const applyContext = firstApplyContext();
     expect(applyContext.backupPath).toBe("/tmp/openclaw-backup.tgz");
-    expect(String(applyContext.reportDir)).toContain("/migration/hermes/");
+    expect(String(applyContext.reportDir).replaceAll("\\", "/")).toContain("/migration/hermes/");
     expect(firstAppliedPlan()).toBe(planned);
     expect(result.backupPath).toBe("/tmp/openclaw-backup.tgz");
   });
@@ -1444,7 +1444,7 @@ describe("migrateApplyCommand", () => {
     };
     expect(logPayload.providerId).toBe("hermes");
     expect(logPayload.summary?.errors).toBe(1);
-    expect(String(logPayload.reportDir)).toContain("/migration/hermes/");
+    expect(String(logPayload.reportDir).replaceAll("\\", "/")).toContain("/migration/hermes/");
   });
 
   it("fails after writing JSON output when apply reports late conflicts", async () => {
@@ -1484,7 +1484,7 @@ describe("migrateApplyCommand", () => {
     };
     expect(logPayload.providerId).toBe("hermes");
     expect(logPayload.summary?.conflicts).toBe(1);
-    expect(String(logPayload.reportDir)).toContain("/migration/hermes/");
+    expect(String(logPayload.reportDir).replaceAll("\\", "/")).toContain("/migration/hermes/");
   });
 
   it("prints the dry-run plan in JSON mode even when --yes is set", async () => {

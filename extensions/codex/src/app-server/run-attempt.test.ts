@@ -346,7 +346,7 @@ async function startThreadWithDisabledNativeSurfaceForTest(
   const pluginConfig = {
     ...options.pluginConfig,
     codexPlugins: {
-      ...(options.pluginConfig?.codexPlugins as Record<string, unknown> | undefined),
+      ...(options.pluginConfig?.codexPlugins as Record<string, unknown>),
       enabled: false,
     },
   };

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { exportTrajectoryCommand } from "./export-trajectory.js";
@@ -74,7 +75,7 @@ describe("exportTrajectoryCommand", () => {
     );
 
     expect(mocks.resolveDefaultSessionStorePath).not.toHaveBeenCalled();
-    expect(mocks.loadSessionStore).toHaveBeenCalledWith("/tmp/direct-store.json", {
+    expect(mocks.loadSessionStore).toHaveBeenCalledWith(path.resolve("/tmp/direct-store.json"), {
       skipCache: true,
     });
     expect(runtime.error).toHaveBeenCalledWith(

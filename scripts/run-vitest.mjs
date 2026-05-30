@@ -792,6 +792,10 @@ function main(argv = process.argv.slice(2), env = process.env) {
   });
 }
 
-if (import.meta.main) {
+if (
+  import.meta.main ||
+  (process.argv[1] &&
+    (process.argv[1].endsWith("run-vitest.mjs") || process.argv[1].endsWith("run-vitest.ts")))
+) {
   main();
 }

@@ -4,7 +4,12 @@ import type { RuntimeEnv } from "../runtime.js";
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
 const resolveStorePathMock = vi.hoisted(() =>
-  vi.fn((_store: string | undefined, opts?: { agentId?: string }) => {
+  vi.fn((store: string | undefined, opts?: { agentId?: string }) => {
+    if (store) {
+      return store.includes("{agentId}")
+        ? store.replaceAll("{agentId}", opts?.agentId ?? "missing")
+        : store;
+    }
     return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
   }),
 );
@@ -19,12 +24,21 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
+vi.mock("../config/sessions/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/sessions/paths.js")>(
+    "../config/sessions/paths.js",
+  );
+  return {
+    ...actual,
+    resolveStorePath: resolveStorePathMock,
+  };
+});
+
 vi.mock("../config/sessions.js", async () => {
   const actual =
     await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
-    resolveStorePath: resolveStorePathMock,
     loadSessionStore: loadSessionStoreMock,
   };
 });
@@ -65,7 +79,12 @@ describe("sessionsCommand default store agent selection", () => {
     vi.clearAllMocks();
     loadConfigMock.mockImplementation(() => createSessionsConfig());
     resolveStorePathMock.mockImplementation(
-      (_store: string | undefined, opts?: { agentId?: string }) => {
+      (store: string | undefined, opts?: { agentId?: string }) => {
+        if (store) {
+          return store.includes("{agentId}")
+            ? store.replaceAll("{agentId}", opts?.agentId ?? "missing")
+            : store;
+        }
         return `/tmp/sessions-${opts?.agentId ?? "missing"}.json`;
       },
     );

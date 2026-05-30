@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import * as ip from "@openclaw/net-policy/ip";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import {
@@ -12,6 +13,8 @@ import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import * as ssrf from "../infra/net/ssrf.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommand,
@@ -2424,6 +2427,107 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         },
         { timeout: 5_000, interval: 50 },
       );
+    },
+  );
+
+  it(
+    "ensures Hard-Kill primitive succeeds in terminating socket before fallback model initiates for hung response",
+    { timeout: 15_000 },
+    async () => {
+      const port = enabledPort;
+      let serverAbortSignal: AbortSignal | undefined;
+
+      let serverSocketClosed = false;
+      let serverConnectionReceived = false;
+      const hangingServer = http.createServer((req, res) => {
+        serverConnectionReceived = true;
+        req.on("close", () => {
+          serverSocketClosed = true;
+        });
+      });
+      await new Promise<void>((resolve) => hangingServer.listen(0, resolve));
+      const addressInfo = hangingServer.address() as {
+        address: string;
+        port: number;
+        family: string;
+      };
+      const hostIp =
+        addressInfo.family === "IPv6" ? `[${addressInfo.address}]` : addressInfo.address;
+      const hangingPort = addressInfo.port;
+
+      // Mock the lowest-level IP block checks (cross-module boundary) to bypass SSRF loopback protections in ESM
+      const isBlockedIpv4Spy = vi
+        .spyOn(ip, "isBlockedSpecialUseIpv4Address")
+        .mockReturnValue(false);
+      const isBlockedIpv6Spy = vi
+        .spyOn(ip, "isBlockedSpecialUseIpv6Address")
+        .mockReturnValue(false);
+
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce(
+        (opts: unknown) =>
+          new Promise<undefined>((resolve) => {
+            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+            serverAbortSignal = signal;
+
+            // Simulate the agent's outbound fetch to verify the Hard-Kill teardown logic
+            // actually invokes dispatcher.destroy() when the abort signal fires.
+            fetchWithSsrFGuard({
+              url: `http://${hostIp === "::" ? "[::1]" : hostIp === "0.0.0.0" ? "127.0.0.1" : hostIp}:${hangingPort}`,
+              signal,
+            }).catch((e) => {
+              if (e?.name !== "AbortError") {
+                expect.fail("fetchWithSsrFGuard threw: " + String(e));
+              }
+            });
+
+            if (signal?.aborted) {
+              resolve(undefined);
+              return;
+            }
+            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+          }),
+      );
+
+      const clientReq = http.request({
+        hostname: "127.0.0.1",
+        port,
+        path: "/v1/chat/completions",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer secret",
+        },
+      });
+      clientReq.on("error", () => {});
+      clientReq.end(
+        JSON.stringify({
+          model: "openclaw",
+          messages: [{ role: "user", content: "trigger hung response" }],
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(serverConnectionReceived).toBe(true);
+      });
+
+      // Simulate client disconnect to trigger the abort controller and Hard-Kill
+      clientReq.destroy();
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(serverAbortSignal?.aborted).toBe(true);
+            expect(serverSocketClosed).toBe(true);
+            isBlockedIpv4Spy.mockRestore();
+            isBlockedIpv6Spy.mockRestore();
+          },
+          { timeout: 5_000, interval: 50 },
+        );
+      } finally {
+        hangingServer.close();
+      }
     },
   );
 });

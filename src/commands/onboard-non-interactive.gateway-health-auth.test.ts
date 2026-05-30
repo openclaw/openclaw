@@ -59,6 +59,7 @@ describe("resolveGatewayHealthProbeToken", () => {
               source: "file",
               path: tokenPath,
               mode: "singleValue",
+              allowInsecurePath: true,
             },
           },
         },
