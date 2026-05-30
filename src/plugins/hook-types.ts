@@ -91,6 +91,11 @@ export type PluginHookName =
   | "before_message_write"
   | "session_start"
   | "session_end"
+  /**
+   * @deprecated Core prepares thread-bound subagent bindings through channel
+   * session-binding adapters before `subagent_spawned` fires. Use
+   * `subagent_spawned` for post-launch observation in new plugins.
+   */
   | "subagent_spawning"
   | "subagent_delivery_target"
   | "subagent_spawned"
@@ -151,6 +156,38 @@ type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)
 type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? true : never;
 const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
 void assertAllPluginHookNamesListed;
+
+export type DeprecatedPluginHookName = "subagent_spawning" | "deactivate";
+
+export type PluginHookDeprecation = {
+  replacement: string;
+  reason: string;
+  removeAfter?: string;
+};
+
+export const DEPRECATED_PLUGIN_HOOKS = {
+  subagent_spawning: {
+    replacement: "`subagent_spawned` for observation; core session bindings for routing",
+    reason:
+      "Core prepares thread-bound subagent bindings through channel session-binding adapters before `subagent_spawned` fires.",
+    removeAfter: "2026-08-30",
+  },
+  deactivate: {
+    replacement: "`gateway_stop`",
+    reason: "`deactivate` is a legacy cleanup hook alias for `gateway_stop`.",
+    removeAfter: "2026-08-16",
+  },
+} as const satisfies Record<DeprecatedPluginHookName, PluginHookDeprecation>;
+
+export const DEPRECATED_PLUGIN_HOOK_NAMES = Object.keys(
+  DEPRECATED_PLUGIN_HOOKS,
+) as DeprecatedPluginHookName[];
+
+const deprecatedPluginHookNameSet = new Set<PluginHookName>(DEPRECATED_PLUGIN_HOOK_NAMES);
+
+export const isDeprecatedPluginHookName = (
+  hookName: PluginHookName,
+): hookName is DeprecatedPluginHookName => deprecatedPluginHookNameSet.has(hookName);
 
 const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
 
@@ -612,8 +649,18 @@ type PluginHookSubagentSpawnBase = {
   threadRequested: boolean;
 };
 
+/**
+ * @deprecated Core prepares thread-bound subagent bindings through channel
+ * session-binding adapters before `subagent_spawned` fires. Use
+ * `subagent_spawned` for post-launch observation in new plugins.
+ */
 export type PluginHookSubagentSpawningEvent = PluginHookSubagentSpawnBase;
 
+/**
+ * @deprecated Core prepares thread-bound subagent bindings through channel
+ * session-binding adapters before `subagent_spawned` fires. Returning routing
+ * data from `subagent_spawning` is retained only for older runtimes.
+ */
 export type PluginHookSubagentSpawningResult =
   | {
       status: "ok";
@@ -1040,6 +1087,11 @@ export type PluginHookHandlerMap = {
     event: PluginHookSessionEndEvent,
     ctx: PluginHookSessionContext,
   ) => Promise<void> | void;
+  /**
+   * @deprecated Core prepares thread-bound subagent bindings through channel
+   * session-binding adapters before `subagent_spawned` fires. Use
+   * `subagent_spawned` for post-launch observation in new plugins.
+   */
   subagent_spawning: (
     event: PluginHookSubagentSpawningEvent,
     ctx: PluginHookSubagentContext,

@@ -47,6 +47,20 @@ Scope selection:
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
 - `--limit <n|all>`: max rows to output (default `100`; `all` restores full output)
 
+Tail human-readable trajectory progress for stored sessions:
+
+```bash
+openclaw sessions tail
+openclaw sessions tail --follow
+openclaw sessions tail --session-key "agent:main:telegram:direct:123" --tail 25
+openclaw sessions --agent work tail --follow
+openclaw sessions --all-agents tail --follow
+```
+
+`openclaw sessions tail` renders recent trajectory JSONL events as compact progress lines. Without `--session-key`, it tails running sessions first, then the latest stored session. `--tail <count>` controls how many existing events print before follow mode; the default is `80`, and `0` starts at the current end. `--follow` keeps watching the selected trajectory files, including relocated files referenced by `<session>.trajectory-path.json`.
+
+The progress view is intentionally conservative: prompt text, tool arguments, and tool result bodies are not printed. Tool calls show the tool name with `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`; model completion lines show provider/model and terminal status.
+
 Export a trajectory bundle for a stored session:
 
 ```bash

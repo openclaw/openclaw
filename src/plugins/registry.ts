@@ -152,7 +152,9 @@ import {
   normalizePluginToolNames,
 } from "./tool-contracts.js";
 import {
+  DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
+  isDeprecatedPluginHookName,
   isPluginHookName,
   isPromptInjectionHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -202,6 +204,7 @@ export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistrati
 
 const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
 const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
+const LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT = getPluginCompatRecord("legacy-subagent-spawning-hook");
 
 function formatLegacyDeactivateHookAliasDiagnostic(): string {
   const removeAfter =
@@ -209,6 +212,22 @@ function formatLegacyDeactivateHookAliasDiagnostic(): string {
   return (
     `typed hook "deactivate" is deprecated (${LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.code}); ` +
     `use "gateway_stop". This compatibility alias will be removed after ${removeAfter}.`
+  );
+}
+
+function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string | undefined {
+  if (!isDeprecatedPluginHookName(hookName) || hookName === "deactivate") {
+    return undefined;
+  }
+  const deprecation = DEPRECATED_PLUGIN_HOOKS[hookName];
+  const compat =
+    hookName === "subagent_spawning" ? LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT : undefined;
+  const removeAfter = compat?.removeAfter ?? deprecation.removeAfter ?? "a future breaking release";
+  const code = compat?.code ?? "deprecated-plugin-hook";
+  return (
+    `typed hook "${hookName}" is deprecated (${code}); ` +
+    `${deprecation.reason} Use ${deprecation.replacement}. ` +
+    `This compatibility hook will be removed after ${removeAfter}.`
   );
 }
 
@@ -2444,6 +2463,16 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: formatLegacyDeactivateHookAliasDiagnostic(),
       });
+    } else {
+      const deprecatedHookDiagnostic = formatDeprecatedTypedHookDiagnostic(hookName);
+      if (deprecatedHookDiagnostic) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: deprecatedHookDiagnostic,
+        });
+      }
     }
     let effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {

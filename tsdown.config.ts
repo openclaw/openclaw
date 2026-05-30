@@ -448,6 +448,13 @@ function buildTerminalCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildWebContentCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/web-content-core/src/index.ts",
+    "provider-runtime-shared": "packages/web-content-core/src/provider-runtime-shared.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -646,6 +653,12 @@ export default defineConfig([
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
     },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildWebContentCoreDistEntries(),
+    outDir: "packages/web-content-core/dist",
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
