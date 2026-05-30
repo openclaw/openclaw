@@ -1,0 +1,117 @@
+import type { SkillScanFinding } from "../security/scanner.js";
+
+export const SKILL_WORKSHOP_SCHEMA = "openclaw.skill-workshop.proposal.v1" as const;
+export const SKILL_WORKSHOP_MANIFEST_SCHEMA =
+  "openclaw.skill-workshop.proposals-manifest.v1" as const;
+export const SKILL_WORKSHOP_ROLLBACK_SCHEMA = "openclaw.skill-workshop.rollback.v1" as const;
+
+export type SkillProposalKind = "create" | "update";
+export type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
+export type SkillProposalScannerState = "pending" | "clean" | "failed" | "quarantined";
+export type SkillProposalSource = "skill-research" | "skill-workshop" | "cli" | "gateway";
+
+export type SkillProposalScan = {
+  state: SkillProposalScannerState;
+  scannedAt: string;
+  critical: number;
+  warn: number;
+  info: number;
+  findings: SkillScanFinding[];
+};
+
+export type SkillProposalTarget = {
+  skillName: string;
+  skillKey: string;
+  skillDir: string;
+  skillFile: string;
+  source?: string;
+  currentContentHash?: string;
+};
+
+export type SkillProposalRecord = {
+  schema: typeof SKILL_WORKSHOP_SCHEMA;
+  id: string;
+  kind: SkillProposalKind;
+  status: SkillProposalStatus;
+  title: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: SkillProposalSource;
+  proposedVersion: string;
+  draftFile: "PROPOSAL.md";
+  draftHash: string;
+  target: SkillProposalTarget;
+  scan: SkillProposalScan;
+  goal?: string;
+  evidence?: string;
+  appliedAt?: string;
+  rejectedAt?: string;
+  quarantinedAt?: string;
+  staleAt?: string;
+  statusReason?: string;
+};
+
+export type SkillProposalManifestEntry = {
+  id: string;
+  kind: SkillProposalKind;
+  status: SkillProposalStatus;
+  title: string;
+  description: string;
+  skillName: string;
+  skillKey: string;
+  createdAt: string;
+  updatedAt: string;
+  scanState: SkillProposalScannerState;
+};
+
+export type SkillProposalManifest = {
+  schema: typeof SKILL_WORKSHOP_MANIFEST_SCHEMA;
+  updatedAt: string;
+  proposals: SkillProposalManifestEntry[];
+};
+
+export type SkillProposalRollback = {
+  schema: typeof SKILL_WORKSHOP_ROLLBACK_SCHEMA;
+  proposalId: string;
+  writtenAt: string;
+  targetSkillFile: string;
+  action: "create" | "update";
+  previousContentHash?: string;
+  previousContent?: string;
+};
+
+export type SkillProposalCreateInput = {
+  workspaceDir: string;
+  name: string;
+  description: string;
+  content: string;
+  createdBy?: SkillProposalSource;
+  goal?: string;
+  evidence?: string;
+};
+
+export type SkillProposalUpdateInput = {
+  workspaceDir: string;
+  skillName: string;
+  content: string;
+  createdBy?: SkillProposalSource;
+  goal?: string;
+  evidence?: string;
+};
+
+export type SkillProposalActionInput = {
+  workspaceDir: string;
+  proposalId: string;
+  reason?: string;
+};
+
+export type SkillProposalReadResult = {
+  record: SkillProposalRecord;
+  content: string;
+};
+
+export type SkillProposalApplyResult = {
+  record: SkillProposalRecord;
+  targetSkillFile: string;
+};
