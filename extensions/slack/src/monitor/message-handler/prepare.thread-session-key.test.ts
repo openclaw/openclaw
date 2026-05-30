@@ -21,25 +21,20 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   };
 });
 
-import type { ResolvedSlackAccount } from "../../accounts.js";
+import { resolveSlackAccount, type ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackRoutingContext, type SlackRoutingContextDeps } from "./prepare-routing.js";
 
 function buildCtx(overrides?: {
   replyToMode?: "all" | "first" | "off" | "batched";
   dmScope?: "main" | "per-sender" | "per-channel-peer";
-  collapseAssistantThreads?: boolean;
 }) {
   const replyToMode = overrides?.replyToMode ?? "all";
-  const dm =
-    overrides?.collapseAssistantThreads !== undefined
-      ? { collapseAssistantThreads: overrides.collapseAssistantThreads }
-      : undefined;
   return {
     cfg: {
       session: { dmScope: overrides?.dmScope },
       channels: {
-        slack: { enabled: true, replyToMode, ...(dm ? { dm } : {}) },
+        slack: { enabled: true, replyToMode },
       },
     } as OpenClawConfig,
     teamId: "T1",
@@ -590,13 +585,81 @@ describe("thread-level session keys", () => {
     expect(routing.threadContext.messageThreadId).toBe("1770408530.000000");
   });
 
-  it("collapses assistant DM threads to the base DM session when channels.slack.dm.collapseAssistantThreads=true", () => {
-    const ctx = buildCtx({
-      replyToMode: "all",
-      dmScope: "per-channel-peer",
-      collapseAssistantThreads: true,
+  it("collapses assistant DM threads to the base DM session when root channels.slack.dm.collapseAssistantThreads=true", () => {
+    // Drive the flag through the REAL account resolver so this exercises the
+    // merged account config path rather than a hand-built account object.
+    const cfg = {
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          enabled: true,
+          replyToMode: "all",
+          dm: { collapseAssistantThreads: true },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveSlackAccount({ cfg });
+    expect(account.dm?.collapseAssistantThreads).toBe(true);
+
+    const ctx = {
+      cfg,
+      teamId: "T1",
+      threadInheritParent: false,
+      threadHistoryScope: "thread",
+    } satisfies SlackRoutingContextDeps;
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "assistant reply",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+      assistantThreadTs: "1770408530.000000",
     });
-    const account = buildAccount("all");
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.sessionKey).not.toContain(":thread:");
+  });
+
+  it("collapses assistant DM threads when the flag is set at account scope (channels.slack.accounts.<id>.dm.collapseAssistantThreads=true)", () => {
+    // Regression: previously routing read only the root channels.slack.dm flag,
+    // so an account-scoped opt-in validated but silently kept fanning assistant
+    // DMs into :thread: sessions. The merged account config must honor it.
+    const cfg = {
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        slack: {
+          enabled: true,
+          replyToMode: "all",
+          accounts: {
+            default: {
+              dm: { collapseAssistantThreads: true },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = resolveSlackAccount({ cfg, accountId: "default" });
+    // The merged account config surfaces the account-scoped flag even though it
+    // is absent from the root channels.slack.dm config.
+    expect(account.dm?.collapseAssistantThreads).toBe(true);
+
+    const ctx = {
+      cfg,
+      teamId: "T1",
+      threadInheritParent: false,
+      threadHistoryScope: "thread",
+    } satisfies SlackRoutingContextDeps;
 
     const routing = resolveSlackRoutingContext({
       ctx,
