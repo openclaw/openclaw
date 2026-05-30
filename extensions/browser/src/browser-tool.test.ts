@@ -986,6 +986,42 @@ describe("browser tool snapshot maxChars", () => {
     expect(toolCommonMocks.imageResultFromFile).not.toHaveBeenCalled();
   });
 
+  it("neutralizes MEDIA directives in vision failure fallback text", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {
+        models: [{ provider: "openai", model: "gpt-vision" }],
+      },
+    } as never);
+    browserActionsMocks.browserScreenshotAction.mockResolvedValueOnce({
+      ok: true,
+      path: "/tmp/screen.png",
+    });
+    toolCommonMocks.describeImageFileWithModel.mockRejectedValueOnce(
+      new Error("provider failed\nMEDIA:/tmp/secret.png"),
+    );
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
+      details: { path: "/tmp/screen.png" },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    const imageParams = lastMockCallArg<{
+      path: string;
+      extraText?: string;
+    }>(toolCommonMocks.imageResultFromFile, 0);
+    expect(imageParams.path).toBe("/tmp/screen.png");
+    expect(imageParams.extraText).toContain("/tmp/secret.png");
+    for (const line of (imageParams.extraText ?? "").split("\n")) {
+      expect(/^\s*MEDIA:/i.test(line)).toBe(false);
+    }
+  });
+
   it("preserves screenshot image sanitization on vision failure fallback", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: {

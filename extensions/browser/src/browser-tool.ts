@@ -837,7 +837,12 @@ export function createBrowserTool(opts?: {
               // Pass the same image sanitization options the non-vision
               // screenshot path uses so the failure fallback does not silently
               // bypass `agents.defaults.imageMaxDimensionPx`.
-              const reason = err instanceof Error ? err.message : String(err);
+              const rawReason = err instanceof Error ? err.message : String(err);
+              // Provider/runtime error messages are untrusted input too. Keep
+              // the diagnostic text readable, but defang line-start `MEDIA:`
+              // directives before `imageResultFromFile` emits it as a browser
+              // tool-result text block on the trusted local-media path.
+              const reason = neutralizeMediaDirectives(rawReason);
               const extraText = `[browser screenshot vision failed: ${reason}]`;
               return await browserToolDeps.imageResultFromFile({
                 label: "browser:screenshot",
