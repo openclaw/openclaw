@@ -162,7 +162,7 @@ function discoverCachedAgentStoresForAgent(
 
 function canonicalizeLegacyResolvedModel(params: { provider: string; model: Model }): Model {
   if (
-    !["openai", "openai"].includes(normalizeProviderId(params.provider)) ||
+    normalizeProviderId(params.provider) !== "openai" ||
     params.model.id.trim().toLowerCase() !== "gpt-5.4-codex"
   ) {
     return params.model;

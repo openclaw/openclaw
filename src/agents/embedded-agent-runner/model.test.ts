@@ -2721,18 +2721,18 @@ describe("resolveModel", () => {
     });
   });
 
-  it("resolves openai gpt-5.5 even when discovery omits the OAuth catalog row", () => {
+  it("resolves openai gpt-5.5 through the direct API fallback when discovery omits OAuth metadata", () => {
     const result = resolveModelForTest("openai", "gpt-5.5");
 
     expect(result.error).toBeUndefined();
     expectRecordFields(result.model, {
       provider: "openai",
       id: "gpt-5.5",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
       reasoning: true,
       input: ["text", "image"],
-      contextWindow: 400_000,
+      contextWindow: 1_000_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
     });

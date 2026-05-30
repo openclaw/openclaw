@@ -109,7 +109,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = normalizeOptionalLowercaseString(provider);
-  return normalized === "openai" || normalized === "openai";
+  return normalized === "openai";
 }
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);

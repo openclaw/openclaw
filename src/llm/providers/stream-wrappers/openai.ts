@@ -76,11 +76,9 @@ function shouldApplyOpenAIAttributionHeaders(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
-}): "openai" | "openai" | undefined {
+}): "openai" | undefined {
   const attributionProvider = resolveOpenAIRequestCapabilities(model).attributionProvider;
-  return attributionProvider === "openai" || attributionProvider === "openai"
-    ? attributionProvider
-    : undefined;
+  return attributionProvider === "openai" ? attributionProvider : undefined;
 }
 
 function shouldUseCodexNativeTransport(model: {
@@ -532,7 +530,7 @@ export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined):
       (model.api !== "openai-responses" &&
         model.api !== "openai-chatgpt-responses" &&
         model.api !== "azure-openai-responses") ||
-      (model.provider !== "openai" && model.provider !== "openai")
+      model.provider !== "openai"
     ) {
       return underlying(model, context, options);
     }

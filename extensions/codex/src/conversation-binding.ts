@@ -714,10 +714,7 @@ function resolveThreadRequestModelProvider(params: {
   if (!modelProvider || modelProvider.toLowerCase() === "codex") {
     return undefined;
   }
-  if (
-    isCodexAppServerNativeAuthProfile(params) &&
-    (modelProvider.toLowerCase() === "openai" || modelProvider.toLowerCase() === "openai")
-  ) {
+  if (isCodexAppServerNativeAuthProfile(params) && modelProvider.toLowerCase() === "openai") {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;

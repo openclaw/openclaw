@@ -26,7 +26,7 @@ type CodexNativeSearchPayloadPatchResult = {
   status: "payload_not_object" | "native_tool_already_present" | "injected";
 };
 
-const OPENAI_AUTH_PROVIDER_IDS = ["openai", "openai"] as const;
+const OPENAI_AUTH_PROVIDER_IDS = ["openai"] as const;
 
 function isOpenAIAuthProviderId(provider: string | undefined): boolean {
   return OPENAI_AUTH_PROVIDER_IDS.some((candidate) => candidate === provider);

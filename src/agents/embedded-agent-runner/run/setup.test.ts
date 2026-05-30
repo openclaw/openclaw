@@ -128,7 +128,7 @@ describe("resolveEffectiveRuntimeModel", () => {
 
     const result = resolveEffectiveRuntimeModel({
       cfg,
-      provider: "openai",
+      provider: "codex",
       contextConfigProvider: "openai",
       modelId: "gpt-5.5",
       runtimeModel: createRuntimeModel(),
@@ -155,7 +155,7 @@ describe("resolveEffectiveRuntimeModel", () => {
 
     const result = resolveEffectiveRuntimeModel({
       cfg,
-      provider: "openai",
+      provider: "codex",
       modelId: "gpt-5.5",
       runtimeModel: createRuntimeModel(),
     });

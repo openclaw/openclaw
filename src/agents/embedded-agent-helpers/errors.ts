@@ -1196,8 +1196,8 @@ export function formatAssistantErrorText(
 
   if (providerRuntimeFailureKind === "auth_scope") {
     return (
-      "Authentication is missing the required OpenAI Codex scopes. " +
-      "Re-run OpenAI/Codex login and try again."
+      "Authentication is missing the required OpenAI ChatGPT scopes. " +
+      "Re-run OpenAI login and try again."
     );
   }
 

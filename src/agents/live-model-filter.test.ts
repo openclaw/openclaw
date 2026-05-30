@@ -5,7 +5,7 @@ import {
 } from "./live-model-filter.js";
 
 function resolveProviderOwners(provider: string): readonly string[] | undefined {
-  if (provider === "openai" || provider === "openai") {
+  if (provider === "openai") {
     return ["openai"];
   }
   if (provider === "codex" || provider === "codex-cli") {

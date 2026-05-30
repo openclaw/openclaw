@@ -553,7 +553,7 @@ function resolveTestReasoning(
   if (model.provider === "xai" && id.startsWith("grok-4")) {
     return undefined;
   }
-  if (model.provider === "openai" || model.provider === "openai") {
+  if (model.provider === "openai") {
     if (id.includes("pro")) {
       return "high";
     }

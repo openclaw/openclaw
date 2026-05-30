@@ -238,7 +238,7 @@ vi.mock("../../agents/harness/selection.js", () => ({
         ? undefined
         : (modelRuntime ??
           (providerRuntime === "default" ? undefined : providerRuntime) ??
-          (provider === "openai" || provider === "openai" ? "codex" : "auto"));
+          (provider === "openai" ? "codex" : "auto"));
     return {
       runtime,
       runtimeSource: modelRuntime ? "model" : providerRuntime ? "provider" : "implicit",

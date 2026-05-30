@@ -58,7 +58,7 @@ describe("fetchGeminiUsage", () => {
 
     expect(result).toEqual({
       provider: usageProvider,
-      displayName: "Codex",
+      displayName: "OpenAI",
       windows: [],
     });
   });

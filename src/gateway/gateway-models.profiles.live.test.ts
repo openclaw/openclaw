@@ -3219,18 +3219,12 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (instructions required)`);
             break;
           }
-          if (
-            (model.provider === "openai" || model.provider === "openai") &&
-            isOpenAIReasoningSequenceError(message)
-          ) {
+          if (model.provider === "openai" && isOpenAIReasoningSequenceError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (openai reasoning sequence error)`);
             break;
           }
-          if (
-            (model.provider === "openai" || model.provider === "openai") &&
-            isToolNonceRefusal(message)
-          ) {
+          if (model.provider === "openai" && isToolNonceRefusal(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;

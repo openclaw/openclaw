@@ -138,11 +138,9 @@ type ExternalCliSyncResult = {
 function resolvePersistedLoadOptions(
   options: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt"> | undefined,
 ): { allowKeychainPrompt?: boolean } {
-  return {
-    ...(options?.allowKeychainPrompt !== undefined
-      ? { allowKeychainPrompt: options.allowKeychainPrompt }
-      : {}),
-  };
+  return options?.allowKeychainPrompt !== undefined
+    ? { allowKeychainPrompt: options.allowKeychainPrompt }
+    : {};
 }
 
 function isInheritedMainOAuthCredential(params: {

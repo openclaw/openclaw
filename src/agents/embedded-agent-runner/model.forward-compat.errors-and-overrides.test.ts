@@ -20,11 +20,11 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
 
 vi.mock("../model-suppression.js", () => ({
   shouldSuppressBuiltInModel: ({ provider, id }: { provider?: string; id?: string }) =>
-    (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
+    (provider === "openai" || provider === "azure-openai-responses") &&
     id?.trim().toLowerCase() === "gpt-5.3-codex-spark",
   buildSuppressedBuiltInModelError: ({ provider, id }: { provider?: string; id?: string }) => {
     if (
-      (provider !== "openai" && provider !== "azure-openai-responses" && provider !== "openai") ||
+      (provider !== "openai" && provider !== "azure-openai-responses") ||
       id?.trim().toLowerCase() !== "gpt-5.3-codex-spark"
     ) {
       return undefined;
@@ -183,6 +183,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
       models: {
         providers: {
           openai: {
+            api: "openai-chatgpt-responses",
             baseUrl: "https://custom.example.com",
           },
         },
@@ -225,7 +226,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
     });
   });
 
-  it("normalizes openai gpt-5.4 overrides away from /v1/responses", () => {
+  it("keeps openai gpt-5.4 responses overrides on the OpenAI API transport", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const cfg: OpenClawConfig = {
@@ -242,15 +243,15 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expectResolvedForwardCompatFallbackResult({
       result: resolveModelForTest("openai", "gpt-5.4", "/tmp/agent", cfg),
       expectedModel: {
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
         id: "gpt-5.4",
         provider: "openai",
       },
     });
   });
 
-  it("normalizes openai gpt-5.4 back to codex transport", () => {
+  it("normalizes openai gpt-5.4 completions overrides to the OpenAI API transport", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const cfg: OpenClawConfig = {
@@ -267,8 +268,8 @@ describe("resolveModel forward-compat errors and overrides", () => {
     expectResolvedForwardCompatFallbackResult({
       result: resolveModelForTest("openai", "gpt-5.4", "/tmp/agent", cfg),
       expectedModel: {
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
         id: "gpt-5.4",
         provider: "openai",
       },

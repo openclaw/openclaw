@@ -96,7 +96,7 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
 }
 
 function registerStatusCodexHarness(): void {
-  const codexProviders = new Set(["codex", "openai", "openai"]);
+  const codexProviders = new Set(["codex", "openai"]);
   const harness: AgentHarness = {
     id: "codex",
     label: "Codex",

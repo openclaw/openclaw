@@ -223,7 +223,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
 ): OpenAIResponsesPayloadCapabilities {
   const provider = normalizeLowercaseString(model.provider);
   const api = normalizeLowercaseString(model.api);
-  const isOpenAIProvider = provider === "openai" || provider === "openai";
+  const isOpenAIProvider = provider === "openai";
   const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
   const isResponsesApi = isOpenAIResponsesApi(api);
   const usesConfiguredBaseUrl = endpointClass !== "default";

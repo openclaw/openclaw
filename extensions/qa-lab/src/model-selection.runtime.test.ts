@@ -54,7 +54,7 @@ describe("qa model selection runtime", () => {
 
   it("keeps the OpenAI live default when stored OpenAI profiles are available", () => {
     listProfilesForProvider.mockImplementation((_store: unknown, provider: string) =>
-      provider === "openai" || provider === "openai" ? [`${provider}:user@example.com`] : [],
+      provider === "openai" ? [`${provider}:user@example.com`] : [],
     );
 
     expect(resolveQaPreferredLiveModel()).toBeUndefined();

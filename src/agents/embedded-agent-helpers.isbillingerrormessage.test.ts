@@ -1445,17 +1445,17 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("auth_scope");
   });
 
-  it("does not classify non-Codex permission errors as missing scope failures", () => {
+  it("does not classify other provider permission errors as OpenAI scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
-        provider: "openai",
+        provider: "anthropic",
         message:
           '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write"}}',
       }),
     ).not.toBe("auth_scope");
   });
 
-  it("does not treat generic Codex permission failures as missing scope failures", () => {
+  it("does not treat generic OpenAI permission failures as missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
         provider: "openai",

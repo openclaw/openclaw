@@ -80,7 +80,6 @@ describe("external CLI auth scope", () => {
       "elevenlabs",
       "minimax-portal",
       "openai",
-      "openai",
       "opencode-go",
       "z.ai",
     ]);

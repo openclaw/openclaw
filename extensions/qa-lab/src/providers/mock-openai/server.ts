@@ -74,7 +74,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
   // the caller supplied one — that's the most reliable signal.
   const separatorMatch = /^([^/:]+)[/:]/.exec(trimmed);
   const provider = separatorMatch?.[1] ?? trimmed;
-  if (provider === "openai" || provider === "openai") {
+  if (provider === "openai") {
     return "openai";
   }
   if (provider === "anthropic" || provider === "claude-cli") {

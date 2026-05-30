@@ -372,39 +372,39 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
-  it("returns a missing-scope message for OpenAI Codex scope failures", () => {
+  it("returns a missing-scope message for OpenAI ChatGPT scope failures", () => {
     const msg = makeAssistantError(
       '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
     );
     expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
-      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+      "Authentication is missing the required OpenAI ChatGPT scopes. Re-run OpenAI login and try again.",
     );
   });
 
-  it("returns a missing-scope message for raw OpenAI Codex scope payloads without an HTTP prefix", () => {
+  it("returns a missing-scope message for raw OpenAI ChatGPT scope payloads without an HTTP prefix", () => {
     const msg = makeAssistantError(
       '{"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"},"code":401}',
     );
     expect(formatAssistantErrorText(msg, { provider: "openai" })).toBe(
-      "Authentication is missing the required OpenAI Codex scopes. Re-run OpenAI/Codex login and try again.",
+      "Authentication is missing the required OpenAI ChatGPT scopes. Re-run OpenAI login and try again.",
     );
   });
 
-  it("does not misdiagnose non-Codex permission errors as missing-scope failures", () => {
+  it("does not misdiagnose other provider permission errors as OpenAI scope failures", () => {
     const msg = makeAssistantError(
       '401 {"type":"error","error":{"type":"permission_error","message":"Missing scopes: api.responses.write model.request"}}',
     );
-    expect(formatAssistantErrorText(msg, { provider: "openai" })).not.toContain(
-      "required OpenAI Codex scopes",
+    expect(formatAssistantErrorText(msg, { provider: "anthropic" })).not.toContain(
+      "required OpenAI ChatGPT scopes",
     );
   });
 
-  it("does not misdiagnose generic Codex permission failures as missing-scope failures", () => {
+  it("does not misdiagnose generic OpenAI permission failures as missing-scope failures", () => {
     const msg = makeAssistantError(
       '403 {"type":"error","error":{"type":"permission_error","message":"Insufficient permissions for this organization"}}',
     );
     expect(formatAssistantErrorText(msg, { provider: "openai" })).not.toContain(
-      "required OpenAI Codex scopes",
+      "required OpenAI ChatGPT scopes",
     );
   });
 

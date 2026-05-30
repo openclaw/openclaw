@@ -28,8 +28,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     mocks.resolveBundledProviderCompatPluginIds.mockReset();
     mocks.resolveOwningPluginIdsForProvider.mockReset();
     mocks.resolveOwningPluginIdsForProvider.mockImplementation(
-      ({ provider }: { provider: string }) =>
-        provider === "openai" || provider === "openai" ? ["openai"] : undefined,
+      ({ provider }: { provider: string }) => (provider === "openai" ? ["openai"] : undefined),
     );
     mocks.resolveBundledProviderCompatPluginIds.mockImplementation(
       ({ onlyPluginIds }: { onlyPluginIds?: readonly string[] }) =>

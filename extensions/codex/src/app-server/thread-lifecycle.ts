@@ -1223,10 +1223,7 @@ export function resolveCodexAppServerModelProvider(params: {
     // native provider/auth selection instead of forcing the legacy OpenAI path.
     return undefined;
   }
-  if (
-    isCodexAppServerNativeAuthProfile(params) &&
-    (normalizedLower === "openai" || normalizedLower === "openai")
-  ) {
+  if (isCodexAppServerNativeAuthProfile(params) && normalizedLower === "openai") {
     // When OpenClaw is forwarding ChatGPT/Codex OAuth, `openai` is Codex's
     // native provider id, not a public OpenAI API-key choice. Omit the override
     // so app-server keeps its configured provider/auth pair for this session.

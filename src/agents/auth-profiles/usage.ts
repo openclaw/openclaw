@@ -113,7 +113,7 @@ function shouldProbeWhamForFailure(
 ): boolean {
   const normalizedProvider = normalizeProviderId(provider ?? "");
   return (
-    (normalizedProvider === "openai" || normalizedProvider === "openai") &&
+    normalizedProvider === "openai" &&
     (reason === "rate_limit" ||
       reason === "empty_response" ||
       reason === "no_error_details" ||

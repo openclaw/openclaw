@@ -432,7 +432,6 @@ function resolveKnownProviderFamily(provider: string | undefined): string {
   }
   switch (provider) {
     case "openai":
-    case "openai":
     case "azure-openai":
     case "azure-openai-responses":
       return "openai-family";
@@ -447,7 +446,7 @@ function isOpenAIResponsesApi(api: string | null | undefined): boolean {
 }
 
 function isCanonicalOrLegacyOpenAIProvider(provider: string | undefined): boolean {
-  return provider === "openai" || provider === "openai";
+  return provider === "openai";
 }
 
 export function resolveProviderAttributionIdentity(
