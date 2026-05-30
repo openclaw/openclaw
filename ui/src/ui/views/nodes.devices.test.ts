@@ -181,6 +181,79 @@ describe("nodes exec approvals rendering", () => {
     expect(card.textContent).toContain("Denylist rules need a pattern and only i, m, or u flags");
   });
 
+  it("disables saving while another agent has a blank denylist rule", () => {
+    const container = renderNodesContainer({
+      execApprovalsSelectedAgent: "main",
+      execApprovalsDirty: true,
+      execApprovalsSnapshot: {
+        path: "~/.openclaw/exec-approvals.json",
+        exists: true,
+        hash: "hash",
+        file: {
+          version: 1,
+          agents: {
+            main: {
+              security: "denylist",
+              denylist: [{ pattern: "curl" }],
+            },
+            other: {
+              security: "denylist",
+              denylist: [{ pattern: "" }],
+            },
+          },
+        },
+      },
+    });
+    const card = getExecApprovalsCard(container);
+    const saveButton = Array.from(card.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Save",
+    );
+
+    expect(saveButton).toBeInstanceOf(HTMLButtonElement);
+    expect(saveButton?.disabled).toBe(true);
+  });
+
+  it("seeds managed default denylist rules when denylist mode is selected", () => {
+    const onPatch = vi.fn();
+    const container = renderNodesContainer({
+      execApprovalsSelectedAgent: null,
+      execApprovalsDirty: true,
+      onExecApprovalsPatch: onPatch,
+      execApprovalsSnapshot: {
+        path: "~/.openclaw/exec-approvals.json",
+        exists: true,
+        hash: "hash",
+        file: {
+          version: 1,
+          defaults: {
+            security: "full",
+          },
+          agents: {},
+        },
+      },
+    });
+    const card = getExecApprovalsCard(container);
+    const modeSelect = Array.from(card.querySelectorAll("select")).find((select) =>
+      Array.from(select.options).some((option) => option.value === "denylist"),
+    );
+
+    expect(modeSelect).toBeInstanceOf(HTMLSelectElement);
+    (modeSelect as HTMLSelectElement).value = "denylist";
+    modeSelect?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onPatch).toHaveBeenCalledWith(["defaults", "security"], "denylist");
+    expect(onPatch).toHaveBeenCalledWith(["managedDefaults", "denylistVersion"], 1);
+    expect(onPatch).toHaveBeenCalledWith(
+      ["agents", "*", "denylist"],
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "default-shell-network-fetch",
+          flags: "i",
+        }),
+      ]),
+    );
+  });
+
   it("renders malformed denylist flags as invalid without crashing", () => {
     const container = renderNodesContainer({
       execApprovalsSelectedAgent: "*",

@@ -1461,7 +1461,8 @@ export function createExecTool(
 
       const approvalDefaults = loadExecApprovals().defaults;
       const configuredSecurity =
-        defaults?.security ?? approvalDefaults?.security ?? (host === "sandbox" ? "deny" : "full");
+        defaults?.security ??
+        (host === "sandbox" ? "deny" : (approvalDefaults?.security ?? "full"));
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
       const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "off";
       const configuredModePolicy = defaults?.mode

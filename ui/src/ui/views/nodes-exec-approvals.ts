@@ -3,6 +3,7 @@ import { t } from "../../i18n/index.ts";
 import type {
   ExecApprovalsAllowlistEntry,
   ExecApprovalsDenylistEntry,
+  ExecApprovalsDenylistObjectEntry,
   ExecApprovalsFile,
 } from "../controllers/exec-approvals.ts";
 import { clampText, formatRelativeTimestamp } from "../format.ts";
@@ -57,6 +58,14 @@ type ExecApprovalsState = {
 };
 
 const EXEC_APPROVALS_DEFAULT_SCOPE = "__defaults__";
+const DEFAULT_DENYLIST_VERSION = 1;
+const DEFAULT_SHELL_NETWORK_FETCH_DENYLIST_ENTRY: ExecApprovalsDenylistObjectEntry = {
+  id: "default-shell-network-fetch",
+  pattern:
+    String.raw`(?:^|[\s;&|()<>])(?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])|` +
+    String.raw`[\\/](?:curl|wget)(?:\.exe)?(?:$|[\s;&|()<>$])`,
+  flags: "i",
+};
 
 const SECURITY_OPTIONS: Array<{ value: ExecSecurity; label: string }> = [
   { value: "deny", label: "Deny" },
@@ -367,6 +376,9 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
                 } else {
                   state.onPatch([...basePath, "security"], value);
                 }
+                if (value === "denylist") {
+                  ensureManagedDefaultDenylistRules(state);
+                }
               }}
             >
               ${!isDefaults
@@ -444,6 +456,9 @@ function renderExecApprovalsPolicy(state: ExecApprovalsState) {
                   state.onRemove([...basePath, "askFallback"]);
                 } else {
                   state.onPatch([...basePath, "askFallback"], value);
+                }
+                if (value === "denylist") {
+                  ensureManagedDefaultDenylistRules(state);
                 }
               }}
             >
@@ -580,6 +595,22 @@ function formHasInvalidDenylistEntries(form: ExecApprovalsFile | null): boolean 
   return Object.values(form.agents).some((agent) =>
     Array.isArray(agent.denylist) ? denylistHasInvalidEntries(agent.denylist) : false,
   );
+}
+
+function ensureManagedDefaultDenylistRules(state: ExecApprovalsState): void {
+  state.onPatch(["managedDefaults", "denylistVersion"], DEFAULT_DENYLIST_VERSION);
+  const wildcardDenylist = state.form?.agents?.["*"]?.denylist ?? [];
+  if (
+    !wildcardDenylist.some(
+      (entry) =>
+        typeof entry !== "string" && entry.id === DEFAULT_SHELL_NETWORK_FETCH_DENYLIST_ENTRY.id,
+    )
+  ) {
+    state.onPatch(
+      ["agents", "*", "denylist"],
+      [...wildcardDenylist, { ...DEFAULT_SHELL_NETWORK_FETCH_DENYLIST_ENTRY }],
+    );
+  }
 }
 
 function renderDenylistEntry(
