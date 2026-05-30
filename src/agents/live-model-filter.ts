@@ -1,9 +1,9 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
 import { parseStrictNonNegativeInteger } from "../shared/number-coercion.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type ModelRef = {
   provider?: string | null;

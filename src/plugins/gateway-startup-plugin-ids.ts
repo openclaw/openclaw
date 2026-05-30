@@ -1,5 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,

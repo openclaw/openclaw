@@ -1,5 +1,9 @@
 import os from "node:os";
 import path from "node:path";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -13,7 +17,6 @@ import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider
 import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;

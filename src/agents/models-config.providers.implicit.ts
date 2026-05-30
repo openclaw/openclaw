@@ -1,3 +1,7 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -27,7 +31,6 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 

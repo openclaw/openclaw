@@ -1,3 +1,7 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type {
@@ -8,7 +12,6 @@ import type { ProviderResolveDynamicModelContext } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { listPrioritizedHighSignalLiveModelRefs } from "./live-model-filter.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 type DynamicModelResolver = typeof runProviderDynamicModel;

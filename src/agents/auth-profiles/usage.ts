@@ -1,10 +1,10 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromEpochSeconds,
 } from "../../shared/number-coercion.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 

@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;

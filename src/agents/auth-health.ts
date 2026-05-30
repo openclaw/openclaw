@@ -1,3 +1,7 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import {
@@ -11,7 +15,6 @@ import { resolveEffectiveOAuthCredential } from "./auth-profiles/effective-oauth
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 type AuthProfileSource = "store";
 

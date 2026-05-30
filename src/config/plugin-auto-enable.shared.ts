@@ -1,5 +1,6 @@
+import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   listPotentialConfiguredChannelPresenceSignals,
   type ChannelPresenceSignalSource,
@@ -23,7 +24,6 @@ import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.j
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
-import { collectConfiguredModelRefs } from "./model-refs.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
 import type {
   PluginAutoEnableCandidate,

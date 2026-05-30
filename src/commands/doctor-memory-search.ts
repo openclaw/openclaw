@@ -1,4 +1,8 @@
 import fsSync from "node:fs";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   resolveAgentDir,
@@ -12,7 +16,6 @@ import {
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../agents/model-auth.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../agents/provider-id.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";

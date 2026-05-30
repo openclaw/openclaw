@@ -1,5 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveModelCatalogScope } from "../agents/model-catalog-scope.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,

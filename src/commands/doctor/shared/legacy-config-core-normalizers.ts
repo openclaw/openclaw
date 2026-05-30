@@ -1,5 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";

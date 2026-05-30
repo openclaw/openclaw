@@ -1,7 +1,7 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import {
   isToolAllowedByPolicies,
