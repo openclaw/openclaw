@@ -191,6 +191,8 @@ export type WorkboardWorkspace = {
 
 export type WorkboardAutomation = {
   tenant?: string;
+  boardId?: string;
+  createdByCardId?: string;
   idempotencyKey?: string;
   skills?: string[];
   workspace?: WorkboardWorkspace;
@@ -448,6 +450,10 @@ function normalizeAutomation(value: unknown): WorkboardAutomation | undefined {
     : undefined;
   const automation: WorkboardAutomation = {
     ...(typeof value.tenant === "string" ? { tenant: value.tenant } : {}),
+    ...(typeof value.boardId === "string" ? { boardId: value.boardId } : {}),
+    ...(typeof value.createdByCardId === "string"
+      ? { createdByCardId: value.createdByCardId }
+      : {}),
     ...(typeof value.idempotencyKey === "string" ? { idempotencyKey: value.idempotencyKey } : {}),
     ...(normalizeStringArray(value.skills).length
       ? { skills: normalizeStringArray(value.skills) }

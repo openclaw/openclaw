@@ -871,7 +871,7 @@ describe("WorkboardStore", () => {
         updatedAt: 1_000,
       },
     });
-    const child = await store.create({ title: "Follow-up" });
+    const child = await store.create({ title: "Follow-up", parents: [card.id] });
     const claimed = await store.claim(card.id, { ownerId: "main", token: "token-1" });
 
     const completed = await store.complete(claimed.card.id, {
@@ -1321,6 +1321,163 @@ describe("WorkboardStore", () => {
     await expect(store.buildWorkerContext(card.id)).resolves.toContain("## Recent comments");
     await expect(store.buildWorkerContext(card.id)).resolves.toContain("pnpm test");
     await expect(store.buildWorkerContext(card.id)).resolves.toContain("Failure screenshot");
+  });
+
+  it("scopes idempotent creates and stats by board", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const ops = await store.create({
+      title: "Ops work",
+      boardId: "ops",
+      idempotencyKey: "same",
+    });
+    const product = await store.create({
+      title: "Product work",
+      boardId: "product",
+      idempotencyKey: "same",
+    });
+    const repeatedOps = await store.create({
+      title: "Duplicate ops",
+      boardId: "ops",
+      idempotencyKey: "same",
+    });
+
+    expect(repeatedOps.id).toBe(ops.id);
+    expect(product.id).not.toBe(ops.id);
+    await expect(store.list({ boardId: "ops" })).resolves.toHaveLength(1);
+    await expect(store.listBoards()).resolves.toMatchObject({
+      boards: expect.arrayContaining([
+        expect.objectContaining({ id: "ops", total: 1 }),
+        expect.objectContaining({ id: "product", total: 1 }),
+      ]),
+    });
+    await expect(store.stats({ boardId: "product" })).resolves.toMatchObject({
+      id: "product",
+      total: 1,
+      byStatus: { todo: 1 },
+    });
+    await store.create({
+      title: "Prototype safe",
+      boardId: "product",
+      agentId: "__proto__",
+    });
+    const stats = await store.stats({ boardId: "product" });
+    expect(stats.byAgent["__proto__"]).toBe(1);
+  });
+
+  it("rejects completed manifests for cards not created from the parent", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "running" });
+    const unrelated = await store.create({ title: "Unrelated" });
+
+    await expect(
+      store.complete(parent.id, { createdCardIds: [unrelated.id] }, null),
+    ).rejects.toThrow(/not linked/);
+    const spoofed = await store.create({
+      title: "Spoofed",
+      createdByCardId: parent.id,
+    });
+
+    await expect(store.complete(parent.id, { createdCardIds: [spoofed.id] }, null)).rejects.toThrow(
+      /not linked/,
+    );
+
+    const child = await store.create({ title: "Child", parents: [parent.id] });
+
+    await expect(
+      store.complete(parent.id, { createdCardIds: [child.id], summary: "done" }, null),
+    ).resolves.toMatchObject({
+      status: "done",
+      metadata: { automation: { createdCardIds: [child.id] } },
+    });
+  });
+
+  it("promotes, reassigns, and reclaims cards for operator recovery", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Recover me",
+      status: "blocked",
+      agentId: "old-agent",
+      metadata: { failureCount: 2 },
+    });
+    await store.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);
+
+    const reassigned = await store.reassign(card.id, {
+      agentId: "new-agent",
+      status: "todo",
+      reason: "route to fresh agent",
+    });
+    expect(reassigned).toMatchObject({
+      agentId: "new-agent",
+      status: "todo",
+    });
+    expect(reassigned.metadata?.failureCount).toBeUndefined();
+    expect(reassigned.metadata?.diagnostics?.map((entry) => entry.kind) ?? []).not.toContain(
+      "repeated_failures",
+    );
+
+    await expect(store.promote(card.id)).resolves.toMatchObject({ status: "ready" });
+    const claimed = await store.claim(card.id, { ownerId: "new-agent" });
+
+    const reclaimed = await store.reclaim(claimed.card.id, { reason: "stale session" }, null);
+    expect(reclaimed).toMatchObject({ status: "ready" });
+    expect(reclaimed.metadata?.claim).toBeUndefined();
+
+    const running = await store.create({
+      title: "Running recovery",
+      status: "running",
+      execution: {
+        id: "exec-reclaim",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "autonomous",
+        status: "running",
+        model: "openai/gpt-5.5",
+        startedAt: 100,
+        updatedAt: 100,
+      },
+    });
+    const stopped = await store.reclaim(running.id, { reason: "replace worker" }, null);
+    expect(stopped.execution).toBeUndefined();
+    expect(stopped.metadata?.attempts).toEqual([expect.objectContaining({ status: "stopped" })]);
+    expect(stopped.metadata?.failureCount).toBeUndefined();
+  });
+
+  it("includes parent results and recent assignee work in worker context", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({
+      title: "Design",
+      status: "running",
+      agentId: "agent-a",
+    });
+    await store.complete(parent.id, { summary: "Use board-scoped queues." }, null);
+    await store.create({
+      title: "Older task",
+      status: "done",
+      agentId: "agent-a",
+      metadata: { automation: { summary: "Finished related cleanup." } },
+    });
+    const child = await store.create({
+      title: "Implement",
+      agentId: "agent-a",
+      parents: [parent.id],
+    });
+
+    const context = await store.buildWorkerContext(child.id);
+
+    expect(context).toContain("## Parent results");
+    expect(context).toContain("Use board-scoped queues.");
+    expect(context).toContain("## Recent done work by agent-a");
+    expect(context).toContain("Finished related cleanup.");
+
+    const crossBoardChild = await store.create({
+      title: "Cross-board child",
+      boardId: "product",
+      parents: [parent.id],
+    });
+
+    await expect(store.buildWorkerContext(crossBoardChild.id)).resolves.toContain(
+      "Use board-scoped queues.",
+    );
   });
 
   it("rejects invalid status values", async () => {
