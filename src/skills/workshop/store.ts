@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { isPathInside } from "../../infra/path-safety.js";
@@ -21,6 +23,7 @@ import {
 
 const WORKSHOP_REL_DIR = "skill-workshop";
 const PROPOSALS_REL_DIR = path.join(WORKSHOP_REL_DIR, "proposals");
+const TARGET_LOCKS_REL_DIR = path.join(WORKSHOP_REL_DIR, "locks");
 const MANIFEST_REL_PATH = path.join(WORKSHOP_REL_DIR, "proposals.json");
 const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
@@ -37,6 +40,16 @@ const ALLOWED_SUPPORT_FILE_ROOTS = new Set([
   "templates",
 ]);
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
+const SKILL_WORKSHOP_TARGET_LOCK_OPTIONS: FileLockOptions = {
+  retries: {
+    retries: 8,
+    factor: 1.35,
+    minTimeout: 10,
+    maxTimeout: 250,
+    randomize: true,
+  },
+  stale: 60_000,
+};
 
 type SkillWorkshopStoreOptions = {
   env?: NodeJS.ProcessEnv;
@@ -167,7 +180,24 @@ export function prepareSkillProposalSupportFiles(
       content: file.content,
     });
   }
+  assertSupportPathSetIsFileOnly(files.map((file) => file.path));
   return files;
+}
+
+function assertSupportPathSetIsFileOnly(paths: readonly string[]): void {
+  const sorted = [...paths].sort((a, b) => a.localeCompare(b));
+  for (const filePath of sorted) {
+    if (!filePath.includes("/")) {
+      throw new Error("Support file paths must include a file below an allowed support directory.");
+    }
+  }
+  for (let index = 1; index < sorted.length; index += 1) {
+    const previous = sorted[index - 1];
+    const current = sorted[index];
+    if (previous && current?.startsWith(`${previous}/`)) {
+      throw new Error(`Support file paths cannot overlap: ${previous} and ${current}`);
+    }
+  }
 }
 
 export function resolveSkillProposalTarget(params: { workspaceDir: string; skillName: string }): {
@@ -288,6 +318,20 @@ export async function updateSkillProposalRecord(params: {
   await refreshSkillProposalManifest(params.store);
 }
 
+export async function withSkillProposalTargetLock<T>(
+  record: SkillProposalRecord,
+  fn: () => Promise<T>,
+  options: SkillWorkshopStoreOptions = {},
+): Promise<T> {
+  const lockFile = path.join(
+    resolveSkillWorkshopStateDir(options),
+    TARGET_LOCKS_REL_DIR,
+    `${hashSkillProposalContent(record.target.skillFile)}.target`,
+  );
+  await fs.mkdir(path.dirname(lockFile), { recursive: true });
+  return await withFileLock(lockFile, SKILL_WORKSHOP_TARGET_LOCK_OPTIONS, fn);
+}
+
 export async function writeSkillProposalRollback(params: {
   proposalId: string;
   rollback: SkillProposalRollback;
@@ -377,6 +421,7 @@ export async function readProposalSupportFiles(
     }
     out.push({ path: filePath, sizeBytes, hash, content });
   }
+  assertSupportPathSetIsFileOnly(out.map((file) => file.path));
   return out;
 }
 
@@ -402,6 +447,7 @@ export async function writeWorkspaceSkillFile(params: {
   workspaceDir: string;
   filePath: string;
   content: string;
+  overwrite?: boolean;
 }): Promise<void> {
   assertInsideWorkspace(params.workspaceDir, params.filePath, "skill file");
   const relativePath = path.relative(
@@ -409,17 +455,40 @@ export async function writeWorkspaceSkillFile(params: {
     path.resolve(params.filePath),
   );
   const workspaceRoot = await root(params.workspaceDir);
-  await workspaceRoot.write(relativePath, params.content, { encoding: "utf8", mkdir: true });
+  await workspaceRoot.write(relativePath, params.content, {
+    encoding: "utf8",
+    mkdir: true,
+    ...(params.overwrite === undefined ? {} : { overwrite: params.overwrite }),
+  });
 }
 
 export async function writeWorkspaceSupportFile(params: {
   skillDir: string;
   relativePath: string;
   content: string;
+  overwrite?: boolean;
+}): Promise<void> {
+  const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
+  await fs.mkdir(params.skillDir, { recursive: true });
+  const skillRoot = await root(params.skillDir);
+  await skillRoot.write(relativePath, params.content, {
+    encoding: "utf8",
+    mkdir: true,
+    ...(params.overwrite === undefined ? {} : { overwrite: params.overwrite }),
+  });
+}
+
+export async function removeWorkspaceSupportFile(params: {
+  skillDir: string;
+  relativePath: string;
 }): Promise<void> {
   const relativePath = normalizeSkillProposalSupportPath(params.relativePath);
   const skillRoot = await root(params.skillDir);
-  await skillRoot.write(relativePath, params.content, { encoding: "utf8", mkdir: true });
+  await skillRoot.remove(relativePath).catch((error: unknown) => {
+    if ((error as { code?: string })?.code !== "ENOENT") {
+      throw error;
+    }
+  });
 }
 
 export function createSkillProposalRollback(params: {

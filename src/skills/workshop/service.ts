@@ -27,6 +27,7 @@ import {
   readSkillProposal,
   readSkillProposalRecord,
   readSkillProposalManifest,
+  removeWorkspaceSupportFile,
   readWorkspaceSupportFile,
   readWorkspaceSkillFile,
   replaceSkillProposalDraft,
@@ -37,6 +38,7 @@ import {
   writeSkillProposalRollback,
   writeWorkspaceSupportFile,
   writeWorkspaceSkillFile,
+  withSkillProposalTargetLock,
   type PreparedSkillProposalSupportFile,
 } from "./store.js";
 import {
@@ -48,6 +50,7 @@ import {
   type SkillProposalReadResult,
   type SkillProposalRecord,
   type SkillProposalReviseInput,
+  type SkillProposalRollback,
   type SkillProposalScan,
   type SkillProposalSupportFile,
   type SkillProposalSupportFileInput,
@@ -439,41 +442,89 @@ export async function quarantineSkillProposal(
 export async function applySkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalApplyResult> {
-  const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
-  const { record, content } = read;
-  if (record.status !== "pending") {
-    throw new Error(`Only pending proposals can be applied. Current status: ${record.status}.`);
-  }
-  const draftHash = hashSkillProposalContent(content);
-  if (draftHash !== record.draftHash) {
-    throw new Error("Proposal draft changed without updating proposal metadata.");
-  }
-  const supportFiles = await readProposalSupportFiles(record);
-  const draftFrontmatter = readProposalFrontmatter(content);
-  if (!draftFrontmatter) {
-    throw new Error("Proposal draft must include proposal frontmatter.");
-  }
-  const scan = scanProposalBundle(content, supportFiles);
-  if (scan.state !== "clean") {
-    const updated = {
-      ...record,
-      status: "quarantined" as const,
-      updatedAt: new Date().toISOString(),
-      quarantinedAt: new Date().toISOString(),
-      scan: { ...scan, state: "quarantined" as const },
-      statusReason: "Proposal scan failed.",
-    };
-    await updateSkillProposalRecord({ record: updated });
-    throw new Error("Proposal scan failed; proposal was quarantined.");
-  }
+  const initial = await readRequiredProposal(input.proposalId, input.workspaceDir);
+  return await withSkillProposalTargetLock(initial.record, async () => {
+    const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
+    const { record, content } = read;
+    if (record.status !== "pending") {
+      throw new Error(`Only pending proposals can be applied. Current status: ${record.status}.`);
+    }
+    const draftHash = hashSkillProposalContent(content);
+    if (draftHash !== record.draftHash) {
+      throw new Error("Proposal draft changed without updating proposal metadata.");
+    }
+    const supportFiles = await readProposalSupportFiles(record);
+    const draftFrontmatter = readProposalFrontmatter(content);
+    if (!draftFrontmatter) {
+      throw new Error("Proposal draft must include proposal frontmatter.");
+    }
+    const scan = scanProposalBundle(content, supportFiles);
+    if (scan.state !== "clean") {
+      const updated = {
+        ...record,
+        status: "quarantined" as const,
+        updatedAt: new Date().toISOString(),
+        quarantinedAt: new Date().toISOString(),
+        scan: { ...scan, state: "quarantined" as const },
+        statusReason: "Proposal scan failed.",
+      };
+      await updateSkillProposalRecord({ record: updated });
+      throw new Error("Proposal scan failed; proposal was quarantined.");
+    }
 
-  assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-  assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+    assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
+    assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+    const targetState = await readApplyTargetState(record, supportFiles);
+    const rollback = createSkillProposalRollback({
+      proposalId: record.id,
+      targetSkillFile: record.target.skillFile,
+      action: record.kind,
+      ...(targetState.previousContent !== null
+        ? { previousContent: targetState.previousContent }
+        : {}),
+      ...(targetState.previousSupportFiles.length > 0
+        ? { supportFiles: targetState.previousSupportFiles }
+        : {}),
+    });
+    await writeSkillProposalRollback({
+      proposalId: record.id,
+      rollback,
+    });
+
+    const skillContent = stripProposalFrontmatterForSkill(content);
+    await publishProposalTarget({
+      workspaceDir: input.workspaceDir,
+      record,
+      skillContent,
+      supportFiles,
+      previousSupportFiles: targetState.previousSupportFiles,
+    });
+    const now = new Date().toISOString();
+    const applied: SkillProposalRecord = {
+      ...record,
+      status: "applied",
+      updatedAt: now,
+      appliedAt: now,
+      scan,
+    };
+    await updateSkillProposalRecord({ record: applied });
+    await refreshSkillProposalManifest();
+    return { record: applied, targetSkillFile: record.target.skillFile };
+  });
+}
+
+async function readApplyTargetState(
+  record: SkillProposalRecord,
+  supportFiles: readonly PreparedSkillProposalSupportFile[],
+): Promise<{
+  previousContent: string | null;
+  previousSupportFiles: NonNullable<SkillProposalRollback["supportFiles"]>;
+}> {
   const previousContent = await readWorkspaceSkillFile(record.target.skillFile);
   if (record.kind === "create" && previousContent !== null) {
     throw new Error(`Target skill already exists: ${record.target.skillFile}`);
   }
-  const previousSupportFiles = [];
+  const previousSupportFiles: NonNullable<SkillProposalRollback["supportFiles"]> = [];
   for (const file of supportFiles) {
     const supportRecord = record.supportFiles?.find((entry) => entry.path === file.path);
     const previousSupportContent = await readWorkspaceSupportFile({
@@ -525,43 +576,82 @@ export async function applySkillProposal(
       throw new Error("Target skill changed after proposal creation; proposal marked stale.");
     }
   }
+  return { previousContent, previousSupportFiles };
+}
 
-  const rollback = createSkillProposalRollback({
-    proposalId: record.id,
-    targetSkillFile: record.target.skillFile,
-    action: record.kind,
-    ...(previousContent !== null ? { previousContent } : {}),
-    ...(previousSupportFiles.length > 0 ? { supportFiles: previousSupportFiles } : {}),
-  });
-  await writeSkillProposalRollback({
-    proposalId: record.id,
-    rollback,
-  });
-
-  const skillContent = stripProposalFrontmatterForSkill(content);
-  await writeWorkspaceSkillFile({
-    workspaceDir: input.workspaceDir,
-    filePath: record.target.skillFile,
-    content: skillContent,
-  });
-  for (const file of supportFiles) {
-    await writeWorkspaceSupportFile({
-      skillDir: record.target.skillDir,
-      relativePath: file.path,
-      content: file.content,
+async function publishProposalTarget(params: {
+  workspaceDir: string;
+  record: SkillProposalRecord;
+  skillContent: string;
+  supportFiles: readonly PreparedSkillProposalSupportFile[];
+  previousSupportFiles: NonNullable<SkillProposalRollback["supportFiles"]>;
+}): Promise<void> {
+  const writtenSupportPaths: string[] = [];
+  try {
+    for (const file of params.supportFiles) {
+      await writeWorkspaceSupportFile({
+        skillDir: params.record.target.skillDir,
+        relativePath: file.path,
+        content: file.content,
+        overwrite: params.record.kind === "update",
+      });
+      writtenSupportPaths.push(file.path);
+    }
+    await writeWorkspaceSkillFile({
+      workspaceDir: params.workspaceDir,
+      filePath: params.record.target.skillFile,
+      content: params.skillContent,
+      overwrite: params.record.kind === "update",
     });
+  } catch (error) {
+    if (params.record.kind === "create") {
+      await cleanupCreatedSupportFiles(params.record, writtenSupportPaths);
+    } else {
+      await restoreUpdatedSupportFiles({
+        record: params.record,
+        writtenSupportPaths,
+        previousSupportFiles: params.previousSupportFiles,
+      });
+    }
+    throw error;
   }
-  const now = new Date().toISOString();
-  const applied: SkillProposalRecord = {
-    ...record,
-    status: "applied",
-    updatedAt: now,
-    appliedAt: now,
-    scan,
-  };
-  await updateSkillProposalRecord({ record: applied });
-  await refreshSkillProposalManifest();
-  return { record: applied, targetSkillFile: record.target.skillFile };
+}
+
+async function cleanupCreatedSupportFiles(
+  record: SkillProposalRecord,
+  writtenSupportPaths: readonly string[],
+): Promise<void> {
+  await Promise.allSettled(
+    [...writtenSupportPaths].reverse().map(async (relativePath) => {
+      await removeWorkspaceSupportFile({ skillDir: record.target.skillDir, relativePath });
+    }),
+  );
+}
+
+async function restoreUpdatedSupportFiles(params: {
+  record: SkillProposalRecord;
+  writtenSupportPaths: readonly string[];
+  previousSupportFiles: NonNullable<SkillProposalRollback["supportFiles"]>;
+}): Promise<void> {
+  const previousByPath = new Map(params.previousSupportFiles.map((file) => [file.path, file]));
+  await Promise.allSettled(
+    [...params.writtenSupportPaths].reverse().map(async (relativePath) => {
+      const previous = previousByPath.get(relativePath);
+      if (!previous) {
+        return;
+      }
+      if (previous.existed) {
+        await writeWorkspaceSupportFile({
+          skillDir: params.record.target.skillDir,
+          relativePath,
+          content: previous.previousContent ?? "",
+          overwrite: true,
+        });
+      } else {
+        await removeWorkspaceSupportFile({ skillDir: params.record.target.skillDir, relativePath });
+      }
+    }),
+  );
 }
 
 function scanProposalBundle(

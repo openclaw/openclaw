@@ -578,6 +578,42 @@ describe("skill workshop proposals", () => {
         ],
       }),
     ).rejects.toThrow("plain relative path segments");
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        name: "Conflicting Support Path",
+        description: "Reject path conflicts",
+        content: "# Conflicting Support Path\n",
+        supportFiles: [
+          {
+            path: "references",
+            content: "bad\n",
+          },
+          {
+            path: "references/guide.md",
+            content: "bad\n",
+          },
+        ],
+      }),
+    ).rejects.toThrow("below an allowed support directory");
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        name: "Nested Support Path",
+        description: "Reject nested file conflicts",
+        content: "# Nested Support Path\n",
+        supportFiles: [
+          {
+            path: "references/guide",
+            content: "bad\n",
+          },
+          {
+            path: "references/guide/notes.md",
+            content: "bad\n",
+          },
+        ],
+      }),
+    ).rejects.toThrow("cannot overlap");
 
     await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
   });
