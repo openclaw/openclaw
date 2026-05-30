@@ -14,18 +14,14 @@ import {
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  getOfficialExternalPluginCatalogEntry,
-  getOfficialExternalPluginCatalogManifest,
-  listOfficialExternalPluginCatalogEntries,
-  resolveOfficialExternalPluginInstall,
-} from "../plugins/official-external-plugin-catalog.js";
+import { getOfficialExternalPluginCatalogEntry } from "../plugins/official-external-plugin-catalog.js";
 import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
+import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
@@ -66,32 +62,6 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
-
-function resolveExternalWebSearchInstallCatalogEntries(): {
-  pluginId: string;
-  providerId: string;
-}[] {
-  const entries: { pluginId: string; providerId: string }[] = [];
-  for (const entry of listOfficialExternalPluginCatalogEntries()) {
-    const manifest = getOfficialExternalPluginCatalogManifest(entry);
-    const pluginId =
-      typeof manifest?.plugin?.id === "string" ? normalizePluginId(manifest.plugin.id) : "";
-    if (!manifest || !pluginId || !resolveOfficialExternalPluginInstall(entry)) {
-      continue;
-    }
-    for (const provider of manifest.webSearchProviders ?? []) {
-      const providerId = typeof provider.id === "string" ? provider.id.trim() : "";
-      if (providerId) {
-        entries.push({ pluginId, providerId });
-      }
-    }
-  }
-  return entries.toSorted(
-    (left, right) =>
-      left.providerId.localeCompare(right.providerId) ||
-      left.pluginId.localeCompare(right.pluginId),
-  );
-}
 
 function stripDeprecatedValidationKeys(raw: unknown): unknown {
   if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
@@ -1317,8 +1287,8 @@ function validateConfigObjectWithPluginsBase(
     return [
       ...new Set([
         ...collectActiveWebSearchProviderIds(),
-        ...resolveExternalWebSearchInstallCatalogEntries()
-          .map((entry) => entry.providerId.trim())
+        ...resolveWebSearchInstallCatalogEntries()
+          .map((entry) => entry.provider.id.trim())
           .filter((providerId) => providerId.length > 0),
       ]),
     ].toSorted((left, right) => left.localeCompare(right));
@@ -1375,8 +1345,8 @@ function validateConfigObjectWithPluginsBase(
     if (activeProviderIds.includes(trimmed)) {
       return;
     }
-    const installCatalogEntry = resolveExternalWebSearchInstallCatalogEntries().find(
-      (entry) => entry.providerId === trimmed,
+    const installCatalogEntry = resolveWebSearchInstallCatalogEntries().find(
+      (entry) => entry.provider.id === trimmed,
     );
     if (installCatalogEntry) {
       const issue = {
