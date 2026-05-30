@@ -24,7 +24,11 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
+import {
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
@@ -41,6 +45,7 @@ import {
   setCompactionSafeguardCancelReason,
 } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
+import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
@@ -75,6 +80,7 @@ import { ensureSessionHeader } from "../embedded-agent-helpers.js";
 import { pickFallbackThinkingLevel } from "../embedded-agent-helpers.js";
 import { coerceToFailoverError, describeFailoverError } from "../failover-error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
+import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -494,7 +500,33 @@ async function compactEmbeddedAgentSessionDirectOnce(
   });
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
-  const selectedHarnessRuntime = params.agentHarnessId;
+  const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
+  const runtimePolicyAgentId =
+    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+      ? undefined
+      : params.agentId;
+  const policyCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const configuredHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: policyCompactionTarget.provider ?? DEFAULT_PROVIDER,
+    modelId: policyCompactionTarget.model ?? DEFAULT_MODEL,
+    config: params.config,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+  });
+  const configuredHarnessRuntime =
+    configuredHarnessPolicy.runtimeSource &&
+    configuredHarnessPolicy.runtimeSource !== "implicit" &&
+    !isDefaultAgentRuntimeId(configuredHarnessPolicy.runtime)
+      ? configuredHarnessPolicy.runtime
+      : undefined;
+  const selectedHarnessRuntime = params.agentHarnessId ?? configuredHarnessRuntime;
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,

@@ -177,9 +177,17 @@ export async function compactEmbeddedAgentSession(
     params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
       ? undefined
       : params.agentId;
-  const configuredHarnessPolicy = resolveAgentHarnessPolicy({
+  const policyCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
     provider: params.provider,
     modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const configuredHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: policyCompactionTarget.provider ?? DEFAULT_PROVIDER,
+    modelId: policyCompactionTarget.model ?? DEFAULT_MODEL,
     config: params.config,
     agentId: runtimePolicyAgentId,
     sessionKey: runtimePolicySessionKey,

@@ -673,6 +673,44 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("uses explicit Codex runtime policy for direct OpenAI compaction", async () => {
+    resolveAgentHarnessPolicyMock.mockReturnValue({
+      runtime: "codex",
+      runtimeSource: "model",
+    } as never);
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      config: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "fake-model", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "fake-model", contextWindow: 350_000 }] },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(resolveAgentHarnessPolicyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", modelId: "fake-model" }),
+    );
+    expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
+    expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
+      provider: "openai-codex",
+      modelId: "fake-model",
+    });
+  });
+
   it("keeps custom OpenAI-compatible compaction on OpenAI context config", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
