@@ -722,7 +722,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
-  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+  const resolvedContextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveFollowupContextConfigProvider({
       cfg: params.cfg,
@@ -734,6 +734,16 @@ export async function runPreflightCompactionIfNeeded(params: {
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
+  const persistedContextWindowTokens =
+    typeof entry.contextTokens === "number" &&
+    Number.isFinite(entry.contextTokens) &&
+    entry.contextTokens > 0
+      ? Math.floor(entry.contextTokens)
+      : undefined;
+  const contextWindowTokens = Math.max(
+    resolvedContextWindowTokens,
+    persistedContextWindowTokens ?? 0,
+  );
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
