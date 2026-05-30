@@ -1210,6 +1210,15 @@ export const dispatchTelegramMessage = async ({
       if (segment.lane === "reasoning") {
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
+        if (
+          interleavedProgressEnabled &&
+          appendInterleavedReasoning(
+            stripReasoningHeader(segment.update.text),
+            segment.update.replace ? { replace: true } : undefined,
+          )
+        ) {
+          continue;
+        }
       }
       updateDraftFromPartial(lanes[segment.lane], segment.update);
     }
@@ -2091,9 +2100,6 @@ export const dispatchTelegramMessage = async ({
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>
                           enqueueDraftLaneEvent(async () => {
-                            if (interleavedProgressEnabled) {
-                              return;
-                            }
                             await ingestDraftLaneSegments(payload);
                           })
                       : undefined,

@@ -2568,6 +2568,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(updates.at(-1)).toContain("🛠️ completed");
   });
 
+  it("keeps answer partial previews while interleaved progress is enabled", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onPartialReply?.({ text: "Partial answer" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      telegramCfg: {
+        streaming: {
+          mode: "partial",
+          preview: { toolProgress: true, interleavedProgress: true },
+        },
+      },
+    });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith(expect.stringContaining("tool: Exec"));
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Partial answer");
+  });
+
   it("folds final reasoning into the interleaved progress lane", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
