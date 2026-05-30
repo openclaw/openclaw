@@ -1,31 +1,36 @@
 /**
- * Shared progress-lane ingest controller (SKELETON — sister PR to #87072).
+ * Shared progress-lane ingest controller.
  *
- * Owns the transcript model, the rolling timer, the spill offset, and the
- * per-stream delta checkpoints; emits `LaneSegment[]` to a channel `sink`. The
- * channel's dispatch wires the generic agent callbacks to the returned handle.
- *
- * MIGRATION: the body logic is hoisted from
- * `extensions/telegram/src/interleaved-progress.ts` (delta-append + overlap
- * dedup, `computeInterleavedSpill`, tag-strip, status-line append, final-answer
- * strip) into `./transcript.ts` (step 1 of the roadmap). Until then these
- * methods are stubs that define the shape; Telegram stays bit-identical.
+ * Owns the body, the rolling timer, the rollover offset, and the per-stream
+ * delta checkpoints; drives a channel `sink`. A channel's dispatch wires the
+ * generic agent callbacks to the returned handle. Channel-neutral: the only
+ * channel-specific things are the sink (render + edit primitive) and the config.
  */
-import type { LaneSegment, ProgressLaneConfig, ProgressLaneSink } from "./sink.js";
+import type { ProgressLaneConfig, ProgressLaneSink } from "./sink.js";
+import {
+  appendLaneDelta,
+  appendStatusLine,
+  computeSpill,
+  emptyLaneStreamState,
+  type LaneStreamState,
+  renderLaneBody,
+  resolveLaneToolLine,
+  stripFinalAnswerFromBody,
+} from "./transcript.js";
 
 /** Handle the channel's dispatch wires to the generic agent callbacks. */
 export interface ProgressLane {
   /** Cumulative reasoning snapshot (from `onReasoningStream`). */
   onReasoning(text: string, opts?: { replace?: boolean }): void;
-  /** Intermediate assistant commentary (from `onPartialReply`, Discord-style). */
+  /** Intermediate assistant commentary (from `onPartialReply`); off by default. */
   onCommentary(text: string): void;
-  /** Tool start (from `onToolStart`) — `detail` is the sanitized args/command. */
-  onTool(name: string, detail?: string): void;
+  /** Tool start (`onToolStart`); `detail` is the sanitized args/command. */
+  onTool(name: string | undefined, detail?: string): void;
   /** Structured runtime event (item/plan/approval/command/patch). */
   onEvent(title: string): void;
-  /** Final delivery: strip the answer out of the lane, flush, stop the timer. */
+  /** Final delivery: strip any leaked answer out of the lane, flush, stop. */
   finalize(finalText?: string): void;
-  /** Tear down the timer/subscriptions. */
+  /** Tear down the timer. */
   dispose(): void;
 }
 
@@ -38,37 +43,44 @@ export function createProgressLane(params: {
   const { sink, config } = params;
   const now = params.now ?? (() => Date.now());
 
-  // --- transcript state (to be backed by ./transcript.ts) ---
-  const segments: LaneSegment[] = [];
+  let body = "";
+  let renderOffset = 0;
+  let reasoningState: LaneStreamState = emptyLaneStreamState();
+  let commentaryState: LaneStreamState = emptyLaneStreamState();
+  let prevStatusLine: string | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let timerStartedAt: number | undefined;
-  // let renderOffset = 0;            // spill offset (computeInterleavedSpill)
-  // let reasoningCheckpoint = ...;   // per-stream delta checkpoint
 
   const pad2 = (n: number): string => String(n).padStart(2, "0");
+  const clock = (): string => {
+    const c = new Date(now());
+    return `${pad2(c.getHours())}:${pad2(c.getMinutes())}:${pad2(c.getSeconds())}`;
+  };
 
   const flush = (): void => {
-    if (!config.enabled || segments.length === 0) {
+    if (!config.enabled) {
       return;
     }
-    // Hoist from transcript.ts — computeSpill(maxChars) → sink.spill() before render.
-    let toRender: LaneSegment[] = segments;
-    if (config.timer && timerStartedAt !== undefined) {
-      const t = now();
-      const c = new Date(t);
-      toRender = [
-        ...segments,
-        {
-          kind: "timer",
-          elapsedSeconds: Math.floor((t - timerStartedAt) / 1000),
-          clock: `${pad2(c.getHours())}:${pad2(c.getMinutes())}:${pad2(c.getSeconds())}`,
-        },
-      ];
+    if (body.trim() === "" && timerStartedAt === undefined) {
+      return; // nothing to show — never emit a bare header
     }
-    const rendered = sink.render(toRender);
-    if (rendered) {
-      sink.update(rendered);
+    const spill = computeSpill({ body, offset: renderOffset, maxChars: sink.maxChars });
+    if (spill.spilled) {
+      renderOffset = spill.offset;
+      prevStatusLine = undefined;
+      sink.spill();
     }
+    const neutral = renderLaneBody({
+      body: body.slice(renderOffset),
+      ...(config.header !== undefined ? { header: config.header } : {}),
+      ...(timerStartedAt !== undefined ? { timerStartedAt } : {}),
+      now: now(),
+      maxChars: sink.maxChars,
+    });
+    if (!neutral) {
+      return;
+    }
+    sink.update(sink.render(neutral));
   };
 
   const armTimer = (): void => {
@@ -87,31 +99,53 @@ export function createProgressLane(params: {
     timerStartedAt = undefined;
   };
 
+  const appendStatus = (line: string): void => {
+    const result = appendStatusLine({
+      body,
+      line,
+      timestamp: clock(),
+      previousLine: prevStatusLine,
+    });
+    body = result.body;
+    if (result.appendedLine !== undefined) {
+      prevStatusLine = result.appendedLine;
+    }
+  };
+
   return {
-    onReasoning(text) {
+    onReasoning(text, opts) {
       if (!config.enabled || !config.reasoning) {
         return;
       }
-      // Hoist from transcript.ts — tag-strip → delta-append (cumulative→suffix) → segment.
-      segments.push({ kind: "reasoning", text });
+      const r = appendLaneDelta({
+        body,
+        state: reasoningState,
+        text,
+        ...(opts?.replace ? { replace: true } : {}),
+      });
+      body = r.body;
+      reasoningState = r.state;
       flush();
     },
     onCommentary(text) {
       if (!config.enabled || !config.commentary) {
         return;
       }
-      segments.push({ kind: "reasoning", text });
+      const r = appendLaneDelta({ body, state: commentaryState, text });
+      body = r.body;
+      commentaryState = r.state;
       flush();
     },
     onTool(name, detail) {
       if (!config.enabled || !config.toolRows) {
         return;
       }
-      segments.push({
-        kind: "tool",
-        name,
-        ...(config.toolArgs && detail ? { detail } : {}),
+      const line = resolveLaneToolLine({
+        showArgs: config.toolArgs,
+        sanitizedLine: detail,
+        toolName: name,
       });
+      appendStatus(line);
       armTimer();
       flush();
     },
@@ -119,11 +153,13 @@ export function createProgressLane(params: {
       if (!config.enabled) {
         return;
       }
-      segments.push({ kind: "event", title });
+      appendStatus(title);
       flush();
     },
-    finalize(_finalText) {
-      // Hoist from transcript.ts — stripFinalAnswerFromBody(_finalText) → final flush.
+    finalize(finalText) {
+      if (finalText) {
+        body = stripFinalAnswerFromBody({ body, finalText });
+      }
       clearTimer();
       flush();
     },
