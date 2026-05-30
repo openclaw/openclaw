@@ -114,6 +114,24 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
   });
 
+  it("does not arm stale active-row suppression for an unowned selected-session final", () => {
+    const state = createState({ sessionKey: "main" }) as ChatState & {
+      lastLocalTerminalReconcile?: unknown;
+    };
+    const payload: ChatEventPayload = {
+      runId: "observed-run",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Observed reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.lastLocalTerminalReconcile).toBeUndefined();
+  });
+
   it("ignores selected-agent global events for another agent", () => {
     const state = createState({
       sessionKey: "global",

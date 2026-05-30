@@ -881,6 +881,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
       clearLocalRun: true,
       clearChatStream: true,
+      armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
     });
 
   if (payload.state === "delta") {
