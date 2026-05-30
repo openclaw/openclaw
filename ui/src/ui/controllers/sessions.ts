@@ -31,6 +31,7 @@ export type SessionsState = SessionsChatRunState & {
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
+  chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;
   sessionsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
@@ -447,6 +448,23 @@ function invalidateCheckpointCacheForKey(state: SessionsState, key: string) {
   state.sessionsCheckpointErrorByKey = nextErrors;
 }
 
+function invalidateCachedChatAgentSessionRow(state: SessionsState, key: string): boolean {
+  const rowsByAgent = state.chatAgentSessionRowsByAgent;
+  if (!rowsByAgent) {
+    return false;
+  }
+  let removed = false;
+  for (const [agentId, rows] of Object.entries(rowsByAgent)) {
+    const nextRows = rows.filter((row) => row.key !== key);
+    if (nextRows.length === rows.length) {
+      continue;
+    }
+    rowsByAgent[agentId] = nextRows;
+    removed = true;
+  }
+  return removed;
+}
+
 async function fetchSessionCompactionCheckpoints(state: SessionsState, key: string) {
   state.sessionsCheckpointLoadingKey = key;
   state.sessionsCheckpointErrorByKey = {
@@ -565,8 +583,9 @@ export function applySessionsChangedEvent(
   const previousRows = state.sessionsResult.sessions;
   const existingIndex = previousRows.findIndex((row) => row.key === key);
   if (payload.reason === "delete") {
+    const removedCachedRow = invalidateCachedChatAgentSessionRow(state, key);
     if (existingIndex < 0) {
-      return { applied: false };
+      return removedCachedRow ? { applied: true, change: "deleted" } : { applied: false };
     }
     state.sessionsResult = {
       ...state.sessionsResult,
@@ -617,8 +636,9 @@ export function applySessionsChangedEvent(
     delete nextRow.totalTokens;
   }
   if (!state.sessionsShowArchived && isArchivedSessionRow(nextRow)) {
+    const removedCachedRow = invalidateCachedChatAgentSessionRow(state, key);
     if (existingIndex < 0) {
-      return { applied: false };
+      return removedCachedRow ? { applied: true, change: "deleted" } : { applied: false };
     }
     state.sessionsResult = {
       ...state.sessionsResult,

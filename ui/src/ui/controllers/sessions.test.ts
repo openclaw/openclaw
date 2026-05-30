@@ -1251,6 +1251,38 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.count).toBe(1);
   });
 
+  it("removes deleted sessions from cached chat agent targets", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
+      },
+      chatAgentSessionRowsByAgent: {
+        work: [
+          { key: "agent:work:dashboard:deleted", kind: "direct", updatedAt: 3 },
+          { key: "agent:work:main", kind: "direct", updatedAt: 1 },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:work:dashboard:deleted",
+      reason: "delete",
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "deleted" });
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:main",
+    ]);
+    expect(state.chatAgentSessionRowsByAgent?.work?.map((session) => session.key)).toEqual([
+      "agent:work:main",
+    ]);
+  });
+
   it("does not synthesize new sessions from partial events without a store-backed row", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
