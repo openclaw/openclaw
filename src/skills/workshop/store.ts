@@ -25,7 +25,7 @@ const MANIFEST_REL_PATH = path.join(WORKSHOP_REL_DIR, "proposals.json");
 const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
-const MAX_PROPOSAL_BYTES = 1024 * 1024;
+export const MAX_PROPOSAL_BYTES = 1024 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILE_BYTES = 256 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
 export const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
@@ -60,6 +60,12 @@ export function hashSkillProposalContent(content: string): string {
 
 function contentSizeBytes(content: string): number {
   return Buffer.byteLength(content, "utf8");
+}
+
+export function assertSkillProposalContentSize(content: string): void {
+  if (contentSizeBytes(content) > MAX_PROPOSAL_BYTES) {
+    throw new Error("Skill proposal is too large.");
+  }
 }
 
 function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): string {
@@ -215,6 +221,7 @@ export async function writeSkillProposal(params: {
   store?: SkillWorkshopStoreOptions;
 }): Promise<void> {
   assertProposalId(params.record.id);
+  assertSkillProposalContentSize(params.content);
   const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
   const relativeDir = proposalRelativeDir(params.record.id);
   await stateRoot.mkdir(relativeDir);
@@ -241,6 +248,7 @@ export async function replaceSkillProposalDraft(params: {
   store?: SkillWorkshopStoreOptions;
 }): Promise<void> {
   assertProposalId(params.record.id);
+  assertSkillProposalContentSize(params.content);
   const stateRoot = await root(resolveSkillWorkshopStateDir(params.store));
   const relativeDir = proposalRelativeDir(params.record.id);
   await stateRoot.write(path.join(relativeDir, PROPOSAL_DRAFT_FILE), params.content, {

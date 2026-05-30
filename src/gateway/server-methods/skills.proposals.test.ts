@@ -147,6 +147,48 @@ describe("skills proposal gateway handlers", () => {
     ).resolves.toContain("Use current weather");
   });
 
+  it("scopes list and inspect to the resolved agent workspace", async () => {
+    const firstWorkspaceDir = mocks.workspaceDir;
+    const first = await callHandler("skills.proposals.create", {
+      name: "First Gateway Skill",
+      description: "First workspace proposal",
+      content: "# First\n",
+    });
+    expect(first.ok).toBe(true);
+    const firstCreated = first.response as { record: { id: string } };
+
+    const secondWorkspaceDir = await tempDirs.make("openclaw-skills-proposals-gateway-second-");
+    mocks.workspaceDir = secondWorkspaceDir;
+    const second = await callHandler("skills.proposals.create", {
+      name: "Second Gateway Skill",
+      description: "Second workspace proposal",
+      content: "# Second\n",
+    });
+    expect(second.ok).toBe(true);
+    const secondCreated = second.response as { record: { id: string } };
+
+    const secondList = await callHandler("skills.proposals.list", {});
+    expect(secondList.ok).toBe(true);
+    expect((secondList.response as { proposals: Array<{ id: string }> }).proposals).toEqual([
+      expect.objectContaining({ id: secondCreated.record.id }),
+    ]);
+
+    const hiddenInspect = await callHandler("skills.proposals.inspect", {
+      proposalId: firstCreated.record.id,
+    });
+    expect(hiddenInspect.ok).toBe(false);
+    expect((hiddenInspect.error as { message?: string }).message).toContain(
+      `Skill proposal not found: ${firstCreated.record.id}`,
+    );
+
+    mocks.workspaceDir = firstWorkspaceDir;
+    const firstList = await callHandler("skills.proposals.list", {});
+    expect(firstList.ok).toBe(true);
+    expect((firstList.response as { proposals: Array<{ id: string }> }).proposals).toEqual([
+      expect.objectContaining({ id: firstCreated.record.id }),
+    ]);
+  });
+
   it("rejects invalid params before touching workshop state", async () => {
     const result = await callHandler("skills.proposals.create", {
       name: "Missing Content",

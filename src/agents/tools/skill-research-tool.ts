@@ -134,7 +134,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
 
       if (action === "list") {
         const proposals = listProposalEntries({
-          proposals: (await listSkillProposals()).proposals,
+          proposals: (await listSkillProposals({ workspaceDir: options.workspaceDir })).proposals,
           status: readProposalStatusParam(params),
           query: readStringParam(params, "query"),
           limit: readListLimitParam(params),
@@ -148,7 +148,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
       }
 
       if (action === "inspect") {
-        const proposal = await readProposalForInspect(params);
+        const proposal = await readProposalForInspect(params, options.workspaceDir);
         return proposalResult(proposal, {
           contentText: formatProposalInspect(proposal),
           includeContent: true,
@@ -230,6 +230,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
             label: "proposal_id",
           }),
           name: readStringParam(params, "name"),
+          workspaceDir: options.workspaceDir,
         });
         proposal = await reviseSkillProposal({
           workspaceDir: options.workspaceDir,
@@ -299,10 +300,11 @@ function readLifecycleProposalIdParam(params: Record<string, unknown>): string {
 
 async function readProposalForInspect(
   params: Record<string, unknown>,
+  workspaceDir: string,
 ): Promise<SkillProposalReadResult> {
   const proposalId = readStringParam(params, "proposal_id", { label: "proposal_id" });
   if (proposalId) {
-    const proposal = await inspectSkillProposal(proposalId);
+    const proposal = await inspectSkillProposal(proposalId, { workspaceDir });
     if (!proposal) {
       throw new ToolInputError(`Skill proposal not found: ${proposalId}`);
     }
@@ -310,6 +312,7 @@ async function readProposalForInspect(
   }
   return await resolvePendingSkillProposal({
     name: readStringParam(params, "name", { required: true }),
+    workspaceDir,
   });
 }
 

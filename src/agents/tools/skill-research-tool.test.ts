@@ -260,4 +260,48 @@ describe("skill_research tool", () => {
       fs.access(path.join(workspaceDir, "skills", "quarantined-skill", "SKILL.md")),
     ).rejects.toThrow();
   });
+
+  it("scopes proposal discovery to the tool workspace", async () => {
+    const firstWorkspaceDir = await tempDirs.make("openclaw-skill-research-tool-first-");
+    const secondWorkspaceDir = await tempDirs.make("openclaw-skill-research-tool-second-");
+    const firstTool = createSkillResearchTool({
+      workspaceDir: firstWorkspaceDir,
+      config: {},
+      agentId: "main",
+    });
+    const secondTool = createSkillResearchTool({
+      workspaceDir: secondWorkspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    const first = await firstTool.execute("call-1", {
+      action: "create",
+      name: "First Workspace Skill",
+      description: "First workspace proposal",
+      proposal_content: "# First\n",
+    });
+    const second = await secondTool.execute("call-2", {
+      action: "create",
+      name: "Second Workspace Skill",
+      description: "Second workspace proposal",
+      proposal_content: "# Second\n",
+    });
+
+    const listed = await firstTool.execute("call-3", {
+      action: "list",
+      status: "pending",
+    });
+    expect(
+      (listed.details as { proposals: Array<{ id: string }> }).proposals.map(
+        (proposal) => proposal.id,
+      ),
+    ).toEqual([(first.details as { id: string }).id]);
+    await expect(
+      firstTool.execute("call-4", {
+        action: "inspect",
+        proposal_id: (second.details as { id: string }).id,
+      }),
+    ).rejects.toThrow(`Skill proposal not found: ${(second.details as { id: string }).id}`);
+  });
 });

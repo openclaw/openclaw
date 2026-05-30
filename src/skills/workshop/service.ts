@@ -25,6 +25,7 @@ import {
   prepareSkillProposalSupportFiles,
   readProposalSupportFiles,
   readSkillProposal,
+  readSkillProposalRecord,
   readSkillProposalManifest,
   readWorkspaceSupportFile,
   readWorkspaceSkillFile,
@@ -57,12 +58,29 @@ type SkillWorkshopWorkspaceOptions = {
   agentId?: string;
 };
 
+type SkillProposalScopeOptions = {
+  workspaceDir?: string;
+};
+
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 const MAX_PROPOSAL_DIRECTORY_ENTRIES = MAX_PROPOSAL_SUPPORT_FILES * 4;
 
-export async function listSkillProposals(): Promise<SkillProposalManifest> {
-  return await readSkillProposalManifest();
+export async function listSkillProposals(
+  options: SkillProposalScopeOptions = {},
+): Promise<SkillProposalManifest> {
+  const manifest = await readSkillProposalManifest();
+  if (!options.workspaceDir) {
+    return manifest;
+  }
+  const proposals: SkillProposalManifest["proposals"] = [];
+  for (const proposal of manifest.proposals) {
+    const record = await readSkillProposalRecord(proposal.id);
+    if (record && isProposalInWorkspace(record, options.workspaceDir)) {
+      proposals.push(proposal);
+    }
+  }
+  return { ...manifest, proposals };
 }
 
 export async function readSkillProposalDraftFile(filePath: string): Promise<string> {
@@ -122,17 +140,26 @@ export async function readSkillProposalDraftDirectory(dirPath: string): Promise<
 
 export async function inspectSkillProposal(
   proposalId: string,
+  options: SkillProposalScopeOptions = {},
 ): Promise<SkillProposalReadResult | null> {
-  return await readSkillProposal(proposalId);
+  const read = await readSkillProposal(proposalId);
+  if (!read) {
+    return null;
+  }
+  if (options.workspaceDir && !isProposalInWorkspace(read.record, options.workspaceDir)) {
+    return null;
+  }
+  return read;
 }
 
 export async function resolvePendingSkillProposal(input: {
   proposalId?: string;
   name?: string;
+  workspaceDir?: string;
 }): Promise<SkillProposalReadResult> {
   const proposalId = normalizeOptionalString(input.proposalId);
   if (proposalId) {
-    const direct = await readRequiredProposal(proposalId);
+    const direct = await readRequiredProposal(proposalId, input.workspaceDir);
     if (direct.record.status !== "pending") {
       throw new Error(
         `Only pending proposals can be revised. Current status: ${direct.record.status}.`,
@@ -145,7 +172,7 @@ export async function resolvePendingSkillProposal(input: {
   if (!name) {
     throw new Error("proposal_id or name required.");
   }
-  const manifest = await listSkillProposals();
+  const manifest = await listSkillProposals({ workspaceDir: input.workspaceDir });
   const matches = manifest.proposals.filter(
     (proposal) => proposal.status === "pending" && proposalMatchesName(proposal, name),
   );
@@ -159,7 +186,7 @@ export async function resolvePendingSkillProposal(input: {
       .join(", ");
     throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
   }
-  const matched = await readRequiredProposal(matches[0]!.id);
+  const matched = await readRequiredProposal(matches[0]!.id, input.workspaceDir);
   if (matched.record.status !== "pending") {
     throw new Error(
       `Only pending proposals can be revised. Current status: ${matched.record.status}.`,
@@ -280,7 +307,7 @@ export async function proposeUpdateSkill(
 export async function reviseSkillProposal(
   input: SkillProposalReviseInput,
 ): Promise<SkillProposalReadResult> {
-  const read = await readRequiredProposal(input.proposalId);
+  const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
   const { record } = read;
   if (record.status !== "pending") {
     throw new Error(`Only pending proposals can be revised. Current status: ${record.status}.`);
@@ -372,7 +399,7 @@ export async function rejectSkillProposal(
 export async function quarantineSkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalRecord> {
-  const read = await readRequiredProposal(input.proposalId);
+  const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
   const now = new Date().toISOString();
   const record: SkillProposalRecord = {
     ...read.record,
@@ -392,7 +419,7 @@ export async function quarantineSkillProposal(
 export async function applySkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalApplyResult> {
-  const read = await readRequiredProposal(input.proposalId);
+  const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
   const { record, content } = read;
   if (record.status !== "pending") {
     throw new Error(`Only pending proposals can be applied. Current status: ${record.status}.`);
@@ -552,7 +579,7 @@ async function markProposal(
   input: SkillProposalActionInput,
   status: "rejected",
 ): Promise<SkillProposalRecord> {
-  const read = await readRequiredProposal(input.proposalId);
+  const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
   const now = new Date().toISOString();
   const record: SkillProposalRecord = {
     ...read.record,
@@ -565,12 +592,25 @@ async function markProposal(
   return record;
 }
 
-async function readRequiredProposal(proposalId: string): Promise<SkillProposalReadResult> {
+async function readRequiredProposal(
+  proposalId: string,
+  workspaceDir?: string,
+): Promise<SkillProposalReadResult> {
   const read = await readSkillProposal(proposalId);
-  if (!read) {
+  if (!read || (workspaceDir && !isProposalInWorkspace(read.record, workspaceDir))) {
     throw new Error(`Skill proposal not found: ${proposalId}`);
   }
   return read;
+}
+
+function isProposalInWorkspace(record: SkillProposalRecord, workspaceDir: string): boolean {
+  try {
+    assertInsideWorkspace(workspaceDir, record.target.skillFile, "skill file");
+    assertInsideWorkspace(workspaceDir, record.target.skillDir, "skill directory");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function markProposalStale(record: SkillProposalRecord, reason: string): Promise<void> {

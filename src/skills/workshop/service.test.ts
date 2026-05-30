@@ -16,7 +16,11 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
-import { readSkillProposalManifest, resolveProposalDraftPath } from "./store.js";
+import {
+  MAX_PROPOSAL_BYTES,
+  readSkillProposalManifest,
+  resolveProposalDraftPath,
+} from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -219,6 +223,48 @@ describe("skill workshop proposals", () => {
     );
   });
 
+  it("scopes proposal reads and lifecycle actions to the selected workspace", async () => {
+    const firstWorkspaceDir = await makeWorkspace();
+    const secondWorkspaceDir = await makeWorkspace();
+    const first = await proposeCreateSkill({
+      workspaceDir: firstWorkspaceDir,
+      name: "First Workspace Skill",
+      description: "Only visible in the first workspace",
+      content: "# First\n",
+    });
+    const second = await proposeCreateSkill({
+      workspaceDir: secondWorkspaceDir,
+      name: "Second Workspace Skill",
+      description: "Only visible in the second workspace",
+      content: "# Second\n",
+    });
+
+    await expect(listSkillProposals({ workspaceDir: firstWorkspaceDir })).resolves.toMatchObject({
+      proposals: [expect.objectContaining({ id: first.record.id })],
+    });
+    await expect(
+      inspectSkillProposal(second.record.id, { workspaceDir: firstWorkspaceDir }),
+    ).resolves.toBeNull();
+    await expect(
+      resolvePendingSkillProposal({
+        name: "second-workspace-skill",
+        workspaceDir: firstWorkspaceDir,
+      }),
+    ).rejects.toThrow("No pending skill proposal matched");
+    await expect(
+      rejectSkillProposal({
+        workspaceDir: firstWorkspaceDir,
+        proposalId: second.record.id,
+      }),
+    ).rejects.toThrow(`Skill proposal not found: ${second.record.id}`);
+    await expect(
+      quarantineSkillProposal({
+        workspaceDir: firstWorkspaceDir,
+        proposalId: second.record.id,
+      }),
+    ).rejects.toThrow(`Skill proposal not found: ${second.record.id}`);
+  });
+
   it("updates only writable workspace skills and marks stale proposals when the target changes", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "release-notes");
@@ -380,6 +426,21 @@ describe("skill workshop proposals", () => {
         ],
       }),
     ).rejects.toThrow("plain relative path segments");
+
+    await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+  });
+
+  it("rejects rendered proposals that exceed the persisted draft size limit", async () => {
+    const workspaceDir = await makeWorkspace();
+
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        name: "Oversized Proposal",
+        description: "Reject final rendered drafts above the store limit",
+        content: "x".repeat(MAX_PROPOSAL_BYTES),
+      }),
+    ).rejects.toThrow("Skill proposal is too large.");
 
     await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
   });

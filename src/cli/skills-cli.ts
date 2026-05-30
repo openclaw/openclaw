@@ -495,7 +495,8 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (opts: { json?: boolean; agent?: string }) => {
       try {
-        const manifest = await listSkillProposals();
+        const { workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
+        const manifest = await listSkillProposals({ workspaceDir });
         if (opts.json) {
           defaultRuntime.writeJson(manifest);
           return;
@@ -514,7 +515,8 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (proposalId: string, opts: { json?: boolean; agent?: string }) => {
       try {
-        const proposal = await inspectSkillProposal(proposalId);
+        const { workspaceDir } = resolveSkillsWorkspaceForCommand(workshop, opts);
+        const proposal = await inspectSkillProposal(proposalId, { workspaceDir });
         if (!proposal) {
           defaultRuntime.error(`Skill proposal not found: ${proposalId}`);
           defaultRuntime.exit(1);

@@ -42,6 +42,21 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+vi.mock("../terminal/links.js", () => ({
+  formatDocsLink: () => "docs.openclaw.ai/cli/skills",
+}));
+
+vi.mock("../terminal/theme.js", () => ({
+  theme: {
+    command: (value: string) => value,
+    error: (value: string) => value,
+    heading: (value: string) => value,
+    muted: (value: string) => value,
+    success: (value: string) => value,
+    warn: (value: string) => value,
+  },
+}));
+
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
 }));
@@ -154,6 +169,38 @@ describe("skills workshop cli", () => {
         "utf8",
       ),
     ).resolves.toContain("Use current conditions");
+  });
+
+  it("scopes list and inspect to the selected workspace", async () => {
+    const firstWorkspaceDir = mocks.workspaceDir;
+    const draftPath = path.join(firstWorkspaceDir, "proposal-draft.md");
+    await fs.writeFile(draftPath, "# First CLI Skill\n", "utf8");
+
+    await runCommand([
+      "skills",
+      "workshop",
+      "propose-create",
+      "--name",
+      "First CLI Skill",
+      "--description",
+      "First workspace proposal",
+      "--proposal",
+      draftPath,
+    ]);
+    const proposalId = mocks.runtimeStdout.at(-1);
+    expect(proposalId).toMatch(/^first-cli-skill-/);
+
+    mocks.workspaceDir = await tempDirs.make("openclaw-skills-cli-workshop-second-");
+    await runCommand(["skills", "workshop", "list"]);
+    expect(mocks.runtimeStdout.at(-1)).toBe("No skill proposals.");
+    await expect(runCommand(["skills", "workshop", "inspect", proposalId!])).rejects.toThrow(
+      "__exit__:1",
+    );
+    expect(mocks.runtimeErrors).toContain(`Skill proposal not found: ${proposalId}`);
+
+    mocks.workspaceDir = firstWorkspaceDir;
+    await runCommand(["skills", "workshop", "inspect", proposalId!]);
+    expect(mocks.runtimeStdout.at(-1)).toContain("status: proposal");
   });
 
   it("rejects missing proposal drafts before creating workshop state", async () => {
