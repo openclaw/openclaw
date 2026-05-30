@@ -490,7 +490,10 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["manifest/catalog execution policy", "runtime selection"],
     diagnostics: ["agent runtime compatibility warning"],
-    tests: ["src/plugins/provider-runtime.test.ts", "src/web/provider-runtime-shared.test.ts"],
+    tests: [
+      "src/plugins/provider-runtime.test.ts",
+      "packages/web-content-core/src/provider-runtime-shared.test.ts",
+    ],
   },
   {
     code: "generated-bundled-channel-config-fallback",
