@@ -78,6 +78,9 @@ describe("OpenAI Codex provider auth helpers", () => {
     expect(resolveOpenAICodexAccessTokenExpiry(jwt({ exp: 1234.9 }))).toBe(1_234_000);
     expect(resolveOpenAICodexAccessTokenExpiry(jwt({ exp: "1234" }))).toBe(1_234_000);
     expect(resolveOpenAICodexAccessTokenExpiry(jwt({ exp: 0 }))).toBeUndefined();
+    expect(
+      resolveOpenAICodexAccessTokenExpiry(jwt({ exp: Number.MAX_SAFE_INTEGER })),
+    ).toBeUndefined();
     expect(resolveOpenAICodexAccessTokenExpiry("not-a-jwt")).toBeUndefined();
   });
 });

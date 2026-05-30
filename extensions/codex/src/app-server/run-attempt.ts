@@ -63,7 +63,6 @@ import {
   readMirroredSessionHistoryMessages,
   renderCodexSkillsCollaborationInstructions,
   resolveContextEngineBootstrapProjectionDecision,
-  shouldProjectMirroredHistoryForCodexStart,
 } from "./attempt-context.js";
 import {
   classifyCodexModelCallFailureKind,
@@ -681,15 +680,6 @@ export async function runCodexAppServerAttempt(
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
   let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
-  const applyMirroredHistoryProjectionForFreshThread = () => {
-    const projection = projectContextEngineAssemblyForCodex({
-      assembledMessages: historyMessages,
-      originalHistoryMessages: historyMessages,
-      prompt: params.prompt,
-    });
-    promptText = projection.promptText;
-    prePromptMessageCount = projection.prePromptMessageCount;
-  };
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: CodexAppServerThreadBinding | undefined,
   ) => {
@@ -773,21 +763,16 @@ export async function runCodexAppServerAttempt(
         error: formatErrorMessage(assembleErr),
       });
     }
-  } else if (
-    shouldProjectMirroredHistoryForCodexStart({
-      startupBinding,
-      dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
-      historyMessages,
-      forceProject: !nativeToolSurfaceEnabled,
-    })
-  ) {
-    applyMirroredHistoryProjectionForFreshThread();
   }
+  // Codex app-server threads own conversation continuity. The mirrored
+  // OpenClaw transcript is persistence/search state. Context-engine output is
+  // rendered into the prompt/developer instructions, not parallel history.
+  const codexModelInputHistoryMessages: typeof historyMessages = [];
   const buildPromptFromCurrentInputs = () =>
     resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptText, params.currentInboundContext),
       developerInstructions,
-      messages: historyMessages,
+      messages: codexModelInputHistoryMessages,
       ctx: hookContext,
     });
   let promptBuild = await buildPromptFromCurrentInputs();
@@ -844,15 +829,6 @@ export async function runCodexAppServerAttempt(
           error: formatErrorMessage(assembleErr),
         });
       }
-    } else if (
-      shouldProjectMirroredHistoryForCodexStart({
-        startupBinding,
-        dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
-        historyMessages,
-        forceProject: !nativeToolSurfaceEnabled,
-      })
-    ) {
-      applyMirroredHistoryProjectionForFreshThread();
     }
     await rebuildCodexTurnPromptFromCurrentProjection();
     embeddedAgentLog.info("codex app-server rebuilt turn prompt after native thread rotation", {
@@ -1364,9 +1340,8 @@ export async function runCodexAppServerAttempt(
       (!isNativeResponseStreamDelta && correlation.matchesActiveTurn !== false) ||
       nativeResponseStreamDeltaMatchesActiveTurn;
     if (notificationMatchesActiveTurn) {
-      // If a future Codex app-server exposes raw response deltas, treat them as
-      // activity only when scoped to this turn or attributable to a single lease.
-      // Today the durable app-server raw-event surface is rawResponseItem/completed.
+      // If Codex app-server exposes raw response deltas, treat them as activity
+      // only when scoped to this turn or attributable to a single lease.
       turnWatches.noteNotificationReceived(
         notification.method,
         isNativeResponseStreamDelta
@@ -1654,12 +1629,12 @@ export async function runCodexAppServerAttempt(
     model: params.modelId,
     systemPrompt: buildRenderedCodexDeveloperInstructions(),
     prompt: codexTurnPromptText,
-    historyMessages,
+    historyMessages: codexModelInputHistoryMessages,
     imagesCount: params.images?.length ?? 0,
     tools,
   });
-  const buildTurnStartFailureMessages = () => [
-    ...historyMessages,
+  const buildCodexModelInputMessages = () => [
+    ...codexModelInputHistoryMessages,
     buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
   ];
   const codexModelCallBaseFields = {
@@ -1678,7 +1653,7 @@ export async function runCodexAppServerAttempt(
     baseFields: codexModelCallBaseFields,
     capture: codexModelContentCapture,
     tools,
-    buildInputMessages: buildTurnStartFailureMessages,
+    buildInputMessages: buildCodexModelInputMessages,
     buildSystemPrompt: buildRenderedCodexDeveloperInstructions,
     onErrorDiagnostic: (error) => {
       embeddedAgentLog.debug("codex app-server model call diagnostic ended with error", {
@@ -1834,9 +1809,13 @@ export async function runCodexAppServerAttempt(
         turnStartErrorMessage,
         turnStartFailureKind ? { failureKind: turnStartFailureKind } : {},
       );
+      const turnStartFailureMessages = [
+        ...historyMessages,
+        buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
+      ];
       await runCodexAgentEndHook(params, {
         event: {
-          messages: buildTurnStartFailureMessages(),
+          messages: turnStartFailureMessages,
           success: false,
           error: turnStartErrorMessage,
           durationMs: Date.now() - attemptStartedAt,
@@ -1876,7 +1855,7 @@ export async function runCodexAppServerAttempt(
           ...buildCodexTurnStartFailureResult({
             params,
             message: usageLimitError.message,
-            messagesSnapshot: buildTurnStartFailureMessages(),
+            messagesSnapshot: turnStartFailureMessages,
             systemPromptReport,
           }),
         };

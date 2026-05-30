@@ -163,6 +163,68 @@ describe("discord model picker preferences", () => {
     ]);
   });
 
+  it("imports legacy JSON preferences with max Date timestamps", async () => {
+    const env = await createStateEnv();
+    const scope = { accountId: "main", guildId: "guild-max-date", userId: "user-max-date" };
+    const key = buildDiscordModelPickerPreferenceKey(scope);
+    expect(key).toBeTruthy();
+    const legacyPath = path.join(
+      env.OPENCLAW_STATE_DIR as string,
+      "discord",
+      "model-picker-preferences.json",
+    );
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          [key as string]: {
+            recent: ["openai/gpt-4.1", "openai/gpt-4o"],
+            updatedAt: "+275760-09-13T00:00:00.000Z",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(readDiscordModelPickerRecentModels({ env, scope })).resolves.toEqual([
+      "openai/gpt-4.1",
+      "openai/gpt-4o",
+    ]);
+  });
+
+  it("preserves legacy JSON preference order near max Date", async () => {
+    const env = await createStateEnv();
+    const scope = { accountId: "main", guildId: "guild-near-max-date", userId: "user-near-max" };
+    const key = buildDiscordModelPickerPreferenceKey(scope);
+    expect(key).toBeTruthy();
+    const legacyPath = path.join(
+      env.OPENCLAW_STATE_DIR as string,
+      "discord",
+      "model-picker-preferences.json",
+    );
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          [key as string]: {
+            recent: ["openai/gpt-4.1", "openai/gpt-4o"],
+            updatedAt: "+275760-09-12T23:59:59.999Z",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(readDiscordModelPickerRecentModels({ env, scope })).resolves.toEqual([
+      "openai/gpt-4.1",
+      "openai/gpt-4o",
+    ]);
+  });
+
   it("skips malformed legacy JSON entries during import", async () => {
     const env = await createStateEnv();
     const scope = { userId: "valid-legacy-user" };

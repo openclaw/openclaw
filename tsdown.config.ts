@@ -396,6 +396,59 @@ function buildMediaGenerationCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildMediaUnderstandingCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-understanding-common/src/index.ts",
+    "active-model": "packages/media-understanding-common/src/active-model.ts",
+    defaults: "packages/media-understanding-common/src/defaults.ts",
+    errors: "packages/media-understanding-common/src/errors.ts",
+    format: "packages/media-understanding-common/src/format.ts",
+    "openai-compatible-video": "packages/media-understanding-common/src/openai-compatible-video.ts",
+    "output-extract": "packages/media-understanding-common/src/output-extract.ts",
+    "provider-id": "packages/media-understanding-common/src/provider-id.ts",
+    "provider-supports": "packages/media-understanding-common/src/provider-supports.ts",
+    types: "packages/media-understanding-common/src/types.ts",
+    video: "packages/media-understanding-common/src/video.ts",
+  };
+}
+
+function buildMarkdownCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/markdown-core/src/index.ts",
+    "code-spans": "packages/markdown-core/src/code-spans.ts",
+    fences: "packages/markdown-core/src/fences.ts",
+    frontmatter: "packages/markdown-core/src/frontmatter.ts",
+    ir: "packages/markdown-core/src/ir.ts",
+    render: "packages/markdown-core/src/render.ts",
+    "render-aware-chunking": "packages/markdown-core/src/render-aware-chunking.ts",
+    tables: "packages/markdown-core/src/tables.ts",
+    types: "packages/markdown-core/src/types.ts",
+  };
+}
+
+function buildTerminalCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/terminal-core/src/index.ts",
+    ansi: "packages/terminal-core/src/ansi.ts",
+    "decorative-emoji": "packages/terminal-core/src/decorative-emoji.ts",
+    "health-style": "packages/terminal-core/src/health-style.ts",
+    links: "packages/terminal-core/src/links.ts",
+    note: "packages/terminal-core/src/note.ts",
+    "osc-progress": "packages/terminal-core/src/osc-progress.ts",
+    palette: "packages/terminal-core/src/palette.ts",
+    "progress-line": "packages/terminal-core/src/progress-line.ts",
+    "prompt-select-styled": "packages/terminal-core/src/prompt-select-styled.ts",
+    "prompt-select-styled-params": "packages/terminal-core/src/prompt-select-styled-params.ts",
+    "prompt-style": "packages/terminal-core/src/prompt-style.ts",
+    restore: "packages/terminal-core/src/restore.ts",
+    "safe-text": "packages/terminal-core/src/safe-text.ts",
+    "stream-writer": "packages/terminal-core/src/stream-writer.ts",
+    table: "packages/terminal-core/src/table.ts",
+    "terminal-link": "packages/terminal-core/src/terminal-link.ts",
+    theme: "packages/terminal-core/src/theme.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -466,6 +519,16 @@ function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
   return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
+function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
+  return (
+    id === "markdown-it" || id.startsWith("markdown-it/") || id === "yaml" || id.startsWith("yaml/")
+  );
+}
+
+function shouldExternalizeTerminalCoreDependency(id: string): boolean {
+  return id === "@clack/prompts" || id.startsWith("@clack/prompts/") || id === "chalk";
+}
+
 const coreDistEntries = buildCoreDistEntries();
 const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
 const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
@@ -476,6 +539,12 @@ function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
+    ...Object.fromEntries(
+      Object.entries(buildTerminalCoreDistEntries()).map(([entry, source]) => [
+        `terminal-core/${entry}`,
+        source,
+      ]),
+    ),
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server user MCP config projection.
@@ -540,6 +609,30 @@ export default defineConfig([
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildMediaGenerationCoreDistEntries(),
     outDir: "packages/media-generation-core/dist",
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaUnderstandingCoreDistEntries(),
+    outDir: "packages/media-understanding-common/dist",
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMarkdownCoreDistEntries(),
+    outDir: "packages/markdown-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeMarkdownCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildTerminalCoreDistEntries(),
+    outDir: "packages/terminal-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeTerminalCoreDependency,
+    },
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

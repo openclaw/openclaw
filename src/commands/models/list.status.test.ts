@@ -611,11 +611,11 @@ describe("modelsStatusCommand auth overview", () => {
         {
           provider: "openai",
           runtime: "codex",
-          authProvider: "openai-codex",
+          authProvider: "openai",
           status: "missing",
           effective: {
-            kind: "missing",
-            detail: "missing",
+            kind: "models.json",
+            detail: "marker(oauth:openai-codex)",
           },
         },
       ]);
@@ -692,7 +692,7 @@ describe("modelsStatusCommand auth overview", () => {
         {
           provider: "openai",
           runtime: "codex",
-          authProvider: "openai-codex",
+          authProvider: "openai",
           status: "usable",
           effective: {
             kind: "synthetic",
@@ -763,7 +763,7 @@ describe("modelsStatusCommand auth overview", () => {
         {
           provider: "openai",
           runtime: "codex",
-          authProvider: "openai-codex",
+          authProvider: "openai",
           status: "usable",
           effective: {
             kind: "profiles",

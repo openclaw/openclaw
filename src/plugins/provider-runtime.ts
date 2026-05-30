@@ -1,3 +1,4 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { resolveGpt5SystemPromptContribution } from "../agents/gpt5-prompt-overlay.js";
 import {
@@ -11,7 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sortUniqueStrings, uniqueStrings } from "../shared/string-normalization.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";

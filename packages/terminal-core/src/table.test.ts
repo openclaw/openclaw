@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { visibleWidth } from "./ansi.js";
 import { resolveNoteColumns, wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
+
+function mockProcessPlatform(platform: NodeJS.Platform): void {
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+}
 
 describe("renderTable", () => {
   afterEach(() => {

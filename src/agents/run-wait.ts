@@ -1,7 +1,11 @@
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
-import { clampTimerTimeoutMs, parseFiniteNumber } from "../shared/number-coercion.js";
+import {
+  addTimerTimeoutGraceMs,
+  clampTimerTimeoutMs,
+  parseFiniteNumber,
+} from "../shared/number-coercion.js";
 import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   type AgentRunTerminalOutcome,
@@ -201,7 +205,7 @@ export async function waitForAgentRun(params: {
         runId: params.runId,
         timeoutMs,
       },
-      timeoutMs: clampTimerTimeoutMs(timeoutMs + 2000),
+      timeoutMs: addTimerTimeoutGraceMs(timeoutMs, 2_000),
     });
     if (wait?.status === "timeout") {
       return normalizeAgentWaitResult("timeout", wait);

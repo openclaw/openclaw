@@ -127,10 +127,59 @@ function redactClaimToken(card: WorkboardCard): WorkboardCard {
   };
 }
 
+type WorkboardToolCardParams = {
+  record: Record<string, unknown>;
+  id: string;
+  token?: string;
+  scope: { ownerId: string; token?: string };
+};
+type WorkboardToolCardParamsReader = (rawParams: unknown) => Promise<WorkboardToolCardParams>;
+type WorkboardCardMutation = (
+  id: string,
+  record: Record<string, unknown>,
+  scope: WorkboardToolCardParams["scope"],
+) => Promise<WorkboardCard>;
+
+function cardIdField() {
+  return Type.String({ description: "Workboard card id." });
+}
+
+function claimTokenField(description = "Claim token returned by workboard_claim.") {
+  return Type.Optional(Type.String({ description }));
+}
+
+const ScopedClaimTokenField = claimTokenField("Claim token for claimed cards.");
+const OptionalNextStatusField = Type.Optional(
+  Type.String({ description: "Optional next status." }),
+);
+const OptionalOperatorNoteField = Type.Optional(
+  Type.String({ description: "Optional operator note." }),
+);
+
+function readCardToolParams(rawParams: unknown, ownerId: string): WorkboardToolCardParams {
+  const record = rawParams as Record<string, unknown>;
+  const id = readStringParam(record, "id", { required: true });
+  const token = record.token as string | undefined;
+  return {
+    record,
+    id,
+    token,
+    scope: { ownerId, token },
+  };
+}
+
+function redactedCardResult(card: WorkboardCard) {
+  return jsonResult({ card: redactClaimToken(card) });
+}
+
+function redactedRawCardResult(card: WorkboardCard) {
+  return jsonResult(redactClaimToken(card));
+}
+
 const CardIdSchema = Type.Object(
   {
-    id: Type.String({ description: "Workboard card id." }),
-    token: Type.Optional(Type.String({ description: "Claim token returned by workboard_claim." })),
+    id: cardIdField(),
+    token: claimTokenField(),
   },
   { additionalProperties: false },
 );
@@ -146,6 +195,30 @@ export function createWorkboardTools(params: {
       params.api.runtime.state.openKeyedStore<PersistedWorkboardCard>(options),
     );
   const ownerId = contextOwner(params.context);
+  const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
+    const input = readCardToolParams(rawParams, ownerId);
+    await requireScopedCard(store, input.id, ownerId, input.token);
+    return input;
+  };
+  const readClaimedCardToolParams = async (
+    rawParams: unknown,
+  ): Promise<WorkboardToolCardParams> => {
+    const input = readCardToolParams(rawParams, ownerId);
+    await requireClaimedCard(store, input.id, ownerId, input.token);
+    return input;
+  };
+  const runCardMutation = async (
+    rawParams: unknown,
+    readParams: WorkboardToolCardParamsReader,
+    mutate: WorkboardCardMutation,
+  ) => {
+    const { record, id, scope } = await readParams(rawParams);
+    return redactedCardResult(await mutate(id, record, scope));
+  };
+  const runScopedCardMutation = (rawParams: unknown, mutate: WorkboardCardMutation) =>
+    runCardMutation(rawParams, readScopedCardToolParams, mutate);
+  const runClaimedCardMutation = (rawParams: unknown, mutate: WorkboardCardMutation) =>
+    runCardMutation(rawParams, readClaimedCardToolParams, mutate);
   return [
     {
       name: "workboard_list",
@@ -294,7 +367,7 @@ export function createWorkboardTools(params: {
         "Claim a Workboard card for this agent and move backlog/todo cards into running. Returns a claim token for heartbeats and release.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
+          id: cardIdField(),
           ttlSeconds: Type.Optional(Type.Number({ description: "Claim TTL in seconds." })),
         },
         { additionalProperties: false },
@@ -316,26 +389,19 @@ export function createWorkboardTools(params: {
         "Refresh this agent's Workboard claim heartbeat. Use during long-running card work so diagnostics do not mark it stale.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
-          token: Type.Optional(
-            Type.String({ description: "Claim token returned by workboard_claim." }),
-          ),
+          id: cardIdField(),
+          token: claimTokenField(),
           note: Type.Optional(Type.String({ description: "Optional compact progress note." })),
         },
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
-        return jsonResult(
-          redactClaimToken(
-            await store.heartbeat(id, {
-              ownerId,
-              token: record.token,
-              note: record.note,
-            }),
-          ),
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        return redactedRawCardResult(
+          await store.heartbeat(id, {
+            ...scope,
+            note: record.note,
+          }),
         );
       },
     },
@@ -346,10 +412,8 @@ export function createWorkboardTools(params: {
         "Release this agent's Workboard claim after finishing, pausing, or handing off card work.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
-          token: Type.Optional(
-            Type.String({ description: "Claim token returned by workboard_claim." }),
-          ),
+          id: cardIdField(),
+          token: claimTokenField(),
           status: Type.Optional(
             Type.String({ description: "Optional next card status after release." }),
           ),
@@ -357,17 +421,12 @@ export function createWorkboardTools(params: {
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
-        return jsonResult(
-          redactClaimToken(
-            await store.releaseClaim(id, {
-              ownerId,
-              token: record.token,
-              status: record.status,
-            }),
-          ),
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        return redactedRawCardResult(
+          await store.releaseClaim(id, {
+            ...scope,
+            status: record.status,
+          }),
         );
       },
     },
@@ -377,21 +436,15 @@ export function createWorkboardTools(params: {
       description: "Append a compact comment to a Workboard card.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
+          id: cardIdField(),
           body: Type.String({ description: "Comment body." }),
-          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+          token: ScopedClaimTokenField,
         },
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
-        return jsonResult(
-          redactClaimToken(
-            await store.addComment(id, { body: record.body }, { ownerId, token: record.token }),
-          ),
-        );
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        return redactedRawCardResult(await store.addComment(id, { body: record.body }, scope));
       },
     },
     {
@@ -401,7 +454,7 @@ export function createWorkboardTools(params: {
         "Attach proof or artifact metadata to a Workboard card after running tests, checks, or producing screenshots/logs.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
+          id: cardIdField(),
           status: Type.Optional(
             Type.String({ description: "passed, failed, skipped, or unknown." }),
           ),
@@ -412,15 +465,12 @@ export function createWorkboardTools(params: {
           artifactPath: Type.Optional(
             Type.String({ description: "Optional local artifact path." }),
           ),
-          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+          token: ScopedClaimTokenField,
         },
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
-        const scope = { ownerId, token: record.token };
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
         const hasArtifact =
           (typeof record.artifactPath === "string" && record.artifactPath.trim() !== "") ||
           (typeof record.url === "string" && record.url.trim() !== "");
@@ -436,7 +486,7 @@ export function createWorkboardTools(params: {
               scope,
             )
           : await store.addProof(id, record, scope);
-        return jsonResult({ card: redactClaimToken(card) });
+        return redactedCardResult(card);
       },
     },
     {
@@ -446,10 +496,8 @@ export function createWorkboardTools(params: {
         "Complete a claimed Workboard card with a structured summary, proof, artifacts, and created-card manifest.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
-          token: Type.Optional(
-            Type.String({ description: "Claim token returned by workboard_claim." }),
-          ),
+          id: cardIdField(),
+          token: claimTokenField(),
           summary: Type.Optional(Type.String({ description: "Completion summary." })),
           proof: Type.Optional(
             Type.Object(
@@ -485,13 +533,9 @@ export function createWorkboardTools(params: {
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        const scope = { ownerId, token: record.token };
-        await requireClaimedCard(store, id, ownerId, record.token as string | undefined);
-        return jsonResult({
-          card: redactClaimToken(await store.complete(id, record, scope)),
-        });
+        return runClaimedCardMutation(rawParams, (id, record, scope) =>
+          store.complete(id, record, scope),
+        );
       },
     },
     {
@@ -500,22 +544,16 @@ export function createWorkboardTools(params: {
       description: "Block a claimed Workboard card with a durable reason and release the claim.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
-          token: Type.Optional(
-            Type.String({ description: "Claim token returned by workboard_claim." }),
-          ),
+          id: cardIdField(),
+          token: claimTokenField(),
           reason: Type.Optional(Type.String({ description: "Blocker summary." })),
         },
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        const scope = { ownerId, token: record.token };
-        await requireClaimedCard(store, id, ownerId, record.token as string | undefined);
-        return jsonResult({
-          card: redactClaimToken(await store.block(id, record, scope)),
-        });
+        return runClaimedCardMutation(rawParams, (id, record, scope) =>
+          store.block(id, record, scope),
+        );
       },
     },
     {
@@ -524,12 +562,8 @@ export function createWorkboardTools(params: {
       description: "Move a blocked Workboard card back to todo after adding enough context.",
       parameters: CardIdSchema,
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
-        return jsonResult(
-          redactClaimToken(await store.unblock(id, { ownerId, token: record.token })),
-        );
+        const { id, scope } = await readScopedCardToolParams(rawParams);
+        return redactedRawCardResult(await store.unblock(id, scope));
       },
     },
     {
@@ -561,22 +595,19 @@ export function createWorkboardTools(params: {
         "Promote a dependency-ready card into ready, optionally forcing past holds for operator recovery.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
-          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+          id: cardIdField(),
+          token: ScopedClaimTokenField,
           force: Type.Optional(
             Type.Boolean({ description: "Bypass dependency or schedule holds." }),
           ),
-          reason: Type.Optional(Type.String({ description: "Optional operator note." })),
+          reason: OptionalOperatorNoteField,
         },
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
-        return jsonResult({
-          card: redactClaimToken(await store.promote(id, record, { ownerId, token: record.token })),
-        });
+        return runScopedCardMutation(rawParams, (id, record, scope) =>
+          store.promote(id, record, scope),
+        );
       },
     },
     {
@@ -585,24 +616,19 @@ export function createWorkboardTools(params: {
       description: "Change a card assignee and optionally reset failure state during recovery.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
-          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+          id: cardIdField(),
+          token: ScopedClaimTokenField,
           agentId: Type.Optional(Type.String({ description: "New assignee id." })),
-          status: Type.Optional(Type.String({ description: "Optional next status." })),
+          status: OptionalNextStatusField,
           resetFailures: Type.Optional(Type.Boolean({ description: "Reset failure count." })),
-          reason: Type.Optional(Type.String({ description: "Optional operator note." })),
+          reason: OptionalOperatorNoteField,
         },
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
-        return jsonResult({
-          card: redactClaimToken(
-            await store.reassign(id, record, { ownerId, token: record.token }),
-          ),
-        });
+        return runScopedCardMutation(rawParams, (id, record, scope) =>
+          store.reassign(id, record, scope),
+        );
       },
     },
     {
@@ -612,20 +638,17 @@ export function createWorkboardTools(params: {
         "Release a stale claim and stop running attempts so another agent can pick it up.",
       parameters: Type.Object(
         {
-          id: Type.String({ description: "Workboard card id." }),
-          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
-          status: Type.Optional(Type.String({ description: "Optional next status." })),
-          reason: Type.Optional(Type.String({ description: "Optional operator note." })),
+          id: cardIdField(),
+          token: ScopedClaimTokenField,
+          status: OptionalNextStatusField,
+          reason: OptionalOperatorNoteField,
         },
         { additionalProperties: false },
       ),
       execute: async (_toolCallId, rawParams) => {
-        const record = rawParams as Record<string, unknown>;
-        const id = readStringParam(record, "id", { required: true });
-        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
-        return jsonResult({
-          card: redactClaimToken(await store.reclaim(id, record, { ownerId, token: record.token })),
-        });
+        return runScopedCardMutation(rawParams, (id, record, scope) =>
+          store.reclaim(id, record, scope),
+        );
       },
     },
     {

@@ -1,5 +1,5 @@
 import {
-  clampTimerTimeoutMs,
+  addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
@@ -17,5 +17,5 @@ export function resolveQaGatewayTimeoutWithGraceMs(
     return MAX_TIMER_TIMEOUT_MS;
   }
   const grace = resolveTimerTimeoutMs(graceMs, 0, 0);
-  return clampTimerTimeoutMs(timeout + grace);
+  return addTimerTimeoutGraceMs(timeout, grace);
 }

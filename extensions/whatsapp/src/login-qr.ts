@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { logInfo } from "openclaw/plugin-sdk/logging-core";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, info, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -61,6 +62,14 @@ function waitForNextTask(): Promise<void> {
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
 const MAX_QR_RENDER_CHASES = 10;
 const activeLogins = new Map<string, ActiveLogin>();
+
+function resolveWhatsAppLoginTimeoutMs(
+  value: number | undefined,
+  fallbackMs: number,
+  minMs: number,
+): number {
+  return resolveTimerTimeoutMs(value, fallbackMs, minMs);
+}
 
 function closeSocket(sock: WaSocket) {
   closeWaSocket(sock);
@@ -344,7 +353,7 @@ export async function startWebLoginWithQr(
     () => {
       rejectQr?.(new Error("Timed out waiting for WhatsApp QR"));
     },
-    Math.max(opts.timeoutMs ?? 30_000, 5000),
+    resolveWhatsAppLoginTimeoutMs(opts.timeoutMs, 30_000, 5000),
   );
 
   let sock: WaSocket;
@@ -492,7 +501,7 @@ export async function waitForWebLogin(
       message: "The login QR expired. Ask me to generate a new one.",
     };
   }
-  const timeoutMs = Math.max(opts.timeoutMs ?? 120_000, 1000);
+  const timeoutMs = resolveWhatsAppLoginTimeoutMs(opts.timeoutMs, 120_000, 1000);
   const deadline = Date.now() + timeoutMs;
   const currentQrDataUrl = opts.currentQrDataUrl;
 

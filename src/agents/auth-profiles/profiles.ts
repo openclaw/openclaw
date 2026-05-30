@@ -11,6 +11,19 @@ import {
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 export { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 
+function findProviderAuthStateKey(
+  entries: Record<string, unknown> | undefined,
+  providerKey: string,
+): string | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const normalizedProviderKey = resolveProviderIdForAuth(providerKey);
+  return Object.keys(entries).find(
+    (key) => resolveProviderIdForAuth(key) === normalizedProviderKey,
+  );
+}
+
 function resetSuccessfulUsageStats(
   existing: ProfileUsageStats | undefined,
   lastUsed: number,
@@ -85,7 +98,9 @@ export async function promoteAuthProfileInOrder(params: {
         return false;
       }
       const orderKey =
-        findNormalizedProviderKey(store.order, providerKey) ?? normalizeProviderId(providerKey);
+        findProviderAuthStateKey(store.order, providerKey) ??
+        findNormalizedProviderKey(store.order, providerKey) ??
+        normalizeProviderId(providerKey);
       const existing = store.order?.[orderKey];
       if (!existing || existing.length === 0) {
         return false;
@@ -214,10 +229,11 @@ export async function clearLastGoodProfileWithLock(params: {
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     updater: (store) => {
-      if (store.lastGood?.[providerKey] !== params.profileId) {
+      const lastGoodKey = findProviderAuthStateKey(store.lastGood, providerKey);
+      if (!lastGoodKey || store.lastGood?.[lastGoodKey] !== params.profileId) {
         return false;
       }
-      delete store.lastGood[providerKey];
+      delete store.lastGood[lastGoodKey];
       if (Object.keys(store.lastGood).length === 0) {
         store.lastGood = undefined;
       }

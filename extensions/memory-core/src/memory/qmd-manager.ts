@@ -49,7 +49,7 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -201,7 +201,7 @@ function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
 }
 
 export function resolveQmdMcporterSearchProcessTimeoutMs(timeoutMs: number): number {
-  return Math.max(clampTimerTimeoutMs(timeoutMs + 2_000) ?? 1, 5_000);
+  return Math.max(addTimerTimeoutGraceMs(timeoutMs, 2_000) ?? 1, 5_000);
 }
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {

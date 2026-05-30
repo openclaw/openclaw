@@ -96,9 +96,11 @@ export type CodexPluginThreadConfigProvider = {
 
 export const CODEX_NATIVE_PERSONALITY_NONE = "none";
 
+// Stream structured patch snapshots so large generated edits keep the turn active.
 export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": false,
+  "features.apply_patch_streaming_events": true,
 };
 
 export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -868,11 +870,16 @@ export function buildCodexRuntimeThreadConfig(
     "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
   };
   if (options.nativeCodeModeEnabled === false) {
-    return (
-      mergeCodexThreadConfigs(codeModeConfig, config, CODEX_CODE_MODE_DISABLED_THREAD_CONFIG) ?? {
-        ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-      }
-    );
+    const disabledConfig = mergeCodexThreadConfigs(
+      config,
+      CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+    ) ?? {
+      ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+    };
+    // Native patch streaming is part of native code mode, so do not send it
+    // when runtime policy disables that tool surface.
+    delete disabledConfig["features.apply_patch_streaming_events"];
+    return disabledConfig;
   }
   if (options.nativeCodeModeOnlyEnabled === true) {
     return (

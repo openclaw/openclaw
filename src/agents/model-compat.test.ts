@@ -508,7 +508,7 @@ describe("isHighSignalLiveModelRef", () => {
       false,
     );
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.5" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.5" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2-codex" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.2-chat" })).toBe(
@@ -660,7 +660,6 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m2.7" },
       { provider: "openai", id: "gpt-5.5" },
-      { provider: "openai-codex", id: "gpt-5.5" },
       { provider: "openrouter", id: "openai/gpt-5.2-chat" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
       { provider: "opencode-go", id: "glm-5" },

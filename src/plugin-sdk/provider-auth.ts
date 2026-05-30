@@ -12,6 +12,7 @@ import {
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
@@ -279,6 +280,7 @@ export async function resolveCopilotApiToken(params: {
 export function isProviderApiKeyConfigured(params: {
   provider: string;
   agentDir?: string;
+  profileTypes?: readonly AuthProfileCredential["type"][];
 }): boolean {
   if (resolveEnvApiKey(params.provider)?.apiKey) {
     return true;
@@ -290,7 +292,15 @@ export function isProviderApiKeyConfigured(params: {
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
-  return listProfilesForProvider(store, params.provider).length > 0;
+  const profileIds = listProfilesForProvider(store, params.provider);
+  if (!params.profileTypes?.length) {
+    return profileIds.length > 0;
+  }
+  const allowedTypes = new Set(params.profileTypes);
+  return profileIds.some((profileId) => {
+    const type = store.profiles[profileId]?.type;
+    return type !== undefined && allowedTypes.has(type);
+  });
 }
 
 export function listUsableProviderAuthProfileIds(params: {

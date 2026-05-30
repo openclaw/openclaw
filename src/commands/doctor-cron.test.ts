@@ -14,7 +14,7 @@ type TerminalNote = (message: string, title?: string) => void;
 
 const noteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: noteMock,
 }));
 

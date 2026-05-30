@@ -73,6 +73,61 @@ function goalReply(text: string): CommandHandlerResult {
   };
 }
 
+function hasCommandLikeGoalText(trimmed: string): boolean {
+  return /(?:^|\s)\//.test(trimmed) || trimmed.startsWith("!");
+}
+
+function encodeGoalJsonString(trimmed: string): string {
+  return JSON.stringify(trimmed).replaceAll("/", "\\/");
+}
+
+export function formatGoalContinuationPrompt(objective: string): string {
+  const trimmed = objective.trim();
+  return hasCommandLikeGoalText(trimmed)
+    ? `Pursue this goal exactly as written from this JSON string: ${encodeGoalJsonString(trimmed)}`
+    : trimmed;
+}
+
+export function formatGoalResumeContinuationPrompt(note: string): string {
+  const trimmed = note.trim();
+  if (!trimmed) {
+    return "Continue pursuing the current goal.";
+  }
+  return hasCommandLikeGoalText(trimmed)
+    ? `Continue pursuing the current goal. Interpret this JSON string as the resume note: ${encodeGoalJsonString(trimmed)}`
+    : `Continue pursuing the current goal. Note: ${trimmed}`;
+}
+
+function applyGoalPromptToContext(ctx: HandleCommandsParams["ctx"], message: string): void {
+  const mutableCtx = ctx as HandleCommandsParams["ctx"] & {
+    Body?: string;
+    RawBody?: string;
+    CommandBody?: string;
+    BodyForCommands?: string;
+    BodyForAgent?: string;
+    BodyStripped?: string;
+  };
+  mutableCtx.Body = message;
+  mutableCtx.RawBody = message;
+  mutableCtx.CommandBody = message;
+  mutableCtx.BodyForCommands = message;
+  mutableCtx.BodyForAgent = message;
+  mutableCtx.BodyStripped = message;
+}
+
+function applyGoalContinuationPrompt(params: HandleCommandsParams, message: string): void {
+  applyGoalPromptToContext(params.ctx, message);
+  if (params.rootCtx && params.rootCtx !== params.ctx) {
+    applyGoalPromptToContext(params.rootCtx, message);
+  }
+  params.command.rawBodyNormalized = message;
+  params.command.commandBodyNormalized = message;
+}
+
+function goalContinuation(): CommandHandlerResult {
+  return { shouldContinue: true };
+}
+
 function goalErrorReply(error: unknown): CommandHandlerResult {
   const message = error instanceof Error ? error.message : String(error);
   return goalReply(`Goal error: ${message}`);
@@ -115,7 +170,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           fallbackEntry: params.sessionEntry,
         });
         syncGoalSessionEntry(params);
-        return goalReply(`Goal started: ${goal.objective}`);
+        applyGoalContinuationPrompt(params, formatGoalContinuationPrompt(goal.objective));
+        return goalContinuation();
       }
       case "pause": {
         const goal = await updateSessionGoalStatus({
@@ -128,14 +184,16 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         return goalReply(`Goal paused: ${goal.objective}`);
       }
       case "resume": {
-        const goal = await updateSessionGoalStatus({
+        await updateSessionGoalStatus({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "active",
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
-        return goalReply(`Goal resumed: ${goal.objective}`);
+        const message = formatGoalResumeContinuationPrompt(parsed.text);
+        applyGoalContinuationPrompt(params, message);
+        return goalContinuation();
       }
       case "complete":
       case "done": {

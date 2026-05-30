@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -31,12 +32,11 @@ import {
 } from "../agents/auth-profiles/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
-const CODEX_PROVIDER_ID = "openai-codex";
+const CODEX_PROVIDER_ID = "openai";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);

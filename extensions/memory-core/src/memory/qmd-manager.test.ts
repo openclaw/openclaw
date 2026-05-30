@@ -233,6 +233,7 @@ describe("QmdMemoryManager", () => {
     expect(resolveQmdMcporterSearchProcessTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
       MAX_TIMER_TIMEOUT_MS,
     );
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(resolveQmdMcporterSearchProcessTimeoutMs(MAX_TIMER_TIMEOUT_MS - 100)).toBe(
       MAX_TIMER_TIMEOUT_MS,
     );

@@ -4,14 +4,14 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { callGateway } from "../gateway/call.js";
-import { clampTimerTimeoutMs } from "../shared/number-coercion.js";
+import { addTimerTimeoutGraceMs } from "../shared/number-coercion.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export function resolvePluginCliNodeInvokeGatewayTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? clampTimerTimeoutMs(timeoutMs + 5_000)
+    ? addTimerTimeoutGraceMs(timeoutMs)
     : undefined;
 }
 

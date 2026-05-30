@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   clearNodeWakeState,
   maybeSendNodeWakeNudge,
   maybeWakeNodeWithApns,
   nodeHandlers,
+  waitForNodeReconnect,
 } from "./nodes.js";
 
 type MockNodeCommandPolicyParams = {
@@ -628,6 +630,25 @@ describe("node.invoke APNs wake path", () => {
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(true);
     expectRecordFields(call[1], "respond payload", { ok: true, nodeId: "ios-node-reconnect" });
+  });
+
+  it("caps oversized reconnect wait timers", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const nodeRegistry = {
+      get: vi.fn(() => undefined),
+    };
+
+    const reconnectPromise = waitForNodeReconnect({
+      nodeId: "ios-node-never-reconnects",
+      context: { nodeRegistry },
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      pollMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await expect(reconnectPromise).resolves.toBe(false);
+    expect(nodeRegistry.get).toHaveBeenCalledWith("ios-node-never-reconnects");
   });
 
   it("broadcasts canonical Talk capture events for successful PTT node commands", async () => {

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -153,7 +154,15 @@ function timestampMs(value: string): number {
 }
 
 function legacyUpdatedAtForIndex(updatedAt: string, index: number, total: number): string {
-  return new Date(timestampMs(updatedAt) + Math.max(0, total - index)).toISOString();
+  const baseMs = timestampMs(updatedAt);
+  const anchorMs = Math.min(baseMs + Math.max(0, total), MAX_DATE_TIMESTAMP_MS);
+  const shiftedMs = anchorMs - Math.max(0, index);
+  return (
+    timestampMsToIsoString(shiftedMs) ??
+    timestampMsToIsoString(baseMs) ??
+    timestampMsToIsoString(Math.max(0, total - index)) ??
+    "1970-01-01T00:00:00.000Z"
+  );
 }
 
 function nextPreferenceTimestampIso(): string {

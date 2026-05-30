@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,8 +7,10 @@ import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_PROFILE_STEP_ENV,
   BUILD_ALL_STEPS,
+  buildAllUsage,
   formatBuildAllDuration,
   formatBuildAllTimingSummary,
+  parseBuildAllArgs,
   resolveBuildAllStepCacheState,
   resolveBuildAllStep,
   resolveBuildAllSteps,
@@ -170,6 +173,46 @@ describe("resolveBuildAllStep", () => {
 });
 
 describe("resolveBuildAllSteps", () => {
+  it("parses build-all CLI args before any build work", () => {
+    expect(parseBuildAllArgs([])).toEqual({ help: false, profile: "full" });
+    expect(parseBuildAllArgs(["cliStartup"])).toEqual({ help: false, profile: "cliStartup" });
+    expect(parseBuildAllArgs(["cliStartup", "--help"])).toEqual({
+      help: true,
+      profile: "cliStartup",
+    });
+    expect(() => parseBuildAllArgs(["cliStartup", "--bogus"])).toThrow("unknown argument: --bogus");
+    expect(() => parseBuildAllArgs(["wat"])).toThrow("Unknown build profile: wat");
+  });
+
+  it("prints CLI help without starting build steps", () => {
+    for (const args of [["--help"], ["cliStartup", "--help"]]) {
+      const result = spawnSync(process.execPath, ["scripts/build-all.mjs", ...args], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("Usage: node scripts/build-all.mjs [profile]");
+      expect(result.stdout).toContain("cliStartup");
+      expect(result.stdout).not.toContain("[build-all]");
+    }
+  });
+
+  it("rejects unknown CLI args without starting build steps", () => {
+    const result = spawnSync(process.execPath, ["scripts/build-all.mjs", "cliStartup", "--bogus"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("unknown argument: --bogus");
+    expect(result.stderr).toContain(buildAllUsage());
+    expect(result.stderr).not.toContain("[build-all]");
+    expect(result.stderr).not.toContain("at ");
+  });
+
   it("keeps the full profile aligned with the declared steps", () => {
     expect(resolveBuildAllSteps("full")).toEqual(BUILD_ALL_STEPS);
     expect(BUILD_ALL_PROFILES.full).toEqual(BUILD_ALL_STEPS.map((step) => step.label));

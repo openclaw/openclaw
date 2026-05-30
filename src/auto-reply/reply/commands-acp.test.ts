@@ -1770,6 +1770,33 @@ describe("/acp command", () => {
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
   });
 
+  it("tolerates Date-invalid ACP status timestamps", async () => {
+    mockBoundThreadSession();
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      ...createAcpSessionEntry(),
+      acp: {
+        ...createAcpSessionEntry().acp,
+        lastActivityAt: 8_700_000_000_000_000,
+      },
+    });
+    createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: defaultAcpSessionKey,
+      runId: "acp-run-1",
+      task: "Inspect ACP backlog",
+      status: "running",
+      lastEventAt: 8_700_000_000_000_000,
+    });
+
+    const result = await runThreadAcpCommand("/acp status", baseCfg);
+
+    expect(result?.reply?.text).toContain("ACP status:");
+    expect(result?.reply?.text).toContain("lastActivityAt: n/a");
+    expect(result?.reply?.text).not.toContain("taskUpdatedAt:");
+  });
+
   it("sanitizes leaked task and runtime details in ACP status output", async () => {
     mockBoundThreadSession({
       identity: {

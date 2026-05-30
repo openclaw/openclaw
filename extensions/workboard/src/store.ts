@@ -59,6 +59,21 @@ const READY_STRANDED_MS = 60 * 60 * 1000;
 const RUNNING_HEARTBEAT_STALE_MS = 20 * 60 * 1000;
 const BLOCKED_TOO_LONG_MS = 24 * 60 * 60 * 1000;
 const CLAIM_RECLAIM_MS = 5 * 60 * 1000;
+const MAX_SAFE_WORKBOARD_DURATION_MS = Number.MAX_SAFE_INTEGER;
+
+function secondsToDurationMs(seconds: number): number {
+  const ms = Math.trunc(seconds) * 1000;
+  return Number.isFinite(ms)
+    ? Math.min(MAX_SAFE_WORKBOARD_DURATION_MS, Math.max(1, ms))
+    : MAX_SAFE_WORKBOARD_DURATION_MS;
+}
+
+function addWorkboardDurationMs(now: number, durationMs: number): number {
+  const expiresAt = now + durationMs;
+  return Number.isFinite(expiresAt)
+    ? Math.min(MAX_SAFE_WORKBOARD_DURATION_MS, expiresAt)
+    : MAX_SAFE_WORKBOARD_DURATION_MS;
+}
 
 export type PersistedWorkboardCard = {
   version: 1;
@@ -2466,7 +2481,10 @@ export class WorkboardStore {
       normalizeBoundedString(input.token, undefined, 160, "claim token") ?? randomUUID();
     return await this.enqueueMutation(async () => {
       const now = Date.now();
-      const expiresAt = now + (ttlSeconds ? ttlSeconds * 1000 : DEFAULT_CLAIM_TTL_MS);
+      const expiresAt = addWorkboardDurationMs(
+        now,
+        ttlSeconds ? secondsToDurationMs(ttlSeconds) : DEFAULT_CLAIM_TTL_MS,
+      );
       const guarded = await this.promoteDependencyReady(id, now);
       if (cardParentIds(guarded).length > 0 && guarded.status !== "ready") {
         throw new Error("card dependencies are not done.");
@@ -2853,7 +2871,7 @@ export class WorkboardStore {
         const runtimeStartedAt = latestAttempt?.startedAt ?? claim?.claimedAt ?? latest.startedAt;
         const timedOut =
           Boolean(maxRuntimeSeconds && runtimeStartedAt) &&
-          now - runtimeStartedAt! > maxRuntimeSeconds! * 1000;
+          now - runtimeStartedAt! > secondsToDurationMs(maxRuntimeSeconds!);
         const claimExpired = Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
         const retriesExhausted = retryBudgetExhausted(latest);
         if (latest.status === "running" && (timedOut || claimExpired)) {

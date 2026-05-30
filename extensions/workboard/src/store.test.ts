@@ -496,6 +496,24 @@ describe("WorkboardStore", () => {
     expect(released.metadata?.claim).toBeUndefined();
   });
 
+  it("caps oversized claim TTL seconds before storing expiry", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({ title: "Bound claim", status: "todo" });
+
+      const claimed = await store.claim(card.id, {
+        ownerId: "main",
+        ttlSeconds: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(claimed.card.metadata?.claim?.expiresAt).toBe(Number.MAX_SAFE_INTEGER);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("creates idempotent child cards and promotes them when parents finish", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const parent = await store.create({ title: "Parent", status: "running" });
@@ -1033,6 +1051,29 @@ describe("WorkboardStore", () => {
           ]),
         },
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps oversized max runtime seconds during dispatch timeout checks", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: "Bound runtime",
+        status: "running",
+        maxRuntimeSeconds: Number.MAX_SAFE_INTEGER,
+      });
+      if (card.startedAt === undefined) {
+        throw new Error("expected running card to have startedAt");
+      }
+
+      const result = await store.dispatch(card.startedAt + Number.MAX_SAFE_INTEGER + 1);
+
+      expect(result.blocked).toEqual([expect.objectContaining({ id: card.id })]);
+      await expect(store.get(card.id)).resolves.toMatchObject({ status: "blocked" });
     } finally {
       vi.useRealTimers();
     }

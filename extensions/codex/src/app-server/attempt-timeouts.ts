@@ -1,4 +1,4 @@
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 export const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 export const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
@@ -108,5 +108,5 @@ export function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined)
 export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {
   const timeout = resolvePositiveIntegerTimeoutMs(timeoutMs, 1);
   const grace = resolveTimerTimeoutMs(graceMs, 0, 0);
-  return resolveTimerTimeoutMs(timeout + grace, timeout);
+  return addTimerTimeoutGraceMs(timeout, grace) ?? timeout;
 }

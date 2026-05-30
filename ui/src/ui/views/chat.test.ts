@@ -2083,6 +2083,28 @@ describe("chat session controls", () => {
     expect(labels).toEqual(["Main chat", "Main work"]);
   });
 
+  it("does not render Invalid Date for Date-invalid session picker timestamps", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows([
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        label: "Main chat",
+        updatedAt: 8_640_000_000_000_001,
+      },
+    ]);
+    const container = document.createElement("div");
+
+    render(renderChatSessionSelect(state), container);
+
+    expect(container.textContent).toContain("Main chat");
+    expect(container.textContent).not.toContain("Invalid Date");
+  });
+
   it("does not add the active session to searched picker rows", () => {
     const { state } = createChatHeaderState();
     state.sessionKey = "agent:main:main";

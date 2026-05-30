@@ -223,6 +223,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
 ): OpenAIResponsesPayloadCapabilities {
   const provider = normalizeLowercaseString(model.provider);
   const api = normalizeLowercaseString(model.api);
+  const isOpenAIProvider = provider === "openai" || provider === "openai-codex";
   const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
   const isResponsesApi = isOpenAIResponsesApi(api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
@@ -248,13 +249,14 @@ function resolveOpenAIResponsesPayloadCapabilities(
       (provider === "openai" &&
         (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
         endpointClass === "openai-public") ||
-      (provider === "openai-codex" &&
+      (isOpenAIProvider &&
         (api === "openai-codex-responses" ||
           api === "openai-responses" ||
           api === "openclaw-openai-responses-transport") &&
         endpointClass === "openai-codex"),
     allowsResponsesStore:
       supportsResponsesStoreField &&
+      api !== "openai-codex-responses" &&
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
