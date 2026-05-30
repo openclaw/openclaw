@@ -3370,6 +3370,15 @@ export async function runEmbeddedAttempt(
                 systemPromptAddition: mediaTaskSystemPromptAddition,
               }),
             );
+          } else {
+            // Ensure the boundary even with no active media hint: for a marker-free hook
+            // systemPrompt override the later appendModelIdentitySystemPrompt would otherwise
+            // land above the (absent) boundary, shifting the idle cached prefix away from the
+            // active turn's prefix and breaking prompt caching across active/idle transitions.
+            const boundedSystemPrompt = ensureSystemPromptCacheBoundary(systemPromptText);
+            if (boundedSystemPrompt !== systemPromptText) {
+              setActiveSessionSystemPrompt(boundedSystemPrompt);
+            }
           }
         }
         const modelAwareSystemPrompt = appendModelIdentitySystemPrompt({

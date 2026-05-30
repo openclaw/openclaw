@@ -40,6 +40,7 @@ import {
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   splitSystemPromptCacheBoundary,
 } from "../../system-prompt-cache-boundary.js";
+import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
 import {
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
@@ -49,11 +50,15 @@ import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js"
 const MEDIA_HINT = "Active image generation task in progress";
 const HOOK = "Static plugin guidance"; // documented static-cacheable hook field, constant per turn
 const BASE = `Stable workspace prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic channel guidance`;
+const MODEL = "test-model-x"; // any non-empty model yields a "Current model identity:" line
+const MODEL_IDENTITY_FRAGMENT = "Current model identity:";
 
-// Mirror the production composition order at attempt.ts:3288 / cli-runner/prepare.ts:
+// Mirror the production composition order at attempt.ts / cli-runner/prepare.ts:
 // 1) compose base with the static hook prepend/append (above-boundary, cacheable),
-// 2) ensure a cache boundary exists (covers marker-free hook systemPrompt overrides),
-// 3) route the per-turn media task hints below the cache boundary.
+// 2) ensure a cache boundary exists whether or not media is active (covers marker-free
+//    hook systemPrompt overrides),
+// 3) route the per-turn media task hints below the cache boundary,
+// 4) append the model identity line (lands below the boundary).
 function composeTurn(opts: { activeImageTask: boolean; base?: string; hook?: string }): string {
   imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
     opts.activeImageTask ? MEDIA_HINT : undefined,
@@ -74,12 +79,15 @@ function composeTurn(opts: { activeImageTask: boolean; base?: string; hook?: str
     sessionKey: "agent:main:discord:direct:123",
     trigger: "user",
   });
-  return mediaTaskSystemPromptAddition
+  const routed = mediaTaskSystemPromptAddition
     ? prependSystemPromptAddition({
         systemPrompt: ensureSystemPromptCacheBoundary(composed),
         systemPromptAddition: mediaTaskSystemPromptAddition,
       })
-    : composed;
+    : ensureSystemPromptCacheBoundary(composed);
+  // Production appends the model identity line AFTER media routing; it must land below the
+  // boundary, never shift the cached prefix (the regression the marker-free idle case caught).
+  return appendModelIdentitySystemPrompt({ systemPrompt: routed, model: MODEL });
 }
 
 describe("#85203 media task hints stay below the system-prompt cache boundary", () => {
@@ -111,5 +119,23 @@ describe("#85203 media task hints stay below the system-prompt cache boundary", 
     expect(split?.stablePrefix).toBe(OVERRIDE);
     expect(split?.stablePrefix ?? "").not.toContain(MEDIA_HINT);
     expect(split?.dynamicSuffix).toContain(MEDIA_HINT);
+  });
+
+  // Without ensuring the boundary on idle turns too, a marker-free override has the later
+  // model-identity append land above the (absent) boundary, so the idle cached prefix
+  // diverges from the active turn and prompt caching breaks across active/idle transitions.
+  it("marker-free override: idle cached prefix matches the active turn after model identity is appended", () => {
+    const OVERRIDE = "Custom hook system prompt override without a cache boundary";
+    const active = splitSystemPromptCacheBoundary(
+      composeTurn({ activeImageTask: true, base: OVERRIDE, hook: "" }),
+    );
+    const idle = splitSystemPromptCacheBoundary(
+      composeTurn({ activeImageTask: false, base: OVERRIDE, hook: "" }),
+    );
+    expect(active?.stablePrefix).toBe(OVERRIDE);
+    expect(idle).toBeDefined();
+    expect(idle?.stablePrefix).toBe(active?.stablePrefix);
+    expect(idle?.stablePrefix ?? "").not.toContain(MODEL_IDENTITY_FRAGMENT);
+    expect(idle?.dynamicSuffix).toContain(MODEL_IDENTITY_FRAGMENT);
   });
 });

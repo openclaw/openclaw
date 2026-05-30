@@ -522,6 +522,11 @@ export async function prepareCliRunContext(
         systemPrompt: ensureSystemPromptCacheBoundary(systemPrompt),
         systemPromptAddition: mediaTaskSystemPromptAddition,
       });
+    } else {
+      // Marker-free hook overrides need the boundary even with no active media hint, so the
+      // later appendModelIdentitySystemPrompt lands below it instead of shifting the idle
+      // cached prefix and breaking prompt caching across active/idle transitions.
+      systemPrompt = ensureSystemPromptCacheBoundary(systemPrompt);
     }
   } catch (error) {
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
