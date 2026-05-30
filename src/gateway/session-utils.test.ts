@@ -467,6 +467,76 @@ describe("gateway session utils", () => {
     }
   });
 
+  test("async session list hydrates disk compaction checkpoint previews without sync fs scans", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-list-async-checkpoints-"));
+    const realDir = fs.realpathSync.native(dir);
+    const sessionFile = path.join(realDir, "session-async-index.jsonl");
+    const checkpointId = "22222222-2222-4222-8222-222222222222";
+    const checkpointFile = path.join(
+      realDir,
+      `session-async-index.checkpoint.${checkpointId}.jsonl`,
+    );
+    const statSyncSpy = vi.spyOn(fs, "statSync");
+    const readdirSyncSpy = vi.spyOn(fs, "readdirSync");
+    try {
+      fs.writeFileSync(sessionFile, "", "utf8");
+      fs.writeFileSync(checkpointFile, "", "utf8");
+      fs.utimesSync(checkpointFile, 1_700_000_010.123, 1_700_000_011.789);
+
+      const listed = await listSessionsFromStoreAsync({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath: path.join(realDir, "sessions.json"),
+        store: {
+          "agent:main:first": {
+            sessionId: "session-async-index",
+            sessionFile: path.basename(sessionFile),
+            updatedAt: 2,
+            modelProvider: "openai",
+            model: "gpt-5.4",
+            totalTokens: 1,
+            totalTokensFresh: true,
+            contextTokens: 1,
+            estimatedCostUsd: 0,
+          },
+          "agent:main:second": {
+            sessionId: "session-async-index",
+            sessionFile: path.basename(sessionFile),
+            updatedAt: 1,
+            modelProvider: "openai",
+            model: "gpt-5.4",
+            totalTokens: 1,
+            totalTokensFresh: true,
+            contextTokens: 1,
+            estimatedCostUsd: 0,
+          },
+        },
+        opts: {},
+      });
+
+      expect(listed.sessions).toHaveLength(2);
+      expect(listed.sessions.map((session) => session.compactionCheckpointCount)).toEqual([1, 1]);
+      expect(
+        listed.sessions.map((session) => session.latestCompactionCheckpoint?.checkpointId),
+      ).toEqual([checkpointId, checkpointId]);
+      expect(
+        readdirSyncSpy.mock.calls.filter((call) => {
+          const target = call[0];
+          return typeof target === "string" && path.resolve(target) === realDir;
+        }),
+      ).toHaveLength(0);
+      expect(
+        statSyncSpy.mock.calls.filter((call) => {
+          const target = call[0];
+          return typeof target === "string" && path.resolve(target) === checkpointFile;
+        }),
+      ).toHaveLength(0);
+    } finally {
+      statSyncSpy.mockRestore();
+      readdirSyncSpy.mockRestore();
+      fs.rmSync(realDir, { recursive: true, force: true });
+    }
+  });
+
   test("async session list reuses thinking metadata for lightweight rows", async () => {
     const resolveThinkingProfile = vi.fn(() => ({
       levels: [{ id: "off" as const }, { id: "medium" as const }],

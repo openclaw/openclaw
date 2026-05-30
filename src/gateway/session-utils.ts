@@ -441,14 +441,54 @@ function buildDiskCompactionCheckpointPreviewIndexSync(
   return previewsByTranscriptBase;
 }
 
-function discoverDiskCompactionCheckpointPreviewsSync(params: {
+async function buildDiskCompactionCheckpointPreviewIndexAsync(
+  sessionDir: string,
+): Promise<DiskCompactionCheckpointPreviewIndex> {
+  const previewsByTranscriptBase: DiskCompactionCheckpointPreviewIndex = new Map();
+  const fileNames = await fs.promises.readdir(sessionDir);
+  for (const fileName of fileNames) {
+    const parsed = parseCompactionCheckpointTranscriptFileName(fileName);
+    if (!parsed) {
+      continue;
+    }
+    const checkpointFile = path.join(sessionDir, fileName);
+    let stat: fs.Stats;
+    try {
+      stat = await fs.promises.stat(checkpointFile);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) {
+      continue;
+    }
+    const createdAt = normalizeFileTimestampMs(stat.mtimeMs);
+    if (createdAt === undefined) {
+      continue;
+    }
+    const previews = previewsByTranscriptBase.get(parsed.sessionId) ?? [];
+    previews.push({
+      checkpointId: parsed.checkpointId,
+      createdAt,
+      reason: "manual",
+    });
+    previewsByTranscriptBase.set(parsed.sessionId, previews);
+  }
+  return previewsByTranscriptBase;
+}
+
+function resolveDiskCompactionCheckpointPreviewRequest(params: {
   key: string;
   storePath: string;
   entry?: Pick<SessionEntry, "sessionId" | "sessionFile" | "compactionCheckpoints">;
-  checkpointPreviewsByDir?: Map<string, DiskCompactionCheckpointPreviewIndex | null>;
-}): GatewaySessionRow["latestCompactionCheckpoint"][] {
+}):
+  | {
+      sessionDir: string;
+      checkpointTranscriptBase: string;
+      knownIds: Set<string>;
+    }
+  | undefined {
   if (!params.entry?.sessionId) {
-    return [];
+    return undefined;
   }
   const agentId = parseAgentSessionKey(params.key)?.agentId;
   let sessionFile: string;
@@ -459,7 +499,7 @@ function discoverDiskCompactionCheckpointPreviewsSync(params: {
       resolveSessionFilePathOptions({ storePath: params.storePath, agentId }),
     );
   } catch {
-    return [];
+    return undefined;
   }
   const sessionDir = path.dirname(sessionFile);
   const checkpointTranscriptBase = path.parse(sessionFile).name;
@@ -468,26 +508,85 @@ function discoverDiskCompactionCheckpointPreviewsSync(params: {
       (checkpoint) => checkpoint.checkpointId,
     ),
   );
-  let previewsByTranscriptBase: DiskCompactionCheckpointPreviewIndex;
-  const cachedPreviews = params.checkpointPreviewsByDir?.get(sessionDir);
-  if (cachedPreviews !== undefined) {
-    if (cachedPreviews === null) {
-      return [];
-    }
-    previewsByTranscriptBase = cachedPreviews;
-  } else {
-    try {
-      previewsByTranscriptBase = buildDiskCompactionCheckpointPreviewIndexSync(sessionDir);
-      params.checkpointPreviewsByDir?.set(sessionDir, previewsByTranscriptBase);
-    } catch {
-      params.checkpointPreviewsByDir?.set(sessionDir, null);
-      return [];
+  return { sessionDir, checkpointTranscriptBase, knownIds };
+}
+
+function resolveDiskCompactionCheckpointPreviewsFromIndex(params: {
+  key: string;
+  storePath: string;
+  entry?: Pick<SessionEntry, "sessionId" | "sessionFile" | "compactionCheckpoints">;
+  checkpointPreviewsByDir?: Map<string, DiskCompactionCheckpointPreviewIndex | null>;
+}): GatewaySessionRow["latestCompactionCheckpoint"][] {
+  const request = resolveDiskCompactionCheckpointPreviewRequest(params);
+  if (!request) {
+    return [];
+  }
+  const previewsByTranscriptBase = params.checkpointPreviewsByDir?.get(request.sessionDir);
+  if (!previewsByTranscriptBase) {
+    return [];
+  }
+  const previews = previewsByTranscriptBase.get(request.checkpointTranscriptBase) ?? [];
+  return request.knownIds.size > 0
+    ? previews.filter((preview) => !request.knownIds.has(preview.checkpointId))
+    : [...previews];
+}
+
+function collectDiskCompactionCheckpointPreviewDirs(params: {
+  storePath: string;
+  entries: readonly [string, SessionEntry][];
+}): Set<string> {
+  const sessionDirs = new Set<string>();
+  for (const [key, entry] of params.entries) {
+    const request = resolveDiskCompactionCheckpointPreviewRequest({
+      key,
+      storePath: params.storePath,
+      entry,
+    });
+    if (request) {
+      sessionDirs.add(request.sessionDir);
     }
   }
-  const previews = previewsByTranscriptBase.get(checkpointTranscriptBase) ?? [];
-  return knownIds.size > 0
-    ? previews.filter((preview) => !knownIds.has(preview.checkpointId))
-    : [...previews];
+  return sessionDirs;
+}
+
+function hydrateDiskCompactionCheckpointPreviewIndexesSync(params: {
+  storePath: string;
+  entries: readonly [string, SessionEntry][];
+  rowContext: SessionListRowContext;
+}) {
+  for (const sessionDir of collectDiskCompactionCheckpointPreviewDirs(params)) {
+    if (params.rowContext.checkpointPreviewsByDir.has(sessionDir)) {
+      continue;
+    }
+    try {
+      params.rowContext.checkpointPreviewsByDir.set(
+        sessionDir,
+        buildDiskCompactionCheckpointPreviewIndexSync(sessionDir),
+      );
+    } catch {
+      params.rowContext.checkpointPreviewsByDir.set(sessionDir, null);
+    }
+  }
+}
+
+async function hydrateDiskCompactionCheckpointPreviewIndexesAsync(params: {
+  storePath: string;
+  entries: readonly [string, SessionEntry][];
+  rowContext: SessionListRowContext;
+}) {
+  for (const sessionDir of collectDiskCompactionCheckpointPreviewDirs(params)) {
+    if (params.rowContext.checkpointPreviewsByDir.has(sessionDir)) {
+      continue;
+    }
+    try {
+      params.rowContext.checkpointPreviewsByDir.set(
+        sessionDir,
+        await buildDiskCompactionCheckpointPreviewIndexAsync(sessionDir),
+      );
+    } catch {
+      params.rowContext.checkpointPreviewsByDir.set(sessionDir, null);
+    }
+  }
 }
 
 function resolveEstimatedSessionCostUsd(params: {
@@ -2186,7 +2285,7 @@ export function buildGatewaySessionRow(params: {
     (checkpoint): checkpoint is NonNullable<GatewaySessionRow["latestCompactionCheckpoint"]> =>
       Boolean(checkpoint),
   );
-  const diskCompactionCheckpointPreviews = discoverDiskCompactionCheckpointPreviewsSync({
+  const diskCompactionCheckpointPreviews = resolveDiskCompactionCheckpointPreviewsFromIndex({
     key,
     storePath,
     entry,
@@ -2841,7 +2940,14 @@ export function listSessionsFromStore(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
+  if (sharedRowContext) {
+    hydrateDiskCompactionCheckpointPreviewIndexesSync({
+      storePath,
+      entries,
+      rowContext: sharedRowContext,
+    });
+  }
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -2931,7 +3037,14 @@ export async function listSessionsFromStoreAsync(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
+  if (sharedRowContext) {
+    await hydrateDiskCompactionCheckpointPreviewIndexesAsync({
+      storePath,
+      entries,
+      rowContext: sharedRowContext,
+    });
+  }
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
