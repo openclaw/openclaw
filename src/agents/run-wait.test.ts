@@ -288,6 +288,26 @@ describe("waitForAgentRun", () => {
     });
   });
 
+  it("keeps hard wait timeouts stronger than blocked liveness", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "error",
+      error: "model timed out",
+      livenessState: "blocked",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const result = await waitForAgentRun({ runId: "run-blocked-timeout", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "timeout",
+      error: "model timed out",
+      livenessState: "blocked",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
   it("normalizes blocked ok waits to errors", async () => {
     callGatewayMock.mockResolvedValue({
       status: "ok",
