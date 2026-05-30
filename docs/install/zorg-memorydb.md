@@ -14,6 +14,12 @@ When the add-on bootstrap is launched with `sudo`, it defaults to the invoking u
 
 The database package keeps rule tables, markdown import tables, source chunk tables, recall hint tables, entity and association tables, and the default LAN command chat message table. The public baseline does not ship private live memory rows, transcripts, credentials, uploaded files, contact data, or operator-only state.
 
+## Coding And Install Rule Discipline
+
+Zorg MemoryDB install and package changes must be grounded in the product's own documentation, source patterns, package metadata, tests, runbooks, and existing implementation procedures before code is changed. Do not implement install, upgrade, plugin, or runtime behavior from generic coding memory or assumed API behavior.
+
+For package or installer fixes, the verification target is the real documented install path: the GitHub URL, npm package metadata, generated runtime artifacts, and the resulting clean or explicitly existing-install flow. A local source checkout working by itself is not enough evidence. If a patch works locally but fails from a clean install, treat that as an incomplete documentation/procedure check and repair the documented path before calling the fix complete.
+
 ## Clean And Existing Installs
 
 On a clean install, the bootstrap creates the database schema and starts with empty user/private memory tables. The default installer mode is `first-run`; if a host-side `openclaw` binary is already on `PATH`, the installer stops instead of treating that host as an upgrade target. This prevents a fresh Zorg setup from accidentally upgrading an existing host install or a host CLI pointed at a Docker/Dockge deployment.

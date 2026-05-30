@@ -28,6 +28,12 @@ This is required because importing rules into PostgreSQL alone is not enough: th
 
 The Python recall tools install their dependencies from `zorg/requirements.txt` into `.venv-sqlmem`. They also re-exec through `.venv-sqlmem/bin/python` when launched with plain `python3`, so agent-readable commands do not fail just because the system Python lacks `psycopg2`.
 
+## Coding And Install Rule Discipline
+
+Changes to this package must follow the documented OpenClaw/Zorg install procedures and existing package source patterns before code is written. Check the relevant docs, package metadata, lifecycle scripts, generated runtime artifacts, and clean-install behavior instead of relying on generic coding memory or assumed APIs.
+
+Installer and package fixes are not complete until the actual documented path is verified. For this repository, that means testing the GitHub/package install path or the explicit existing-install overlay path that the documentation tells users to run, not only a local checkout.
+
 ## Direct npm prerequisite repair
 
 `zorg/check-node-version.cjs` is intentionally duplicated from the root OpenClaw lifecycle helper into this packaged Zorg tree. Direct git installs can run npm lifecycle scripts from a temporary packed tree before every root development script is present. Keeping the Node prerequisite repair helper under `zorg/` makes the repair path available during `npm install -g --install-links=true git+https://github.com/StefRush2099/Zorg_MemoryDB.git`, including on old hosts that start with Node v12. The same helper also checks for a missing `npm` binary after Node is compatible and attempts OS package-manager repair before the install continues. When it upgrades Node from an old running npm process, it exits with a retry instruction so the repaired Node/npm runtime owns the actual package install.
