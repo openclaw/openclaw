@@ -1546,6 +1546,10 @@ function renderGroupedMessage(
       : typeof m.messageId === "string"
         ? m.messageId
         : undefined;
+  const shouldFetchFullMessage = Boolean(
+    sidebarMessageId &&
+    (transcriptMeta?.truncated === true || markdown?.includes("\n...(truncated)...")),
+  );
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -1628,7 +1632,7 @@ function renderGroupedMessage(
               ? renderExpandButton(markdown!, onOpenSidebar!, {
                   sessionKey: opts.sessionKey,
                   agentId: opts.agentId,
-                  messageId: sidebarMessageId,
+                  messageId: shouldFetchFullMessage ? sidebarMessageId : undefined,
                 })
               : nothing}
             ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}

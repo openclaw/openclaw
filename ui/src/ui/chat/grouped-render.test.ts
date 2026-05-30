@@ -2241,4 +2241,30 @@ describe("grouped chat rendering", () => {
       kind: "assistant_message",
     });
   });
+
+  it("does not add a full-message request for non-truncated assistant messages", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "full visible message" }],
+        __openclaw: { id: "msg-visible-1", seq: 1 },
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        onOpenSidebar,
+      },
+    );
+
+    const expandButton = container.querySelector<HTMLButtonElement>(".chat-expand-btn");
+    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
+    expandButton!.click();
+
+    const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
+    expect(sidebar.kind).toBe("markdown");
+    expect(sidebar.fullMessageRequest).toBeUndefined();
+  });
 });
