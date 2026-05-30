@@ -31,7 +31,7 @@ const unitFastCandidateGlobs = [
   "src/interactive/**/*.test.ts",
   "src/link-understanding/**/*.test.ts",
   "src/logging/**/*.test.ts",
-  "src/markdown/**/*.test.ts",
+  "packages/markdown-core/src/**/*.test.ts",
   "src/media/**/*.test.ts",
   "src/media-generation/**/*.test.ts",
   "src/media-understanding/**/*.test.ts",

@@ -1,3 +1,4 @@
+import { convertMarkdownTables } from "@openclaw/markdown-core/tables";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
   chunkByNewline,
@@ -68,7 +69,6 @@ import {
   updateLastRoute,
 } from "../../config/sessions.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import { convertMarkdownTables } from "../../markdown/tables.js";
 import {
   fetchRemoteMedia,
   readRemoteMediaBuffer,

@@ -1,5 +1,6 @@
 // Shared helpers for parsing MEDIA tokens from command/stdout text.
 
+import { parseFenceSpans } from "@openclaw/markdown-core/fences";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -10,7 +11,6 @@ import {
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "@openclaw/net-policy/ip";
-import { parseFenceSpans } from "../markdown/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.

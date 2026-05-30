@@ -1,5 +1,5 @@
+import * as fences from "@openclaw/markdown-core/fences";
 import { describe, expect, it, vi } from "vitest";
-import * as fences from "../markdown/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,

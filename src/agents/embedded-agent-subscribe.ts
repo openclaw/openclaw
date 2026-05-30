@@ -1,3 +1,6 @@
+import type { InlineCodeState } from "@openclaw/markdown-core/code-spans";
+import { buildCodeSpanIndex, createInlineCodeState } from "@openclaw/markdown-core/code-spans";
+import type { FenceScanState } from "@openclaw/markdown-core/fences";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
@@ -5,9 +8,6 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { InlineCodeState } from "../markdown/code-spans.js";
-import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
-import type { FenceScanState } from "../markdown/fences.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
 import { hasOrphanReasoningCloseBoundary } from "../shared/text/reasoning-tags.js";

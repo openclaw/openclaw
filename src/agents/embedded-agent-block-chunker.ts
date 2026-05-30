@@ -1,5 +1,5 @@
-import type { FenceSpan } from "../markdown/fences.js";
-import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
+import type { FenceSpan } from "@openclaw/markdown-core/fences";
+import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "@openclaw/markdown-core/fences";
 
 export type BlockReplyChunking = {
   minChars: number;

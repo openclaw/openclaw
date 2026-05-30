@@ -1384,6 +1384,18 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "index.ts",
       distFile: "index.mjs",
     });
+    const markdownCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "markdown-core",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const markdownCoreTables = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "markdown-core",
+      srcFile: "tables.ts",
+      distFile: "tables.mjs",
+    });
     const mediaGenerationModelRef = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "media-generation-core",
@@ -1400,6 +1412,8 @@ describe("plugin sdk alias helpers", () => {
     fs.rmSync(gatewayClientTimeouts.distFile);
     fs.rmSync(gatewayProtocol.distFile);
     fs.rmSync(gatewayProtocolSchema.distFile);
+    fs.rmSync(markdownCore.distFile);
+    fs.rmSync(markdownCoreTables.distFile);
     fs.rmSync(mediaGenerationCore.distFile);
     fs.rmSync(mediaGenerationModelRef.distFile);
     fs.rmSync(netPolicy.distFile);
@@ -1424,6 +1438,12 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/schema"] ?? "")).toBe(
       fs.realpathSync(gatewayProtocolSchema.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/markdown-core"] ?? "")).toBe(
+      fs.realpathSync(markdownCore.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/markdown-core/tables"] ?? "")).toBe(
+      fs.realpathSync(markdownCoreTables.srcFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/media-generation-core"] ?? "")).toBe(
       fs.realpathSync(mediaGenerationCore.srcFile),
@@ -1459,6 +1479,12 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "catalog.ts",
       distFile: "catalog.mjs",
     });
+    const markdownCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "markdown-core",
+      srcFile: "render.ts",
+      distFile: "render.mjs",
+    });
     const netPolicy = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "net-policy",
@@ -1479,6 +1505,9 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/connect-error-details"] ?? "")).toBe(
       fs.realpathSync(gatewayProtocol.distFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/markdown-core/render"] ?? "")).toBe(
+      fs.realpathSync(markdownCore.distFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/media-generation-core/catalog"] ?? "")).toBe(
       fs.realpathSync(mediaGenerationCore.distFile),

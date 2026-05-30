@@ -1,6 +1,6 @@
+import { createInlineCodeState } from "@openclaw/markdown-core/code-spans";
 import { describe, expect, it, vi } from "vitest";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
-import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   buildAssistantStreamData,
   consumePendingAssistantReplyDirectivesIntoReply,

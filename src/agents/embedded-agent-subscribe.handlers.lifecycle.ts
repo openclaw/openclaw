@@ -1,5 +1,5 @@
+import { createInlineCodeState } from "@openclaw/markdown-core/code-spans";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { createInlineCodeState } from "../markdown/code-spans.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   buildApiErrorObservationFields,

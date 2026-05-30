@@ -65,6 +65,18 @@
         "./packages/media-generation-core/src/normalization.ts"
       ],
       "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
+      "@openclaw/markdown-core": ["./packages/markdown-core/src/index.ts"],
+      "@openclaw/markdown-core/code-spans": ["./packages/markdown-core/src/code-spans.ts"],
+      "@openclaw/markdown-core/fences": ["./packages/markdown-core/src/fences.ts"],
+      "@openclaw/markdown-core/frontmatter": ["./packages/markdown-core/src/frontmatter.ts"],
+      "@openclaw/markdown-core/ir": ["./packages/markdown-core/src/ir.ts"],
+      "@openclaw/markdown-core/render": ["./packages/markdown-core/src/render.ts"],
+      "@openclaw/markdown-core/render-aware-chunking": [
+        "./packages/markdown-core/src/render-aware-chunking.ts"
+      ],
+      "@openclaw/markdown-core/tables": ["./packages/markdown-core/src/tables.ts"],
+      "@openclaw/markdown-core/types": ["./packages/markdown-core/src/types.ts"],
+      "@openclaw/markdown-core/*": ["./packages/markdown-core/src/*"],
       "@openclaw/net-policy": ["./packages/net-policy/src/index.ts"],
       "@openclaw/net-policy/ip": ["./packages/net-policy/src/ip.ts"],
       "@openclaw/net-policy/ipv4": ["./packages/net-policy/src/ipv4.ts"],
