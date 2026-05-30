@@ -118,7 +118,7 @@ describe("renderInterleavedMessage", () => {
 
   it("appends a rolling-timer suffix while a tool is running", () => {
     const out = renderInterleavedMessage({ body: "_body_", timerStartedAt: 1_000, now: 13_000 });
-    expect(out).toBe("Thinking\n\n_body_\n_12s — still running_");
+    expect(out).toMatch(/^Thinking\n\n_body_\n_12s — still running · \d{2}:\d{2}:\d{2}_$/u);
   });
 
   // No-content guard: a turn that reaches final delivery with nothing appended
@@ -131,8 +131,8 @@ describe("renderInterleavedMessage", () => {
 
   // A running timer is itself content (a tool is active), so it still renders.
   it("still renders when a timer is active even if the body is empty", () => {
-    expect(renderInterleavedMessage({ body: "", timerStartedAt: 1_000, now: 4_000 })).toBe(
-      "Thinking\n\n\n_3s — still running_",
+    expect(renderInterleavedMessage({ body: "", timerStartedAt: 1_000, now: 4_000 })).toMatch(
+      /^Thinking\n\n\n_3s — still running · \d{2}:\d{2}:\d{2}_$/u,
     );
   });
 
@@ -516,7 +516,7 @@ describe("renderInterleavedMessage length cap", () => {
     expect(rendered.length).toBeLessThanOrEqual(INTERLEAVED_MESSAGE_MAX_CHARS);
     expect(rendered.startsWith("Thinking\n\n")).toBe(true);
     expect(rendered).toContain("…");
-    expect(rendered.endsWith("3s — still running_")).toBe(true);
+    expect(rendered).toMatch(/3s — still running · \d{2}:\d{2}:\d{2}_$/u);
   });
 
   it("leaves a within-budget body untouched (no marker, no truncation)", () => {

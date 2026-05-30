@@ -117,6 +117,7 @@ import {
   computeInterleavedSpill,
   emptyInterleavedStreamState,
   INTERLEAVED_MESSAGE_MAX_CHARS,
+  INTERLEAVED_TIMER_INTERVAL_MS,
   renderInterleavedMessage,
   resolveInterleavedProgressEnabled,
   resolveInterleavedToolLine,
@@ -1324,7 +1325,7 @@ export const dispatchTelegramMessage = async ({
         void enqueueDraftLaneEvent(async () => {
           updateInterleavedLane();
         });
-      }, 3000);
+      }, INTERLEAVED_TIMER_INTERVAL_MS);
     }
     return updateInterleavedLane();
   };

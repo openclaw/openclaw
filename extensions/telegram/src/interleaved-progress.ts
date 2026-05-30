@@ -14,6 +14,15 @@
 export const INTERLEAVED_LINE_MAX_CHARS = 200;
 
 /**
+ * Rolling-timer tick interval for the "still running" line. Held at 20s (not a
+ * few seconds) so that N concurrently-streaming Thinking messages don't flood
+ * Telegram's per-chat edit rate and trigger 429 rate-limits — a 429 drops the
+ * edit and stalls the lane until the next tick. The wall-clock stamp the render
+ * puts on the line makes any real stall obvious (the clock stops advancing).
+ */
+export const INTERLEAVED_TIMER_INTERVAL_MS = 20_000;
+
+/**
  * Budget for the *visible* portion of the interleaved message. Telegram caps a
  * message at 4096 chars and the durable draft stream STOPS editing (freezes)
  * the moment a render exceeds that — so the lane must spill into a continuation
@@ -123,10 +132,16 @@ export function renderInterleavedMessage(params: {
   if (body === "" && params.timerStartedAt === undefined) {
     return "";
   }
-  const timerSuffix =
-    params.timerStartedAt !== undefined
-      ? `\n_${Math.floor((now - params.timerStartedAt) / 1000)}s — still running_`
-      : "";
+  let timerSuffix = "";
+  if (params.timerStartedAt !== undefined) {
+    const elapsed = Math.floor((now - params.timerStartedAt) / 1000);
+    // Wall-clock stamp of this tick: if it stops advancing the lane has stalled
+    // (e.g. a Telegram 429 dropped the edit), making a freeze visible at a glance.
+    const c = new Date(now);
+    const pad2 = (n: number): string => String(n).padStart(2, "0");
+    const clock = `${pad2(c.getHours())}:${pad2(c.getMinutes())}:${pad2(c.getSeconds())}`;
+    timerSuffix = `\n_${elapsed}s — still running · ${clock}_`;
+  }
   // Safety net: spill-by-offset keeps the visible body small in the normal case,
   // but a single append larger than a whole message could still overflow. Cap
   // the body to the most-recent content (line boundary) so a render NEVER
