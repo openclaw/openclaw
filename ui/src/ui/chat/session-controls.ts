@@ -58,6 +58,7 @@ export function renderChatSessionSelect(
   onSwitchSession: ChatSessionSwitchHandler = () => undefined,
   options: { surface?: ChatSessionSelectSurface } = {},
 ) {
+  rememberChatAgentSessionRows(state, state.sessionsResult);
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
   const agentOptions = resolveChatAgentFilterOptions(state);
   const hasAgentSelect = agentOptions.length > 1;
@@ -1122,24 +1123,75 @@ function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): stri
   return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
 }
 
+function resolvePreferredSessionCandidateAgentId(
+  row: SessionsListResult["sessions"][number],
+  defaultAgentId: string,
+): string | null {
+  if (row.kind === "global" || row.kind === "unknown" || isCronSessionKey(row.key)) {
+    return null;
+  }
+  if (isSubagentSessionKey(row.key) || row.spawnedBy) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(row.key);
+  return normalizeAgentId(parsed?.agentId ?? defaultAgentId);
+}
+
+function rememberChatAgentSessionRows(
+  state: AppViewState,
+  sessions: SessionsListResult | null,
+): void {
+  const rows = sessions?.sessions ?? [];
+  if (rows.length === 0) {
+    return;
+  }
+  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
+  const grouped = new Map<string, SessionsListResult["sessions"]>();
+  for (const row of rows) {
+    const agentId = resolvePreferredSessionCandidateAgentId(row, defaultAgentId);
+    if (!agentId) {
+      continue;
+    }
+    grouped.set(agentId, [...(grouped.get(agentId) ?? []), row]);
+  }
+  if (grouped.size === 0) {
+    return;
+  }
+  state.chatAgentSessionRowsByAgent ??= {};
+  for (const [agentId, agentRows] of grouped) {
+    state.chatAgentSessionRowsByAgent[agentId] = agentRows;
+  }
+}
+
+function rowsForPreferredAgentSession(
+  state: AppViewState,
+  normalizedAgentId: string,
+  defaultAgentId: string,
+): SessionsListResult["sessions"] {
+  const byKey = new Map<string, SessionsListResult["sessions"][number]>();
+  for (const row of state.chatAgentSessionRowsByAgent?.[normalizedAgentId] ?? []) {
+    byKey.set(row.key, row);
+  }
+  for (const row of state.sessionsResult?.sessions ?? []) {
+    if (resolvePreferredSessionCandidateAgentId(row, defaultAgentId) === normalizedAgentId) {
+      byKey.set(row.key, row);
+    }
+  }
+  return [...byKey.values()];
+}
+
 function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
   const normalizedAgentId = normalizeAgentId(agentId);
   if (resolveChatAgentFilterId(state, state.sessionKey) === normalizedAgentId) {
     return state.sessionKey;
   }
   const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
-  const eligible = (state.sessionsResult?.sessions ?? [])
+  const eligible = rowsForPreferredAgentSession(state, normalizedAgentId, defaultAgentId)
     .filter((row) => {
       if (!isSessionKeyTiedToAgent(row.key, normalizedAgentId, defaultAgentId)) {
         return false;
       }
-      if (row.kind === "global" || row.kind === "unknown") {
-        return false;
-      }
-      if (isCronSessionKey(row.key)) {
-        return false;
-      }
-      return !isSubagentSessionKey(row.key) && !row.spawnedBy;
+      return resolvePreferredSessionCandidateAgentId(row, defaultAgentId) === normalizedAgentId;
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   if (eligible[0]?.key) {

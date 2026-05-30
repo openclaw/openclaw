@@ -1374,6 +1374,51 @@ describe("chat session controls", () => {
     expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
   });
 
+  it("keeps agent switch targets after scoped session refreshes", () => {
+    const { state } = createChatHeaderState();
+    const onSwitchSession = vi.fn();
+    state.sessionKey = "agent:alpha:main";
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 3,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        { key: "agent:alpha:main", kind: "direct", updatedAt: 4 },
+        { key: "agent:beta:dashboard:beta-recent", kind: "direct", updatedAt: 3 },
+        { key: "agent:beta:main", kind: "direct", updatedAt: 2 },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [{ key: "agent:alpha:main", kind: "direct", updatedAt: 5 }],
+    };
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    const agentSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-agent-filter="true"]',
+    );
+    agentSelect!.value = "beta";
+    agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
+  });
+
   it("renders selector labels from the active locale", async () => {
     await i18n.setLocale("zh-CN");
     const { state } = createChatHeaderState();
