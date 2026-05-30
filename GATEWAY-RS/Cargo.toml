@@ -1,0 +1,19 @@
+[package]
+name = "gateway-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.7", features = ["ws"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tower-http = { version = "0.5", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+futures-util = "0.3"
+jsonwebtoken = "9"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+bytes = "1"
