@@ -808,6 +808,54 @@ export async function runCodexAppServerAttempt(
     promptBuild = await buildPromptFromCurrentInputs();
     codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
   };
+  const selectNewerVisibleHistoryAfterBinding = (binding: CodexAppServerThreadBinding) => {
+    const bindingUpdatedAt = Date.parse(binding.updatedAt);
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      return [];
+    }
+    return historyMessages.filter((message) => {
+      if (message.role !== "user" && message.role !== "assistant") {
+        return false;
+      }
+      const record = message as unknown as Record<string, unknown>;
+      const idempotencyKey = record.idempotencyKey;
+      if (typeof idempotencyKey === "string" && idempotencyKey.startsWith("codex-app-server:")) {
+        return false;
+      }
+      const meta = record.__openclaw;
+      if (
+        meta &&
+        typeof meta === "object" &&
+        !Array.isArray(meta) &&
+        typeof (meta as Record<string, unknown>).mirrorIdentity === "string"
+      ) {
+        return false;
+      }
+      const timestamp =
+        typeof message.timestamp === "number"
+          ? message.timestamp
+          : typeof message.timestamp === "string"
+            ? Date.parse(message.timestamp)
+            : Number.NaN;
+      return Number.isFinite(timestamp) && timestamp > bindingUpdatedAt;
+    });
+  };
+  const applyResumeStaleBindingContinuityProjection = (
+    binding: CodexAppServerThreadLifecycleBinding,
+  ) => {
+    const newerVisibleMessages = selectNewerVisibleHistoryAfterBinding(binding);
+    if (newerVisibleMessages.length === 0) {
+      return false;
+    }
+    const projection = projectContextEngineAssemblyForCodex({
+      assembledMessages: newerVisibleMessages,
+      originalHistoryMessages: historyMessages,
+      prompt: params.prompt,
+    });
+    promptText = projection.promptText;
+    prePromptMessageCount = projection.prePromptMessageCount;
+    return true;
+  };
   const rotateStartupBindingForProjectedTurn = async () => {
     if (!startupBinding?.threadId) {
       return;
@@ -973,6 +1021,12 @@ export async function runCodexAppServerAttempt(
       historyMessages.some((message) => message.role === "user")
     ) {
       applyFreshThreadContinuityProjection();
+      await rebuildCodexTurnPromptFromCurrentProjection();
+    } else if (
+      !activeContextEngine &&
+      thread.lifecycle.action === "resumed" &&
+      applyResumeStaleBindingContinuityProjection(thread)
+    ) {
       await rebuildCodexTurnPromptFromCurrentProjection();
     }
     emitCodexAppServerEvent(params, {

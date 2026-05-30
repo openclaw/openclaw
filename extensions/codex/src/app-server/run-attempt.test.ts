@@ -1754,7 +1754,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("does not inject newer mirrored history when resuming an existing Codex thread binding", async () => {
+  it("projects newer visible history when resuming an existing Codex thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
@@ -1783,10 +1783,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(harness.requests.map((request) => request.method)).toContain("thread/resume");
     const inputText = getTurnStartInputText(harness.requests);
 
-    expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).not.toContain("we were discussing the Sonnet leak screenshots");
-    expect(inputText).not.toContain("David Ondrej was mentioned in that prior thread");
-    expect(inputText).not.toContain("Current user request:");
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("we were discussing the Sonnet leak screenshots");
+    expect(inputText).toContain("David Ondrej was mentioned in that prior thread");
+    expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("is the previous message trustworthy?");
   });
 
@@ -1822,8 +1822,8 @@ describe("runCodexAppServerAttempt", () => {
     await firstRun;
 
     const firstInputText = getTurnStartInputText(firstHarness.requests);
-    expect(firstInputText).not.toContain("OpenClaw assembled context for this turn:");
-    expect(firstInputText).not.toContain("we were discussing the Sonnet leak screenshots");
+    expect(firstInputText).toContain("OpenClaw assembled context for this turn:");
+    expect(firstInputText).toContain("we were discussing the Sonnet leak screenshots");
     expect(firstInputText).toContain("is the previous message trustworthy?");
 
     const secondHarness = createResumeHarness();
@@ -1879,6 +1879,36 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("restricted Codex runs still need bounded continuity");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("apply the safe transient-thread fix");
+  });
+
+  it("does not project Codex mirrored transcript echoes that arrive after the binding on resume", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      throw new Error("expected valid Codex binding timestamp");
+    }
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage({
+      ...assistantMessage("mirrored codex reply", bindingUpdatedAt + 1_000),
+      idempotencyKey: "codex-app-server:turn-1",
+    } as never);
+    const harness = createResumeHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "continue safely";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    const inputText = getTurnStartInputText(harness.requests);
+    expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("mirrored codex reply");
+    expect(inputText).toContain("continue safely");
   });
 
   it("passes stable workspace files as Codex developer instructions and routes MEMORY.md through tools", async () => {
