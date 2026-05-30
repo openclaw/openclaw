@@ -443,6 +443,15 @@ Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).
 
 If the browser loads a blank dashboard and DevTools shows no useful error, an extension or early content script may have prevented the JavaScript module app from evaluating. The static page includes a plain HTML recovery panel that appears when `<openclaw-app>` is not registered after startup.
 
+First confirm the Gateway itself is reachable:
+
+```bash
+openclaw gateway status
+openclaw dashboard
+```
+
+If the blank page started immediately after an update, the browser may still be running an old service-worker or cached Control UI bundle against the newer Gateway. Reopen the dashboard with `openclaw dashboard`, then hard-refresh the page (`Cmd+Shift+R` on macOS, `Ctrl+Shift+R` on Windows/Linux). If it still fails, clear site data for the dashboard origin or try a private window.
+
 Use the panel's **Try again** action after changing the browser environment, or reload manually after these checks:
 
 - Disable extensions that inject into all pages, especially extensions with `<all_urls>` content scripts.
