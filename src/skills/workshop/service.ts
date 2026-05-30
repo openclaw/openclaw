@@ -339,6 +339,7 @@ export async function reviseSkillProposal(
       await markProposalStale(record, "Target skill changed after proposal creation.");
       throw new Error("Target skill changed after proposal creation; proposal marked stale.");
     }
+    await assertSupportTargetsUnchanged(record);
   }
 
   const supportFiles =
@@ -667,6 +668,22 @@ async function assertSupportTargetUnchanged(params: {
         "Target support file changed after proposal creation; proposal marked stale.",
       );
     }
+  }
+}
+
+async function assertSupportTargetsUnchanged(record: SkillProposalRecord): Promise<void> {
+  if (record.kind !== "update" || !record.supportFiles) {
+    return;
+  }
+  for (const file of record.supportFiles) {
+    if (file.targetExisted === undefined) {
+      continue;
+    }
+    const currentContent = await readWorkspaceSupportFile({
+      skillDir: record.target.skillDir,
+      relativePath: file.path,
+    });
+    await assertSupportTargetUnchanged({ record, file, currentContent });
   }
 }
 

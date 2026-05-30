@@ -32,6 +32,18 @@ describe("skill_research tool", () => {
     expect(tools.some((tool) => tool.name === "skill_research")).toBe(true);
   });
 
+  it("is not exposed from sandboxed OpenClaw tool sets", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-research-tool-");
+    const tools = createOpenClawTools({
+      workspaceDir,
+      config: {},
+      disablePluginTools: true,
+      sandboxed: true,
+    });
+
+    expect(tools.some((tool) => tool.name === "skill_research")).toBe(false);
+  });
+
   it("creates pending skill proposals without applying them", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-research-tool-");
     const tool = createSkillResearchTool({ workspaceDir, config: {}, agentId: "main" });

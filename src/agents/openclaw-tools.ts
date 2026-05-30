@@ -442,11 +442,15 @@ export function createOpenClawTools(
       sessionAgentId,
       config: resolvedConfig,
     }),
-    createSkillResearchTool({
-      workspaceDir,
-      config: resolvedConfig,
-      agentId: sessionAgentId,
-    }),
+    ...(options?.sandboxed
+      ? []
+      : [
+          createSkillResearchTool({
+            workspaceDir,
+            config: resolvedConfig,
+            agentId: sessionAgentId,
+          }),
+        ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,

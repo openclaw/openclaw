@@ -514,6 +514,8 @@ const SkillProposalSupportFileSchema = Type.Object(
     path: NonEmptyString,
     sizeBytes: Type.Integer({ minimum: 0, maximum: 262_144 }),
     hash: Sha256String,
+    targetExisted: Type.Optional(Type.Boolean()),
+    targetContentHash: Type.Optional(Sha256String),
   },
   { additionalProperties: false },
 );

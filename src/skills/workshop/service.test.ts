@@ -415,6 +415,44 @@ describe("skill workshop proposals", () => {
     );
   });
 
+  it("keeps update proposal support baselines when revising", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "support-revise-stale");
+    await writeSkill({
+      dir: skillDir,
+      name: "support-revise-stale",
+      description: "Detect stale support files during revision",
+      body: "# Support Revise Stale\n\nOld checklist.\n",
+    });
+    await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "references", "qa.md"), "Old support file.\n", "utf8");
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "support-revise-stale",
+      content: "# Support Revise Stale\n\nNew checklist.\n",
+      supportFiles: [
+        {
+          path: "references/qa.md",
+          content: "New support file.\n",
+        },
+      ],
+    });
+
+    await fs.writeFile(path.join(skillDir, "references", "qa.md"), "Changed elsewhere.\n", "utf8");
+
+    await expect(
+      reviseSkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        content: "# Support Revise Stale\n\nRevised checklist.\n",
+      }),
+    ).rejects.toThrow("Target support file changed after proposal creation");
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("stale");
+    await expect(fs.readFile(path.join(skillDir, "references", "qa.md"), "utf8")).resolves.toBe(
+      "Changed elsewhere.\n",
+    );
+  });
+
   it("rejects and quarantines proposals without touching active skills", async () => {
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
