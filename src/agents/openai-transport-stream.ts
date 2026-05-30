@@ -2639,7 +2639,6 @@ async function processOpenAICompletionsStream(
       for (const part of parts) {
         appendVisibleTextDelta(part);
       }
-      tryFlushDeepSeekDsmlToolText(false);
       return;
     }
     appendVisibleTextDelta(text);
