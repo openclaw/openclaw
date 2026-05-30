@@ -102,9 +102,9 @@ describe("ensureConfigReady", () => {
 
   it.each([
     {
-      name: "skips doctor flow for read-only fast path commands",
+      name: "runs doctor flow for status task reads",
       commandPath: ["status"],
-      expectedDoctorCalls: 0,
+      expectedDoctorCalls: 1,
     },
     {
       name: "skips doctor flow for update status",
@@ -121,7 +121,7 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(expectedDoctorCalls);
     if (expectedDoctorCalls > 0) {
       expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
-        migrateState: false,
+        migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
       });
@@ -137,7 +137,7 @@ describe("ensureConfigReady", () => {
     };
     readConfigFileSnapshotMock.mockResolvedValue(snapshot);
 
-    await runEnsureConfigReady(["status"]);
+    await runEnsureConfigReady(["health"]);
 
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       snapshot.runtimeConfig,
@@ -155,9 +155,9 @@ describe("ensureConfigReady", () => {
       .mockResolvedValueOnce(recoveredSnapshot);
 
     try {
-      await expect(runEnsureConfigReady(["status"])).rejects.toThrow(transientError);
-      await expect(runEnsureConfigReady(["status"])).resolves.toBeDefined();
-      await expect(runEnsureConfigReady(["status"])).resolves.toBeDefined();
+      await expect(runEnsureConfigReady(["health"])).rejects.toThrow(transientError);
+      await expect(runEnsureConfigReady(["health"])).resolves.toBeDefined();
+      await expect(runEnsureConfigReady(["health"])).resolves.toBeDefined();
     } finally {
       if (originalVitest === undefined) {
         delete process.env.VITEST;
@@ -182,7 +182,7 @@ describe("ensureConfigReady", () => {
       "",
       `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
       `Inspect: ${formatCliCommand("openclaw config validate")}`,
-      "Status, health, logs, and doctor commands still run with invalid config.",
+      "Status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
     ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -226,6 +226,18 @@ describe("ensureConfigReady", () => {
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
+
+    const tasksListRuntime = await runEnsureConfigReady(["tasks", "list"]);
+    expect(tasksListRuntime.exit).not.toHaveBeenCalled();
+
+    const tasksParentRuntime = await runEnsureConfigReady(["tasks"]);
+    expect(tasksParentRuntime.exit).not.toHaveBeenCalled();
+
+    const tasksAuditRuntime = await runEnsureConfigReady(["tasks", "audit"]);
+    expect(tasksAuditRuntime.exit).not.toHaveBeenCalled();
+
+    const tasksRunRuntime = await runEnsureConfigReady(["tasks", "run"]);
+    expect(tasksRunRuntime.exit).toHaveBeenCalledWith(1);
 
     const doctorRuntime = await runEnsureConfigReady(["doctor", "fix"]);
     expect(doctorRuntime.exit).not.toHaveBeenCalled();
