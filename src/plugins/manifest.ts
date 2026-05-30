@@ -2,11 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
-import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
-import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
-import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type {
   ModelCatalog,
   ModelCatalogAlias,
@@ -18,7 +13,12 @@ import type {
   ModelCatalogStatus,
   ModelCatalogSuppression,
   ModelCatalogTieredCost,
-} from "../model-catalog/types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
+import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
+import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";

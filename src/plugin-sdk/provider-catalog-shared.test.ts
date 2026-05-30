@@ -1,5 +1,5 @@
+import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelCatalogProvider } from "../model-catalog/types.js";
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
