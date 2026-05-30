@@ -221,7 +221,11 @@ const discordMessageActions = {
 
 function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): number {
   const startupAccountIds = listDiscordAccountIds(cfg).filter((candidateId) => {
-    const candidate = resolveDiscordAccount({ cfg, accountId: candidateId });
+    const candidate = resolveDiscordAccount({
+      cfg,
+      accountId: candidateId,
+      enumerateAccounts: true,
+    });
     return (
       candidate.enabled &&
       (resolveConfiguredFromCredentialStatuses(candidate) ??

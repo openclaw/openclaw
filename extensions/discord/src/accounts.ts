@@ -108,14 +108,23 @@ export function createDiscordActionGate(params: {
 export function resolveDiscordAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
+  /** True when iterating accounts (listing, scans); uses implicit channel-token fallback. */
+  enumerateAccounts?: boolean;
 }): ResolvedDiscordAccount {
   const cfg = selectDiscordRuntimeConfig(params.cfg);
+  const callerProvidedAccountId =
+    typeof params.accountId === "string" && params.accountId.trim().length > 0;
+  const tokenExplicit =
+    params.enumerateAccounts === true ? false : callerProvidedAccountId;
   const accountId = normalizeAccountId(params.accountId ?? resolveDefaultDiscordAccountId(cfg));
   const baseEnabled = cfg.channels?.discord?.enabled !== false;
   const merged = mergeDiscordAccountConfig(cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const tokenResolution = resolveDiscordToken(cfg, { accountId });
+  const tokenResolution = resolveDiscordToken(cfg, {
+    accountId,
+    explicit: tokenExplicit,
+  });
   return {
     accountId,
     enabled,
@@ -152,7 +161,11 @@ function resolveDiscordAccountTokenOwner(params: {
   let owner: { accountId: string; priority: number; index: number } | undefined;
   const accountIds = listDiscordAccountIds(params.cfg);
   for (const [index, accountId] of accountIds.entries()) {
-    const account = resolveDiscordAccount({ cfg: params.cfg, accountId });
+    const account = resolveDiscordAccount({
+      cfg: params.cfg,
+      accountId,
+      enumerateAccounts: true,
+    });
     const accountToken = account.token.trim();
     if (!account.enabled || accountToken !== token) {
       continue;
@@ -200,6 +213,8 @@ export function resolveDiscordAccountDisabledReason(
 
 export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscordAccount[] {
   return listDiscordAccountIds(cfg)
-    .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
+    .map((accountId) =>
+      resolveDiscordAccount({ cfg, accountId, enumerateAccounts: true }),
+    )
     .filter((account) => isDiscordAccountEnabledForRuntime(account, cfg));
 }

@@ -58,15 +58,26 @@ function resolveDiscordTokenValue(params: {
 
 export function resolveDiscordToken(
   cfg: OpenClawConfig,
-  opts: { accountId?: string | null; envToken?: string | null } = {},
+  opts: {
+    accountId?: string | null;
+    envToken?: string | null;
+    /** When false, account id may come from config/default enumeration — allow channel-level token fallback. */
+    explicit?: boolean;
+  } = {},
 ): DiscordTokenResolution {
   const selectedCfg = selectDiscordRuntimeConfig(cfg);
+  const hasProvidedAccountId =
+    typeof opts.accountId === "string" && opts.accountId.trim().length > 0;
+  const explicitAccountId =
+    hasProvidedAccountId && opts.explicit !== false
+      ? normalizeAccountId(opts.accountId)
+      : undefined;
   const accountId = normalizeAccountId(opts.accountId);
   const discordCfg = selectedCfg?.channels?.discord;
   const accountCfg = resolveAccountEntry(discordCfg?.accounts, accountId);
   const hasAccountToken = Boolean(
     accountCfg &&
-    Object.prototype.hasOwnProperty.call(accountCfg as Record<string, unknown>, "token"),
+      Object.prototype.hasOwnProperty.call(accountCfg as Record<string, unknown>, "token"),
   );
   const accountToken = resolveDiscordTokenValue({
     cfg: selectedCfg,
@@ -80,6 +91,9 @@ export function resolveDiscordToken(
     return { token: "", source: "config", tokenStatus: "configured_unavailable" };
   }
   if (hasAccountToken) {
+    return { token: "", source: "none", tokenStatus: "missing" };
+  }
+  if (explicitAccountId && explicitAccountId !== DEFAULT_ACCOUNT_ID) {
     return { token: "", source: "none", tokenStatus: "missing" };
   }
 
