@@ -1024,8 +1024,9 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      runtime.error(
-        `Could not clear cached profiles for "${selectedProvider.id}" before re-login: ${message}. Continuing with existing profiles.`,
+      throw new Error(
+        `Could not clear cached profiles for "${selectedProvider.id}" before re-login: ${message}. Re-login was not started because --force must remove cached profiles first.`,
+        { cause: err },
       );
     }
   }

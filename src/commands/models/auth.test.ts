@@ -1184,37 +1184,37 @@ describe("modelsAuthLoginCommand", () => {
   it("--force purges cached profiles for the provider before login", async () => {
     const runtime = createRuntime();
 
-    await modelsAuthLoginCommand({ provider: "openai-codex", force: true }, runtime);
+    await modelsAuthLoginCommand({ provider: "openai", force: true }, runtime);
 
     expect(mocks.removeProviderAuthProfilesWithLock).toHaveBeenCalledWith({
-      provider: "openai-codex",
+      provider: "openai",
       agentDir: "/tmp/openclaw/agents/main",
     });
     expect(runProviderAuth).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining('Removed cached auth profiles for provider "openai-codex"'),
+      expect.stringContaining('Removed cached auth profiles for provider "openai"'),
     );
   });
 
   it("--force does not purge when omitted", async () => {
     const runtime = createRuntime();
 
-    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+    await modelsAuthLoginCommand({ provider: "openai" }, runtime);
 
     expect(mocks.removeProviderAuthProfilesWithLock).not.toHaveBeenCalled();
     expect(runProviderAuth).toHaveBeenCalledOnce();
   });
 
-  it("--force surfaces a warning and still proceeds when purge throws", async () => {
+  it("--force fails before login when purge throws", async () => {
     const runtime = createRuntime();
     mocks.removeProviderAuthProfilesWithLock.mockRejectedValueOnce(new Error("disk full"));
 
-    await modelsAuthLoginCommand({ provider: "openai-codex", force: true }, runtime);
+    await expect(
+      modelsAuthLoginCommand({ provider: "openai", force: true }, runtime),
+    ).rejects.toThrow('Could not clear cached profiles for "openai" before re-login: disk full');
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Could not clear cached profiles"),
-    );
-    expect(runProviderAuth).toHaveBeenCalledOnce();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runProviderAuth).not.toHaveBeenCalled();
   });
 
   it("--force does NOT purge cached profiles when the requested auth method is unknown", async () => {
