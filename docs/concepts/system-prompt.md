@@ -261,8 +261,9 @@ location (workspace, managed, or bundled). If no skills are eligible, the
 Skills section is omitted.
 
 Native Codex turns receive this list as turn-scoped collaboration developer
-instructions instead of per-turn user input. Other harnesses keep the normal
-prompt section.
+instructions instead of per-turn user input, except lightweight cron turns that
+preserve the exact scheduled prompt. Other harnesses keep the normal prompt
+section.
 
 The location can point at a nested skill, such as
 `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt still
