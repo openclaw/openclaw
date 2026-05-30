@@ -1574,6 +1574,11 @@ describe("classifyProviderRuntimeFailureKind", () => {
         "ValidationException: invalid signature on thinking block",
       ),
     ).toBe("replay_invalid");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "ValidationException: signature present in thinking block",
+      ),
+    ).not.toBe("replay_invalid");
     expect(classifyProviderRuntimeFailureKind("Invalid signature")).not.toBe("replay_invalid");
   });
 
