@@ -231,6 +231,20 @@ export function securityApproverSet(value) {
   );
 }
 
+export function dependencyGuardCommentAuthors(value) {
+  return new Set(
+    String(value ?? "github-actions[bot]")
+      .split(/[\s,]+/u)
+      .map((login) => login.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+export function isDependencyGuardMarkerComment(comment, marker, trustedAuthors) {
+  const login = comment.user?.login?.toLowerCase();
+  return Boolean(login && trustedAuthors.has(login) && comment.body?.includes(marker));
+}
+
 export function renderDependencyAwarenessComment(dependencyFiles) {
   const listedFiles = dependencyFiles.slice(0, maxListedFiles);
   const omittedCount = dependencyFiles.length - listedFiles.length;
@@ -636,7 +650,12 @@ async function main() {
   }
 
   const api = githubApi(token);
+  const autoscrubToken = process.env.OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN;
+  const autoscrubApi = autoscrubToken ? githubApi(autoscrubToken) : null;
   const explicitSecurityApprovers = securityApproverSet(process.env.OPENCLAW_SECURITY_APPROVERS);
+  const trustedCommentAuthors = dependencyGuardCommentAuthors(
+    process.env.OPENCLAW_DEPENDENCY_GUARD_COMMENT_BOTS,
+  );
   const issuePath = `/repos/${owner}/${repo}/issues/${eventPullRequest.number}`;
   const pullPath = `/repos/${owner}/${repo}/pulls/${eventPullRequest.number}`;
   const pullRequest = await api.request(pullPath);
@@ -664,12 +683,12 @@ async function main() {
     api.paginate(`${issuePath}/comments`),
     api.paginate(`${issuePath}/labels`),
   ]);
-  const findBotComment = (marker) =>
-    comments.find(
-      (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.includes(marker),
+  const findDependencyGuardComment = (marker) =>
+    comments.find((comment) =>
+      isDependencyGuardMarkerComment(comment, marker, trustedCommentAuthors),
     );
-  let dependencyComment = findBotComment(dependencyChangeMarker);
-  const existingGuardComment = findBotComment(dependencyGraphGuardMarker);
+  let dependencyComment = findDependencyGuardComment(dependencyChangeMarker);
+  const existingGuardComment = findDependencyGuardComment(dependencyGraphGuardMarker);
   const labelNames = new Set(labels.map((label) => label.name));
 
   const ignoreUnavailableWritePermission = (action) => (error) => {
@@ -783,6 +802,8 @@ async function main() {
     : null;
   if (mode === "detect" && autoscrubTarget) {
     await setOutput("autoscrub", "true");
+    await setOutput("autoscrub-owner", autoscrubTarget.owner);
+    await setOutput("autoscrub-repository", autoscrubTarget.repo);
     await writeSummary(
       [
         "## Dependency Guard",
@@ -808,7 +829,10 @@ async function main() {
   if (mode === "autoscrub") {
     if (autoscrubTarget) {
       try {
-        const commit = await createAutoscrubCommit(api, {
+        if (!autoscrubApi) {
+          throw new Error("autoscrub app token was unavailable");
+        }
+        const commit = await createAutoscrubCommit(autoscrubApi, {
           owner,
           repo,
           pullRequest,

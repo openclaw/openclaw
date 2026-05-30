@@ -6,6 +6,7 @@ const WORKFLOW = ".github/workflows/dependency-guard.yml";
 const CODEOWNERS = ".github/CODEOWNERS";
 
 type WorkflowStep = {
+  "continue-on-error"?: boolean;
   env?: Record<string, string>;
   name?: string;
   run?: string;
@@ -56,6 +57,8 @@ describe("dependency guard workflow", () => {
     });
     expect(parsed.jobs?.["dependency-guard-autoscrub"]?.permissions).toEqual({
       contents: "read",
+      issues: "write",
+      "pull-requests": "read",
     });
     expect(parsed.jobs?.["dependency-guard-detect"]?.permissions).toBeUndefined();
     expect(parsed.jobs?.["dependency-guard"]?.permissions).toBeUndefined();
@@ -100,6 +103,12 @@ describe("dependency guard workflow", () => {
     const finalJob = jobs["dependency-guard"];
 
     expect(detectJob?.outputs?.autoscrub).toBe("${{ steps.guard.outputs.autoscrub }}");
+    expect(detectJob?.outputs?.["autoscrub-owner"]).toBe(
+      "${{ steps.guard.outputs.autoscrub-owner }}",
+    );
+    expect(detectJob?.outputs?.["autoscrub-repository"]).toBe(
+      "${{ steps.guard.outputs.autoscrub-repository }}",
+    );
     expect(autoscrubJob?.needs).toBe("dependency-guard-detect");
     expect(autoscrubJob?.if).toContain("needs.dependency-guard-detect.outputs.autoscrub == 'true'");
     expect(finalJob?.needs).toEqual(["dependency-guard-detect", "dependency-guard-autoscrub"]);
@@ -114,20 +123,23 @@ describe("dependency guard workflow", () => {
     );
     expect(autoscrubSteps[1].with).toMatchObject({
       "app-id": "2729701",
+      owner: "${{ needs.dependency-guard-detect.outputs.autoscrub-owner }}",
+      repositories: "${{ needs.dependency-guard-detect.outputs.autoscrub-repository }}",
       "permission-contents": "write",
-      "permission-issues": "write",
-      "permission-pull-requests": "write",
     });
+    expect(autoscrubSteps[1]["continue-on-error"]).toBe(true);
     expect(autoscrubSteps[2].uses).toBe(
       "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
     );
     expect(autoscrubSteps[2].with).toMatchObject({
       "app-id": "2971289",
+      owner: "${{ needs.dependency-guard-detect.outputs.autoscrub-owner }}",
+      repositories: "${{ needs.dependency-guard-detect.outputs.autoscrub-repository }}",
       "permission-contents": "write",
-      "permission-issues": "write",
-      "permission-pull-requests": "write",
     });
-    expect(autoscrubSteps[3].env?.GITHUB_TOKEN).toBe(
+    expect(autoscrubSteps[2]["continue-on-error"]).toBe(true);
+    expect(autoscrubSteps[3].env?.GITHUB_TOKEN).toBe("${{ github.token }}");
+    expect(autoscrubSteps[3].env?.OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN).toBe(
       "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
     );
     expect(autoscrubSteps[3].env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("autoscrub");

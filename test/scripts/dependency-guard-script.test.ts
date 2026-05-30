@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GITHUB_ERROR_BODY_MAX_BYTES,
   canAutoscrubPullRequest,
+  dependencyGuardCommentAuthors,
   dependencyGuardCommentHeadSha,
   dependencyFieldChanges,
   dependencyOverrideExpectedSha,
@@ -11,6 +12,7 @@ import {
   isAutoscrubbedDependencyComment,
   isDependencyGuardAuthorizedForHead,
   isDependencyFile,
+  isDependencyGuardMarkerComment,
   isDependencyManifest,
   isPackageLockfile,
   readBoundedGitHubErrorText,
@@ -213,6 +215,43 @@ describe("dependency guard script", () => {
     expect(isDependencyGuardAuthorizedForHead(authorizedComment, headSha)).toBe(true);
     expect(isDependencyGuardAuthorizedForHead(authorizedComment, staleSha)).toBe(false);
     expect(dependencyOverrideExpectedSha(authorizedComment, headSha)).toBeNull();
+  });
+
+  it("trusts only configured dependency guard marker comment authors", () => {
+    const trustedAuthors = dependencyGuardCommentAuthors(
+      "github-actions[bot], openclaw-autoscrub[bot]",
+    );
+
+    expect(
+      isDependencyGuardMarkerComment(
+        {
+          body: "<!-- openclaw:dependency-graph-guard -->",
+          user: { login: "openclaw-autoscrub[bot]" },
+        },
+        "<!-- openclaw:dependency-graph-guard -->",
+        trustedAuthors,
+      ),
+    ).toBe(true);
+    expect(
+      isDependencyGuardMarkerComment(
+        {
+          body: "<!-- openclaw:dependency-graph-guard -->",
+          user: { login: "contributor" },
+        },
+        "<!-- openclaw:dependency-graph-guard -->",
+        trustedAuthors,
+      ),
+    ).toBe(false);
+    expect(
+      isDependencyGuardMarkerComment(
+        {
+          body: "no marker",
+          user: { login: "github-actions[bot]" },
+        },
+        "<!-- openclaw:dependency-graph-guard -->",
+        trustedAuthors,
+      ),
+    ).toBe(false);
   });
 
   it("renders deterministic removal guidance for blocked lockfile changes", () => {
