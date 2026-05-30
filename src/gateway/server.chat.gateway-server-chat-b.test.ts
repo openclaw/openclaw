@@ -1317,6 +1317,43 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history without RPC maxChars uses gateway webchat history cap", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await writeGatewayConfig({
+        gateway: {
+          webchat: {
+            chatHistoryMaxChars: 64_000,
+          },
+        },
+      });
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const longText = Array.from(
+        { length: 500 },
+        (_, index) => `SENTINEL-${String(index + 1).padStart(3, "0")} ${"x".repeat(80)}`,
+      ).join("\n");
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: longText }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const configBackedMessages = await fetchHistoryMessages(ws);
+      const configBackedSerialized = JSON.stringify(configBackedMessages);
+      expect(configBackedSerialized).toContain("SENTINEL-500");
+      expect(configBackedSerialized).not.toContain("...(truncated)...");
+
+      const explicitRpcMessages = await fetchHistoryMessages(ws, { maxChars: 4_000 });
+      const explicitRpcSerialized = JSON.stringify(explicitRpcMessages);
+      expect(explicitRpcSerialized).toContain("SENTINEL-001");
+      expect(explicitRpcSerialized).not.toContain("SENTINEL-050");
+      expect(explicitRpcSerialized).toContain("...(truncated)...");
+    });
+  });
+
   test("chat.history prefers RPC maxChars over config", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
