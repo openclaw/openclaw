@@ -341,15 +341,9 @@ export function buildRuntimeConfigOptionPairs(
       normalized.permissionProfile,
     );
   }
-  if (
-    typeof normalized.timeoutSeconds === "number" &&
-    shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys)
-  ) {
-    pairs.set(
-      resolveRuntimeConfigOptionKey("timeout", advertisedConfigOptionKeys),
-      String(normalized.timeoutSeconds),
-    );
-  }
+  // OpenClaw enforces runtime timeouts with its own manager/gateway watchdogs.
+  // Do not forward them as ACP session config: some adapters advertise a
+  // timeout-like option but still reject `session/set_config` with `timeout`.
   for (const [key, value] of Object.entries(normalized.backendExtras ?? {})) {
     const wireKey = resolveRuntimeConfigOptionKey(key, advertisedConfigOptionKeys);
     if (!pairs.has(wireKey)) {
@@ -357,16 +351,6 @@ export function buildRuntimeConfigOptionPairs(
     }
   }
   return [...pairs.entries()];
-}
-
-function shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
-  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
-  return (
-    advertisedKeys.size === 0 ||
-    RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) =>
-      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
-    )
-  );
 }
 
 function buildAdvertisedConfigOptionKeyMap(
