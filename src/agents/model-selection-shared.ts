@@ -721,17 +721,6 @@ export function resolveConfiguredModelRef(
     const trimmed = rawModel.trim();
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
     const manifestPluginContext = createModelManifestPluginContext(params);
-    const primaryWithoutProfile = modelWithoutProfile || trimmed;
-    const exactConfiguredPrimary = findExactConfiguredProviderRefParts({
-      cfg: params.cfg,
-      raw: primaryWithoutProfile,
-    });
-    if (exactConfiguredPrimary) {
-      return normalizeExactConfiguredProviderRef(exactConfiguredPrimary, {
-        allowManifestNormalization: params.allowManifestNormalization,
-        manifestPlugins: manifestPluginContext.get(),
-      });
-    }
     const profileStripped = Boolean(modelWithoutProfile && modelWithoutProfile !== trimmed);
     const exactAliasCandidate = findModelAliasCandidate(params.cfg, trimmed);
     if (profileStripped && exactAliasCandidate) {
@@ -746,6 +735,17 @@ export function resolveConfiguredModelRef(
       if (aliasRef) {
         return aliasRef;
       }
+    }
+    const primaryWithoutProfile = modelWithoutProfile || trimmed;
+    const exactConfiguredPrimary = findExactConfiguredProviderRefParts({
+      cfg: params.cfg,
+      raw: primaryWithoutProfile,
+    });
+    if (exactConfiguredPrimary) {
+      return normalizeExactConfiguredProviderRef(exactConfiguredPrimary, {
+        allowManifestNormalization: params.allowManifestNormalization,
+        manifestPlugins: manifestPluginContext.get(),
+      });
     }
     const strippedAliasCandidate = profileStripped
       ? findModelAliasCandidate(params.cfg, modelWithoutProfile)

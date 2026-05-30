@@ -2039,6 +2039,38 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
     });
 
+    it("prefers exact auth-profile aliases before configured-provider stripping", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nemotron-bolt/nemotron-3-super-120b@prod" },
+            models: {
+              "openai/gpt-5.5": {
+                alias: "nemotron-bolt/nemotron-3-super-120b@prod",
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            "nemotron-bolt": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:8080/v1",
+              models: [{ id: "nemotron-3-super-120b", name: "Nemotron" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
+    });
+
     it("resolves provider-qualified defaults without normalizing every aliasless configured model", () => {
       providerModelNormalizationMock.normalizeProviderModelIdWithRuntime.mockClear();
       const models = Object.fromEntries(
