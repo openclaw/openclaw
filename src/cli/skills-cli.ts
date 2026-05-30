@@ -25,6 +25,17 @@ import {
   installSkillFromSource,
   isSkillSourceInstallSpec,
 } from "../skills/lifecycle/source-install.js";
+import {
+  applySkillProposal,
+  inspectSkillProposal,
+  listSkillProposals,
+  proposeCreateSkill,
+  proposeUpdateSkill,
+  quarantineSkillProposal,
+  readSkillProposalDraftFile,
+  rejectSkillProposal,
+} from "../skills/workshop/service.js";
+import type { SkillProposalManifest, SkillProposalReadResult } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
@@ -100,6 +111,13 @@ function resolveActiveWorkspaceDir(options?: ResolveSkillsWorkspaceOptions): str
   return resolveSkillsWorkspace(options).workspaceDir;
 }
 
+function resolveSkillsWorkspaceForCommand(
+  command: Command | undefined,
+  opts?: { agent?: string },
+): ReturnType<typeof resolveSkillsWorkspace> {
+  return resolveSkillsWorkspace({ agentId: resolveAgentOption(command, opts) });
+}
+
 function resolveClawHubTargetWorkspaceDir(
   command: Command | undefined,
   opts: { agent?: string; global?: boolean },
@@ -153,6 +171,34 @@ function readVerifiedSkillCardUrl(
     return { ok: false, error: "ClawHub verification response did not include a Skill Card URL." };
   }
   return { ok: true, url };
+}
+
+function formatSkillProposalList(manifest: SkillProposalManifest): string {
+  if (manifest.proposals.length === 0) {
+    return "No skill proposals.\n";
+  }
+  return `${manifest.proposals
+    .map(
+      (entry) => `${entry.id}  ${entry.status}  ${entry.kind}  ${entry.skillKey}  ${entry.title}`,
+    )
+    .join("\n")}\n`;
+}
+
+function formatSkillProposalInspect(read: SkillProposalReadResult): string {
+  const { record } = read;
+  return [
+    `ID: ${record.id}`,
+    `Status: ${record.status}`,
+    `Kind: ${record.kind}`,
+    `Skill: ${record.target.skillName}`,
+    `Target: ${record.target.skillFile}`,
+    `Scanner: ${record.scan.state}`,
+    record.statusReason ? `Reason: ${record.statusReason}` : undefined,
+    "",
+    read.content,
+  ]
+    .filter((line) => line !== undefined)
+    .join("\n");
 }
 
 /**
@@ -407,6 +453,240 @@ export function registerSkillsCli(program: Command) {
         }
         if (exitCode) {
           defaultRuntime.exit(exitCode);
+        }
+      },
+    );
+
+  const workshop = skills
+    .command("workshop")
+    .description("Manage pending skill proposals")
+    .option(
+      "--agent <id>",
+      "Target agent workspace (defaults to cwd-inferred, then default agent)",
+    );
+
+  workshop
+    .command("list")
+    .description("List pending and completed skill proposals")
+    .option("--json", "Output as JSON", false)
+    .action(async (opts: { json?: boolean; agent?: string }, command: Command) => {
+      try {
+        const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+        const manifest = await listSkillProposals(workspaceDir);
+        if (opts.json) {
+          defaultRuntime.writeJson(manifest);
+          return;
+        }
+        defaultRuntime.writeStdout(formatSkillProposalList(manifest));
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  workshop
+    .command("inspect")
+    .description("Inspect a skill proposal")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+        try {
+          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const proposal = await inspectSkillProposal(workspaceDir, proposalId);
+          if (!proposal) {
+            defaultRuntime.error(`Skill proposal not found: ${proposalId}`);
+            defaultRuntime.exit(1);
+            return;
+          }
+          if (opts.json) {
+            defaultRuntime.writeJson(proposal);
+            return;
+          }
+          defaultRuntime.writeStdout(formatSkillProposalInspect(proposal));
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
+    .command("propose-create")
+    .description("Create a pending proposal for a new workspace skill")
+    .requiredOption("--name <name>", "Skill name")
+    .requiredOption("--description <description>", "Skill description")
+    .requiredOption("--proposal <path>", "Path to PROPOSAL.md draft content")
+    .option("--goal <text>", "Research or improvement goal")
+    .option("--evidence <text>", "Evidence or notes for the proposal")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (
+        opts: {
+          name: string;
+          description: string;
+          proposal: string;
+          goal?: string;
+          evidence?: string;
+          json?: boolean;
+          agent?: string;
+        },
+        command: Command,
+      ) => {
+        try {
+          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const content = await readSkillProposalDraftFile(opts.proposal);
+          const proposal = await proposeCreateSkill({
+            workspaceDir,
+            name: opts.name,
+            description: opts.description,
+            content,
+            createdBy: "cli",
+            goal: opts.goal,
+            evidence: opts.evidence,
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson(proposal);
+            return;
+          }
+          defaultRuntime.writeStdout(`${proposal.record.id}\n`);
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
+    .command("propose-update")
+    .description("Create a pending proposal for an existing workspace skill")
+    .argument("<skill>", "Skill name or key")
+    .requiredOption("--proposal <path>", "Path to PROPOSAL.md draft content")
+    .option("--goal <text>", "Research or improvement goal")
+    .option("--evidence <text>", "Evidence or notes for the proposal")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (
+        skill: string,
+        opts: {
+          proposal: string;
+          goal?: string;
+          evidence?: string;
+          json?: boolean;
+          agent?: string;
+        },
+        command: Command,
+      ) => {
+        try {
+          const { config, workspaceDir, agentId } = resolveSkillsWorkspaceForCommand(
+            command.parent,
+            opts,
+          );
+          const content = await readSkillProposalDraftFile(opts.proposal);
+          const proposal = await proposeUpdateSkill({
+            workspaceDir,
+            config,
+            agentId,
+            skillName: skill,
+            content,
+            createdBy: "cli",
+            goal: opts.goal,
+            evidence: opts.evidence,
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson(proposal);
+            return;
+          }
+          defaultRuntime.writeStdout(`${proposal.record.id}\n`);
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
+    .command("apply")
+    .description("Apply a pending skill proposal")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+        try {
+          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const applied = await applySkillProposal({ workspaceDir, proposalId });
+          if (opts.json) {
+            defaultRuntime.writeJson(applied);
+            return;
+          }
+          defaultRuntime.writeStdout(
+            `Applied ${applied.record.id} -> ${applied.targetSkillFile}\n`,
+          );
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
+    .command("reject")
+    .description("Reject a pending skill proposal")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--reason <text>", "Reason for rejection")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (
+        proposalId: string,
+        opts: { reason?: string; json?: boolean; agent?: string },
+        command: Command,
+      ) => {
+        try {
+          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const record = await rejectSkillProposal({
+            workspaceDir,
+            proposalId,
+            reason: opts.reason,
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson(record);
+            return;
+          }
+          defaultRuntime.writeStdout(`Rejected ${proposalActionOutput(record).id}\n`);
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
+    .command("quarantine")
+    .description("Quarantine a skill proposal")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--reason <text>", "Reason for quarantine")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (
+        proposalId: string,
+        opts: { reason?: string; json?: boolean; agent?: string },
+        command: Command,
+      ) => {
+        try {
+          const { workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const record = await quarantineSkillProposal({
+            workspaceDir,
+            proposalId,
+            reason: opts.reason,
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson(record);
+            return;
+          }
+          defaultRuntime.writeStdout(`Quarantined ${proposalActionOutput(record).id}\n`);
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
         }
       },
     );

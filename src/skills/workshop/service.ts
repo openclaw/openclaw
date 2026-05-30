@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   buildWorkspaceSkillStatus,
@@ -46,9 +47,18 @@ type SkillWorkshopWorkspaceOptions = {
 };
 
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
+const MAX_PROPOSAL_DRAFT_BYTES = 1024 * 1024;
 
 export async function listSkillProposals(workspaceDir: string): Promise<SkillProposalManifest> {
   return await readSkillProposalManifest(workspaceDir);
+}
+
+export async function readSkillProposalDraftFile(filePath: string): Promise<string> {
+  const read = await readLocalFileSafely({
+    filePath,
+    maxBytes: MAX_PROPOSAL_DRAFT_BYTES,
+  });
+  return read.buffer.toString("utf8");
 }
 
 export async function inspectSkillProposal(
