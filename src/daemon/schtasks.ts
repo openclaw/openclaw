@@ -899,16 +899,12 @@ async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise
   }
 }
 
-async function restartStartupEntry(
-  env: GatewayServiceEnv,
-  stdout: NodeJS.WritableStream,
-): Promise<GatewayServiceRestartResult> {
+async function restartStartupEntry(env: GatewayServiceEnv): Promise<GatewayServiceRestartResult> {
   const runtime = await resolveFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
   await launchFallbackTaskScript(env);
-  stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };
 }
 
@@ -1324,7 +1320,6 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
 }
 
 export async function restartScheduledTask({
-  stdout,
   env,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
@@ -1332,13 +1327,13 @@ export async function restartScheduledTask({
     await assertSchtasksAvailable();
   } catch (err) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      return await restartStartupEntry(effectiveEnv, stdout);
+      return await restartStartupEntry(effectiveEnv);
     }
     throw err;
   }
   if (!(await isRegisteredScheduledTask(effectiveEnv))) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      return await restartStartupEntry(effectiveEnv, stdout);
+      return await restartStartupEntry(effectiveEnv);
     }
   }
   const taskName = resolveTaskName(effectiveEnv);
@@ -1366,7 +1361,6 @@ export async function restartScheduledTask({
     env: effectiveEnv,
     scriptPath: resolveTaskScriptPath(effectiveEnv),
   });
-  stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
   return { outcome: "completed" };
 }
 

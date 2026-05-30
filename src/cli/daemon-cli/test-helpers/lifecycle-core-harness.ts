@@ -39,6 +39,7 @@ export function resetLifecycleRuntimeLogs() {
 }
 
 export function resetLifecycleServiceMocks() {
+  service.label = "TestService";
   service.stage.mockReset();
   service.install.mockReset();
   service.uninstall.mockReset();

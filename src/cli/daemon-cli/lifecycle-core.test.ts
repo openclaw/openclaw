@@ -341,6 +341,34 @@ describe("runServiceRestart token drift", () => {
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
   });
 
+  it("prints one Scheduled Task restart message after a stale-process retry", async () => {
+    service.label = "Scheduled Task";
+    const postRestartCheck = vi.fn(async ({ stdout }) => {
+      await service.restart({ env: process.env, stdout });
+    });
+
+    await runServiceRestart({
+      ...createServiceRunArgs(),
+      opts: { json: false },
+      postRestartCheck,
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(2);
+    expect(runtimeLogs.filter((line) => line === "Gateway service restarted.")).toHaveLength(1);
+  });
+
+  it("prints a Scheduled Task start message when start reuses restart", async () => {
+    service.label = "Scheduled Task";
+
+    await runServiceStart({
+      ...createServiceRunArgs(),
+      opts: { json: false },
+    });
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+    expect(runtimeLogs).toContain("Gateway service started.");
+  });
+
   it("writes a restart intent before service-manager restart", async () => {
     service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
 

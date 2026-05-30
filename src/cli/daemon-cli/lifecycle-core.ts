@@ -90,6 +90,12 @@ function emitActionMessage(params: {
   }
 }
 
+function emitsServiceProgressFromCli(service: GatewayService): boolean {
+  // Windows restart may retry after stale-PID cleanup, so schtasks stays quiet
+  // and the CLI emits one final success line after health handling settles.
+  return service.label === "Scheduled Task";
+}
+
 async function handleServiceNotLoaded(params: {
   serviceNoun: string;
   service: GatewayService;
@@ -364,6 +370,9 @@ export async function runServiceStart(params: {
       result: "started",
       service: buildDaemonServiceSnapshot(params.service, startResult.state.loaded),
     });
+    if (!json && emitsServiceProgressFromCli(params.service)) {
+      defaultRuntime.log(`${params.serviceNoun} service started.`);
+    }
   } catch (err) {
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
@@ -629,7 +638,9 @@ export async function runServiceRestart(params: {
       service: buildDaemonServiceSnapshot(params.service, restarted),
       warnings: warnings.length ? warnings : undefined,
     });
-    if (!json && handledRecovery?.message) {
+    if (!json && loaded && emitsServiceProgressFromCli(params.service)) {
+      defaultRuntime.log(restartStatus.progressMessage);
+    } else if (!json && handledRecovery?.message) {
       defaultRuntime.log(handledRecovery.message);
     }
     return true;
