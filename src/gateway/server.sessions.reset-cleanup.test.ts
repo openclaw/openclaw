@@ -110,15 +110,9 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   });
 });
 
-test.each([
-  ["root browser.enabled=false", { browser: { enabled: false } }],
-  [
-    "browser plugin entry is disabled",
-    { plugins: { entries: { browser: { enabled: false } } } },
-  ],
-] as const)("sessions.reset skips browser cleanup when %s", async (_name, disabledBrowserConfig) => {
+test("sessions.reset skips browser cleanup when root browser support is disabled", async () => {
   const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile(disabledBrowserConfig);
+  await writeConfigFile({ browser: { enabled: false } });
   try {
     await seedActiveMainSession();
     embeddedRunMock.activeIds.add("sess-main");

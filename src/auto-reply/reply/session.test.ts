@@ -1915,13 +1915,7 @@ describe("initSessionState browser tab cleanup", () => {
     expect(cleanupParams.sessionKeys).toEqual([existingSessionId, sessionKey]);
   });
 
-  it.each([
-    ["root browser.enabled=false", { browser: { enabled: false } }],
-    [
-      "browser plugin entry is disabled",
-      { plugins: { entries: { browser: { enabled: false } } } },
-    ],
-  ] as const)("skips browser tab cleanup when %s", async (_name, disabledBrowserConfig) => {
+  it("skips browser tab cleanup when root browser support is disabled", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
     const storePath = await createStorePath("openclaw-tab-cleanup-browser-disabled-");
     const sessionKey = "agent:main:webchat:dm:tab-disabled";
@@ -1935,7 +1929,7 @@ describe("initSessionState browser tab cleanup", () => {
     });
 
     const cfg = {
-      ...disabledBrowserConfig,
+      browser: { enabled: false },
       session: {
         store: storePath,
         reset: { mode: "daily", atHour: 4, idleMinutes: 30 },

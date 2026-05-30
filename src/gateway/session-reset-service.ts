@@ -20,7 +20,7 @@ import {
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
-import { isDefaultBrowserPluginEnabledByConfig } from "../config/browser-plugin-enabled.js";
+import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   snapshotSessionOrigin,
@@ -39,7 +39,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -370,16 +369,14 @@ async function ensureSessionRuntimeCleanup(params: {
   sessionId?: string;
 }) {
   const closeTrackedBrowserTabs = async () => {
-    if (!isDefaultBrowserPluginEnabledByConfig(params.cfg)) {
-      return 0;
-    }
     const closeKeys = new Set<string>([
       params.key,
       params.target.canonicalKey,
       ...params.target.storeKeys,
       params.sessionId ?? "",
     ]);
-    return await closeTrackedBrowserTabsForSessions({
+    await cleanupBrowserSessionsForLifecycleEnd({
+      cfg: params.cfg,
       sessionKeys: [...closeKeys],
       onWarn: (message) => logVerbose(message),
     });
