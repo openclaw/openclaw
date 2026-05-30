@@ -139,6 +139,7 @@ type McporterState = {
 };
 
 type McporterConfigMode = "generated" | "external";
+type McporterEnvMode = "discovery" | McporterConfigMode;
 
 type ConfiguredMcporterServer =
   | { mode: "generated"; server: Record<string, unknown> }
@@ -2354,6 +2355,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       daemonStart = (async () => {
         try {
           await this.runMcporterCommand(["daemon", "start"], {
+            envMode: configMode,
             includeGeneratedConfig: configMode === "generated",
             timeoutMs: 10_000,
           });
@@ -2412,6 +2414,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     let result: { stdout: string; stderr: string };
     try {
       result = await this.runMcporterCommand(["config", "get", serverName, "--json"], {
+        envMode: "discovery",
         includeGeneratedConfig: false,
         timeoutMs: 5_000,
       });
@@ -2518,8 +2521,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     return env;
   }
 
-  private buildMcporterProcessEnv(): NodeJS.ProcessEnv {
-    return { ...this.mcporterEnv };
+  private buildMcporterProcessEnv(mode: McporterEnvMode): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...this.mcporterEnv };
+    delete env.QMD_CONFIG_DIR;
+    delete env.XDG_CACHE_HOME;
+    if (mode === "generated") {
+      delete env.XDG_CONFIG_HOME;
+      delete env.MCPORTER_CONFIG;
+    }
+    return env;
   }
 
   private mcporterDaemonKey(configMode: McporterConfigMode): string {
@@ -2537,13 +2547,17 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runMcporterCommand(
     args: string[],
-    opts?: { includeGeneratedConfig?: boolean; timeoutMs?: number },
+    opts?: {
+      envMode?: McporterEnvMode;
+      includeGeneratedConfig?: boolean;
+      timeoutMs?: number;
+    },
   ): Promise<{ stdout: string; stderr: string }> {
     const mcporterArgs =
       opts?.includeGeneratedConfig === false
         ? args
         : [...args, "--config", this.mcporterConfigPath];
-    const env = this.buildMcporterProcessEnv();
+    const env = this.buildMcporterProcessEnv(opts?.envMode ?? "generated");
     const spawnInvocation = resolveCliSpawnInvocation({
       command: "mcporter",
       args: mcporterArgs,
@@ -2567,6 +2581,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const configMode = await this.ensureMcporterConfig();
     return await this.runMcporterCommand(args, {
       ...opts,
+      envMode: configMode,
       includeGeneratedConfig: configMode === "generated",
     });
   }
