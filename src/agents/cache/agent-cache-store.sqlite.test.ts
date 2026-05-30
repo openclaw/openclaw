@@ -179,6 +179,32 @@ describe("SQLite agent cache store", () => {
     expect(clearSqliteAgentCacheEntries({ env, agentId: "main", scope: "run:adapter" })).toBe(1);
   });
 
+  it("does not let loose write options override the scoped adapter owner", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const cache = createSqliteAgentCacheStore({
+      env,
+      agentId: "main",
+      scope: "safe",
+      now: () => 4000,
+    });
+
+    cache.write({
+      key: "result",
+      value: "ok",
+      ...({
+        agentId: "other",
+        scope: "unsafe",
+      } as Record<string, unknown>),
+    });
+
+    expect(
+      readSqliteAgentCacheEntry({ env, agentId: "main", scope: "safe", key: "result" }),
+    ).toEqual(expect.objectContaining({ value: "ok" }));
+    expect(
+      readSqliteAgentCacheEntry({ env, agentId: "other", scope: "unsafe", key: "result" }),
+    ).toBeNull();
+  });
+
   it("honors explicit per-agent database paths", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };

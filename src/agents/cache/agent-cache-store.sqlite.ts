@@ -261,9 +261,14 @@ export class SqliteAgentCacheStore implements AgentRuntimeCacheStore {
   }
 
   write(options: AgentRuntimeCacheWriteOptions): AgentRuntimeCacheValue {
+    const { blob, expiresAt, key, ttlMs, value } = options;
     return writeSqliteAgentCacheEntry({
       ...this.#options,
-      ...options,
+      key,
+      ...(value === undefined ? {} : { value }),
+      ...(blob === undefined ? {} : { blob }),
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+      ...(ttlMs === undefined ? {} : { ttlMs }),
     });
   }
 
