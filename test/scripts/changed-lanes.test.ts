@@ -344,6 +344,7 @@ describe("scripts/changed-lanes", () => {
     expect(
       createTargetedCoreLintCommand(
         [
+          ".github/workflows/ci.yml",
           "scripts/check-changed.mjs",
           "src/agents/auth-profiles/usage.ts",
           "test/scripts/changed-lanes.test.ts",

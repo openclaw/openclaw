@@ -33,7 +33,8 @@ const SHRINKWRAP_POLICY_PATH_RE =
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const TARGETED_CORE_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
-const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:scripts|test\/scripts)\//u;
+const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
 let corepackPnpmShimDir;
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
