@@ -31,7 +31,9 @@ const PROC_MEMINFO_PATH = "/proc/meminfo";
 const TERMINATION_GRACE_MS = 5_000;
 const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
+const DECLARATION_EXTENSIONS = [".d.ts", ".d.mts", ".d.cts"];
 const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
+const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -66,14 +68,105 @@ function pruneStaleRuntimeSymlinks() {
 export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  for (const root of listTsdownOutputRoots({ cwd, fs: fsImpl })) {
+  const env = params.env ?? process.env;
+  const roots = listTsdownOutputRoots();
+  const protectedDeclarationPaths =
+    env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
+      ? listTrackedDeclarationOutputPaths({
+          cwd,
+          fs: fsImpl,
+          roots,
+          spawnSync: params.spawnSync ?? spawnSync,
+        })
+      : new Set();
+  for (const root of roots) {
+    if (protectedDeclarationPaths === null && root.startsWith("packages/")) {
+      continue;
+    }
     const rootPath = path.join(cwd, root);
     try {
-      fsImpl.rmSync(rootPath, { force: true, recursive: true });
+      if (
+        protectedDeclarationPaths &&
+        hasProtectedChild({ rootPath, protectedPaths: protectedDeclarationPaths })
+      ) {
+        cleanOutputRootExcept(rootPath, protectedDeclarationPaths, fsImpl);
+      } else {
+        fsImpl.rmSync(rootPath, { force: true, recursive: true });
+      }
     } catch {
       // Best-effort cleanup. tsdown will recreate the output tree it needs.
     }
   }
+}
+
+function hasProtectedChild({ rootPath, protectedPaths }) {
+  const rootWithSeparator = `${path.resolve(rootPath)}${path.sep}`;
+  for (const protectedPath of protectedPaths) {
+    if (protectedPath.startsWith(rootWithSeparator)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function cleanOutputRootExcept(rootPath, protectedPaths, fsImpl) {
+  let entries = [];
+  try {
+    entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    const resolvedEntryPath = path.resolve(entryPath);
+    if (protectedPaths.has(resolvedEntryPath)) {
+      continue;
+    }
+    try {
+      if (entry.isDirectory()) {
+        cleanOutputRootExcept(entryPath, protectedPaths, fsImpl);
+        fsImpl.rmdirSync(entryPath);
+      } else {
+        fsImpl.rmSync(entryPath, { force: true });
+      }
+    } catch {
+      // Keep best-effort semantics; protected declaration children can keep a directory non-empty.
+    }
+  }
+}
+
+function listTrackedDeclarationOutputPaths({ cwd, fs: fsImpl, roots, spawnSync: spawnSyncImpl }) {
+  let result;
+  try {
+    result = spawnSyncImpl("git", ["ls-files", "--", ...roots], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
+  if (result.status !== 0 || typeof result.stdout !== "string") {
+    return null;
+  }
+
+  const rootPrefixes = roots.map((root) => `${root.replaceAll("\\", "/")}/`);
+  const protectedPaths = new Set();
+  for (const rawPath of result.stdout.split(/\r?\n/u)) {
+    const relativePath = rawPath.trim().replaceAll("\\", "/");
+    if (!DECLARATION_EXTENSIONS.some((extension) => relativePath.endsWith(extension))) {
+      continue;
+    }
+    if (!rootPrefixes.some((prefix) => relativePath.startsWith(prefix))) {
+      continue;
+    }
+    const absolutePath = path.resolve(cwd, relativePath);
+    if (fsImpl.existsSync(absolutePath)) {
+      protectedPaths.add(absolutePath);
+    }
+  }
+  return protectedPaths;
 }
 
 export function pruneStaleRootChunkFiles(params = {}) {
