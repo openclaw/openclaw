@@ -608,14 +608,18 @@ function computeNextProfileUsageStats(params: {
     });
     updatedStats.disabledReason = disabledFailureReason;
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
-    // Keep active cooldown windows immutable so retries within the window
-    // cannot push recovery further out.
-    updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
-      existingUntil: params.existing.cooldownUntil,
-      now: params.now,
-      recomputedUntil: params.now + backoffMs,
-    });
+    if (params.reason === "overloaded") {
+      updatedStats.cooldownUntil = undefined;
+    } else {
+      const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+      // Keep active cooldown windows immutable so retries within the window
+      // cannot push recovery further out.
+      updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
+        existingUntil: params.existing.cooldownUntil,
+        now: params.now,
+        recomputedUntil: params.now + backoffMs,
+      });
+    }
     // Update cooldown metadata based on whether the window is still active
     // and whether the same or a different model is failing.
     const existingCooldownActive =

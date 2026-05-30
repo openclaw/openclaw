@@ -458,7 +458,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("falls back across providers after overloaded primary failure and persists transient cooldown", async () => {
+  it("falls back across providers after overloaded primary failure without persisting cooldown", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryOverloadedThenFallbackSuccess();
@@ -476,7 +476,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
 
       const usageStats = await readUsageStats(agentDir);
-      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
       expectFailureCount(usageStats, "openai:p1", "overloaded", 1);
       expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
 
@@ -610,7 +610,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("persists overloaded cooldown across turns while still allowing one probe and fallback", async () => {
+  it("does not let overloaded failures skip later turns", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
       mockPrimaryOverloadedThenFallbackSuccess();
@@ -641,7 +641,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expectOpenAiThenGroqAttemptOrder({ expectOpenAiAuthProfileId: "openai:p1" });
 
       const usageStats = await readUsageStats(agentDir);
-      expect(typeof usageStats["openai:p1"]?.cooldownUntil).toBe("number");
+      expect(usageStats["openai:p1"]?.cooldownUntil).toBeUndefined();
       expectFailureCount(usageStats, "openai:p1", "overloaded", 2);
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
