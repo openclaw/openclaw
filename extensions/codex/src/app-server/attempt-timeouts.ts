@@ -104,3 +104,9 @@ export function resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
 export function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {
   return resolvePositiveIntegerTimeoutMs(value, CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS);
 }
+
+export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {
+  const timeout = resolvePositiveIntegerTimeoutMs(timeoutMs, 1);
+  const grace = resolveTimerTimeoutMs(graceMs, 0, 0);
+  return resolveTimerTimeoutMs(timeout + grace, timeout);
+}

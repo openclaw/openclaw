@@ -89,6 +89,7 @@ function summarizeCard(card: WorkboardCard) {
     priority: card.priority,
     agentId: card.agentId,
     tenant: card.metadata?.automation?.tenant,
+    boardId: card.metadata?.automation?.boardId ?? "default",
     parents: card.metadata?.links
       ?.filter((link) => link.type === "parent" && link.targetCardId)
       .map((link) => link.targetCardId),
@@ -156,6 +157,7 @@ export function createWorkboardTools(params: {
           status: Type.Optional(Type.String({ description: "Optional card status filter." })),
           agentId: Type.Optional(Type.String({ description: "Optional agent id filter." })),
           tenant: Type.Optional(Type.String({ description: "Optional tenant filter." })),
+          boardId: Type.Optional(Type.String({ description: "Optional board id filter." })),
           limit: Type.Optional(
             Type.Number({ description: "Maximum cards to return. Default 50." }),
           ),
@@ -176,11 +178,12 @@ export function createWorkboardTools(params: {
         const status = typeof record.status === "string" ? record.status : undefined;
         const agentId = typeof record.agentId === "string" ? record.agentId : undefined;
         const tenant = typeof record.tenant === "string" ? record.tenant : undefined;
+        const boardId = typeof record.boardId === "string" ? record.boardId : undefined;
         const limit =
           typeof record.limit === "number" && Number.isFinite(record.limit)
             ? Math.max(1, Math.min(200, Math.trunc(record.limit)))
             : 50;
-        const cards = (await store.list())
+        const cards = (await store.list({ boardId }))
           .filter((card) => record.includeArchived === true || !card.metadata?.archivedAt)
           .filter((card) => !status || card.status === status)
           .filter((card) => !agentId || card.agentId === agentId)
@@ -208,6 +211,10 @@ export function createWorkboardTools(params: {
             Type.String({ description: "Claim token for claimed parent cards." }),
           ),
           tenant: Type.Optional(Type.String({ description: "Soft tenant namespace." })),
+          boardId: Type.Optional(Type.String({ description: "Soft board namespace." })),
+          createdByCardId: Type.Optional(
+            Type.String({ description: "Parent card that created this card." }),
+          ),
           idempotencyKey: Type.Optional(Type.String({ description: "Idempotent create key." })),
           skills: Type.Optional(Type.Array(Type.String(), { description: "Suggested skills." })),
           workspace: Type.Optional(
@@ -523,6 +530,102 @@ export function createWorkboardTools(params: {
         return jsonResult(
           redactClaimToken(await store.unblock(id, { ownerId, token: record.token })),
         );
+      },
+    },
+    {
+      name: "workboard_boards",
+      label: "Workboard Boards",
+      description: "List Workboard board namespaces with active, archived, and status counts.",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => jsonResult(await store.listBoards()),
+    },
+    {
+      name: "workboard_stats",
+      label: "Workboard Stats",
+      description: "Summarize Workboard counts by status and assignee for one board or all boards.",
+      parameters: Type.Object(
+        {
+          boardId: Type.Optional(Type.String({ description: "Optional board id filter." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        return jsonResult(await store.stats({ boardId: record.boardId }));
+      },
+    },
+    {
+      name: "workboard_promote",
+      label: "Workboard Promote",
+      description:
+        "Promote a dependency-ready card into ready, optionally forcing past holds for operator recovery.",
+      parameters: Type.Object(
+        {
+          id: Type.String({ description: "Workboard card id." }),
+          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+          force: Type.Optional(
+            Type.Boolean({ description: "Bypass dependency or schedule holds." }),
+          ),
+          reason: Type.Optional(Type.String({ description: "Optional operator note." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        const id = readStringParam(record, "id", { required: true });
+        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
+        return jsonResult({
+          card: redactClaimToken(await store.promote(id, record, { ownerId, token: record.token })),
+        });
+      },
+    },
+    {
+      name: "workboard_reassign",
+      label: "Workboard Reassign",
+      description: "Change a card assignee and optionally reset failure state during recovery.",
+      parameters: Type.Object(
+        {
+          id: Type.String({ description: "Workboard card id." }),
+          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+          agentId: Type.Optional(Type.String({ description: "New assignee id." })),
+          status: Type.Optional(Type.String({ description: "Optional next status." })),
+          resetFailures: Type.Optional(Type.Boolean({ description: "Reset failure count." })),
+          reason: Type.Optional(Type.String({ description: "Optional operator note." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        const id = readStringParam(record, "id", { required: true });
+        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
+        return jsonResult({
+          card: redactClaimToken(
+            await store.reassign(id, record, { ownerId, token: record.token }),
+          ),
+        });
+      },
+    },
+    {
+      name: "workboard_reclaim",
+      label: "Workboard Reclaim",
+      description:
+        "Release a stale claim and stop running attempts so another agent can pick it up.",
+      parameters: Type.Object(
+        {
+          id: Type.String({ description: "Workboard card id." }),
+          token: Type.Optional(Type.String({ description: "Claim token for claimed cards." })),
+          status: Type.Optional(Type.String({ description: "Optional next status." })),
+          reason: Type.Optional(Type.String({ description: "Optional operator note." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const record = rawParams as Record<string, unknown>;
+        const id = readStringParam(record, "id", { required: true });
+        await requireScopedCard(store, id, ownerId, record.token as string | undefined);
+        return jsonResult({
+          card: redactClaimToken(await store.reclaim(id, record, { ownerId, token: record.token })),
+        });
       },
     },
     {
