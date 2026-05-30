@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
   JsonSchemaType,
@@ -480,6 +481,12 @@ export function createSessionMcpRuntime(params: {
       } catch (error) {
         // If the call failed because the child process died ("Not connected",
         // EPIPE, ERR_STREAM_DESTROYED), try to reconnect the server once.
+        // McpError instances come from healthy MCP servers returning JSON-RPC
+        // errors (e.g. "Not connected to browser"), NOT dead transports.
+        // Never retry those — they are normal application-level failures.
+        if (error instanceof McpError) {
+          throw error;
+        }
         const msg = error instanceof Error ? error.message : String(error);
         const isTransportDead =
           msg.includes("Not connected") ||
