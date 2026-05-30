@@ -83,9 +83,6 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.3.0
         version: 0.3.0
-      '@openclaw/normalization-core':
-        specifier: workspace:*
-        version: link:packages/normalization-core
       '@openclaw/proxyline':
         specifier: 0.3.3
         version: 0.3.3(undici@8.3.0)

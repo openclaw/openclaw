@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
 import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";

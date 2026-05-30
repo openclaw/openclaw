@@ -215,6 +215,8 @@ function shouldAlwaysBundleDependency(id: string): boolean {
   return (
     id === "@openclaw/fs-safe" ||
     id.startsWith("@openclaw/fs-safe/") ||
+    id === "@openclaw/normalization-core" ||
+    id.startsWith("@openclaw/normalization-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
   );
