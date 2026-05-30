@@ -600,11 +600,15 @@ function failedCodeModeWorkerResult(
   };
 }
 
+function isQuickJsInterruptedWorkerError(error: unknown): boolean {
+  return String(error) === "interrupted";
+}
+
 function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
   if (
     result.status === "failed" &&
     result.code === "timeout" &&
-    String(result.error) === "interrupted"
+    isQuickJsInterruptedWorkerError(result.error)
   ) {
     return {
       ...result,
