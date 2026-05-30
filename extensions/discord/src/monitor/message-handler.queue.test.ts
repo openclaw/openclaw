@@ -19,6 +19,7 @@ type ReplyTypingFeedbackMock = {
   onCleanup: ReturnType<typeof vi.fn<() => void>>;
   updateChannelId: ReturnType<typeof vi.fn<(channelId: string) => void>>;
   getChannelId: ReturnType<typeof vi.fn<() => string>>;
+  restartForDispatch: ReturnType<typeof vi.fn<(channelId: string) => void>>;
 };
 
 function mockCall(source: MockCallSource, label: string, callIndex = 0): Array<unknown> {
@@ -131,6 +132,7 @@ function createReplyTypingFeedbackMock(channelId = "ch-1"): ReplyTypingFeedbackM
     onCleanup: vi.fn(),
     updateChannelId: vi.fn(),
     getChannelId: vi.fn(() => channelId),
+    restartForDispatch: vi.fn(),
   };
 }
 

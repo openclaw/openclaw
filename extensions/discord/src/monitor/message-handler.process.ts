@@ -452,7 +452,11 @@ async function processDiscordMessageInner(
       rest: feedbackRest,
       log: logVerbose,
     });
-  typingFeedback.updateChannelId(typingChannelId);
+  if (replyTypingFeedback) {
+    replyTypingFeedback.restartForDispatch(typingChannelId);
+  } else {
+    typingFeedback.updateChannelId(typingChannelId);
+  }
 
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,

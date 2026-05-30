@@ -911,6 +911,7 @@ describe("processDiscordMessage ack reactions", () => {
       onCleanup: vi.fn(),
       updateChannelId: vi.fn(),
       getChannelId: vi.fn(() => "c1"),
+      restartForDispatch: vi.fn(),
     };
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReplyStart?.();
@@ -922,41 +923,49 @@ describe("processDiscordMessage ack reactions", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(replyTypingFeedback.updateChannelId).toHaveBeenCalledWith("c1");
+    expect(replyTypingFeedback.updateChannelId).not.toHaveBeenCalled();
+    expect(replyTypingFeedback.restartForDispatch).toHaveBeenCalledWith("c1");
     expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
     expect(replyTypingFeedback.onIdle).toHaveBeenCalledTimes(1);
     expect(replyTypingFeedback.onCleanup).toHaveBeenCalledTimes(1);
     expect(typingMocks.sendTyping).not.toHaveBeenCalled();
   });
 
-  it("keeps carried typing feedback refreshed until dispatch is idle", async () => {
+  it("restarts stale carried typing feedback before dispatch", async () => {
     vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const rest = { kind: "feedback-rest" };
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onReplyStart?.();
-      await vi.advanceTimersByTimeAsync(10_500);
-      return createNoQueuedDispatchResult();
-    });
-    const ctx = await createAutomaticSourceDeliveryContext();
-    ctx.replyTypingFeedback = createDiscordReplyTypingFeedback({
-      cfg: ctx.cfg,
-      token: ctx.token,
-      accountId: ctx.accountId,
-      channelId: "c1",
-      rest: rest as never,
-      log: vi.fn(),
-    });
+    try {
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        await params?.replyOptions?.onReplyStart?.();
+        await vi.advanceTimersByTimeAsync(3_500);
+        return createNoQueuedDispatchResult();
+      });
+      const ctx = await createAutomaticSourceDeliveryContext();
+      ctx.replyTypingFeedback = createDiscordReplyTypingFeedback({
+        cfg: ctx.cfg,
+        token: ctx.token,
+        accountId: ctx.accountId,
+        channelId: "c1",
+        rest: rest as never,
+        log: vi.fn(),
+        maxDurationMs: 5_000,
+      });
+      await ctx.replyTypingFeedback.onReplyStart();
+      await vi.advanceTimersByTimeAsync(5_100);
+      typingMocks.sendTyping.mockClear();
 
-    await runProcessDiscordMessage(ctx);
+      await runProcessDiscordMessage(ctx);
 
-    expect(typingMocks.sendTyping.mock.calls.length).toBeGreaterThanOrEqual(4);
-    expect(
-      typingMocks.sendTyping.mock.calls.every(
-        ([params]) =>
-          (params as { channelId?: string; rest?: unknown }).channelId === "c1" &&
-          (params as { channelId?: string; rest?: unknown }).rest === rest,
-      ),
-    ).toBe(true);
+      expect(typingMocks.sendTyping.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(
+        typingMocks.sendTyping.mock.calls.every(
+          ([params]) => params.channelId === "c1" && params.rest === rest,
+        ),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {

@@ -10,6 +10,7 @@ export const DISCORD_REPLY_TYPING_MAX_DURATION_MS = 20 * 60_000;
 export type DiscordReplyTypingFeedback = ReturnType<typeof createTypingCallbacks> & {
   updateChannelId: (channelId: string) => void;
   getChannelId: () => string;
+  restartForDispatch: (channelId: string) => void;
 };
 
 export function createDiscordReplyTypingFeedback(params: {
@@ -29,25 +30,35 @@ export function createDiscordReplyTypingFeedback(params: {
       token: params.token,
       accountId: params.accountId,
     }).rest;
-  const callbacks = createTypingCallbacks({
-    start: () => sendTyping({ rest, channelId }),
-    onStartError: (err) => {
-      logTypingFailure({
-        log: params.log,
-        channel: "discord",
-        target: channelId,
-        error: err,
-      });
-    },
-    maxDurationMs: params.maxDurationMs ?? DISCORD_REPLY_TYPING_MAX_DURATION_MS,
-  });
+  const createCallbacks = () =>
+    createTypingCallbacks({
+      start: () => sendTyping({ rest, channelId }),
+      onStartError: (err) => {
+        logTypingFailure({
+          log: params.log,
+          channel: "discord",
+          target: channelId,
+          error: err,
+        });
+      },
+      maxDurationMs: params.maxDurationMs ?? DISCORD_REPLY_TYPING_MAX_DURATION_MS,
+    });
+  const updateChannelId = (nextChannelId: string) => {
+    const trimmed = nextChannelId.trim();
+    if (trimmed) {
+      channelId = trimmed;
+    }
+  };
+  let callbacks = createCallbacks();
   return {
-    ...callbacks,
-    updateChannelId: (nextChannelId) => {
-      const trimmed = nextChannelId.trim();
-      if (trimmed) {
-        channelId = trimmed;
-      }
+    onReplyStart: () => callbacks.onReplyStart(),
+    onIdle: () => callbacks.onIdle?.(),
+    onCleanup: () => callbacks.onCleanup?.(),
+    updateChannelId,
+    restartForDispatch: (nextChannelId) => {
+      updateChannelId(nextChannelId);
+      callbacks.onCleanup?.();
+      callbacks = createCallbacks();
     },
     getChannelId: () => channelId,
   };
