@@ -76,6 +76,10 @@ struct ExecApprovalsGatewayPrompterTests {
         #expect(!ExecApprovalsGatewayPrompter._testShouldAsk(security: .full, ask: .off))
     }
 
+    @Test func `explicit approval request denies when prompting is disabled`() {
+        #expect(ExecApprovalsGatewayPrompter._testNonPromptedApprovalRequestDecision == .deny)
+    }
+
     @Test func `fallback allowlist allows matching resolved path`() {
         let decision = ExecApprovalsGatewayPrompter._testFallbackDecision(
             command: "git status",

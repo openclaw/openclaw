@@ -45,17 +45,14 @@ final class ExecApprovalsGatewayPrompter {
             let request = try JSONDecoder().decode(GatewayApprovalRequest.self, from: data)
             let presentation = self.shouldPresent(request: request)
             guard presentation.shouldAsk else {
-                // Ask policy says no prompt needed – resolve based on security policy
-                let decision = Self.fallbackDecision(
-                    request: request.request,
-                    askFallback: presentation.security,
-                    allowlist: presentation.allowlist,
-                    denylist: presentation.denylist)
+                // An approval event is already an explicit decision boundary; if local
+                // policy says no prompt should be shown, fail closed instead of
+                // reinterpreting the request as an auto-allow candidate.
                 try await GatewayConnection.shared.requestVoid(
                     method: .execApprovalResolve,
                     params: [
                         "id": AnyCodable(request.id),
-                        "decision": AnyCodable(decision.rawValue),
+                        "decision": AnyCodable(Self.nonPromptedApprovalRequestDecision.rawValue),
                     ],
                     timeoutMs: 10000)
                 return
@@ -217,6 +214,10 @@ final class ExecApprovalsGatewayPrompter {
         if seconds.isNaN || seconds.isInfinite || seconds < 0 { return nil }
         return Int(seconds.rounded())
     }
+
+    private static var nonPromptedApprovalRequestDecision: ExecApprovalDecision {
+        .deny
+    }
 }
 
 #if DEBUG
@@ -281,6 +282,10 @@ extension ExecApprovalsGatewayPrompter {
             askFallback: askFallback,
             allowlist: [],
             denylist: denylistPatterns.map { ExecDenylistEntry(id: nil, pattern: $0, flags: nil) })
+    }
+
+    static var _testNonPromptedApprovalRequestDecision: ExecApprovalDecision {
+        self.nonPromptedApprovalRequestDecision
     }
 }
 #endif
