@@ -1,4 +1,8 @@
-import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
+import type {
+  ModelCompatConfig,
+  ModelDefinitionConfig,
+  ModelMediaInputConfig,
+} from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
 import type { Api, Model } from "../../llm/types.js";
@@ -997,6 +1001,7 @@ function resolveConfiguredFallbackModel(params: {
         includeRuntimeDiscovery: true,
       });
   const metadataModel = configuredModel ?? staticCatalogModel;
+  const metadataDefinitionModel = metadataModel as Partial<ModelDefinitionConfig> | undefined;
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
@@ -1009,7 +1014,7 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     modelId,
     providerParams: providerConfig?.params,
-    configuredParams: metadataModel?.params,
+    configuredParams: metadataDefinitionModel?.params,
   });
   const fallbackTransport = resolveProviderTransport({
     provider,
@@ -1036,8 +1041,8 @@ function resolveConfiguredFallbackModel(params: {
   });
   const fallbackReasoning = resolveConfiguredFallbackReasoning({
     provider,
-    compat: metadataModel?.compat,
-    reasoning: metadataModel?.reasoning,
+    compat: metadataDefinitionModel?.compat,
+    reasoning: metadataDefinitionModel?.reasoning,
   });
   return normalizeResolvedModel({
     provider,
@@ -1070,7 +1075,7 @@ function resolveConfiguredFallbackModel(params: {
             configuredModel?.contextTokens ??
             providerConfig?.contextTokens ??
             providerConfig?.models?.[0]?.contextTokens ??
-            staticCatalogModel?.contextTokens,
+            metadataDefinitionModel?.contextTokens,
           maxTokens:
             configuredModel?.maxTokens ??
             providerConfig?.maxTokens ??
@@ -1080,8 +1085,8 @@ function resolveConfiguredFallbackModel(params: {
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
-          compat: metadataModel?.compat,
-          mediaInput: metadataModel?.mediaInput,
+          compat: metadataDefinitionModel?.compat,
+          mediaInput: metadataDefinitionModel?.mediaInput,
         } as Model,
         providerRequest,
       ),
