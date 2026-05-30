@@ -51,6 +51,7 @@ const SKILL_WORKSHOP_LOCK_OPTIONS: FileLockOptions = {
   },
   stale: 60_000,
 };
+const skillWorkshopProcessLocks = new Map<string, Promise<void>>();
 
 type SkillWorkshopStoreOptions = {
   env?: NodeJS.ProcessEnv;
@@ -332,8 +333,7 @@ export async function withSkillProposalTargetLock<T>(
     TARGET_LOCKS_REL_DIR,
     `${hashSkillProposalContent(record.target.skillFile)}.target`,
   );
-  await fs.mkdir(path.dirname(lockFile), { recursive: true });
-  return await withFileLock(lockFile, SKILL_WORKSHOP_LOCK_OPTIONS, fn);
+  return await withSkillWorkshopLock(lockFile, fn);
 }
 
 export async function writeSkillProposalRollback(params: {
@@ -404,8 +404,29 @@ async function withSkillProposalManifestLock<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const lockFile = path.join(resolveSkillWorkshopStateDir(options), MANIFEST_LOCK_REL_PATH);
+  return await withSkillWorkshopLock(lockFile, fn);
+}
+
+async function withSkillWorkshopLock<T>(lockFile: string, fn: () => Promise<T>): Promise<T> {
+  const lockKey = path.resolve(lockFile);
+  const previous = skillWorkshopProcessLocks.get(lockKey) ?? Promise.resolve();
+  let releaseQueued!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseQueued = resolve;
+  });
+  const previousDone = previous.catch(() => undefined);
+  const queued = previousDone.then(() => current);
+  skillWorkshopProcessLocks.set(lockKey, queued);
+  await previousDone;
   await fs.mkdir(path.dirname(lockFile), { recursive: true });
-  return await withFileLock(lockFile, SKILL_WORKSHOP_LOCK_OPTIONS, fn);
+  try {
+    return await withFileLock(lockFile, SKILL_WORKSHOP_LOCK_OPTIONS, fn);
+  } finally {
+    releaseQueued();
+    if (skillWorkshopProcessLocks.get(lockKey) === queued) {
+      skillWorkshopProcessLocks.delete(lockKey);
+    }
+  }
 }
 
 export async function readWorkspaceSkillFile(filePath: string): Promise<string | null> {
