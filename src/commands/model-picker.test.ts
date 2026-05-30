@@ -349,13 +349,8 @@ afterEach(() => {
 });
 
 describe("promptDefaultModel", () => {
-  it("adds runtime-route hints for canonical and legacy OpenAI Codex models", async () => {
+  it("adds runtime-route hints for canonical OpenAI models", async () => {
     loadModelCatalog.mockResolvedValue([
-      {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-      },
       {
         provider: "openai",
         id: "gpt-5.5",
@@ -377,8 +372,6 @@ describe("promptDefaultModel", () => {
     const options = pickerOptions(select as MockCallSource);
     const canonical = requireOption(options, "openai/gpt-5.5");
     expect(canonical.hint).toContain("Codex runtime route");
-    const legacy = requireOption(options, "openai/gpt-5.5");
-    expect(legacy.hint).toContain("legacy Codex OAuth route");
   });
 
   it("hides unauthenticated catalog entries from default model choices", async () => {
@@ -453,7 +446,6 @@ describe("promptDefaultModel", () => {
       "openai/gpt-5.5",
       "anthropic/claude-sonnet-4-6",
       "google/gemini-3.1-pro-preview",
-      "openai/gpt-5.5",
     ]);
   });
 

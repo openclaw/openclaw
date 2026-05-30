@@ -46,8 +46,7 @@ describe("warnIfModelConfigLooksOff", () => {
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).toHaveBeenCalledOnce();
-    expect(listProfilesForProvider).toHaveBeenCalledTimes(2);
-    expect(listProfilesForProvider).toHaveBeenCalledWith({ version: 1, profiles: {} }, "openai");
+    expect(listProfilesForProvider).toHaveBeenCalledOnce();
     expect(listProfilesForProvider).toHaveBeenCalledWith({ version: 1, profiles: {} }, "openai");
     expect(note).toHaveBeenCalledWith(
       'No auth configured for provider "openai". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai`, `openclaw configure`, or set an API key env var.',
@@ -88,7 +87,6 @@ describe("warnIfModelConfigLooksOff", () => {
 
     expect(note).not.toHaveBeenCalled();
     expect(listProfilesForProvider).toHaveBeenCalledWith(store, "openai");
-    expect(listProfilesForProvider).toHaveBeenCalledWith(store, "openai");
     expect(resolveEnvApiKey).not.toHaveBeenCalled();
     expect(hasUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
@@ -96,6 +94,19 @@ describe("warnIfModelConfigLooksOff", () => {
   it("keeps custom OpenAI-compatible provider auth separate from Codex OAuth profiles", async () => {
     const note = vi.fn(async () => {});
     const prompter = makePrompter({ note });
+    const store = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    } satisfies AuthProfileStore;
+    ensureAuthProfileStore.mockReturnValue(store);
     listProfilesForProvider.mockImplementation((_store, provider) =>
       provider === "openai" ? ["openai:default"] : [],
     );
@@ -119,7 +130,7 @@ describe("warnIfModelConfigLooksOff", () => {
 
     await warnIfModelConfigLooksOff(config, prompter, { validateCatalog: false });
 
-    expect(listProfilesForProvider.mock.calls.map(([, provider]) => provider)).toEqual(["openai"]);
+    expect(listProfilesForProvider).toHaveBeenCalledWith(store, "openai");
     expect(note).toHaveBeenCalledWith(
       'No auth configured for provider "openai". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai`, `openclaw configure`, or set an API key env var.',
       "Model check",

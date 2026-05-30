@@ -557,7 +557,11 @@ describe("createPdfTool", () => {
 
   it("uses extraction fallback for non-native models", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai",
+        api: "openai-responses",
+        input: ["text"],
+      });
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [],

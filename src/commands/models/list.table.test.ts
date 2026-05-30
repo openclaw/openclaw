@@ -23,7 +23,7 @@ describe("printModelTable", () => {
 
     expect(runtime.log.mock.calls).toEqual([
       ["Model                                      Input      Ctx         Local Auth  Tags"],
-      ["openai/gpt-5.5                       text+image 266k/391k   no    yes   "],
+      ["openai/gpt-5.5                             text+image 266k/391k   no    yes   "],
     ]);
   });
 });
