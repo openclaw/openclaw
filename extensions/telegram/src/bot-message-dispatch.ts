@@ -1243,12 +1243,10 @@ export const dispatchTelegramMessage = async ({
   // that outgrows one Telegram message the lane rotates to a fresh message and
   // this advances, so each message only ever grows (append-only) until rotation.
   let interleavedRenderOffset = 0;
-  // Delta-append checkpoints, one per stream. The reasoning and commentary
-  // streams are tracked separately so each converts its own cumulative
-  // snapshots to deltas; appends are chronological, so no checkpoint reset is
-  // needed at tool boundaries and cumulative re-delivery never duplicates.
+  // Delta-append checkpoint for the reasoning stream — converts its cumulative
+  // snapshots to suffix deltas. Reply prose is not folded into the lane, so the
+  // reasoning stream is the only producer that appends prose to the body.
   let interleavedReasoningState = emptyInterleavedStreamState();
-  let interleavedAssistantState = emptyInterleavedStreamState();
   // Last appended status line, so consecutive identical tool lines collapse.
   let interleavedPrevStatusLine: string | undefined;
   let interleavedTimer: ReturnType<typeof setInterval> | undefined;
@@ -1349,34 +1347,6 @@ export const dispatchTelegramMessage = async ({
     interleavedReasoningState = result.state;
     return updateInterleavedLane();
   };
-  // Append the new increment of assistant *commentary* (prose the model emits
-  // between tool calls — not the final answer) into the same durable message,
-  // so the lane reads reasoning → commentary → tool → … like a CLI transcript.
-  // The eventual final answer that may also stream through here is stripped back
-  // out at delivery (see stripInterleavedFinalAnswer) so it is not shown twice.
-  const appendInterleavedAssistant = (
-    rawText: string,
-    opts?: { delta?: string; replace?: boolean },
-  ): boolean => {
-    if (!interleavedProgressEnabled) {
-      return false;
-    }
-    clearInterleavedTimer();
-    // Same tag unwrapping as the reasoning lane: commentary that carries inline
-    // <think> markup must render as plain prose, not raw tags.
-    const text = stripReasoningTagsForInterleaved(rawText);
-    const delta = text === rawText ? opts?.delta : undefined;
-    const result = appendInterleavedDelta({
-      body: interleavedBody,
-      state: interleavedAssistantState,
-      text,
-      ...(delta !== undefined ? { delta } : {}),
-      ...(opts?.replace ? { replace: true } : {}),
-    });
-    interleavedBody = result.body;
-    interleavedAssistantState = result.state;
-    return updateInterleavedLane();
-  };
   // Remove the resolved final answer from the tail of the interleaved body and
   // re-render, so the polished final message (delivered to the answer lane) is
   // not duplicated in the durable thinking message. Conservative: a no-op when
@@ -1390,10 +1360,11 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     interleavedBody = stripped;
-    // The body tail was rewritten, so the per-stream delta checkpoints no longer
-    // match it. Reset both so any late snapshot recomputes its increment against
-    // the new tail instead of re-stamping the stripped text.
-    interleavedAssistantState = emptyInterleavedStreamState();
+    // The body tail was rewritten, so the reasoning checkpoint no longer matches
+    // it. Reset it so any late snapshot recomputes its increment against the new
+    // tail instead of re-stamping the stripped text. (Defensive: only fires for
+    // backends that bridge assistant text into the reasoning lane when thinking
+    // is redacted; the interactive backend feeds real thinking, never the answer.)
     interleavedReasoningState = emptyInterleavedStreamState();
     updateInterleavedLane();
   };
@@ -1991,13 +1962,12 @@ export const dispatchTelegramMessage = async ({
                         reasoningStepState.noteReasoningHint();
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
-                        // Interleaved mode owns intermediate commentary: fold it
-                        // into the durable thinking message and never route it to
-                        // the answer lane / tool-progress draft. The cumulative
-                        // append is idempotent if onPartialReply already carried
-                        // the same text live.
+                        // Interleaved mode keeps reply prose OUT of the thinking
+                        // message — it shows only as the polished final answer. Drop
+                        // intermediate commentary during tool progress so it is
+                        // neither folded into the thinking message nor routed to the
+                        // answer-lane / tool-progress draft mid-turn.
                         if (interleavedProgressEnabled) {
-                          appendInterleavedAssistant(segment.update.text ?? "");
                           continue;
                         }
                         const canRepresentAsTransientProgress = canUseNativeToolProgressDraft({
@@ -2179,24 +2149,18 @@ export const dispatchTelegramMessage = async ({
                             // delivery (stripInterleavedFinalAnswer) so it shows
                             // once, polished, in the answer lane.
                             if (interleavedProgressEnabled) {
-                              // Append the assistant stream as ONE monotonic
-                              // stream — do NOT split it into reasoning/answer
-                              // lanes here. The reasoning/answer boundary that
-                              // splitTextIntoLaneSegments computes shifts between
-                              // cumulative snapshots (text reclassifies as more
-                              // arrives), which breaks the per-lane prefix
-                              // invariant the delta-append relies on and
-                              // re-stamps the moved text (duplication). In the
-                              // interleaved lane reasoning and commentary render
-                              // identically (plain text), so a single stream is
-                              // both correct and dup-free; the full payload text
-                              // is always a clean growing prefix. The final
-                              // answer that streams through here is removed at
-                              // delivery (stripInterleavedFinalAnswer).
-                              appendInterleavedAssistant(payload.text ?? "", {
-                                ...(payload.delta !== undefined ? { delta: payload.delta } : {}),
-                                ...(payload.replace === true ? { replace: true } : {}),
-                              });
+                              // Reply prose is delivered ONLY as the polished final
+                              // answer in the answer lane — it is never folded into
+                              // the durable thinking message, which shows reasoning
+                              // + tool lines only. Folding it here made the reply
+                              // appear twice and could not be reliably de-duplicated:
+                              // the model often drafts an answer, runs tools, then
+                              // re-emits a revised version, so no exact-match strip
+                              // at delivery removes every copy. Reasoning still
+                              // streams into the lane via onReasoningStream below
+                              // (for the interactive backend the MITM proxy restores
+                              // real thinking, so reasoning arrives on its own
+                              // stream, not as assistant text).
                               return;
                             }
                             await ingestDraftLaneSegments(payload);
