@@ -246,7 +246,16 @@ import {
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
+const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
 const ensuredCodexWorkspaceDirs = new Set<string>();
+
+function estimateCodexAppServerProjectedTurnTokens(params: {
+  prompt: string;
+  developerInstructions?: string;
+}): number {
+  const inputChars = params.prompt.length + (params.developerInstructions?.length ?? 0);
+  return Math.max(1, Math.ceil(inputChars / CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN));
+}
 
 async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> {
   const normalized = path.resolve(workspaceDir);
@@ -673,6 +682,15 @@ export async function runCodexAppServerAttempt(
   let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
   let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+  const applyMirroredHistoryProjectionForFreshThread = () => {
+    const projection = projectContextEngineAssemblyForCodex({
+      assembledMessages: historyMessages,
+      originalHistoryMessages: historyMessages,
+      prompt: params.prompt,
+    });
+    promptText = projection.promptText;
+    prePromptMessageCount = projection.prePromptMessageCount;
+  };
   const applyActiveContextEngineProjection = async (
     decisionStartupBinding: CodexAppServerThreadBinding | undefined,
   ) => {
@@ -764,13 +782,7 @@ export async function runCodexAppServerAttempt(
       forceProject: !nativeToolSurfaceEnabled,
     })
   ) {
-    const projection = projectContextEngineAssemblyForCodex({
-      assembledMessages: historyMessages,
-      originalHistoryMessages: historyMessages,
-      prompt: params.prompt,
-    });
-    promptText = projection.promptText;
-    prePromptMessageCount = projection.prePromptMessageCount;
+    applyMirroredHistoryProjectionForFreshThread();
   }
   const buildPromptFromCurrentInputs = () =>
     resolveAgentHarnessBeforePromptBuildResult({
@@ -794,6 +806,60 @@ export async function runCodexAppServerAttempt(
       promptBuild.developerInstructions,
       buildCodexTurnCollaborationDeveloperInstructions(),
     );
+  const rebuildCodexTurnPromptFromCurrentProjection = async () => {
+    promptBuild = await buildPromptFromCurrentInputs();
+    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  };
+  const rotateStartupBindingForProjectedTurn = async () => {
+    if (!startupBinding?.threadId) {
+      return;
+    }
+    const previousThreadId = startupBinding.threadId;
+    const projectedTurnTokens = estimateCodexAppServerProjectedTurnTokens({
+      prompt: codexTurnPromptText,
+      developerInstructions: buildRenderedCodexDeveloperInstructions(),
+    });
+    startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+      binding: startupBinding,
+      sessionFile: params.sessionFile,
+      agentDir,
+      codexHome: appServer.start.env?.CODEX_HOME,
+      config: params.config,
+      contextEngineActive: Boolean(activeContextEngine),
+      projectedTurnTokens,
+    });
+    if (startupBinding?.threadId) {
+      return;
+    }
+    if (activeContextEngine) {
+      contextEngineProjection = undefined;
+      try {
+        await applyActiveContextEngineProjection(undefined);
+      } catch (assembleErr) {
+        embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
+          error: formatErrorMessage(assembleErr),
+        });
+      }
+    } else if (
+      shouldProjectMirroredHistoryForCodexStart({
+        startupBinding,
+        dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+        historyMessages,
+        forceProject: !nativeToolSurfaceEnabled,
+      })
+    ) {
+      applyMirroredHistoryProjectionForFreshThread();
+    }
+    await rebuildCodexTurnPromptFromCurrentProjection();
+    embeddedAgentLog.info("codex app-server rebuilt turn prompt after native thread rotation", {
+      sessionId: params.sessionId,
+      sessionKey: contextSessionKey,
+      previousThreadId,
+      promptChars: codexTurnPromptText.length,
+      developerInstructionChars: buildRenderedCodexDeveloperInstructions()?.length ?? 0,
+    });
+  };
+  await rotateStartupBindingForProjectedTurn();
   const systemPromptReport = buildCodexSystemPromptReport({
     attempt: params,
     sessionKey: contextSessionKey,
