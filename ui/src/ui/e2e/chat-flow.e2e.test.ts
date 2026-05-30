@@ -264,7 +264,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await main.getByRole("button", { name: "Chat session" }).click();
       await page
-        .locator('button[data-chat-session-picker-option="true"][data-session-key="agent:main:session-b"]')
+        .locator(
+          'button[data-chat-session-picker-option="true"][data-session-key="agent:main:session-b"]',
+        )
         .click();
       await main.getByRole("button", { name: "Chat session" }).getByText("Session B").waitFor({
         timeout: 10_000,
@@ -273,7 +275,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await main.getByRole("button", { name: "Chat session" }).click();
       await page
-        .locator('button[data-chat-session-picker-option="true"][data-session-key="agent:main:session-a"]')
+        .locator(
+          'button[data-chat-session-picker-option="true"][data-session-key="agent:main:session-a"]',
+        )
         .click();
       await main.getByRole("button", { name: "Chat session" }).getByText("Session A").waitFor({
         timeout: 10_000,

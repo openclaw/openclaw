@@ -28,6 +28,11 @@ import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
+  resolveChatAgentFilterId,
+  resolveChatAgentFilterOptions,
+  resolvePreferredSessionForAgent,
+} from "./chat/session-controls.ts";
+import {
   controlUiNowMs,
   recordControlUiRenderTiming,
   roundedControlUiDurationMs,
@@ -1028,10 +1033,16 @@ export function renderApp(state: AppViewState) {
   const configuredDreaming = resolveConfiguredDreaming(configValue);
   const dreamingOn = state.dreamingStatus?.enabled ?? configuredDreaming.enabled;
   const dreamingNextCycle = resolveDreamingNextCycle(state.dreamingStatus);
+  const dreamingAgentOptions = resolveChatAgentFilterOptions(state);
+  const dreamingSelectedAgentId = resolveChatAgentFilterId(state, state.sessionKey);
+  const syncDreamingSelectedAgent = () => {
+    state.selectedAgentId = dreamingSelectedAgentId;
+  };
   const dreamingLoading = state.dreamingStatusLoading || state.dreamingModeSaving;
   const dreamingRefreshLoading = state.dreamingStatusLoading || state.dreamDiaryLoading;
   const refreshDreaming = () => {
     void (async () => {
+      syncDreamingSelectedAgent();
       await loadConfig(state);
       await Promise.all([
         loadDreamingStatus(state),
@@ -3085,6 +3096,8 @@ export function renderApp(state: AppViewState) {
         ${state.tab === "dreams"
           ? renderDreaming({
               active: dreamingOn,
+              selectedAgentId: dreamingSelectedAgentId,
+              agentOptions: dreamingAgentOptions,
               shortTermCount: state.dreamingStatus?.shortTermCount ?? 0,
               groundedSignalCount: state.dreamingStatus?.groundedSignalCount ?? 0,
               totalSignalCount: state.dreamingStatus?.totalSignalCount ?? 0,
@@ -3117,7 +3130,16 @@ export function renderApp(state: AppViewState) {
               wikiMemoryPalaceError: state.wikiMemoryPalaceError,
               wikiMemoryPalace: state.wikiMemoryPalace,
               onRefresh: refreshDreaming,
-              onRefreshDiary: () => loadDreamDiary(state),
+              onSelectAgent: (agentId: string) => {
+                state.selectedAgentId = agentId;
+                switchChatSession(state, resolvePreferredSessionForAgent(state, agentId));
+                void loadDreamingStatus(state);
+                void loadDreamDiary(state);
+              },
+              onRefreshDiary: () => {
+                syncDreamingSelectedAgent();
+                void loadDreamDiary(state);
+              },
               onRefreshImports: () => {
                 void (async () => {
                   await loadConfig(state);
@@ -3132,14 +3154,29 @@ export function renderApp(state: AppViewState) {
               },
               onOpenConfig: () => openConfigFile(state),
               onOpenWikiPage: (lookup: string) => openWikiPage(lookup),
-              onBackfillDiary: () => backfillDreamDiary(state),
+              onBackfillDiary: () => {
+                syncDreamingSelectedAgent();
+                void backfillDreamDiary(state);
+              },
               onCopyDreamingArchivePath: () => {
                 void copyDreamingArchivePath(state);
               },
-              onDedupeDreamDiary: () => dedupeDreamDiary(state),
-              onResetDiary: () => resetDreamDiary(state),
-              onResetGroundedShortTerm: () => resetGroundedShortTerm(state),
-              onRepairDreamingArtifacts: () => repairDreamingArtifacts(state),
+              onDedupeDreamDiary: () => {
+                syncDreamingSelectedAgent();
+                void dedupeDreamDiary(state);
+              },
+              onResetDiary: () => {
+                syncDreamingSelectedAgent();
+                void resetDreamDiary(state);
+              },
+              onResetGroundedShortTerm: () => {
+                syncDreamingSelectedAgent();
+                void resetGroundedShortTerm(state);
+              },
+              onRepairDreamingArtifacts: () => {
+                syncDreamingSelectedAgent();
+                void repairDreamingArtifacts(state);
+              },
               onRequestUpdate: requestHostUpdate,
             })
           : nothing}

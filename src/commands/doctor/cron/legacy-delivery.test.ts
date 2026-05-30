@@ -5,7 +5,7 @@ import {
   hasLegacyDeliveryHints,
   mergeLegacyDeliveryInto,
   normalizeLegacyDeliveryInput,
-} from "./doctor-cron-legacy-delivery.js";
+} from "./legacy-delivery.js";
 
 describe("legacy delivery threadId support", () => {
   it("treats threadId as a legacy delivery hint", () => {

@@ -4,7 +4,7 @@ import {
   LowercaseNonEmptyStringFieldSchema,
   TrimmedNonEmptyStringFieldSchema,
   parseOptionalField,
-} from "../cron/delivery-field-schemas.js";
+} from "../../../cron/delivery-field-schemas.js";
 
 function parseLegacyDeliveryHintsInput(payload: Record<string, unknown>) {
   return {

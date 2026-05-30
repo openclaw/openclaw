@@ -759,6 +759,10 @@ export const es: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "Agente",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "Escena",
       diary: "Diario",

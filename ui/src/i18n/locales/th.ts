@@ -751,6 +751,10 @@ export const th: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "เอเจนต์",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "ฉาก",
       diary: "ไดอารี",

@@ -1,21 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { parseAbsoluteTimeMs } from "../cron/parse.js";
-import { getInvalidPersistedCronJobReason } from "../cron/persisted-shape.js";
-import { coerceFiniteScheduleNumber } from "../cron/schedule.js";
-import { inferLegacyName } from "../cron/service/normalize.js";
-import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../cron/stagger.js";
-import { timestampMsToIsoString } from "../shared/number-coercion.js";
+import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
+import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
+import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
+import { inferLegacyName } from "../../../cron/service/normalize.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
+import { timestampMsToIsoString } from "../../../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
-} from "../shared/string-coerce.js";
-import { normalizeLegacyDeliveryInput } from "./doctor-cron-legacy-delivery.js";
-import {
-  hasLegacyOpenAICodexCronModelRef,
-  migrateLegacyCronPayload,
-} from "./doctor-cron-payload-migration.js";
+} from "../../../shared/string-coerce.js";
+import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
+import { hasLegacyOpenAICodexCronModelRef, migrateLegacyCronPayload } from "./payload-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"

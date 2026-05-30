@@ -2,12 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  appendCronRunLog,
-  migrateLegacyCronRunLogsToSqlite,
-  readCronRunLogEntriesPage,
-  type CronRunLogEntry,
-} from "./run-log.js";
+import { migrateLegacyCronRunLogsToSqlite } from "../commands/doctor/cron/legacy-run-log-migration.js";
+import { appendCronRunLog, readCronRunLogEntriesPage, type CronRunLogEntry } from "./run-log.js";
 
 async function writeLegacyRunLogAndMigrate(
   entries: Array<Record<string, unknown>>,

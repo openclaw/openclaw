@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
-} from "../commands/doctor-cron-legacy-store-migration.js";
+} from "../commands/doctor/cron/legacy-store-migration.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   loadCronQuarantineFile,

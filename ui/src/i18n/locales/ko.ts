@@ -758,6 +758,10 @@ export const ko: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "에이전트",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "장면",
       diary: "일지",

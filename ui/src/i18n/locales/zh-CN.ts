@@ -750,6 +750,10 @@ export const zh_CN: TranslationMap = {
     },
   },
   dreaming: {
+    agentSelect: {
+      label: "代理",
+      ariaLabel: "Dreaming agent",
+    },
     tabs: {
       scene: "场景",
       diary: "日记",
