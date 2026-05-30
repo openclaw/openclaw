@@ -38,6 +38,28 @@ describe("sandbox/tool-policy", () => {
     });
   });
 
+  it("includes message tool in the default sandbox allowlist", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+      },
+    };
+
+    const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
+    expect(resolved.allow).toContain("message");
+    expect(
+      isToolAllowed(
+        {
+          allow: resolved.allow,
+          deny: resolved.deny,
+        },
+        "message",
+      ),
+    ).toBe(true);
+  });
+
   it("lets explicit sandbox allow remove entries from the default sandbox denylist", () => {
     const cfg: OpenClawConfig = {
       agents: {
