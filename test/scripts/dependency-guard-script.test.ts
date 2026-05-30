@@ -395,6 +395,12 @@ describe("dependency guard script", () => {
     expect(body).toContain("`pnpm-lock.yaml`");
     expect(body).toContain("`extensions/slack/npm-shrinkwrap.json`");
     expect(body).toContain(`Cleanup commit: \`${staleSha}\``);
+    expect(body).toContain(
+      "restored each listed lockfile from the target branch and pushed the cleanup commit to this PR head",
+    );
+    expect(body).toContain(
+      "this PR no longer carries those package lockfile diffs after the cleanup commit",
+    );
     expect(isAutoscrubbedDependencyComment({ body })).toBe(true);
   });
 

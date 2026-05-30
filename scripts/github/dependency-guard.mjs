@@ -303,6 +303,8 @@ ${fileLines.join("\n")}
 
 - Target branch: ${markdownCode(safeBranch)}
 - Cleanup commit: ${markdownCode(commitSha)}
+- Workflow action: restored each listed lockfile from the target branch and pushed the cleanup commit to this PR head.
+- Verification result: this PR no longer carries those package lockfile diffs after the cleanup commit.
 
 No action is needed unless this PR intentionally requires a dependency update. If it does, mention that in the PR and a maintainer will handle the dependency update internally.`;
 }
