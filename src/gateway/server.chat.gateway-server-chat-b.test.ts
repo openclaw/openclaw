@@ -80,6 +80,9 @@ async function withGatewayChatHarness(
     await run({ ws, createSessionDir });
   } finally {
     setMaxChatHistoryMessagesBytesForTest();
+    if (process.env.OPENCLAW_CONFIG_PATH) {
+      await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
+    }
     clearConfigCache();
     testState.sessionStorePath = undefined;
     ws.close();

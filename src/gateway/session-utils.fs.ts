@@ -604,6 +604,15 @@ export async function readSessionMessageByIdAsync(
   }
   const entry = index.entries.find((candidate) => candidate.id === messageId);
   if (!entry) {
+    let foundOversized = false;
+    await visitTranscriptLinesAsync(filePath, (line) => {
+      if (!foundOversized && isOversizedTranscriptLine(line)) {
+        foundOversized = extractJsonStringFieldPrefix(line, "id") === messageId;
+      }
+    });
+    if (foundOversized) {
+      return { oversized: true, found: true };
+    }
     return { oversized: false, found: false };
   }
   if (entry.byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
