@@ -1868,6 +1868,39 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledWith("Approve command?");
   });
 
+  it("does not hide durable tool payloads in interleaved progress", async () => {
+    const { answerDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    const execApproval = { id: "approval-1", command: "pnpm test" };
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Approve command?",
+          channelData: { execApproval },
+        },
+        { kind: "tool" },
+      );
+      await dispatcherOptions.deliver({ text: "Tool failed", isError: true }, { kind: "tool" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "partial",
+      telegramCfg: {
+        streaming: {
+          mode: "partial",
+          preview: { toolProgress: true, interleavedProgress: true },
+        },
+      },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Approve command?");
+    expectDeliveredReply(0, { text: "Tool failed", isError: true });
+  });
+
   it("does not use native tool progress drafts in groups", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(

@@ -1916,14 +1916,14 @@ export const dispatchTelegramMessage = async ({
                         }
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
-                        if (interleavedProgressEnabled) {
-                          continue;
-                        }
                         const canRepresentAsTransientProgress = canUseNativeToolProgressDraft({
                           payload: effectivePayload,
                           reply,
                           buttons: telegramButtons,
                         });
+                        if (interleavedProgressEnabled && canRepresentAsTransientProgress) {
+                          continue;
+                        }
                         if (nativeToolProgressDraft && canRepresentAsTransientProgress) {
                           if (await pushStreamToolProgress(segment.update.text)) {
                             blockDelivered = true;
