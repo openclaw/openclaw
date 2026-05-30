@@ -959,7 +959,8 @@ function discoverInDirectory(params: {
     const fullPath = path.join(params.dir, entry.name);
     const entryType = resolveScannedEntryType(entry, fullPath);
     if (entryType === "file") {
-      if (!params.scanFiles || !isExtensionFile(fullPath)) {
+      const shouldScanFile = params.scanFiles ?? params.origin === "bundled";
+      if (!shouldScanFile || !isExtensionFile(fullPath)) {
         continue;
       }
       addCandidate({
@@ -1208,6 +1209,7 @@ function discoverFromPath(params: {
   requireBuiltRuntimeEntry?: boolean;
   managedPluginDirs?: Set<string>;
   skipRootDirKeys?: Set<string>;
+  scanFiles?: boolean;
   env: NodeJS.ProcessEnv;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
@@ -1409,7 +1411,9 @@ function discoverFromPath(params: {
       seen: params.seen,
       realpathCache: params.realpathCache,
       packageManifestCache: params.packageManifestCache,
-      scanFiles: params.origin === "config",
+      ...(params.scanFiles !== undefined || params.origin === "config"
+        ? { scanFiles: params.scanFiles ?? true }
+        : {}),
       ...(params.requireBuiltRuntimeEntry !== undefined
         ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
         : {}),
@@ -1588,6 +1592,7 @@ export function discoverOpenClawPlugins(params: {
           workspaceDir,
           requireBuiltRuntimeEntry: installedPath.requireBuiltRuntimeEntry,
           managedPluginDirs,
+          scanFiles: true,
           env,
           candidates: result.candidates,
           diagnostics: result.diagnostics,
