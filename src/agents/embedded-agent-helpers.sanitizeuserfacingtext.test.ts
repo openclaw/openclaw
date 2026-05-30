@@ -821,8 +821,16 @@ describe("downgradeOpenAIReasoningBlocks", () => {
         {
           role: "assistant",
           content: [
-            { type: "text", text: "commentary" },
-            { type: "text", text: "final" },
+            {
+              type: "text",
+              text: "commentary",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+            {
+              type: "text",
+              text: "final",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
           ],
         },
       ],

@@ -984,17 +984,24 @@ function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"
 
 function parseTextSignature(
   signature: string | undefined,
-): { id: string; phase?: "commentary" | "final_answer" } | undefined {
+): { id?: string; phase?: "commentary" | "final_answer" } | undefined {
   if (!signature) {
     return undefined;
   }
   if (signature.startsWith("{")) {
     try {
       const parsed = JSON.parse(signature) as { v?: unknown; id?: unknown; phase?: unknown };
-      if (parsed.v === 1 && typeof parsed.id === "string") {
-        return parsed.phase === "commentary" || parsed.phase === "final_answer"
-          ? { id: parsed.id, phase: parsed.phase }
-          : { id: parsed.id };
+      if (parsed.v === 1) {
+        const id = typeof parsed.id === "string" ? parsed.id : undefined;
+        const phase =
+          parsed.phase === "commentary" || parsed.phase === "final_answer"
+            ? parsed.phase
+            : undefined;
+        // A reasoning-dropped replay keeps the phase but omits the paired id.
+        if (id !== undefined || phase !== undefined) {
+          return { id, phase };
+        }
+        return undefined;
       }
     } catch {
       // Keep legacy plain-string behavior below.
