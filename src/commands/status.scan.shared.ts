@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -11,7 +12,6 @@ import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gate
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

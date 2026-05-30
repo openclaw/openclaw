@@ -24,6 +24,7 @@ import {
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { appendSnapshotUrls, type SnapshotUrlEntry } from "../snapshot-urls.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import {
   browserNavigationPolicyForProfile,
@@ -53,7 +54,7 @@ async function collectChromeMcpSnapshotUrls(params: {
   profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
-}): Promise<Array<{ text: string; url: string }>> {
+}): Promise<SnapshotUrlEntry[]> {
   const result = await evaluateChromeMcpScript({
     profileName: params.profileName,
     profile: params.profile,
@@ -85,14 +86,6 @@ async function collectChromeMcpSnapshotUrls(params: {
           typeof (entry as { url?: unknown }).url === "string",
       )
     : [];
-}
-
-function appendSnapshotUrls(snapshot: string, urls: Array<{ text: string; url: string }>): string {
-  if (urls.length === 0) {
-    return snapshot;
-  }
-  const lines = urls.map((entry, index) => `${index + 1}. ${entry.text} -> ${entry.url}`);
-  return `${snapshot}\n\nLinks:\n${lines.join("\n")}`;
 }
 
 async function clearChromeMcpOverlay(params: {

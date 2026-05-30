@@ -251,6 +251,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
+    "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
@@ -371,6 +372,28 @@ function buildGatewayClientDistEntries(): Record<string, string> {
   };
 }
 
+function buildNetPolicyDistEntries(): Record<string, string> {
+  return {
+    // These subpaths are imported by root runtime code and exported by the
+    // package. Keep the build list adjacent to package.json exports.
+    index: "packages/net-policy/src/index.ts",
+    ip: "packages/net-policy/src/ip.ts",
+    ipv4: "packages/net-policy/src/ipv4.ts",
+    "redact-sensitive-url": "packages/net-policy/src/redact-sensitive-url.ts",
+    "url-userinfo": "packages/net-policy/src/url-userinfo.ts",
+  };
+}
+
+function buildMediaGenerationCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-generation-core/src/index.ts",
+    "capability-model-ref": "packages/media-generation-core/src/capability-model-ref.ts",
+    catalog: "packages/media-generation-core/src/catalog.ts",
+    "model-ref": "packages/media-generation-core/src/model-ref.ts",
+    normalization: "packages/media-generation-core/src/normalization.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -380,8 +403,28 @@ function buildSpeechCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildLlmCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/llm-core/src/index.ts",
+    types: "packages/llm-core/src/types.ts",
+    "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
+    "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",
+    validation: "packages/llm-core/src/validation.ts",
+  };
+}
+
+function buildLlmRuntimeDistEntries(): Record<string, string> {
+  return {
+    index: "packages/llm-runtime/src/index.ts",
+    "api-registry": "packages/llm-runtime/src/api-registry.ts",
+    stream: "packages/llm-runtime/src/stream.ts",
+  };
+}
+
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
+    id === "@openclaw/llm-core" ||
+    id.startsWith("@openclaw/llm-core/") ||
     id === "ignore" ||
     id === "openclaw" ||
     id.startsWith("openclaw/") ||
@@ -405,8 +448,20 @@ function shouldExternalizeGatewayClientDependency(id: string): boolean {
   );
 }
 
+function shouldExternalizeNetPolicyDependency(id: string): boolean {
+  return id === "ipaddr.js" || id.startsWith("ipaddr.js/");
+}
+
 function shouldExternalizeSpeechCoreDependency(id: string): boolean {
   return id === "openclaw" || id.startsWith("openclaw/");
+}
+
+function shouldExternalizeLlmCoreDependency(id: string): boolean {
+  return id === "typebox" || id.startsWith("typebox/");
+}
+
+function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
+  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
 const coreDistEntries = buildCoreDistEntries();
@@ -472,10 +527,43 @@ export default defineConfig([
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildNetPolicyDistEntries(),
+    outDir: "packages/net-policy/dist",
+    deps: {
+      neverBundle: shouldExternalizeNetPolicyDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaGenerationCoreDistEntries(),
+    outDir: "packages/media-generation-core/dist",
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildSpeechCoreDistEntries(),
     outDir: "packages/speech-core/dist",
     deps: {
       neverBundle: shouldExternalizeSpeechCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildLlmCoreDistEntries(),
+    outDir: "packages/llm-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeLlmCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildLlmRuntimeDistEntries(),
+    outDir: "packages/llm-runtime/dist",
+    deps: {
+      neverBundle: shouldExternalizeLlmRuntimeDependency,
     },
   }),
   nodeBuildConfig({

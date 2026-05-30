@@ -39,15 +39,15 @@ import {
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
 import {
-  recordRemoteNodeInfo,
-  refreshRemoteNodeBins,
-  removeRemoteNodeInfo,
-} from "../../infra/skills-remote.js";
-import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { normalizeUniqueTrimmedStringList } from "../../shared/string-normalization.js";
+import {
+  recordRemoteNodeInfo,
+  refreshRemoteNodeBins,
+  removeRemoteNodeInfo,
+} from "../../skills/runtime/remote.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -199,8 +199,16 @@ async function resolveDirectNodePushConfig() {
     : { ok: false as const, error: auth.error };
 }
 
-function resolveRelayNodePushConfig(cfg: OpenClawConfig) {
-  const relay = resolveApnsRelayConfigFromEnv(process.env, cfg.gateway);
+function resolveRelayNodePushConfig(
+  cfg: OpenClawConfig,
+  registration: Extract<
+    NonNullable<Awaited<ReturnType<typeof loadApnsRegistration>>>,
+    { transport: "relay" }
+  >,
+) {
+  const relay = resolveApnsRelayConfigFromEnv(process.env, cfg.gateway, {
+    registrationRelayOrigin: registration.relayOrigin,
+  });
   return relay.ok
     ? { ok: true as const, relayConfig: relay.value }
     : { ok: false as const, error: relay.error };
@@ -493,7 +501,7 @@ export async function maybeWakeNodeWithApns(
 
       let wakeResult;
       if (registration.transport === "relay") {
-        const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig());
+        const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
         if (!relay.ok) {
           return withDuration({
             available: false,
@@ -595,7 +603,7 @@ export async function maybeSendNodeWakeNudge(
   try {
     let result;
     if (registration.transport === "relay") {
-      const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig());
+      const relay = resolveRelayNodePushConfig(opts?.cfg ?? getRuntimeConfig(), registration);
       if (!relay.ok) {
         return withDuration({
           sent: false,
