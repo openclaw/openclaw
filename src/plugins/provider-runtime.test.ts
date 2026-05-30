@@ -1453,8 +1453,12 @@ describe("provider-runtime", () => {
         auth: [],
         matchesContextOverflowError: ({ errorMessage }) =>
           /\bcontent_filter\b.*\btoo long\b/i.test(errorMessage),
-        classifyFailoverReason: ({ errorMessage }) =>
-          /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined,
+        classifyFailoverReason: ({ errorMessage, code, status }) => {
+          if (status === 403 && code === "PROVIDER_QUOTA_EXHAUSTED") {
+            return "billing";
+          }
+          return /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined;
+        },
       },
     ]);
 
@@ -1476,6 +1480,17 @@ describe("provider-runtime", () => {
         },
       }),
     ).toBe("rate_limit");
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          errorMessage: "Forbidden",
+          status: 403,
+          code: "PROVIDER_QUOTA_EXHAUSTED",
+        },
+      }),
+    ).toBe("billing");
   });
 
   it("resolves stream wrapper hooks through hook-only aliases without provider ownership", () => {

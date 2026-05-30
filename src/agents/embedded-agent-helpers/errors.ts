@@ -34,6 +34,7 @@ import {
   matchesFormatErrorPattern,
 } from "./failover-matches.js";
 import {
+  classifyProviderPluginError,
   classifyProviderSpecificError,
   matchesProviderContextOverflow,
 } from "./provider-error-patterns.js";
@@ -264,6 +265,7 @@ type PaymentRequiredFailoverReason = Extract<FailoverReason, "billing" | "rate_l
 export type FailoverSignal = {
   status?: number;
   code?: string;
+  errorType?: string;
   message?: string;
   provider?: string;
 };
@@ -633,14 +635,27 @@ export function classifyFailoverReasonFromHttpStatus(
   message?: string,
   opts?: { provider?: string },
 ): FailoverReason | null {
+  const hasProviderStatusSignal = Boolean(opts?.provider && typeof status === "number");
   const messageClassification = message
-    ? classifyFailoverClassificationFromMessage(message, opts?.provider)
+    ? classifyFailoverClassificationFromMessage(message, opts?.provider, {
+        includeProviderPluginHooks: !hasProviderStatusSignal,
+      })
     : null;
+  const providerPluginReason = hasProviderStatusSignal
+    ? classifyProviderPluginError({
+        errorMessage: message ?? "",
+        provider: opts?.provider,
+        status,
+      })
+    : null;
+  const effectiveMessageClassification = providerPluginReason
+    ? toReasonClassification(providerPluginReason)
+    : messageClassification;
   return failoverReasonFromClassification(
     classifyFailoverClassificationFromHttpStatus(
       status,
       message,
-      messageClassification,
+      effectiveMessageClassification,
       status,
       opts?.provider,
     ),
@@ -868,6 +883,7 @@ function isExactUnknownNoDetailsError(raw: string): boolean {
 function classifyFailoverClassificationFromMessage(
   raw: string,
   provider?: string,
+  opts?: { includeProviderPluginHooks?: boolean },
 ): FailoverClassification | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -960,7 +976,10 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("timeout");
   }
   // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
-  const providerSpecific = classifyProviderSpecificError(raw);
+  const providerSpecific = classifyProviderSpecificError(
+    { errorMessage: raw, provider },
+    { includePluginHooks: opts?.includeProviderPluginHooks },
+  );
   if (providerSpecific) {
     return toReasonClassification(providerSpecific);
   }
@@ -976,9 +995,32 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   ) {
     return toReasonClassification("timeout");
   }
+  const hasStructuredProviderSignal = Boolean(
+    signal.provider &&
+    (typeof inferredStatus === "number" ||
+      signal.code !== undefined ||
+      signal.errorType !== undefined),
+  );
   const messageClassification = signal.message
-    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
+    ? classifyFailoverClassificationFromMessage(signal.message, signal.provider, {
+        includeProviderPluginHooks: !hasStructuredProviderSignal,
+      })
     : null;
+  const providerPluginReason =
+    signal.provider &&
+    (messageClassification?.kind !== "context_overflow" || hasStructuredProviderSignal) &&
+    (signal.message || signal.code || signal.errorType || typeof inferredStatus === "number")
+      ? classifyProviderPluginError({
+          errorMessage: signal.message ?? "",
+          provider: signal.provider,
+          status: inferredStatus,
+          code: signal.code,
+          errorType: signal.errorType,
+        })
+      : null;
+  const effectiveMessageClassification = providerPluginReason
+    ? toReasonClassification(providerPluginReason)
+    : messageClassification;
   const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
@@ -986,7 +1028,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const statusClassification = classifyFailoverClassificationFromHttpStatus(
     inferredStatus,
     signal.message,
-    messageClassification,
+    effectiveMessageClassification,
     signal.status,
     signal.provider,
   );
@@ -996,7 +1038,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   if (codeReason) {
     return toReasonClassification(codeReason);
   }
-  return messageClassification;
+  return effectiveMessageClassification;
 }
 
 export function classifyProviderRuntimeFailureKind(

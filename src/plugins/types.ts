@@ -957,6 +957,9 @@ export type ProviderFailoverErrorContext = {
   provider?: string;
   modelId?: string;
   errorMessage: string;
+  status?: number;
+  code?: string;
+  errorType?: string;
 };
 
 /**

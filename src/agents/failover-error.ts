@@ -169,6 +169,35 @@ function getErrorCode(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectErrorCode);
 }
 
+function readDirectErrorType(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const directType = (err as { errorType?: unknown }).errorType;
+  if (typeof directType === "string") {
+    const trimmed = directType.trim();
+    return trimmed || undefined;
+  }
+  const detailType = (err as { detail?: { type?: unknown } }).detail?.type;
+  if (typeof detailType === "string") {
+    const trimmed = detailType.trim();
+    return trimmed || undefined;
+  }
+  const type = (err as { type?: unknown }).type;
+  if (typeof type === "string") {
+    const trimmed = type.trim();
+    if (!trimmed || /^(?:error|exception)$/i.test(trimmed)) {
+      return undefined;
+    }
+    return trimmed;
+  }
+  return undefined;
+}
+
+function getErrorType(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectErrorType);
+}
+
 function readDirectProvider(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -216,6 +245,7 @@ function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   return {
     status: readDirectStatusCode(err),
     code: readDirectErrorCode(err),
+    errorType: readDirectErrorType(err),
     message: message || undefined,
     provider: readDirectProvider(err),
   };
@@ -333,6 +363,7 @@ function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSign
   return {
     status: getStatusCode(err),
     code: getErrorCode(err),
+    errorType: getErrorType(err),
     message: message || undefined,
     provider: getProvider(err) ?? providerHint,
   };
