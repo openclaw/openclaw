@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GITHUB_ERROR_BODY_MAX_BYTES,
   canAutoscrubPullRequest,
+  createAutoscrubCommit,
   dependencyGuardCommentAuthors,
   dependencyGuardCommentHeadSha,
   dependencyFieldChanges,
@@ -436,6 +437,68 @@ describe("dependency guard script", () => {
     expect(mixedBody).toContain("also changes dependency-related files");
     expect(mixedBody).toContain("`patches/example.patch`");
     expect(mixedBody).toContain("`pnpm-workspace.yaml`");
+  });
+
+  it("reads base lockfiles with the base API before writing autoscrub commits", async () => {
+    const calls: Array<{ api: string; path: string; variables?: unknown }> = [];
+    const baseApi = {
+      request: async (path: string) => {
+        calls.push({ api: "base", path });
+        if (path.includes("/contents/pnpm-lock.yaml?")) {
+          return {
+            content: Buffer.from("base lockfile").toString("base64"),
+            encoding: "base64",
+            sha: "base-file",
+            type: "file",
+          };
+        }
+        throw new Error(`unexpected base request: ${path}`);
+      },
+    };
+    const writeApi = {
+      graphql: async (_query: string, variables: unknown) => {
+        calls.push({ api: "write", path: "graphql", variables });
+        return { createCommitOnBranch: { commit: { oid: staleSha } } };
+      },
+    };
+
+    const commit = await createAutoscrubCommit(
+      { baseApi, writeApi },
+      {
+        owner: "openclaw",
+        repo: "openclaw",
+        pullRequest: {
+          base: { sha: "base-sha" },
+          head: { ref: "contributor/change", sha: headSha },
+        },
+        lockfileChanges: ["pnpm-lock.yaml"],
+        targetRepository: { owner: "contributor", repo: "openclaw" },
+      },
+    );
+
+    expect(commit).toEqual({ sha: staleSha });
+    expect(calls.map((call) => `${call.api}:${call.path}`)).toEqual([
+      "base:/repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=base-sha",
+      "write:graphql",
+    ]);
+    expect(calls[1].variables).toMatchObject({
+      input: {
+        branch: {
+          repositoryNameWithOwner: "contributor/openclaw",
+          branchName: "contributor/change",
+        },
+        expectedHeadOid: headSha,
+        fileChanges: {
+          additions: [
+            {
+              contents: Buffer.from("base lockfile").toString("base64"),
+              path: "pnpm-lock.yaml",
+            },
+          ],
+          deletions: [],
+        },
+      },
+    });
   });
 
   it("renders a cleared guard comment that preserves approval freshness", () => {

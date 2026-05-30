@@ -571,8 +571,8 @@ async function collectDependencyManifestChanges(api, { owner, repo, pullRequest,
   return changes;
 }
 
-async function createAutoscrubCommit(
-  api,
+export async function createAutoscrubCommit(
+  { baseApi, writeApi },
   { owner, repo, pullRequest, lockfileChanges, targetRepository },
 ) {
   const headSha = pullRequest.head.sha;
@@ -582,7 +582,7 @@ async function createAutoscrubCommit(
   const additions = [];
   const deletions = [];
   for (const path of lockfileChanges) {
-    const contents = await readBase64FileAtRef(api, {
+    const contents = await readBase64FileAtRef(baseApi, {
       owner,
       repo,
       path,
@@ -594,7 +594,7 @@ async function createAutoscrubCommit(
       deletions.push({ path });
     }
   }
-  const data = await api.graphql(
+  const data = await writeApi.graphql(
     `mutation CreateAutoscrubCommit($input: CreateCommitOnBranchInput!) {
       createCommitOnBranch(input: $input) {
         commit {
@@ -832,13 +832,16 @@ async function main() {
         if (!autoscrubApi) {
           throw new Error("autoscrub app token was unavailable");
         }
-        const commit = await createAutoscrubCommit(autoscrubApi, {
-          owner,
-          repo,
-          pullRequest,
-          lockfileChanges,
-          targetRepository: autoscrubTarget,
-        });
+        const commit = await createAutoscrubCommit(
+          { baseApi: api, writeApi: autoscrubApi },
+          {
+            owner,
+            repo,
+            pullRequest,
+            lockfileChanges,
+            targetRepository: autoscrubTarget,
+          },
+        );
         await removeLabelIfPresent(dependencyChangedLabel);
         await deleteCommentIfPresent(dependencyComment);
         await upsertComment(
