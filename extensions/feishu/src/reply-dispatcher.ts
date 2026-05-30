@@ -580,7 +580,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           !skipTextForDuplicateFinal &&
           !skipTextForClosedStreamingFinal;
         const shouldDiscardStreamingPreview =
-          info?.kind === "final" && hasMedia && !shouldDeliverText;
+          info?.kind === "final" &&
+          hasMedia &&
+          ((hasVoiceMedia && !shouldDeliverText) || skipTextForDuplicateFinal);
 
         if (!shouldDeliverText && !hasMedia) {
           return;
