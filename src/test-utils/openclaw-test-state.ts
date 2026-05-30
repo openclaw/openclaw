@@ -303,12 +303,13 @@ export async function createOpenClawTestState(
       return writeJsonFile(filePath, store);
     },
     applyEnv: () => {
-      // Test fixtures apply a fixed OpenClaw env set, not plugin-provided host env.
+      // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
       for (const [key, value] of Object.entries(envVars)) {
+        // Test fixtures apply a fixed OpenClaw env set, not plugin-provided host env.
         if (value === undefined) {
           delete process.env[key];
         } else {
-          process.env[key] = value; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
+          process.env[key] = value;
         }
       }
       envApplied = true;
