@@ -400,6 +400,22 @@ function storeHasUnsafeUntouchedHydratedSkillPrompts(
     if (!ref || !isSessionSkillPromptBlobReadable(storePath, ref)) {
       return true;
     }
+    if (serializedPromptRefs?.has(key)) {
+      const projected = projectSessionStoreForPersistence({ storePath, store: { [key]: entry } });
+      for (const blob of projected.promptBlobs.values()) {
+        if (!blob.path) {
+          continue;
+        }
+        try {
+          const stat = fs.statSync(blob.path);
+          if (!stat.isFile() || stat.size !== blob.ref.bytes) {
+            return true;
+          }
+        } catch {
+          return true;
+        }
+      }
+    }
   }
   return false;
 }

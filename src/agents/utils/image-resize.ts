@@ -32,6 +32,10 @@ const DEFAULT_OPTIONS: Required<ImageResizeOptions> = {
   jpegQuality: 80,
 };
 
+function maxBinaryBytesForBase64Budget(maxBase64Bytes: number): number {
+  return Math.floor(maxBase64Bytes / 4) * 3;
+}
+
 interface EncodedCandidate {
   data: string;
   encodedSize: number;
@@ -107,7 +111,7 @@ export async function resizeImage(
         maxWidth: opts.maxWidth,
         maxHeight: opts.maxHeight,
       },
-      maxBase64Bytes: opts.maxBytes,
+      maxBytes: maxBinaryBytesForBase64Budget(opts.maxBytes),
       opaque: { format: "jpeg", quality: opts.jpegQuality },
       transparent: { format: "png" },
       search: {

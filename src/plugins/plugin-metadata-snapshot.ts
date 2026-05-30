@@ -142,6 +142,10 @@ function pickMemoRelevantEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   );
 }
 
+export function resolvePluginMetadataSnapshotMemoEnvFingerprint(env: NodeJS.ProcessEnv): string {
+  return hashJson(pickMemoRelevantEnv(env));
+}
+
 function throwReadonlyPluginMetadataMutation(): never {
   throw new TypeError("Plugin metadata snapshots are immutable");
 }

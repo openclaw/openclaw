@@ -16,11 +16,13 @@ import {
   type ModelCatalogInput,
   type ModelCatalogMediaInputConfig,
   type ModelCatalogModel,
+  type ModelCatalogOpenRouterRouting,
   type ModelCatalogProvider,
   type ModelCatalogSource,
   type ModelCatalogStatus,
   type ModelCatalogSuppression,
   type ModelCatalogTieredCost,
+  type ModelCatalogVercelGatewayRouting,
   type NormalizedModelCatalogRow,
 } from "./model-catalog-types.js";
 
@@ -119,6 +121,14 @@ function normalizeNonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function normalizeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function normalizeStringOrNumber(value: unknown): string | number | undefined {
+  return normalizeOptionalString(value) ?? normalizeFiniteNumber(value);
+}
+
 function normalizePositiveNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
@@ -187,6 +197,144 @@ function normalizeModelCatalogCost(value: unknown): ModelCatalogCost | undefined
   return Object.keys(cost).length > 0 ? cost : undefined;
 }
 
+function normalizeOpenRouterPrice(value: unknown): ModelCatalogOpenRouterRouting["max_price"] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const maxPrice = {
+    ...(normalizeStringOrNumber(value.prompt) !== undefined
+      ? { prompt: normalizeStringOrNumber(value.prompt) }
+      : {}),
+    ...(normalizeStringOrNumber(value.completion) !== undefined
+      ? { completion: normalizeStringOrNumber(value.completion) }
+      : {}),
+    ...(normalizeStringOrNumber(value.image) !== undefined
+      ? { image: normalizeStringOrNumber(value.image) }
+      : {}),
+    ...(normalizeStringOrNumber(value.audio) !== undefined
+      ? { audio: normalizeStringOrNumber(value.audio) }
+      : {}),
+    ...(normalizeStringOrNumber(value.request) !== undefined
+      ? { request: normalizeStringOrNumber(value.request) }
+      : {}),
+  } satisfies NonNullable<ModelCatalogOpenRouterRouting["max_price"]>;
+  return Object.keys(maxPrice).length > 0 ? maxPrice : undefined;
+}
+
+function normalizeOpenRouterPercentileCutoffs(
+  value: unknown,
+):
+  | NonNullable<Exclude<ModelCatalogOpenRouterRouting["preferred_min_throughput"], number>>
+  | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized = {
+    ...(normalizeFiniteNumber(value.p50) !== undefined
+      ? { p50: normalizeFiniteNumber(value.p50) }
+      : {}),
+    ...(normalizeFiniteNumber(value.p75) !== undefined
+      ? { p75: normalizeFiniteNumber(value.p75) }
+      : {}),
+    ...(normalizeFiniteNumber(value.p90) !== undefined
+      ? { p90: normalizeFiniteNumber(value.p90) }
+      : {}),
+    ...(normalizeFiniteNumber(value.p99) !== undefined
+      ? { p99: normalizeFiniteNumber(value.p99) }
+      : {}),
+  };
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeOpenRouterMetricPreference(
+  value: unknown,
+): ModelCatalogOpenRouterRouting["preferred_min_throughput"] {
+  return normalizeFiniteNumber(value) ?? normalizeOpenRouterPercentileCutoffs(value);
+}
+
+function normalizeOpenRouterSort(value: unknown): ModelCatalogOpenRouterRouting["sort"] {
+  const sort = normalizeOptionalString(value);
+  if (sort) {
+    return sort;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const by = normalizeOptionalString(value.by);
+  const partition =
+    value.partition === null ? null : (normalizeOptionalString(value.partition) ?? undefined);
+  const normalized = {
+    ...(by ? { by } : {}),
+    ...(partition !== undefined ? { partition } : {}),
+  } satisfies NonNullable<Exclude<ModelCatalogOpenRouterRouting["sort"], string>>;
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeOpenRouterRouting(value: unknown): ModelCatalogOpenRouterRouting | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const routing = {
+    ...(typeof value.allow_fallbacks === "boolean"
+      ? { allow_fallbacks: value.allow_fallbacks }
+      : {}),
+    ...(typeof value.require_parameters === "boolean"
+      ? { require_parameters: value.require_parameters }
+      : {}),
+    ...(value.data_collection === "deny" || value.data_collection === "allow"
+      ? { data_collection: value.data_collection }
+      : {}),
+    ...(typeof value.zdr === "boolean" ? { zdr: value.zdr } : {}),
+    ...(typeof value.enforce_distillable_text === "boolean"
+      ? { enforce_distillable_text: value.enforce_distillable_text }
+      : {}),
+    ...(normalizeOptionalTrimmedStringList(value.order)
+      ? { order: normalizeOptionalTrimmedStringList(value.order) }
+      : {}),
+    ...(normalizeOptionalTrimmedStringList(value.only)
+      ? { only: normalizeOptionalTrimmedStringList(value.only) }
+      : {}),
+    ...(normalizeOptionalTrimmedStringList(value.ignore)
+      ? { ignore: normalizeOptionalTrimmedStringList(value.ignore) }
+      : {}),
+    ...(normalizeOptionalTrimmedStringList(value.quantizations)
+      ? { quantizations: normalizeOptionalTrimmedStringList(value.quantizations) }
+      : {}),
+    ...(normalizeOpenRouterSort(value.sort) ? { sort: normalizeOpenRouterSort(value.sort) } : {}),
+    ...(normalizeOpenRouterPrice(value.max_price)
+      ? { max_price: normalizeOpenRouterPrice(value.max_price) }
+      : {}),
+    ...(normalizeOpenRouterMetricPreference(value.preferred_min_throughput) !== undefined
+      ? {
+          preferred_min_throughput: normalizeOpenRouterMetricPreference(
+            value.preferred_min_throughput,
+          ),
+        }
+      : {}),
+    ...(normalizeOpenRouterMetricPreference(value.preferred_max_latency) !== undefined
+      ? { preferred_max_latency: normalizeOpenRouterMetricPreference(value.preferred_max_latency) }
+      : {}),
+  } satisfies ModelCatalogOpenRouterRouting;
+  return Object.keys(routing).length > 0 ? routing : undefined;
+}
+
+function normalizeVercelGatewayRouting(
+  value: unknown,
+): ModelCatalogVercelGatewayRouting | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const routing = {
+    ...(normalizeOptionalTrimmedStringList(value.only)
+      ? { only: normalizeOptionalTrimmedStringList(value.only) }
+      : {}),
+    ...(normalizeOptionalTrimmedStringList(value.order)
+      ? { order: normalizeOptionalTrimmedStringList(value.order) }
+      : {}),
+  } satisfies ModelCatalogVercelGatewayRouting;
+  return Object.keys(routing).length > 0 ? routing : undefined;
+}
+
 function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -205,6 +353,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "requiresToolResultName",
     "requiresAssistantAfterToolResult",
     "requiresThinkingAsText",
+    "zaiToolStream",
+    "sendSessionAffinityHeaders",
+    "sendSessionIdHeader",
+    "supportsEagerToolInputStreaming",
+    "supportsLongCacheRetention",
     "nativeWebSearchTool",
     "requiresMistralToolIds",
     "requiresOpenAiAnthropicToolPayload",
@@ -254,6 +407,20 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
   const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";
   if (isModelCatalogThinkingFormat(thinkingFormat)) {
     compat.thinkingFormat = thinkingFormat;
+  }
+
+  if (value.cacheControlFormat === "anthropic") {
+    compat.cacheControlFormat = "anthropic";
+  }
+
+  const openRouterRouting = normalizeOpenRouterRouting(value.openRouterRouting);
+  if (openRouterRouting) {
+    compat.openRouterRouting = openRouterRouting;
+  }
+
+  const vercelGatewayRouting = normalizeVercelGatewayRouting(value.vercelGatewayRouting);
+  if (vercelGatewayRouting) {
+    compat.vercelGatewayRouting = vercelGatewayRouting;
   }
 
   return Object.keys(compat).length > 0 ? (compat as ModelCatalogCompatConfig) : undefined;

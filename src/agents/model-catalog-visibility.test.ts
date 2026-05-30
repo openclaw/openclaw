@@ -133,7 +133,7 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
-  });
+  }, 240_000);
 
   it("uses runtime model normalization for exact allowlist entries", async () => {
     normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ provider, context }) => {

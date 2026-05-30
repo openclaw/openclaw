@@ -755,6 +755,12 @@ const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
+const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
+  "vitest.config.ts",
+  DEFAULT_VITEST_CONFIG,
+  ...Object.values(VITEST_CONFIG_BY_KIND),
+  ...fullSuiteVitestShards.flatMap((shard) => [shard.config, ...shard.projects]),
+]);
 const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
@@ -914,7 +920,13 @@ function isPathLikeTargetArg(arg, cwd) {
   if (!arg || arg === "--" || arg.startsWith("-")) {
     return false;
   }
-  return isGlobTarget(arg) || isFileLikeTarget(arg) || isExistingPathTarget(arg, cwd);
+  const relative = toRepoRelativeTarget(arg, cwd);
+  return (
+    isGlobTarget(arg) ||
+    isFileLikeTarget(arg) ||
+    isVitestConfigPathLikeTarget(relative) ||
+    isExistingPathTarget(arg, cwd)
+  );
 }
 
 function toRepoRelativeTarget(arg, cwd) {
@@ -1043,7 +1055,10 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
   const unmatched = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
-    if (resolveVitestConfigTargetKind(relative)) {
+    if (
+      resolveVitestConfigTargetKind(relative) ||
+      (isVitestConfigFileTarget(relative) && isExistingFileTarget(targetArg, cwd))
+    ) {
       continue;
     }
     const kind = classifyTarget(targetArg, cwd);
@@ -1405,6 +1420,16 @@ function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {
 
 function resolveVitestConfigTargetKind(relative) {
   return VITEST_CONFIG_TARGET_KIND_BY_PATH.get(relative) ?? null;
+}
+
+function isVitestConfigPathLikeTarget(relative) {
+  return (
+    relative === "vitest.config.ts" || /^test\/vitest\/vitest\..+\.config\.ts$/u.test(relative)
+  );
+}
+
+function isVitestConfigFileTarget(relative) {
+  return RUNNABLE_VITEST_CONFIG_TARGETS.has(relative);
 }
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
@@ -2011,6 +2036,24 @@ export function buildVitestRunPlans(
     ];
   }
 
+  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
+  const explicitConfigTargets = activeTargetArgs.map((targetArg) =>
+    toRepoRelativeTarget(targetArg, cwd),
+  );
+  if (explicitConfigTargets.every(isVitestConfigFileTarget)) {
+    if (watchMode && explicitConfigTargets.length > 1) {
+      throw new Error(
+        "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
+      );
+    }
+    return explicitConfigTargets.map((config) => ({
+      config,
+      forwardedArgs: nonTargetArgs,
+      includePatterns: null,
+      watchMode,
+    }));
+  }
+
   const groupedTargets = new Map();
   for (const targetArg of activeTargetArgs) {
     const kind = classifyTarget(targetArg, cwd);
@@ -2040,7 +2083,6 @@ export function buildVitestRunPlans(
     );
   }
 
-  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
   const orderedKinds = [
     "unitFast",
     "unitFastFakeTimers",
@@ -2357,6 +2399,9 @@ export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
 
 export function shouldRetryVitestNoOutputTimeout(env = process.env) {
   const value = env[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim().toLowerCase();
+  if (value === undefined && isCiLikeEnv(env)) {
+    return false;
+  }
   return !["0", "false", "no", "off"].includes(value ?? "");
 }
 

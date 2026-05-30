@@ -1,4 +1,4 @@
-import type { UnifiedModelCatalogEntry } from "../model-catalog/types.js";
+import type { UnifiedModelCatalogEntry } from "@openclaw/model-catalog-core/model-catalog-types";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import { projectProviderCatalogResultToUnifiedTextRows } from "../plugins/provider-catalog-unified-text.js";
 import type {

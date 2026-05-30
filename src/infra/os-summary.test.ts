@@ -3,8 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
+vi.mock("node:child_process", () => ({
   spawnSync: spawnSyncMock,
 }));
 

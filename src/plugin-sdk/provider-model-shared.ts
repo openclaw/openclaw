@@ -35,7 +35,7 @@ export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
-} from "../model-catalog/types.js";
+} from "@openclaw/model-catalog-core/model-catalog-types";
 export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,

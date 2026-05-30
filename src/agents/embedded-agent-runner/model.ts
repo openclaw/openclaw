@@ -754,7 +754,14 @@ function resolveExplicitModelWithRegistry(params: {
     // Conditional suppressions (e.g. baseUrlHosts-gated qwen restrictions) are
     // intentionally bypassable when the user has explicitly configured the model.
     // (#74451)
-    if (shouldUnconditionallySuppress({ provider, id: modelId, config: cfg })) {
+    if (
+      shouldUnconditionallySuppress({
+        provider,
+        id: modelId,
+        ...(cfg ? { config: cfg } : {}),
+        ...(workspaceDir ? { workspaceDir } : {}),
+      })
+    ) {
       return { kind: "suppressed" };
     }
     const resolvedParams = mergeConfiguredRuntimeModelParams({
@@ -789,8 +796,9 @@ function resolveExplicitModelWithRegistry(params: {
     shouldSuppressBuiltInModel({
       provider,
       id: modelId,
-      baseUrl: providerConfig?.baseUrl,
-      config: cfg,
+      ...(cfg ? { config: cfg } : {}),
+      ...(providerConfig?.baseUrl ? { baseUrl: providerConfig.baseUrl } : {}),
+      ...(workspaceDir ? { workspaceDir } : {}),
     })
   ) {
     return { kind: "suppressed" };
@@ -1164,10 +1172,7 @@ function resolveMergedConfiguredModelReasoning(params: {
   );
 }
 
-function isVllmQwenThinkingCompat(params: {
-  provider: string;
-  compat?: unknown;
-}): boolean {
+function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }): boolean {
   const thinkingFormat = readCompatThinkingFormat(params.compat);
   return (
     normalizeProviderId(params.provider) === "vllm" &&
@@ -1543,7 +1548,8 @@ function buildUnknownModelError(params: {
   const suppressed = buildSuppressedBuiltInModelError({
     provider: params.provider,
     id: params.modelId,
-    config: params.cfg,
+    ...(params.cfg ? { config: params.cfg } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   if (suppressed) {
     return suppressed;
