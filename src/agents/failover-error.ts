@@ -187,12 +187,12 @@ function readDirectErrorType(err: unknown): string | undefined {
   const directType = (err as { errorType?: unknown }).errorType;
   if (typeof directType === "string") {
     const trimmed = directType.trim();
-    return trimmed || undefined;
+    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
   }
   const detailType = (err as { detail?: { type?: unknown } }).detail?.type;
   if (typeof detailType === "string") {
     const trimmed = detailType.trim();
-    return trimmed || undefined;
+    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
   }
   const type = (err as { type?: unknown }).type;
   if (typeof type === "string") {

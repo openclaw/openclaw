@@ -114,6 +114,13 @@ describe("provider failover hook structured signals", () => {
         message: "unclassified provider failure",
       }),
     ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "demo-provider",
+        message: "unclassified provider failure",
+        detail: { type: "api_error" },
+      }),
+    ).toBeNull();
     expect(providerRuntimeMocks.classifyProviderPluginError).not.toHaveBeenCalled();
   });
 });
