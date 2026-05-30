@@ -1,20 +1,36 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "../../../plugin-sdk/windows-spawn.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
-import { resolveWindowsCommandShim } from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 
-function resolveCommand(command: string): string {
-  return resolveWindowsCommandShim({
+function resolveChildSpawnInvocation(params: {
+  argv: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  const [command = "", ...args] = params.argv;
+  const program = resolveWindowsSpawnProgram({
     command,
-    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
+    cwd: params.cwd,
+    env: params.env,
   });
+  const invocation = materializeWindowsSpawnProgram(program, args);
+  return {
+    command: invocation.command,
+    args: invocation.argv,
+    shell: invocation.shell,
+    windowsHide: invocation.windowsHide,
+  };
 }
 
 export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
@@ -31,10 +47,13 @@ export async function createChildAdapter(params: {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
 }): Promise<ChildAdapter> {
-  const resolvedArgv = [...params.argv];
-  resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
-  const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedArgv[0] ?? "", resolvedArgv.slice(1), {
+  const resolvedSpawn = resolveChildSpawnInvocation({
+    argv: params.argv,
+    cwd: params.cwd,
+    env: baseEnv,
+  });
+  const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedSpawn.command, resolvedSpawn.args, {
     env: baseEnv,
   });
 
@@ -50,7 +69,8 @@ export async function createChildAdapter(params: {
     env: preparedSpawn.env,
     stdio: ["pipe", "pipe", "pipe"],
     detached: useDetached,
-    windowsHide: true,
+    shell: resolvedSpawn.shell,
+    windowsHide: resolvedSpawn.windowsHide ?? true,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   };
   if (stdinMode === "inherit") {

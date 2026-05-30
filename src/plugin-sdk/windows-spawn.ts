@@ -42,6 +42,7 @@ export type ResolveWindowsSpawnProgramParams = {
   env?: NodeJS.ProcessEnv;
   execPath?: string;
   packageName?: string;
+  cwd?: string;
   /** Trusted compatibility escape hatch for callers that intentionally accept shell-mediated wrapper execution. */
   allowShellFallback?: boolean;
 };
@@ -70,6 +71,38 @@ const INLINE_ARGUMENT_EXECUTABLES = new Set([
   "yarn.cmd",
   "yarn.exe",
 ]);
+
+const WINDOWS_PATH_EXTENSIONS = ".EXE;.CMD;.BAT;.COM";
+
+function getEnvironmentValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const exact = env[key];
+  if (exact !== undefined) {
+    return exact;
+  }
+  const normalizedKey = key.toLowerCase();
+  for (const [candidateKey, value] of Object.entries(env)) {
+    if (candidateKey.toLowerCase() === normalizedKey) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function getWindowsPathEntries(env: NodeJS.ProcessEnv): string[] {
+  return normalizeStringEntries((getEnvironmentValue(env, "PATH") ?? "").split(";"));
+}
+
+function hasDirectorySegment(command: string): boolean {
+  return command.includes("/") || command.includes("\\");
+}
+
+function isWindowsAbsolutePath(command: string): boolean {
+  return path.isAbsolute(command) || path.win32.isAbsolute(command);
+}
+
+function isBareWindowsCommand(command: string): boolean {
+  return !hasDirectorySegment(command) && !isWindowsAbsolutePath(command);
+}
 
 function isFilePath(candidate: string): boolean {
   try {
@@ -123,20 +156,21 @@ export function detectWindowsSpawnCommandInlineArgs(
 }
 
 /** Resolve a Windows command name through PATH and PATHEXT so wrapper inspection sees the real file. */
-export function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string {
-  if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
+export function resolveWindowsExecutablePath(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+  cwd?: string,
+): string {
+  if (!isBareWindowsCommand(command)) {
+    if (cwd && !isWindowsAbsolutePath(command)) {
+      return path.resolve(cwd, command);
+    }
     return command;
   }
 
-  const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
-  const pathEntries = normalizeStringEntries(pathValue.split(";"));
+  const pathEntries = getWindowsPathEntries(env);
   const hasExtension = path.extname(command).length > 0;
-  const pathExtRaw =
-    env.PATHEXT ??
-    env.Pathext ??
-    process.env.PATHEXT ??
-    process.env.Pathext ??
-    ".EXE;.CMD;.BAT;.COM";
+  const pathExtRaw = getEnvironmentValue(env, "PATHEXT") ?? WINDOWS_PATH_EXTENSIONS;
   const pathExt = hasExtension
     ? [""]
     : normalizeStringEntries(pathExtRaw.split(";")).map((ext) =>
@@ -281,8 +315,16 @@ export function resolveWindowsSpawnProgramCandidate(
     );
   }
 
-  const resolvedCommand = resolveWindowsExecutablePath(params.command, env);
+  const resolvedCommand = resolveWindowsExecutablePath(params.command, env, params.cwd);
   const ext = normalizeLowercaseStringOrEmpty(path.extname(resolvedCommand));
+  const unresolvedBareCommand =
+    resolvedCommand === params.command && isBareWindowsCommand(params.command);
+  if (unresolvedBareCommand && getWindowsPathEntries(env).length === 0) {
+    throw new Error(
+      `Windows spawn command "${params.command}" could not be resolved because PATH is empty. Pass an absolute path or include PATH in the spawn environment.`,
+    );
+  }
+  const unresolvedBareWrapper = unresolvedBareCommand && (ext === ".cmd" || ext === ".bat");
   if (ext === ".js" || ext === ".cjs" || ext === ".mjs") {
     return {
       command: execPath,
@@ -293,6 +335,14 @@ export function resolveWindowsSpawnProgramCandidate(
   }
 
   if (ext === ".cmd" || ext === ".bat") {
+    if (unresolvedBareWrapper) {
+      return {
+        command: resolvedCommand,
+        leadingArgv: [],
+        resolution: "unresolved-wrapper",
+      };
+    }
+
     const entrypoint =
       resolveEntrypointFromCmdShim(resolvedCommand) ??
       resolveEntrypointFromPackageJson(resolvedCommand, params.packageName);

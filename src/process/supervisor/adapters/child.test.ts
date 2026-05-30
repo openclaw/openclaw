@@ -1,5 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -61,6 +64,7 @@ function createStubChild(pid = 1234) {
 async function createAdapterHarness(params?: {
   pid?: number;
   argv?: string[];
+  cwd?: string;
   env?: NodeJS.ProcessEnv;
 }) {
   const { child, killMock } = createStubChild(params?.pid);
@@ -70,6 +74,7 @@ async function createAdapterHarness(params?: {
   });
   const adapter = await createChildAdapter({
     argv: params?.argv ?? ["node", "-e", "setTimeout(() => {}, 1000)"],
+    cwd: params?.cwd,
     env: params?.env,
     stdinMode: "pipe-open",
   });
@@ -79,9 +84,13 @@ async function createAdapterHarness(params?: {
 type SpawnWithFallbackParams = {
   argv?: string[];
   options?: {
+    cwd?: string;
     detached?: boolean;
     env?: NodeJS.ProcessEnv | Record<string, string>;
+    shell?: boolean | string;
     stdio?: string[];
+    windowsHide?: boolean;
+    windowsVerbatimArguments?: boolean;
   };
   fallbacks?: Array<{ options?: { detached?: boolean } }>;
 };
@@ -364,6 +373,53 @@ describe("createChildAdapter", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
+  });
+
+  it("resolves Windows cmd shims through the shared spawn policy", async () => {
+    setPlatform("win32");
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-child-windows-"));
+    try {
+      const shimPath = path.join(dir, "claude.cmd");
+      const entrypointPath = path.join(dir, "claude.js");
+      await writeFile(shimPath, '@ECHO off\r\n"%~dp0claude.js" %*\r\n', "utf8");
+      await writeFile(entrypointPath, "console.log('ok');\n", "utf8");
+
+      await createAdapterHarness({
+        argv: ["claude", "--print", "hi"],
+        env: { PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" },
+      });
+
+      const spawnArgs = firstSpawnWithFallbackParams();
+      expect(spawnArgs.argv).toEqual([process.execPath, entrypointPath, "--print", "hi"]);
+      expect(spawnArgs.options?.detached).toBe(false);
+      expect(spawnArgs.options?.env).toEqual({ PATH: dir, PATHEXT: ".CMD;.EXE;.BAT" });
+      expect(spawnArgs.options?.shell).toBeUndefined();
+      expect(spawnArgs.options?.windowsHide).toBe(true);
+      expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects bare Windows commands when the child env PATH is empty", async () => {
+    setPlatform("win32");
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-child-windows-"));
+    try {
+      await writeFile(path.join(dir, "claude.cmd"), '@ECHO off\r\n"%~dp0claude.js" %*\r\n', "utf8");
+      await writeFile(path.join(dir, "claude.js"), "console.log('ok');\n", "utf8");
+
+      await expect(
+        createAdapterHarness({
+          argv: ["claude", "--print", "hi"],
+          cwd: dir,
+          env: { PATH: "", PATHEXT: ".CMD;.EXE;.BAT" },
+        }),
+      ).rejects.toThrow(/PATH is empty/);
+
+      expect(spawnWithFallbackMock).not.toHaveBeenCalled();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("disables detached mode in service-managed runtime", async () => {
