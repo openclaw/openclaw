@@ -44,6 +44,7 @@ import {
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { resolveTelegramScopedAckReaction } from "./group-config-helpers.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
@@ -534,6 +535,10 @@ export const buildTelegramMessageContext = async ({
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,
+    scopedAckReaction: resolveTelegramScopedAckReaction({
+      groupConfig,
+      topicConfig,
+    }),
   });
   const ackReactionEmoji =
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;

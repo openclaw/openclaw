@@ -270,6 +270,10 @@ export type TelegramTopicConfig = {
   disableAudioPreflight?: boolean;
   /** Route this topic to a specific agent (overrides group-level and binding routing). */
   agentId?: string;
+  /** Per-topic UI streaming overrides for Telegram draft/progress messages. */
+  streaming?: TelegramPreviewStreamingConfig;
+  /** Per-topic ack reaction override. Empty string or null disables reactions. */
+  ackReaction?: string | null;
   /** Controls outbound error reporting for this topic. */
   errorPolicy?: "always" | "once" | "silent";
   /** Cooldown window for `errorPolicy: "once"` in milliseconds. */
@@ -297,6 +301,10 @@ export type TelegramGroupConfig = {
   systemPrompt?: string;
   /** If true, skip automatic voice-note transcription for mention detection in this group. */
   disableAudioPreflight?: boolean;
+  /** Per-group UI streaming overrides for Telegram draft/progress messages. */
+  streaming?: TelegramPreviewStreamingConfig;
+  /** Per-group ack reaction override. Empty string or null disables reactions. */
+  ackReaction?: string | null;
   /** Controls outbound error reporting for this group. */
   errorPolicy?: "always" | "once" | "silent";
   /** Cooldown window for `errorPolicy: "once"` in milliseconds. */

@@ -396,6 +396,27 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Use `streaming.mode: "off"` only when you want final-only delivery: Telegram preview edits are disabled and generic tool/progress chatter is suppressed instead of being sent as standalone status messages. Approval prompts, media payloads, and errors still route through normal final delivery. Use `streaming.preview.toolProgress: false` when you only want to keep answer preview edits while hiding the tool-progress status lines.
 
+    Groups and topics can override the Telegram account/channel streaming UI for noisy rooms without changing DM behavior:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "progress"
+          },
+          "groups": {
+            "-1001234567890": {
+              "streaming": {
+                "mode": "off"
+              }
+            }
+          }
+        }
+      }
+    }
+    ```
+
     <Note>
       Telegram selected quote replies are the exception. When `replyToMode` is `"first"`, `"all"`, or `"batched"` and the inbound message includes selected quote text, OpenClaw sends the final answer through Telegram's native quote-reply path instead of editing the answer preview, so `streaming.preview.toolProgress` cannot show the short status lines for that turn. Current-message replies without selected quote text still keep preview streaming. Set `replyToMode: "off"` when tool-progress visibility matters more than native quote replies, or set `streaming.preview.toolProgress: false` to acknowledge the trade-off.
     </Note>
@@ -637,7 +658,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - message sends omit `message_thread_id` (Telegram rejects `sendMessage(...thread_id=1)`)
     - typing actions still include `message_thread_id`
 
-    Topic inheritance: topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`).
+    Topic inheritance: topic entries inherit group settings unless overridden (`requireMention`, `allowFrom`, `skills`, `systemPrompt`, `enabled`, `groupPolicy`, `streaming`, `ackReaction`).
     `agentId` is topic-only and does not inherit from group defaults.
     `topics."*"` sets defaults for every topic in that group; exact topic IDs still win over `"*"`.
 
@@ -802,6 +823,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     **Emoji (`ackReaction`) resolution order:**
 
+    - `channels.telegram.groups.<chatId>.topics.<threadId>.ackReaction`
+    - `channels.telegram.groups.<chatId>.ackReaction`
     - `channels.telegram.accounts.<accountId>.ackReaction`
     - `channels.telegram.ackReaction`
     - `messages.ackReaction`
@@ -810,7 +833,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Notes:
 
     - Telegram expects unicode emoji (for example "👀").
-    - Use `""` to disable the reaction for a channel or account.
+    - Use `""` or `null` to disable the reaction for a group/topic. Use `""` to disable it for a channel or account.
 
     **Scope (`messages.ackReactionScope`):**
 

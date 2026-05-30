@@ -191,12 +191,18 @@ async function addWakeModeNowMainSystemEventJob(
 
 async function addMainOneShotHelloJob(
   cron: CronService,
-  params: { atMs: number; name: string; deleteAfterRun?: boolean },
+  params: {
+    atMs: number;
+    name: string;
+    deleteAfterRun?: boolean;
+    delivery?: { mode: "none" };
+  },
 ) {
   return cron.add({
     name: params.name,
     enabled: true,
     ...(params.deleteAfterRun === undefined ? {} : { deleteAfterRun: params.deleteAfterRun }),
+    ...(params.delivery ? { delivery: params.delivery } : {}),
     schedule: { kind: "at", at: new Date(params.atMs).toISOString() },
     sessionTarget: "main",
     wakeMode: "now",
@@ -255,13 +261,18 @@ function createStartedCronService(
   });
 }
 
-async function createMainOneShotJobHarness(params: { name: string; deleteAfterRun?: boolean }) {
+async function createMainOneShotJobHarness(params: {
+  name: string;
+  deleteAfterRun?: boolean;
+  delivery?: { mode: "none" };
+}) {
   const harness = await createMainOneShotHarness();
   const atMs = Date.parse("2025-12-13T00:00:02.000Z");
   const job = await addMainOneShotHelloJob(harness.cron, {
     atMs,
     name: params.name,
     deleteAfterRun: params.deleteAfterRun,
+    delivery: params.delivery,
   });
   return { ...harness, atMs, job };
 }
@@ -303,6 +314,24 @@ describe("CronService", () => {
     expect(requestHeartbeat).toHaveBeenCalled();
 
     await cron.list({ includeDisabled: true });
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("does not wake the assistant for explicit no-delivery main systemEvent jobs", async () => {
+    const { store, cron, enqueueSystemEvent, requestHeartbeat, events, atMs, job } =
+      await createMainOneShotJobHarness({
+        name: "silent main system event",
+        deleteAfterRun: false,
+        delivery: { mode: "none" },
+      });
+
+    vi.setSystemTime(new Date(atMs));
+    await vi.runOnlyPendingTimersAsync();
+    await events.waitFor((evt) => evt.jobId === job.id && evt.action === "finished");
+
+    expectMainSystemEventPosted(enqueueSystemEvent, { text: "hello", jobId: job.id });
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+
     await stopCronAndCleanup(cron, store);
   });
 
