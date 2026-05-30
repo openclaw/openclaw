@@ -24,6 +24,7 @@ import {
   resolveExecApprovalsPath,
   saveExecApprovals,
 } from "../infra/exec-approvals.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { DEFAULT_EXEC_DENYLIST_ENTRIES } from "../infra/exec-denylist.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
@@ -450,7 +451,48 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       requireSocket: false,
     });
 
-    expect(policy).toEqual({ security: "deny", ask: "off" });
+    expect(policy).toMatchObject({ security: "deny", ask: "off", autoReview: false });
+  });
+
+  it("lets auto mode reviewer approve node system.run allowlist misses", async () => {
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          mode: "auto",
+        },
+      },
+    });
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["echo", "ok"],
+      sessionKey: "agent:main:main",
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      rationale: "simple echo",
+      risk: "low",
+    }));
+
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: prepared.plan.argv,
+      rawCommand: prepared.plan.commandText,
+      systemRunPlan: prepared.plan,
+      autoReviewer,
+    });
+
+    expect(autoReviewer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        argv: [expect.stringMatching(/echo$/), "ok"],
+        host: "node",
+        reason: "approval-required",
+      }),
+    );
+    expect(invoke.runCommand).toHaveBeenCalledTimes(1);
+    expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "local-ok" });
   });
 
   async function runSystemInvoke(params: {
@@ -475,6 +517,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     skillBinsCurrent?: () => Promise<Array<{ name: string; resolvedPath: string }>>;
     isCmdExeInvocation?: HandleSystemRunInvokeOptions["isCmdExeInvocation"];
     sanitizeEnv?: HandleSystemRunInvokeOptions["sanitizeEnv"];
+    autoReviewer?: ExecAutoReviewer;
   }): Promise<{
     runCommand: MockedRunCommand;
     runViaMacAppExecHost: MockedRunViaMacAppExecHost;
@@ -551,6 +594,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       sendExecFinishedEvent,
       preferMacAppExecHost: params.preferMacAppExecHost,
       getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? {},
+      autoReviewer: params.autoReviewer,
     });
 
     return {
