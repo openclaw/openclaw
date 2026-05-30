@@ -4206,7 +4206,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("preserves a configured stdio mcporter server without persisting user env", async () => {
+  it("uses the original mcporter config for configured stdio servers with env", async () => {
     const userXdgConfigHome = path.join(tmpRoot, "user-xdg-config");
     const userXdgCacheHome = path.join(tmpRoot, "user-xdg-cache");
     const userQmdConfigDir = path.join(tmpRoot, "user-qmd-config");
@@ -4263,49 +4263,27 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager();
     await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.search("again", { sessionKey: "agent:main:slack:dm:u123" });
 
     const mcporterCall = spawnMock.mock.calls.find(
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    const configPath = args[args.indexOf("--config") + 1];
-    const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
-    const config = JSON.parse(await fs.readFile(configPath ?? "", "utf8")) as {
-      imports?: unknown[];
-      mcpServers?: Record<
-        string,
-        {
-          name?: string;
-          source?: string;
-          command?: string;
-          args?: string[];
-          cwd?: string;
-          env?: Record<string, string>;
-          lifecycle?: { mode?: string; idleTimeoutMs?: number };
-          allowedTools?: string[];
-        }
-      >;
-    };
-    const custom = config.mcpServers?.["custom-qmd"];
-    expect(config.imports).toEqual([]);
-    expect(custom?.name).toBeUndefined();
-    expect(custom?.source).toBeUndefined();
-    expect(custom?.command).toBe("node");
-    expect(custom?.args).toEqual(["/opt/qmd-wrapper.js", "mcp"]);
-    expect(custom?.cwd).toBe("/opt/qmd");
-    expect(custom?.env?.CUSTOM_KEEP).toBeUndefined();
-    expect(custom?.env?.API_KEY).toBeUndefined();
-    expect(custom?.env?.TOKEN).toBeUndefined();
-    expect(normalizePath(custom?.env?.XDG_CONFIG_HOME)).toContain("/agents/main/qmd/xdg-config");
-    expect(normalizePath(custom?.env?.QMD_CONFIG_DIR)).toContain("/agents/main/qmd/xdg-config/qmd");
-    expect(normalizePath(custom?.env?.XDG_CACHE_HOME)).toContain("/agents/main/qmd/xdg-cache");
-    expect(custom?.lifecycle).toEqual({ mode: "keep-alive", idleTimeoutMs: 123_000 });
-    expect(custom?.allowedTools).toEqual(["query"]);
+    expect(args).not.toContain("--config");
+    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
+    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
+    expect(callOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    await expect(
+      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
+    ).rejects.toThrow();
 
-    const configProbe = spawnMock.mock.calls.find(
+    const configProbes = spawnMock.mock.calls.filter(
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "config",
     );
-    const probeOpts = configProbe?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(configProbes).toHaveLength(1);
+    const probeOpts = configProbes[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     expect(probeOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
     expect(probeOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
     expect(probeOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
@@ -4339,7 +4317,6 @@ describe("QmdMemoryManager", () => {
             source: "user",
             command: "node",
             args: ["/opt/qmd-wrapper.js", "mcp"],
-            env: { CUSTOM_KEEP: "1" },
           }),
         );
         return child;
@@ -4404,7 +4381,6 @@ describe("QmdMemoryManager", () => {
             source: "user",
             command: "node",
             args: ["/opt/qmd-wrapper.js", "mcp"],
-            env: { CUSTOM_KEEP: "1" },
           }),
         );
         return child;

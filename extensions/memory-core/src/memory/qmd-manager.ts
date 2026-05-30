@@ -558,6 +558,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private vectorStatusDetail: string | null = null;
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
+  private mcporterConfigMode: Promise<McporterConfigMode> | null = null;
   private readonly sessionWarm = new Set<string>();
   private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
   private multiCollectionFilterSupported: boolean | null = null;
@@ -2446,6 +2447,16 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async ensureMcporterConfig(): Promise<McporterConfigMode> {
+    if (!this.mcporterConfigMode) {
+      this.mcporterConfigMode = this.resolveMcporterConfigMode().catch((err: unknown) => {
+        this.mcporterConfigMode = null;
+        throw err;
+      });
+    }
+    return await this.mcporterConfigMode;
+  }
+
+  private async resolveMcporterConfigMode(): Promise<McporterConfigMode> {
     await fs.mkdir(path.dirname(this.mcporterConfigPath), { recursive: true });
     const configured = await this.resolveConfiguredMcporterServer();
     if (configured?.mode === "external") {
@@ -2544,6 +2555,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     if (typeof server.command === "string" && server.command.length > 0) {
+      if (server.env !== undefined) {
+        return { mode: "external" };
+      }
       server.env = this.buildMcporterQmdEnv();
       // startDaemon=true depends on mcporter treating the configured stdio
       // server as daemon-warm; without lifecycle, mcporter keeps it ephemeral.
