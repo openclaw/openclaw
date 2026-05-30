@@ -2688,7 +2688,7 @@ async function processOpenAICompletionsStream(
       }
       const closeMatch = DEEPSEEK_DSML_CLOSE_RE.exec(deepSeekDsmlBuffer);
       if (!closeMatch || closeMatch.index === undefined) {
-        if (final || !deepSeekDsmlBuffer.match(DEEPSEEK_DSML_END_RE)) {
+        if (final || !DEEPSEEK_DSML_END_RE.test(deepSeekDsmlBuffer)) {
           deepSeekDsmlBuffer = final ? "" : deepSeekDsmlBuffer;
         }
         return matched;
