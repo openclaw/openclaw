@@ -1,0 +1,26 @@
+[package]
+name = "openclaw-desktop"
+version = "2026.5.28"
+description = "OpenClaw desktop client"
+authors = ["OpenClaw"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "openclaw_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.2", features = [] }
+
+[dependencies]
+getrandom = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "2.11.2", features = ["devtools"] }
+tauri-plugin-notification = "2.3.3"
+tauri-plugin-opener = "2.5.4"
+tauri-plugin-shell = "2.3.5"
+tauri-plugin-updater = "2.10.1"
+url = "2.5.4"

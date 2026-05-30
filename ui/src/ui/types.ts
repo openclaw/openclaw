@@ -1,5 +1,7 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
+export type ModelsProbeResult =
+  import("../../../src/gateway/server-methods/models.js").ModelsProbeResult;
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {

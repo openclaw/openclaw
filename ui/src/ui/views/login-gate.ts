@@ -269,9 +269,67 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
   `;
 }
 
+function renderDesktopLoginGate(state: AppViewState, faviconSrc: string) {
+  const hasStartError = Boolean(state.desktopGatewayError);
+  const statusTitle = hasStartError
+    ? t("login.desktop.failedTitle")
+    : state.desktopGatewayStarting
+      ? t("login.desktop.startingTitle")
+      : t("login.desktop.connectingTitle");
+  const statusSummary = hasStartError
+    ? t("login.desktop.failedSummary")
+    : state.desktopGatewayStarting
+      ? t("login.desktop.startingSummary")
+      : t("login.desktop.connectingSummary");
+
+  return html`
+    <div class="login-gate login-gate--desktop">
+      <div class="login-gate__card">
+        <div class="login-gate__header">
+          <img class="login-gate__logo" src=${faviconSrc} alt="OpenClaw" />
+          <div class="login-gate__title">OpenClaw</div>
+          <div class="login-gate__sub">${t("login.desktop.subtitle")}</div>
+        </div>
+        <div class="login-gate__desktop-status" aria-live="polite">
+          <div
+            class="login-gate__desktop-icon ${state.desktopGatewayStarting ? "is-spinning" : ""}"
+          >
+            ${state.desktopGatewayStarting ? icons.loader : icons.monitor}
+          </div>
+          <div>
+            <div class="login-gate__desktop-title">${statusTitle}</div>
+            <div class="login-gate__desktop-summary">${statusSummary}</div>
+          </div>
+        </div>
+        ${hasStartError
+          ? html`
+              <div class="callout danger login-gate__failure" role="alert">
+                <div class="login-gate__failure-title">${t("login.desktop.failedTitle")}</div>
+                <div class="login-gate__failure-summary">${state.desktopGatewayError}</div>
+              </div>
+            `
+          : ""}
+        <button
+          class="btn primary login-gate__connect"
+          ?disabled=${state.desktopGatewayStarting}
+          @click=${() => state.startDesktopGateway?.()}
+        >
+          ${state.desktopGatewayStarting ? icons.loader : icons.refresh}
+          ${state.desktopGatewayStarting
+            ? t("login.desktop.startingButton")
+            : t("login.desktop.retryButton")}
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 export function renderLoginGate(state: AppViewState) {
   const basePath = normalizeBasePath(state.basePath ?? "");
   const faviconSrc = agentLogoUrl(basePath);
+  if (state.desktopMode) {
+    return renderDesktopLoginGate(state, faviconSrc);
+  }
   const failure = resolveLoginFailureFeedback({
     connected: state.connected,
     lastError: state.lastError,

@@ -1,0 +1,20 @@
+{
+  "name": "openclaw-desktop",
+  "version": "2026.5.28",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tauri build",
+    "build:mac": "tauri build --bundles app,dmg",
+    "build:windows": "tauri build --bundles nsis,msi",
+    "dev": "tauri dev",
+    "prepare-runtime": "node ../../scripts/desktop/prepare-runtime.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.0",
+    "@tauri-apps/plugin-opener": "2.5.4"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.2"
+  }
+}

@@ -324,6 +324,36 @@ const ModelAgentRuntimePolicySchema = z
   .strict()
   .optional();
 
+function normalizeHttpsBaseUrl(value: string): string {
+  const trimmed = value.trim();
+  if (
+    !trimmed ||
+    /^[a-z][a-z0-9+.-]*:/iu.test(trimmed) ||
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../")
+  ) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(`https://${trimmed}`);
+    if (
+      parsed.hostname.includes(".") &&
+      !/^\d+\.\d+\.\d+\.\d+$/u.test(parsed.hostname) &&
+      parsed.protocol === "https:" &&
+      !parsed.username &&
+      !parsed.password
+    ) {
+      return parsed.toString().replace(/\/$/u, trimmed.endsWith("/") ? "/" : "");
+    }
+  } catch {
+    // Leave invalid values unchanged so downstream validation/errors preserve the user's input.
+  }
+  return trimmed;
+}
+
+const HttpsNormalizedBaseUrlSchema = z.string().min(1).transform(normalizeHttpsBaseUrl);
+
 const ModelImageInputSchema = z
   .object({
     maxBytes: z.number().int().positive().optional(),
@@ -345,7 +375,7 @@ const ModelDefinitionSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     api: ModelApiSchema.optional(),
-    baseUrl: z.string().min(1).optional(),
+    baseUrl: HttpsNormalizedBaseUrlSchema.optional(),
     reasoning: z.boolean().optional(),
     input: z
       .array(
@@ -469,7 +499,7 @@ export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
 
 const ModelProviderSchema = z
   .object({
-    baseUrl: z.string().min(1).optional(),
+    baseUrl: HttpsNormalizedBaseUrlSchema.optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])

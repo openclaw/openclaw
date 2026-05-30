@@ -74,6 +74,10 @@ export type SkillsProps = {
   clawhubDetailError: string | null;
   clawhubInstallSlug: string | null;
   clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+  desktopMode?: boolean;
+  desktopPluginSource?: string;
+  desktopPluginInstallBusy?: boolean;
+  desktopPluginInstallMessage?: { kind: "success" | "error"; text: string } | null;
   onFilterChange: (next: string) => void;
   onStatusFilterChange: (next: SkillsStatusFilter) => void;
   onRefresh: () => void;
@@ -88,6 +92,8 @@ export type SkillsProps = {
   onClawHubDetailOpen: (slug: string) => void;
   onClawHubDetailClose: () => void;
   onClawHubInstall: (slug: string) => void;
+  onDesktopPluginSourceChange?: (next: string) => void;
+  onDesktopPluginInstall?: () => void;
 };
 
 type StatusTabDef = { id: SkillsStatusFilter; label: string };
@@ -286,6 +292,49 @@ export function renderSkills(props: SkillsProps) {
         ${renderClawHubResults(props)}
       </div>
 
+      ${props.desktopMode
+        ? html`
+            <div style="margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px;">
+              <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
+                <div style="font-weight: 600;">Desktop Plugins</div>
+                <div class="muted" style="font-size: 13px;">
+                  Install an external OpenClaw plugin into the desktop Gateway runtime.
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                <label class="field" style="flex: 1; min-width: 220px;">
+                  <input
+                    .value=${props.desktopPluginSource ?? ""}
+                    @input=${(e: Event) =>
+                      props.onDesktopPluginSourceChange?.((e.target as HTMLInputElement).value)}
+                    placeholder="clawhub:owner/plugin, npm:pkg, npm-pack:/path/plugin.tgz"
+                    autocomplete="off"
+                    name="desktop-plugin-install-source"
+                  />
+                </label>
+                <button
+                  class="btn"
+                  ?disabled=${!props.connected ||
+                  props.desktopPluginInstallBusy ||
+                  !(props.desktopPluginSource ?? "").trim()}
+                  @click=${() => props.onDesktopPluginInstall?.()}
+                >
+                  ${props.desktopPluginInstallBusy ? "Installing..." : "Install plugin"}
+                </button>
+              </div>
+              ${props.desktopPluginInstallMessage
+                ? html`<div
+                    class="callout ${props.desktopPluginInstallMessage.kind === "error"
+                      ? "danger"
+                      : "success"}"
+                    style="margin-top: 8px;"
+                  >
+                    ${props.desktopPluginInstallMessage.text}
+                  </div>`
+                : nothing}
+            </div>
+          `
+        : nothing}
       ${props.error
         ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
         : nothing}

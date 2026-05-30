@@ -40,8 +40,31 @@ import {
   handleFirstUpdated,
   handleUpdated,
 } from "./app-lifecycle.ts";
-import { initNativeBridge } from "./app-native-bridge.ts";
-import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
+import {
+  checkDesktopAppUpdate as checkDesktopAppUpdateInternal,
+  initNativeBridge,
+  getDesktopCliStatus,
+  getDesktopNotificationStatus,
+  installDesktopPlugin,
+  installDesktopCli,
+  installDesktopAppUpdate as installDesktopAppUpdateInternal,
+  isTauriDesktop,
+  openDesktopAppUpdatePage as openDesktopAppUpdatePageInternal,
+  openDesktopPermissionSettings as openDesktopPermissionSettingsInternal,
+  refreshTauriDesktopStatus,
+  requestDesktopNotificationPermission,
+  restartTauriDesktopGateway,
+  sendDesktopNotificationTest,
+  startTauriDesktopGateway,
+  type DesktopStatus,
+  type DesktopGatewayStateUpdate,
+  type DesktopCliStatus,
+  type DesktopAppUpdateStatus,
+} from "./app-native-bridge.ts";
+import {
+  createChatSession as createChatSessionInternal,
+  switchChatSession,
+} from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
@@ -70,6 +93,7 @@ import {
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
+import { createChatModelOverride } from "./chat-model-ref.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
   createRealtimeTalkConversationState,
@@ -89,6 +113,14 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "./controllers/agents.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { applyConfigSnapshot, loadConfig as loadConfigController } from "./controllers/config.ts";
+import {
+  buildDesktopModelSetupPatch,
+  createDesktopModelSetupForm,
+  resolveDesktopModelSetupStatus,
+  updateDesktopModelSetupForm as updateDesktopModelSetupFormInternal,
+  type DesktopModelSetupForm,
+} from "./controllers/desktop-model-setup.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type {
   DreamingStatus,
@@ -102,18 +134,28 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import { probeModelProvider } from "./controllers/models.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
   ClawHubSkillDetail,
   SkillMessage,
 } from "./controllers/skills.ts";
+import { loadSkills } from "./controllers/skills.ts";
 import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
-import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
+import {
+  loadDesktopOnboardingSessionCreated,
+  loadDesktopModelSetupComplete,
+  loadLocalUserIdentity,
+  loadSettings,
+  saveDesktopOnboardingSessionCreated,
+  saveDesktopModelSetupComplete,
+  type UiSettings,
+} from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import type {
   AgentsListResult,
@@ -130,6 +172,7 @@ import type {
   LogLevel,
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  ModelsProbeResult,
   PresenceEntry,
   ChannelsStatusSnapshot,
   SessionCompactionCheckpoint,
@@ -153,13 +196,10 @@ declare global {
 const bootAssistantIdentity = normalizeAssistantIdentity({});
 const bootLocalUserIdentity = loadLocalUserIdentity();
 
-function resolveOnboardingMode(): boolean {
-  if (!window.location.search) {
-    return false;
-  }
-  const params = new URLSearchParams(window.location.search);
+export function resolveOnboardingMode(search = window.location.search): boolean {
+  const params = new URLSearchParams(search);
   const raw = params.get("onboarding");
-  if (!raw) {
+  if (raw == null || raw.trim() === "") {
     return false;
   }
   const normalized = raw.trim().toLowerCase();
@@ -182,6 +222,38 @@ export class OpenClawApp extends LitElement {
   @state() loginShowGatewayPassword = false;
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
+  @state() desktopMode = isTauriDesktop();
+  @state() desktopGatewayStarting = this.desktopMode;
+  @state() desktopGatewayStarted = false;
+  @state() desktopGatewayError: string | null = null;
+  @state() desktopStatus: DesktopStatus | null = null;
+  @state() desktopCliStatus: DesktopCliStatus | null = null;
+  @state() desktopCliLoading = false;
+  @state() desktopCliInstalling = false;
+  @state() desktopCliMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() desktopAppUpdateChecking = false;
+  @state() desktopAppUpdateInstalling = false;
+  @state() desktopAppUpdateStatus: DesktopAppUpdateStatus | null = null;
+  @state() desktopAppUpdateMessage: { kind: "success" | "error"; text: string } | null = null;
+  @state() desktopWizardSessionId: string | null = null;
+  @state() desktopWizardBusy = false;
+  @state() desktopWizardError: string | null = null;
+  @state() desktopWizardStep: AppViewState["desktopWizardStep"] = null;
+  @state() desktopWizardDone = false;
+  @state() desktopWizardAnswer: unknown = null;
+  @state() desktopNotificationPermission: NotificationPermission | "unsupported" = "unsupported";
+  @state() desktopNotificationLoading = false;
+  @state() desktopModelSetupChecked = !this.desktopMode;
+  @state() desktopModelSetupRequired = false;
+  @state() desktopModelSetupLoading = false;
+  @state() desktopModelSetupSaving = false;
+  @state() desktopModelSetupError: string | null = null;
+  @state() desktopModelSetupDismissed = false;
+  @state() desktopModelSetupComplete = !this.desktopMode || loadDesktopModelSetupComplete();
+  @state() desktopModelSetupForm: DesktopModelSetupForm = createDesktopModelSetupForm();
+  private desktopModelSetupGeneration = 0;
+  private desktopOnboardingSessionCreating = false;
+  private desktopOnboardingSessionCreated = loadDesktopOnboardingSessionCreated();
   @state() connected = false;
   @state() theme: ThemeName = this.settings.theme ?? "claw";
   @state() themeMode: ThemeMode = this.settings.themeMode ?? "system";
@@ -255,6 +327,8 @@ export class OpenClawApp extends LitElement {
   @state() chatModelSwitchPromises: Record<string, Promise<boolean>> = {};
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
+  @state() modelProbeResults: Record<string, ModelsProbeResult> = {};
+  @state() modelProbeLoadingKey: string | null = null;
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
   @state() sessionSwitchFlashKey: string | null = null;
   @state() chatSessionPickerOpen = false;
@@ -599,6 +673,9 @@ export class OpenClawApp extends LitElement {
   @state() skillCardContentKeys: Record<string, string> = {};
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
+  @state() desktopPluginInstallSource = "";
+  @state() desktopPluginInstallBusy = false;
+  @state() desktopPluginInstallMessage: { kind: "success" | "error"; text: string } | null = null;
 
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
@@ -773,6 +850,19 @@ export class OpenClawApp extends LitElement {
     if (changed.has("tab") && this.tab !== "chat" && this.chatMobileControlsOpen) {
       this.setChatMobileControlsOpen(false);
     }
+    if (changed.has("connected") || changed.has("desktopMode")) {
+      if (this.desktopMode && this.connected) {
+        void this.loadDesktopModelSetupStatus();
+        void this.ensureDesktopOnboardingSession();
+        void this.refreshDesktopCliStatus();
+      } else if (!this.connected) {
+        this.desktopModelSetupChecked = !this.desktopMode;
+        this.desktopModelSetupRequired = false;
+        this.desktopModelSetupLoading = false;
+        this.desktopModelSetupSaving = false;
+        this.desktopModelSetupError = null;
+      }
+    }
     if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
       return;
     }
@@ -793,6 +883,495 @@ export class OpenClawApp extends LitElement {
 
   connect() {
     connectGatewayInternal(this as unknown as Parameters<typeof connectGatewayInternal>[0]);
+  }
+
+  startDesktopGateway() {
+    void startTauriDesktopGateway(this);
+  }
+
+  setDesktopGatewayState(next: DesktopGatewayStateUpdate) {
+    if (typeof next.starting === "boolean") {
+      this.desktopGatewayStarting = next.starting;
+    }
+    if (typeof next.started === "boolean") {
+      this.desktopGatewayStarted = next.started;
+    }
+    if ("error" in next) {
+      this.desktopGatewayError = next.error ?? null;
+    }
+    const gatewayUrl = typeof next.url === "string" ? next.url.trim() : "";
+    const token = typeof next.token === "string" ? next.token.trim() : "";
+    if (gatewayUrl && (gatewayUrl !== this.settings.gatewayUrl || token !== this.settings.token)) {
+      this.applySettings({ ...this.settings, gatewayUrl, token });
+      this.password = "";
+    }
+  }
+
+  setDesktopStatus(next: DesktopStatus | null) {
+    this.desktopStatus = next;
+  }
+
+  async refreshDesktopStatus() {
+    await refreshTauriDesktopStatus(this);
+  }
+
+  async refreshDesktopCliStatus() {
+    if (!this.desktopMode || this.desktopCliLoading) {
+      return;
+    }
+    this.desktopCliLoading = true;
+    try {
+      this.desktopCliStatus = await getDesktopCliStatus();
+    } catch (err) {
+      this.desktopCliMessage = { kind: "error", text: String(err) };
+    } finally {
+      this.desktopCliLoading = false;
+    }
+  }
+
+  async installDesktopCliHelper() {
+    if (!this.desktopMode || this.desktopCliInstalling) {
+      return;
+    }
+    this.desktopCliInstalling = true;
+    this.desktopCliMessage = null;
+    try {
+      const result = await installDesktopCli("auto");
+      this.desktopCliMessage = {
+        kind: "success",
+        text:
+          result.stdout?.trim() ||
+          "Installed the OpenClaw CLI helper. New terminal windows can run openclaw.",
+      };
+      await this.refreshDesktopCliStatus();
+    } catch (err) {
+      this.desktopCliMessage = { kind: "error", text: String(err) };
+    } finally {
+      this.desktopCliInstalling = false;
+    }
+  }
+
+  private applyDesktopWizardResult(result: {
+    sessionId?: string;
+    done?: boolean;
+    status?: string;
+    step?: AppViewState["desktopWizardStep"];
+    error?: string;
+  }) {
+    if (typeof result.sessionId === "string" && result.sessionId.trim()) {
+      this.desktopWizardSessionId = result.sessionId.trim();
+    }
+    this.desktopWizardDone = result.done === true || result.status === "done";
+    this.desktopWizardStep = result.step ?? null;
+    this.desktopWizardError = result.error ?? null;
+    this.desktopWizardAnswer = result.step?.initialValue ?? null;
+    if (this.desktopWizardDone) {
+      this.desktopWizardSessionId = null;
+      this.desktopModelSetupComplete = true;
+      saveDesktopModelSetupComplete(true);
+      this.desktopModelSetupRequired = false;
+      this.desktopModelSetupChecked = true;
+      this.desktopModelSetupDismissed = true;
+    }
+  }
+
+  updateDesktopSetupWizardAnswer(answer: unknown) {
+    this.desktopWizardAnswer = answer;
+  }
+
+  async startDesktopSetupWizard() {
+    if (!this.client || !this.connected || this.desktopWizardBusy) {
+      return;
+    }
+    this.desktopWizardBusy = true;
+    this.desktopWizardError = null;
+    try {
+      const result = await this.client.request<{
+        sessionId?: string;
+        done?: boolean;
+        status?: string;
+        step?: AppViewState["desktopWizardStep"];
+        error?: string;
+      }>("wizard.start", { mode: "local" });
+      this.applyDesktopWizardResult(result);
+    } catch (err) {
+      this.desktopWizardError = String(err);
+    } finally {
+      this.desktopWizardBusy = false;
+    }
+  }
+
+  async submitDesktopSetupWizard() {
+    if (!this.client || !this.connected || this.desktopWizardBusy || !this.desktopWizardSessionId) {
+      return;
+    }
+    const step = this.desktopWizardStep;
+    this.desktopWizardBusy = true;
+    this.desktopWizardError = null;
+    try {
+      const params: Record<string, unknown> = { sessionId: this.desktopWizardSessionId };
+      if (step) {
+        params.answer = { stepId: step.id, value: this.desktopWizardAnswer };
+      }
+      const result = await this.client.request<{
+        done?: boolean;
+        status?: string;
+        step?: AppViewState["desktopWizardStep"];
+        error?: string;
+      }>("wizard.next", params);
+      this.applyDesktopWizardResult(result);
+    } catch (err) {
+      this.desktopWizardError = String(err);
+    } finally {
+      this.desktopWizardBusy = false;
+    }
+  }
+
+  async cancelDesktopSetupWizard() {
+    if (!this.client || !this.connected || this.desktopWizardBusy || !this.desktopWizardSessionId) {
+      return;
+    }
+    this.desktopWizardBusy = true;
+    this.desktopWizardError = null;
+    try {
+      await this.client.request("wizard.cancel", { sessionId: this.desktopWizardSessionId });
+      this.desktopWizardSessionId = null;
+      this.desktopWizardStep = null;
+      this.desktopWizardDone = false;
+      this.desktopWizardAnswer = null;
+    } catch (err) {
+      this.desktopWizardError = String(err);
+    } finally {
+      this.desktopWizardBusy = false;
+    }
+  }
+
+  async openDesktopPermissionSettings(permissionId: string) {
+    try {
+      await openDesktopPermissionSettingsInternal(permissionId);
+    } catch (err) {
+      this.lastError = String(err);
+    }
+  }
+
+  async openDesktopAppUpdatePage() {
+    try {
+      await openDesktopAppUpdatePageInternal();
+    } catch (err) {
+      this.lastError = String(err);
+    }
+  }
+
+  async checkDesktopAppUpdate() {
+    if (!this.desktopMode || this.desktopAppUpdateChecking) {
+      return;
+    }
+    this.desktopAppUpdateChecking = true;
+    this.desktopAppUpdateMessage = null;
+    try {
+      const status = await checkDesktopAppUpdateInternal();
+      this.desktopAppUpdateStatus = status;
+      if (status.error) {
+        this.desktopAppUpdateMessage = { kind: "error", text: status.error };
+      } else if (status.available) {
+        this.desktopAppUpdateMessage = {
+          kind: "success",
+          text: `Desktop update ${status.version ?? ""} is available.`.trim(),
+        };
+      } else if (status.configured) {
+        this.desktopAppUpdateMessage = { kind: "success", text: "Desktop app is up to date." };
+      } else {
+        this.desktopAppUpdateMessage = {
+          kind: "error",
+          text: "Desktop in-app updater is not configured for this build.",
+        };
+      }
+    } catch (err) {
+      this.desktopAppUpdateMessage = { kind: "error", text: String(err) };
+    } finally {
+      this.desktopAppUpdateChecking = false;
+    }
+  }
+
+  async installDesktopAppUpdate() {
+    if (!this.desktopMode || this.desktopAppUpdateInstalling) {
+      return;
+    }
+    this.desktopAppUpdateInstalling = true;
+    this.desktopAppUpdateMessage = null;
+    try {
+      const status = await installDesktopAppUpdateInternal();
+      this.desktopAppUpdateStatus = status;
+      this.desktopAppUpdateMessage = {
+        kind: "success",
+        text: status.available
+          ? `Installed desktop update ${status.version ?? ""}. Restart the app if it did not restart automatically.`.trim()
+          : "No desktop update is currently available.",
+      };
+    } catch (err) {
+      this.desktopAppUpdateMessage = { kind: "error", text: String(err) };
+    } finally {
+      this.desktopAppUpdateInstalling = false;
+    }
+  }
+
+  async handleDesktopNotificationEnable() {
+    if (!this.desktopMode || this.desktopNotificationLoading) {
+      return;
+    }
+    this.desktopNotificationLoading = true;
+    try {
+      const status = await requestDesktopNotificationPermission();
+      this.desktopNotificationPermission = status.permission;
+    } catch (err) {
+      this.lastError = String(err);
+    } finally {
+      this.desktopNotificationLoading = false;
+    }
+  }
+
+  async handleDesktopNotificationTest() {
+    if (!this.desktopMode || this.desktopNotificationLoading) {
+      return;
+    }
+    this.desktopNotificationLoading = true;
+    try {
+      const status = await sendDesktopNotificationTest();
+      this.desktopNotificationPermission = status.permission;
+    } catch (err) {
+      this.lastError = String(err);
+    } finally {
+      this.desktopNotificationLoading = false;
+    }
+  }
+
+  async installDesktopExternalPlugin() {
+    const source = this.desktopPluginInstallSource.trim();
+    if (!this.desktopMode || !source || this.desktopPluginInstallBusy) {
+      return;
+    }
+    this.desktopPluginInstallBusy = true;
+    this.desktopPluginInstallMessage = null;
+    try {
+      const result = await installDesktopPlugin(source);
+      this.desktopPluginInstallMessage = {
+        kind: "success",
+        text:
+          result.stdout?.trim() ||
+          `Installed plugin from ${source}. Restarted the local Gateway so the plugin can load.`,
+      };
+      await restartTauriDesktopGateway(this);
+      await Promise.all([
+        loadConfigController(this as unknown as Parameters<typeof loadConfigController>[0], {
+          discardPendingChanges: true,
+        }).catch(() => undefined),
+        loadSkills(this as unknown as Parameters<typeof loadSkills>[0], {
+          clearMessages: false,
+        }).catch(() => undefined),
+      ]);
+    } catch (err) {
+      this.desktopPluginInstallMessage = { kind: "error", text: String(err) };
+    } finally {
+      this.desktopPluginInstallBusy = false;
+    }
+  }
+
+  updateDesktopModelSetupForm(patch: Partial<DesktopModelSetupForm>) {
+    this.desktopModelSetupForm = updateDesktopModelSetupFormInternal(
+      this.desktopModelSetupForm,
+      patch,
+    );
+    this.desktopModelSetupError = null;
+  }
+
+  async loadDesktopModelSetupStatus() {
+    if (!this.desktopMode || !this.connected || !this.client) {
+      this.desktopModelSetupChecked = !this.desktopMode;
+      return;
+    }
+    if (this.desktopModelSetupLoading) {
+      return;
+    }
+    const generation = ++this.desktopModelSetupGeneration;
+    this.desktopModelSetupLoading = true;
+    this.desktopModelSetupError = null;
+    try {
+      const [snapshot, modelsResult, authStatus] = await Promise.all([
+        this.client.request<ConfigSnapshot>("config.get", {}),
+        this.client
+          .request<{ models?: ModelCatalogEntry[] }>("models.list", { view: "configured" })
+          .catch(() => ({ models: [] })),
+        this.client
+          .request<ModelAuthStatusResult>("models.authStatus", { refresh: true })
+          .catch(() => null),
+      ]);
+      if (generation !== this.desktopModelSetupGeneration) {
+        return;
+      }
+      applyConfigSnapshot(this as unknown as Parameters<typeof applyConfigSnapshot>[0], snapshot, {
+        discardPendingChanges: true,
+      });
+      const models = Array.isArray(modelsResult.models) ? modelsResult.models : [];
+      this.chatModelCatalog = models;
+      if (authStatus) {
+        this.modelAuthStatusResult = authStatus;
+      }
+      const status = resolveDesktopModelSetupStatus({ snapshot, models, authStatus });
+      this.desktopModelSetupRequired = status.required || !this.desktopModelSetupComplete;
+      this.desktopModelSetupChecked = true;
+    } catch (err) {
+      if (generation !== this.desktopModelSetupGeneration) {
+        return;
+      }
+      this.desktopModelSetupChecked = true;
+      this.desktopModelSetupRequired = true;
+      this.desktopModelSetupError = String(err);
+    } finally {
+      if (generation === this.desktopModelSetupGeneration) {
+        this.desktopModelSetupLoading = false;
+      }
+    }
+  }
+
+  async saveDesktopModelSetup() {
+    if (!this.client || !this.connected || this.desktopModelSetupSaving) {
+      return;
+    }
+    this.desktopModelSetupSaving = true;
+    this.desktopModelSetupError = null;
+    try {
+      let snapshot = this.configSnapshot;
+      if (!snapshot?.hash) {
+        snapshot = await this.client.request<ConfigSnapshot>("config.get", {});
+        applyConfigSnapshot(
+          this as unknown as Parameters<typeof applyConfigSnapshot>[0],
+          snapshot,
+          {
+            discardPendingChanges: true,
+          },
+        );
+      }
+      if (!snapshot?.hash) {
+        throw new Error("Config hash missing; reload and retry.");
+      }
+      const setup = buildDesktopModelSetupPatch(this.desktopModelSetupForm, { snapshot });
+      await this.client.request("config.patch", {
+        raw: JSON.stringify(setup.patch),
+        baseHash: snapshot.hash,
+      });
+      const targetSessionKey = this.sessionKey;
+      try {
+        await this.client.request("sessions.patch", {
+          key: targetSessionKey,
+          model: setup.modelRef,
+        });
+        this.chatModelOverrides = {
+          ...this.chatModelOverrides,
+          [targetSessionKey]: createChatModelOverride(setup.modelRef),
+        };
+      } catch (err) {
+        this.lastError = `Saved model settings, but could not update the current chat session: ${String(err)}`;
+      }
+      this.desktopModelSetupComplete = true;
+      saveDesktopModelSetupComplete(true);
+      this.desktopModelSetupRequired = false;
+      this.desktopModelSetupChecked = true;
+      this.desktopModelSetupForm = { ...this.desktopModelSetupForm, apiKey: "" };
+      try {
+        await this.loadDesktopModelSetupStatus();
+      } finally {
+        this.desktopModelSetupError = null;
+        this.desktopModelSetupRequired = false;
+        this.desktopModelSetupChecked = true;
+        this.desktopModelSetupComplete = true;
+      }
+    } catch (err) {
+      this.desktopModelSetupError = String(err);
+    } finally {
+      this.desktopModelSetupSaving = false;
+    }
+  }
+
+  async ensureDesktopOnboardingSession() {
+    if (
+      !this.desktopMode ||
+      !this.connected ||
+      !this.client ||
+      this.desktopModelSetupComplete ||
+      this.desktopOnboardingSessionCreated ||
+      this.desktopOnboardingSessionCreating
+    ) {
+      return;
+    }
+    this.desktopOnboardingSessionCreating = true;
+    try {
+      const result = await this.client.request<{ key?: string }>("sessions.create", {
+        agentId: "main",
+        label: "Desktop onboarding",
+        emitCommandHooks: false,
+      });
+      const key = typeof result?.key === "string" ? result.key.trim() : "";
+      if (!key) {
+        return;
+      }
+      this.desktopOnboardingSessionCreated = true;
+      saveDesktopOnboardingSessionCreated(true);
+      switchChatSession(this as unknown as AppViewState, key);
+    } catch (err) {
+      this.lastError = `Could not create the desktop onboarding session: ${String(err)}`;
+    } finally {
+      this.desktopOnboardingSessionCreating = false;
+    }
+  }
+
+  openDesktopModelAdvancedSettings() {
+    this.desktopModelSetupComplete = true;
+    saveDesktopModelSetupComplete(true);
+    this.desktopModelSetupDismissed = true;
+    setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], "config");
+    void loadConfigController(this as unknown as Parameters<typeof loadConfigController>[0], {
+      discardPendingChanges: true,
+    });
+  }
+
+  async probeProviderModel(
+    providerId: string,
+    modelId: string,
+    providerConfig?: Record<string, unknown>,
+  ) {
+    if (!this.client || !this.connected) {
+      return;
+    }
+    const key = `${providerId}\u0000${modelId}`;
+    if (this.modelProbeLoadingKey === key) {
+      return;
+    }
+    this.modelProbeLoadingKey = key;
+    this.lastError = null;
+    try {
+      const result = await probeModelProvider(this.client, {
+        provider: providerId,
+        model: modelId,
+        providerConfig,
+      });
+      this.modelProbeResults = {
+        ...this.modelProbeResults,
+        [key]: result,
+      };
+    } catch (err) {
+      this.modelProbeResults = {
+        ...this.modelProbeResults,
+        [key]: {
+          provider: providerId,
+          model: modelId,
+          ok: false,
+          elapsedMs: 0,
+          message: String(err),
+        },
+      };
+    } finally {
+      this.modelProbeLoadingKey = null;
+    }
   }
 
   handleChatScroll(event: Event) {
@@ -1322,6 +1901,14 @@ export class OpenClawApp extends LitElement {
   }
 
   private async initWebPushState() {
+    if (this.desktopMode) {
+      this.webPushSupported = false;
+      this.webPushPermission = "unsupported";
+      this.webPushSubscribed = false;
+      const status = await getDesktopNotificationStatus();
+      this.desktopNotificationPermission = status.permission;
+      return;
+    }
     const supported =
       "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
     this.webPushSupported = supported;
@@ -1339,6 +1926,9 @@ export class OpenClawApp extends LitElement {
 
   /** Re-register local push subscription with the gateway after connect. */
   async reconcileWebPushState() {
+    if (this.desktopMode) {
+      return;
+    }
     if (!this.client) {
       return;
     }

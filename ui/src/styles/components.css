@@ -84,6 +84,244 @@
   font-weight: 600;
 }
 
+.login-gate__desktop-status {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.login-gate__desktop-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.login-gate__desktop-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.login-gate__desktop-icon.is-spinning svg {
+  animation: login-gate-spin 1s linear infinite;
+}
+
+.login-gate__desktop-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.login-gate__desktop-summary {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+@keyframes login-gate-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ===========================================
+   Desktop Model Setup
+   =========================================== */
+
+.desktop-model-setup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 24px;
+  background: var(--bg);
+}
+
+.desktop-model-setup__card {
+  width: min(720px, 100%);
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  animation: scale-in 0.25s var(--ease-out);
+}
+
+.desktop-model-setup__header {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 22px;
+}
+
+.desktop-model-setup__icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.desktop-model-setup__icon svg,
+.desktop-model-setup__spinner svg,
+.desktop-model-setup__actions svg {
+  width: 18px;
+  height: 18px;
+}
+
+.desktop-model-setup__title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.desktop-model-setup__subtitle {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.desktop-model-setup__status {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.desktop-model-setup__status + .desktop-model-setup__status,
+.desktop-model-setup__status + .desktop-model-setup__form {
+  margin-top: 14px;
+}
+
+.desktop-model-setup__status-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--accent);
+}
+
+.desktop-model-setup__status-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.desktop-model-setup__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.desktop-model-setup__wizard,
+.desktop-model-setup__checks {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.desktop-model-setup__check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.desktop-model-setup__spinner svg {
+  animation: login-gate-spin 1s linear infinite;
+}
+
+.desktop-model-setup__status-title {
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.desktop-model-setup__status-summary {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.desktop-model-setup__form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.desktop-model-setup__provider-lock {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-height: 67px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.desktop-model-setup__provider-lock span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.desktop-model-setup__provider-lock strong {
+  overflow: hidden;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+
+.desktop-model-setup__error,
+.desktop-model-setup__actions {
+  grid-column: 1 / -1;
+}
+
+.desktop-model-setup__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .desktop-model-setup__form,
+  .desktop-model-setup__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .desktop-model-setup__actions {
+    flex-direction: column;
+  }
+
+  .desktop-model-setup__actions .btn {
+    justify-content: center;
+    width: 100%;
+  }
+}
+
 .login-gate__failure {
   margin-top: 14px;
 }
@@ -6671,6 +6909,67 @@ details[open] > .ov-expandable-toggle::after {
   display: inline;
 }
 
+.config-provider-manager {
+  margin: 12px 0;
+}
+
+.config-provider-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.45fr) minmax(260px, 1fr);
+  gap: 10px 16px;
+  align-items: start;
+}
+
+.config-provider-row .settings-info-row__value {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.config-provider-row .mono {
+  overflow-wrap: anywhere;
+}
+
+.config-provider-row__models {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.config-provider-model {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.config-provider-model__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.config-provider-model__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.config-provider-model__message {
+  grid-column: 1 / -1;
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 600px) {
   .ov-cards {
     grid-template-columns: repeat(2, 1fr);
@@ -6696,5 +6995,16 @@ details[open] > .ov-expandable-toggle::after {
   .ov-recent__row {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  .config-provider-row,
+  .config-provider-model {
+    grid-template-columns: 1fr;
+  }
+
+  .config-provider-row .settings-info-row__value,
+  .config-provider-model__status {
+    justify-content: flex-start;
+    white-space: normal;
   }
 }

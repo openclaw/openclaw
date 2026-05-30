@@ -14,6 +14,11 @@ import {
 export type ConfigState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  desktopMode?: boolean;
+  desktopStatus?: {
+    runtime?: { packaged_runtime?: boolean; runtime_source?: string };
+    capabilities?: { gateway_update_supported?: boolean };
+  } | null;
   applySessionKey: string;
   configLoading: boolean;
   configRaw: string;
@@ -274,6 +279,17 @@ export async function runUpdate(state: ConfigState) {
   state.lastError = null;
   state.updateStatusBanner = null;
   try {
+    if (
+      state.desktopMode &&
+      state.desktopStatus?.capabilities?.gateway_update_supported === false
+    ) {
+      state.pendingUpdateExpectedVersion = null;
+      state.updateStatusBanner = {
+        tone: "info",
+        text: "Desktop is running a packaged OpenClaw runtime. Update the desktop app instead of running the Gateway package updater from inside the bundle.",
+      };
+      return;
+    }
     const res = await state.client.request<{
       ok?: boolean;
       result?: { status?: string; reason?: string; after?: { version?: string | null } };

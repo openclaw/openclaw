@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenClaw",
+  "version": "2026.5.28",
+  "identifier": "ai.openclaw.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../.. desktop:prepare-runtime -- --dev && pnpm --dir ../../ui dev",
+    "beforeBuildCommand": "pnpm --dir ../.. desktop:prepare-runtime -- --write-manifest && pnpm --dir ../.. ui:build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../../../dist/control-ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenClaw",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http: https:; font-src 'self' data:; connect-src ipc: http://ipc.localhost ws: wss: http: https:; media-src 'self' data: blob:; frame-src 'none'; object-src 'none'; base-uri 'none'"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "nsis", "msi"],
+    "category": "DeveloperTool",
+    "shortDescription": "OpenClaw desktop client",
+    "longDescription": "OpenClaw desktop client with a local Gateway sidecar.",
+    "icon": ["../../../ui/public/favicon.ico", "../../../ui/public/favicon-32.png"],
+    "externalBin": ["binaries/openclaw-node"],
+    "resources": {
+      "resources/openclaw-runtime/": "openclaw-runtime/"
+    },
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

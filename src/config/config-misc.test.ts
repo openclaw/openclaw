@@ -117,6 +117,42 @@ describe("model provider localService config", () => {
     }
   });
 
+  it("normalizes hostname-only model provider baseUrl values to https URLs", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "models.example.test/v1",
+            models: [{ id: "custom-model", name: "Custom model", api: "openai-completions" }],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.models?.providers?.custom?.baseUrl).toBe("https://models.example.test/v1");
+    }
+  });
+
+  it("leaves localhost model provider baseUrl values without schemes unchanged", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "127.0.0.1:1234/v1",
+            models: [{ id: "custom-model", name: "Custom model", api: "openai-completions" }],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.models?.providers?.custom?.baseUrl).toBe("127.0.0.1:1234/v1");
+    }
+  });
+
   it("requires baseUrl when a model provider declaration sets models", () => {
     const result = OpenClawSchema.safeParse({
       models: {

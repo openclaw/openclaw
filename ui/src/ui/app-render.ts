@@ -181,6 +181,7 @@ import {
   createDefaultDraft,
   draftToCronFormPatch,
 } from "./views/cron-quick-create.ts";
+import { renderDesktopModelSetup } from "./views/desktop-model-setup.ts";
 import { renderDreamingRestartConfirmation } from "./views/dreaming-restart-confirmation.ts";
 import { renderDreaming } from "./views/dreaming.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
@@ -912,6 +913,16 @@ export function renderApp(state: AppViewState) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
 
+  if (
+    state.desktopMode &&
+    !state.desktopModelSetupDismissed &&
+    (!state.desktopModelSetupChecked ||
+      state.desktopModelSetupLoading ||
+      state.desktopModelSetupRequired)
+  ) {
+    return html` ${renderDesktopModelSetup(state)} ${renderGatewayUrlConfirmation(state)} `;
+  }
+
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -1180,6 +1191,33 @@ export function renderApp(state: AppViewState) {
     onApply: () => applyConfig(state),
     onUpdate: () => runUpdate(state),
     onOpenFile: () => openConfigFile(state),
+    onProviderProbe: (providerId, modelId, providerConfig) =>
+      void state.probeProviderModel?.(providerId, modelId, providerConfig),
+    providerProbeResults: state.modelProbeResults,
+    providerProbeLoadingKey: state.modelProbeLoadingKey,
+    desktopMode: state.desktopMode,
+    desktopGatewayUpdateSupported: state.desktopStatus?.capabilities?.gateway_update_supported,
+    desktopAppUpdateSupported: state.desktopStatus?.capabilities?.desktop_app_update_supported,
+    desktopPackagedRuntimeUpdateSupported:
+      state.desktopStatus?.capabilities?.packaged_runtime_update_supported,
+    desktopRuntime: state.desktopStatus?.runtime ?? null,
+    desktopAppUpdateChecking: state.desktopAppUpdateChecking,
+    desktopAppUpdateInstalling: state.desktopAppUpdateInstalling,
+    desktopAppUpdateStatus: state.desktopAppUpdateStatus,
+    desktopAppUpdateMessage: state.desktopAppUpdateMessage,
+    onCheckDesktopAppUpdate: () => void state.checkDesktopAppUpdate?.(),
+    onInstallDesktopAppUpdate: () => void state.installDesktopAppUpdate?.(),
+    onDesktopAppUpdate: () => void state.openDesktopAppUpdatePage?.(),
+    desktopNotifications: {
+      supported: state.desktopStatus?.capabilities?.native_notifications_supported === true,
+      permission: state.desktopNotificationPermission,
+      loading: state.desktopNotificationLoading,
+      permissions: state.desktopStatus?.permissions?.entries ?? [],
+    },
+    onDesktopNotificationEnable: () => void state.handleDesktopNotificationEnable?.(),
+    onDesktopNotificationTest: () => void state.handleDesktopNotificationTest?.(),
+    onOpenDesktopPermissionSettings: (permissionId: string) =>
+      void state.openDesktopPermissionSettings?.(permissionId),
     version: state.hello?.server?.version ?? "",
     theme: state.theme,
     themeMode: state.themeMode,

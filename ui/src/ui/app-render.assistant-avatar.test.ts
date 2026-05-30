@@ -4,9 +4,13 @@ import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppViewState } from "./app-view-state.ts";
 import type { QuickSettingsProps } from "./views/config-quick.ts";
+import type { ConfigProps } from "./views/config.ts";
 
 const quickSettingsProps = vi.hoisted(() => ({
   current: null as QuickSettingsProps | null,
+}));
+const configProps = vi.hoisted(() => ({
+  current: null as ConfigProps | null,
 }));
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 
@@ -26,8 +30,19 @@ vi.mock("./views/config-quick.ts", () => ({
   },
 }));
 
+vi.mock("./views/config.ts", () => ({
+  renderConfig: (props: ConfigProps) => {
+    configProps.current = props;
+    return html`<div data-testid="config-view"></div>`;
+  },
+}));
+
 vi.mock("./views/chat.ts", () => ({
   renderChat: () => html`<div data-testid="chat"></div>`,
+}));
+
+vi.mock("./views/desktop-model-setup.ts", () => ({
+  renderDesktopModelSetup: () => html`<div data-testid="desktop-model-setup"></div>`,
 }));
 
 vi.mock("./icons.ts", () => ({
@@ -214,9 +229,89 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
 beforeEach(() => {
   localStorageValues.clear();
   quickSettingsProps.current = null;
+  configProps.current = null;
 });
 
 describe("renderApp assistant avatar routing", () => {
+  it("renders the desktop model setup gate before the normal dashboard", () => {
+    const container = document.createElement("div");
+    render(
+      renderApp(
+        createState({
+          desktopMode: true,
+          desktopModelSetupDismissed: false,
+          desktopModelSetupChecked: true,
+          desktopModelSetupLoading: false,
+          desktopModelSetupRequired: true,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector("[data-testid='desktop-model-setup']")).not.toBeNull();
+    expect(container.querySelector("[data-testid='quick-settings']")).toBeNull();
+  });
+
+  it("passes desktop settings state to the advanced config view", () => {
+    renderApp(
+      createState({
+        configSettingsMode: "advanced",
+        desktopMode: true,
+        desktopModelSetupChecked: true,
+        desktopModelSetupRequired: false,
+        desktopModelSetupLoading: false,
+        desktopStatus: {
+          runtime: {
+            packaged_runtime: true,
+            runtime_source: "packaged-runtime",
+            openclaw_version: "2026.5.28",
+            node_version: "v24.0.0",
+          },
+          capabilities: {
+            gateway_update_supported: false,
+            desktop_app_update_supported: true,
+            packaged_runtime_update_supported: true,
+            native_notifications_supported: true,
+          },
+          permissions: {
+            entries: [{ id: "notifications", label: "Notifications", status: "granted" }],
+          },
+        },
+        desktopAppUpdateChecking: true,
+        desktopAppUpdateInstalling: false,
+        desktopAppUpdateStatus: { configured: true, available: false },
+        desktopAppUpdateMessage: { kind: "success", text: "Up to date." },
+        desktopNotificationPermission: "granted",
+        desktopNotificationLoading: true,
+        checkDesktopAppUpdate: vi.fn(),
+        installDesktopAppUpdate: vi.fn(),
+        openDesktopAppUpdatePage: vi.fn(),
+        handleDesktopNotificationEnable: vi.fn(),
+        handleDesktopNotificationTest: vi.fn(),
+        openDesktopPermissionSettings: vi.fn(),
+      }),
+    );
+
+    expect(configProps.current).toEqual(
+      expect.objectContaining({
+        desktopMode: true,
+        desktopGatewayUpdateSupported: false,
+        desktopAppUpdateSupported: true,
+        desktopPackagedRuntimeUpdateSupported: true,
+        desktopRuntime: expect.objectContaining({ runtime_source: "packaged-runtime" }),
+        desktopAppUpdateChecking: true,
+        desktopAppUpdateStatus: expect.objectContaining({ configured: true }),
+        desktopAppUpdateMessage: { kind: "success", text: "Up to date." },
+        desktopNotifications: expect.objectContaining({
+          supported: true,
+          permission: "granted",
+          loading: true,
+          permissions: [expect.objectContaining({ id: "notifications" })],
+        }),
+      }),
+    );
+  });
+
   it("passes the browser-local assistant override to Quick Settings ahead of stale identity metadata", () => {
     const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
     saveLocalAssistantIdentity({ avatar: dataUrl });

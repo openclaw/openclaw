@@ -2,6 +2,9 @@ const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
+const DESKTOP_MODEL_SETUP_COMPLETE_KEY = "openclaw.control.desktopModelSetupComplete.v1";
+const DESKTOP_ONBOARDING_SESSION_CREATED_KEY =
+  "openclaw.control.desktopOnboardingSessionCreated.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
@@ -101,6 +104,18 @@ export type UiSettings = {
 
 export type { LocalUserIdentity } from "./user-identity.ts";
 
+function isTauriDesktopRuntime(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const candidate = window as Window &
+    typeof globalThis & {
+      __TAURI__?: unknown;
+      __TAURI_INTERNALS__?: unknown;
+    };
+  return Boolean(candidate.__TAURI__ || candidate.__TAURI_INTERNALS__);
+}
+
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
     return false;
@@ -114,6 +129,10 @@ function formatHostWithPort(hostname: string, port: string): string {
 }
 
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
+  if (isTauriDesktopRuntime()) {
+    const url = "ws://127.0.0.1:18789";
+    return { pageUrl: url, effectiveUrl: url };
+  }
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const configured =
     typeof window !== "undefined" &&
@@ -372,6 +391,50 @@ export function saveLocalAssistantIdentity(next: LocalAssistantIdentity) {
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory identity updates from being applied
+  }
+}
+
+export function loadDesktopModelSetupComplete(): boolean {
+  const storage = getSafeLocalStorage();
+  try {
+    return storage?.getItem(DESKTOP_MODEL_SETUP_COMPLETE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveDesktopModelSetupComplete(next: boolean) {
+  const storage = getSafeLocalStorage();
+  try {
+    if (next) {
+      storage?.setItem(DESKTOP_MODEL_SETUP_COMPLETE_KEY, "1");
+      return;
+    }
+    storage?.removeItem(DESKTOP_MODEL_SETUP_COMPLETE_KEY);
+  } catch {
+    // best-effort — onboarding completion should not block the current view
+  }
+}
+
+export function loadDesktopOnboardingSessionCreated(): boolean {
+  const storage = getSafeLocalStorage();
+  try {
+    return storage?.getItem(DESKTOP_ONBOARDING_SESSION_CREATED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveDesktopOnboardingSessionCreated(next: boolean) {
+  const storage = getSafeLocalStorage();
+  try {
+    if (next) {
+      storage?.setItem(DESKTOP_ONBOARDING_SESSION_CREATED_KEY, "1");
+      return;
+    }
+    storage?.removeItem(DESKTOP_ONBOARDING_SESSION_CREATED_KEY);
+  } catch {
+    // best-effort — onboarding session creation should not block desktop startup
   }
 }
 
