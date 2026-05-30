@@ -1,5 +1,5 @@
-import { displayString } from "../utils.js";
 import { splitGraphemes, visibleWidth } from "./ansi.js";
+import { displayString } from "./display-string.js";
 
 type Align = "left" | "right" | "center";
 

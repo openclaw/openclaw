@@ -1,3 +1,5 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
@@ -11,8 +13,6 @@ import {
   listTaskFlowRecords,
   resolveTaskFlowForLookupToken,
 } from "../tasks/task-flow-runtime-internal.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { isRich, theme } from "../terminal/theme.js";
 
 const ID_PAD = 10;
 const STATUS_PAD = 10;

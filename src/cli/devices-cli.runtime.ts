@@ -6,6 +6,9 @@ import {
   readConnectPairingRequiredMessage,
   type ConnectPairingRequiredDetails,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   buildGatewayConnectionDetails,
   callGateway,
@@ -34,9 +37,6 @@ import {
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";

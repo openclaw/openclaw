@@ -408,6 +408,29 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildTerminalCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/terminal-core/src/index.ts",
+    ansi: "packages/terminal-core/src/ansi.ts",
+    "decorative-emoji": "packages/terminal-core/src/decorative-emoji.ts",
+    "health-style": "packages/terminal-core/src/health-style.ts",
+    links: "packages/terminal-core/src/links.ts",
+    note: "packages/terminal-core/src/note.ts",
+    "osc-progress": "packages/terminal-core/src/osc-progress.ts",
+    palette: "packages/terminal-core/src/palette.ts",
+    "progress-line": "packages/terminal-core/src/progress-line.ts",
+    "prompt-select-styled": "packages/terminal-core/src/prompt-select-styled.ts",
+    "prompt-select-styled-params": "packages/terminal-core/src/prompt-select-styled-params.ts",
+    "prompt-style": "packages/terminal-core/src/prompt-style.ts",
+    restore: "packages/terminal-core/src/restore.ts",
+    "safe-text": "packages/terminal-core/src/safe-text.ts",
+    "stream-writer": "packages/terminal-core/src/stream-writer.ts",
+    table: "packages/terminal-core/src/table.ts",
+    "terminal-link": "packages/terminal-core/src/terminal-link.ts",
+    theme: "packages/terminal-core/src/theme.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -484,6 +507,10 @@ function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
   );
 }
 
+function shouldExternalizeTerminalCoreDependency(id: string): boolean {
+  return id === "@clack/prompts" || id.startsWith("@clack/prompts/") || id === "chalk";
+}
+
 const coreDistEntries = buildCoreDistEntries();
 const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
 const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
@@ -494,6 +521,12 @@ function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
+    ...Object.fromEntries(
+      Object.entries(buildTerminalCoreDistEntries()).map(([entry, source]) => [
+        `terminal-core/${entry}`,
+        source,
+      ]),
+    ),
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server user MCP config projection.
@@ -566,6 +599,15 @@ export default defineConfig([
     outDir: "packages/markdown-core/dist",
     deps: {
       neverBundle: shouldExternalizeMarkdownCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildTerminalCoreDistEntries(),
+    outDir: "packages/terminal-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeTerminalCoreDependency,
     },
   }),
   nodeWorkspacePackageBuildConfig({

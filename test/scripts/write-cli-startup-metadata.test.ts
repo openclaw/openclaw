@@ -38,8 +38,8 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
       "export const pluginCommandGroups = 'plugins';\n",
     ],
     ["src/cli/secrets-cli.ts", "export const secretsHelp = 'secrets';\n"],
-    ["src/terminal/links.ts", "export const links = 'links';\n"],
-    ["src/terminal/theme.ts", "export const theme = 'theme';\n"],
+    ["packages/terminal-core/src/links.ts", "export const links = 'links';\n"],
+    ["packages/terminal-core/src/theme.ts", "export const theme = 'theme';\n"],
   ]);
   for (const [relativePath, contents] of fixtures) {
     writeFixtureFile(rootDir, relativePath, contents);

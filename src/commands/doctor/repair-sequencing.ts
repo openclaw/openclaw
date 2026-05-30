@@ -1,5 +1,5 @@
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
 import {
   maybeRepairManagedNpmOpenClawPeerLinks,

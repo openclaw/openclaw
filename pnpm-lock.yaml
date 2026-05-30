@@ -1856,6 +1856,15 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  packages/terminal-core:
+    dependencies:
+      '@clack/prompts':
+        specifier: 1.4.0
+        version: 1.4.0
+      chalk:
+        specifier: 5.6.2
+        version: 5.6.2
+
   ui:
     dependencies:
       '@create-markdown/preview':

@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "./string.js";
 import { theme } from "./theme.js";
 
 export function styleHealthChannelLine(line: string, rich: boolean): string {

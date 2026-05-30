@@ -1,4 +1,5 @@
 import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
@@ -15,7 +16,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
 import {

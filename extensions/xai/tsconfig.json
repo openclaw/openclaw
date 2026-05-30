@@ -159,6 +159,63 @@
       "@openclaw/media-generation-core/*": [
         "../../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts"
       ],
+      "@openclaw/terminal-core": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/index.d.ts"
+      ],
+      "@openclaw/terminal-core/ansi": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts"
+      ],
+      "@openclaw/terminal-core/decorative-emoji": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/decorative-emoji.d.ts"
+      ],
+      "@openclaw/terminal-core/health-style": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/health-style.d.ts"
+      ],
+      "@openclaw/terminal-core/links": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/links.d.ts"
+      ],
+      "@openclaw/terminal-core/note": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/note.d.ts"
+      ],
+      "@openclaw/terminal-core/osc-progress": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/osc-progress.d.ts"
+      ],
+      "@openclaw/terminal-core/palette": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/palette.d.ts"
+      ],
+      "@openclaw/terminal-core/progress-line": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/progress-line.d.ts"
+      ],
+      "@openclaw/terminal-core/prompt-select-styled": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled.d.ts"
+      ],
+      "@openclaw/terminal-core/prompt-select-styled-params": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled-params.d.ts"
+      ],
+      "@openclaw/terminal-core/prompt-style": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/prompt-style.d.ts"
+      ],
+      "@openclaw/terminal-core/restore": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/restore.d.ts"
+      ],
+      "@openclaw/terminal-core/safe-text": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/safe-text.d.ts"
+      ],
+      "@openclaw/terminal-core/stream-writer": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/stream-writer.d.ts"
+      ],
+      "@openclaw/terminal-core/table": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/table.d.ts"
+      ],
+      "@openclaw/terminal-core/terminal-link": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/terminal-link.d.ts"
+      ],
+      "@openclaw/terminal-core/theme": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/theme.d.ts"
+      ],
+      "@openclaw/terminal-core/*": [
+        "../../dist/plugin-sdk/packages/terminal-core/src/*.d.ts"
+      ],
       "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
       "@openclaw/*": ["../*"],
       "openclaw/plugin-sdk/qa-channel": [

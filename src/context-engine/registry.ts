@@ -1,7 +1,7 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import type {
   AssembleResult,
   BootstrapResult,
