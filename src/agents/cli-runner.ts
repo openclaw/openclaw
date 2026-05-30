@@ -316,6 +316,25 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedAg
     if (params.cleanupBundleMcpOnRunEnd === true) {
       const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
       await closeMcpLoopbackServer();
+      // Also dispose the SessionMcpRuntime holding stdio child processes.
+      // closeMcpLoopbackServer() only tears down the HTTP bridge to the CLI;
+      // the actual MCP server child processes stay alive without this.
+      try {
+        const { retireSessionMcpRuntimeForSessionKey, retireSessionMcpRuntime } =
+          await import("./agent-bundle-mcp-tools.js");
+        const retiredByKey = await retireSessionMcpRuntimeForSessionKey({
+          sessionKey: params.sessionKey,
+          reason: "cli-run-end",
+        });
+        if (!retiredByKey) {
+          await retireSessionMcpRuntime({
+            sessionId: params.sessionId,
+            reason: "cli-run-end",
+          });
+        }
+      } catch {
+        // Best-effort; the idle sweep timer is the safety net.
+      }
     }
   }
 }

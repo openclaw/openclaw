@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
@@ -127,6 +128,117 @@ process.stdin.on("data", (chunk) => {
 process.stdin.on("end", shutdown);
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);`,
+  );
+}
+
+async function writeCallToolMcpServer(params: {
+  filePath: string;
+  logPath: string;
+  callModes: string[];
+  stateFilePath?: string;
+}): Promise<void> {
+  await writeExecutable(
+    params.filePath,
+    `#!/usr/bin/env node
+import fs from "node:fs";
+
+const logPath = ${JSON.stringify(params.logPath)};
+const stateFilePath = ${JSON.stringify(params.stateFilePath ?? "")};
+const callModes = ${JSON.stringify(params.callModes)};
+let buffer = "";
+let callIndex = 0;
+if (stateFilePath) {
+  try {
+    callIndex = Number(JSON.parse(fs.readFileSync(stateFilePath, "utf8")).callIndex ?? 0);
+  } catch {
+    callIndex = 0;
+  }
+}
+function log(line) {
+  fs.appendFileSync(logPath, line + "\\n", "utf8");
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  log("recv " + String(message.method ?? "unknown"));
+  if (message.method === "initialize") {
+    log("pid " + String(process.pid));
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: {} },
+        serverInfo: { name: "test-call-tool", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "notifications/initialized") {
+    return;
+  }
+  if (message.method === "tools/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        tools: [
+          {
+            name: "probe_tool",
+            description: "Probe tool for reconnect behavior.",
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    const mode = callModes[Math.min(callIndex, callModes.length - 1)] ?? "ok";
+    callIndex += 1;
+    if (stateFilePath) {
+      fs.writeFileSync(stateFilePath, JSON.stringify({ callIndex }), "utf8");
+    }
+    log("call " + mode);
+    if (mode === "server-error") {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: { code: -32603, message: "Not connected to browser" },
+      });
+      return;
+    }
+    if (mode === "exit") {
+      fs.appendFileSync(logPath, "call exit\\n", "utf8");
+      process.exit(0);
+      return;
+    }
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { content: [{ type: "text", text: "ok" }], isError: false },
+    });
+  }
+}
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});`,
   );
 }
 
@@ -654,6 +766,87 @@ describe("session MCP runtime", () => {
     } finally {
       await runtime.dispose();
       await Promise.race([catalogResult, new Promise((resolve) => setTimeout(resolve, 1000))]);
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reconnect and retry application-level McpError responses", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-server-error-"));
+    const serverPath = path.join(tempDir, "server-error.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeCallToolMcpServer({ filePath: serverPath, logPath, callModes: ["server-error"] });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-server-error-no-retry",
+      sessionKey: "agent:test:session-server-error-no-retry",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            appErrorProbe: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["probe_tool"]);
+      await expect(runtime.callTool("appErrorProbe", "probe_tool", {})).rejects.toMatchObject({
+        name: "McpError",
+        code: ErrorCode.InternalError,
+      });
+      const logText = await fs.readFile(logPath, "utf8");
+      expect(logText.match(/recv initialize/g)).toHaveLength(1);
+      expect(logText.match(/call server-error/g)).toHaveLength(1);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reconnects and retries once when an in-flight tool call closes the transport", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-connection-closed-"));
+    const serverPath = path.join(tempDir, "connection-closed.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const stateFilePath = path.join(tempDir, "server-state.json");
+    await writeCallToolMcpServer({
+      filePath: serverPath,
+      logPath,
+      stateFilePath,
+      callModes: ["exit", "ok"],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-connection-closed-retry",
+      sessionKey: "agent:test:session-connection-closed-retry",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            transportProbe: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["probe_tool"]);
+      const result = await runtime.callTool("transportProbe", "probe_tool", {});
+      expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+      const logText = await fs.readFile(logPath, "utf8");
+      expect(logText.match(/recv initialize/g)).toHaveLength(2);
+      expect(logText).toContain("call exit");
+      expect(logText).toContain("call ok");
+    } finally {
+      await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
