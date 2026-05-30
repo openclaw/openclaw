@@ -239,6 +239,28 @@ describe("gateway lock", () => {
     }
   });
 
+  it("reads active lock ports from titled gateway processes", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const lock = await acquireForTest(env, {
+      port: 48789,
+      readProcessCmdline: () => ["openclaw-gateway"],
+    });
+
+    try {
+      await expect(
+        readActiveGatewayLockPort({
+          env,
+          lockDir: resolveTestLockDir(),
+          platform: "darwin",
+          readProcessCmdline: () => ["openclaw-gateway"],
+        }),
+      ).resolves.toBe(48789);
+    } finally {
+      await lock?.release();
+    }
+  });
+
   it("ignores lock ports whose owner no longer looks like a gateway", async () => {
     vi.useRealTimers();
     const env = await makeEnv();

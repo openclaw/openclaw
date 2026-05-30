@@ -105,6 +105,9 @@ export async function runGatewayLoop(params: {
   healthHost?: string;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
 }) {
+  // macOS/BSD `ps -o command=` reports process.title, not the original argv.
+  // Keep lock-owner verification recognizable after entry.ts sets `openclaw`.
+  process.title = "openclaw-gateway";
   let startupStartedAt = Date.now();
   // Eagerly resolve the lifecycle runtime module before installing signal
   // listeners. Without this, every subsequent lifecycle path (SIGUSR1,

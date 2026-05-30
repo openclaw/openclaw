@@ -227,7 +227,7 @@ async function resolveGatewayOwnerStatus(
     // preserve single-instance guarantees when wmic/ps is unavailable.
     return platform === "linux" || opts.trustUnknownCmdlineOwner === false ? "unknown" : "alive";
   }
-  return isGatewayArgv(args) ? "alive" : "dead";
+  return isGatewayArgv(args, { allowGatewayBinary: true }) ? "alive" : "dead";
 }
 
 async function readLockPayload(lockPath: string): Promise<LockPayload | null> {

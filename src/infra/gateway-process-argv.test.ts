@@ -54,8 +54,14 @@ describe("isGatewayArgv", () => {
   it("matches the openclaw executable but gates the gateway binary behind the opt-in flag", () => {
     expect(isGatewayArgv(["C:\\bin\\openclaw.cmd", "gateway"])).toBe(true);
     expect(isGatewayArgv(["/usr/local/bin/openclaw-gateway", "gateway"])).toBe(false);
+    expect(isGatewayArgv(["/usr/local/bin/openclaw-gateway"])).toBe(false);
     expect(
       isGatewayArgv(["/usr/local/bin/openclaw-gateway", "gateway"], {
+        allowGatewayBinary: true,
+      }),
+    ).toBe(true);
+    expect(
+      isGatewayArgv(["/usr/local/bin/openclaw-gateway"], {
         allowGatewayBinary: true,
       }),
     ).toBe(true);
