@@ -914,7 +914,13 @@ function isPathLikeTargetArg(arg, cwd) {
   if (!arg || arg === "--" || arg.startsWith("-")) {
     return false;
   }
-  return isGlobTarget(arg) || isFileLikeTarget(arg) || isExistingPathTarget(arg, cwd);
+  const relative = toRepoRelativeTarget(arg, cwd);
+  return (
+    isGlobTarget(arg) ||
+    isFileLikeTarget(arg) ||
+    isVitestConfigFileTarget(relative) ||
+    isExistingPathTarget(arg, cwd)
+  );
 }
 
 function toRepoRelativeTarget(arg, cwd) {
