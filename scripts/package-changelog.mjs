@@ -118,6 +118,7 @@ export async function restorePackageChangelog(cwd = process.cwd()) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(
         `Refusing to restore stale packaged changelog backup from ${BACKUP_PATH}: ${message}`,
+        { cause: error },
       );
     }
     if (current !== expectedPackaged) {
