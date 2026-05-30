@@ -389,6 +389,12 @@ function readRequesterThinkingLevel(params: {
     if (typeof entry?.thinkingLevel === "string" && entry.thinkingLevel.trim()) {
       return entry.thinkingLevel.trim();
     }
+    const requesterAgentThinking = params.requesterAgentId
+      ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
+      : undefined;
+    if (requesterAgentThinking) {
+      return requesterAgentThinking;
+    }
     const defaultModel = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId: params.requesterAgentId,
@@ -412,12 +418,6 @@ function readRequesterThinkingLevel(params: {
           model: persistedModel.model,
         });
       }
-    }
-    const requesterAgentThinking = params.requesterAgentId
-      ? resolveAgentConfig(params.cfg, params.requesterAgentId)?.thinkingDefault
-      : undefined;
-    if (requesterAgentThinking) {
-      return requesterAgentThinking;
     }
     return resolveThinkingDefault({
       cfg: params.cfg,
