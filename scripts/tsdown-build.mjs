@@ -72,23 +72,16 @@ export function cleanTsdownOutputRoots(params = {}) {
   const roots = listTsdownOutputRoots();
   const protectedDeclarationPaths =
     env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
-      ? listTrackedDeclarationOutputPaths({
+      ? listExistingDeclarationOutputPaths({
           cwd,
           fs: fsImpl,
           roots,
-          spawnSync: params.spawnSync ?? spawnSync,
         })
       : new Set();
   for (const root of roots) {
-    if (protectedDeclarationPaths === null && root.startsWith("packages/")) {
-      continue;
-    }
     const rootPath = path.join(cwd, root);
     try {
-      if (
-        protectedDeclarationPaths &&
-        hasProtectedChild({ rootPath, protectedPaths: protectedDeclarationPaths })
-      ) {
+      if (hasProtectedChild({ rootPath, protectedPaths: protectedDeclarationPaths })) {
         cleanOutputRootExcept(rootPath, protectedDeclarationPaths, fsImpl);
       } else {
         fsImpl.rmSync(rootPath, { force: true, recursive: true });
@@ -136,37 +129,30 @@ function cleanOutputRootExcept(rootPath, protectedPaths, fsImpl) {
   }
 }
 
-function listTrackedDeclarationOutputPaths({ cwd, fs: fsImpl, roots, spawnSync: spawnSyncImpl }) {
-  let result;
-  try {
-    result = spawnSyncImpl("git", ["ls-files", "--", ...roots], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {
-    return null;
-  }
-  if (result.status !== 0 || typeof result.stdout !== "string") {
-    return null;
-  }
-
-  const rootPrefixes = roots.map((root) => `${root.replaceAll("\\", "/")}/`);
+function listExistingDeclarationOutputPaths({ cwd, fs: fsImpl, roots }) {
   const protectedPaths = new Set();
-  for (const rawPath of result.stdout.split(/\r?\n/u)) {
-    const relativePath = rawPath.trim().replaceAll("\\", "/");
-    if (!DECLARATION_EXTENSIONS.some((extension) => relativePath.endsWith(extension))) {
-      continue;
-    }
-    if (!rootPrefixes.some((prefix) => relativePath.startsWith(prefix))) {
-      continue;
-    }
-    const absolutePath = path.resolve(cwd, relativePath);
-    if (fsImpl.existsSync(absolutePath)) {
-      protectedPaths.add(absolutePath);
-    }
+  for (const root of roots) {
+    collectDeclarationOutputPaths(path.join(cwd, root), protectedPaths, fsImpl);
   }
   return protectedPaths;
+}
+
+function collectDeclarationOutputPaths(rootPath, protectedPaths, fsImpl) {
+  let entries = [];
+  try {
+    entries = fsImpl.readdirSync(rootPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryPath = path.join(rootPath, entry.name);
+    if (entry.isDirectory()) {
+      collectDeclarationOutputPaths(entryPath, protectedPaths, fsImpl);
+    } else if (DECLARATION_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) {
+      protectedPaths.add(path.resolve(entryPath));
+    }
+  }
 }
 
 export function pruneStaleRootChunkFiles(params = {}) {

@@ -320,7 +320,7 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
   });
 
-  it("preserves tracked package declarations when tsdown DTS output is skipped", async () => {
+  it("preserves existing package declarations when tsdown DTS output is skipped", async () => {
     const rootDir = createTempDir("openclaw-tsdown-clean-skip-dts-");
     const declarationFile = path.join(
       rootDir,
@@ -328,6 +328,14 @@ describe("resolveTsdownBuildInvocation", () => {
       "media-understanding-common",
       "dist",
       "index.d.mts",
+    );
+    const nestedDeclarationFile = path.join(
+      rootDir,
+      "packages",
+      "media-understanding-common",
+      "dist",
+      "nested",
+      "types.d.ts",
     );
     const staleJsFile = path.join(
       rootDir,
@@ -346,9 +354,11 @@ describe("resolveTsdownBuildInvocation", () => {
     );
     const agentCorePackageFile = path.join(rootDir, "packages", "agent-core", "dist", "stale.js");
     await fsPromises.mkdir(path.dirname(declarationFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(nestedDeclarationFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(nestedStaleFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(agentCorePackageFile), { recursive: true });
     await fsPromises.writeFile(declarationFile, "export {};\n");
+    await fsPromises.writeFile(nestedDeclarationFile, "export {};\n");
     await fsPromises.writeFile(staleJsFile, "stale\n");
     await fsPromises.writeFile(nestedStaleFile, "old\n");
     await fsPromises.writeFile(agentCorePackageFile, "stale\n");
@@ -356,35 +366,13 @@ describe("resolveTsdownBuildInvocation", () => {
     cleanTsdownOutputRoots({
       cwd: rootDir,
       env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      spawnSync: () => ({
-        status: 0,
-        stdout: "packages/media-understanding-common/dist/index.d.mts\n",
-      }),
     });
 
     await expect(fsPromises.readFile(declarationFile, "utf8")).resolves.toBe("export {};\n");
+    await expect(fsPromises.readFile(nestedDeclarationFile, "utf8")).resolves.toBe("export {};\n");
     await expectPathMissing(staleJsFile);
     await expectPathMissing(nestedStaleFile);
     await expectPathMissing(path.join(rootDir, "packages", "agent-core", "dist"));
-  });
-
-  it("leaves package output roots alone when skip-DTS declaration tracking is unavailable", async () => {
-    const rootDir = createTempDir("openclaw-tsdown-clean-no-git-");
-    const packageFile = path.join(rootDir, "packages", "agent-core", "dist", "keep.js");
-    const rootFile = path.join(rootDir, "dist", "stale.js");
-    await fsPromises.mkdir(path.dirname(packageFile), { recursive: true });
-    await fsPromises.mkdir(path.dirname(rootFile), { recursive: true });
-    await fsPromises.writeFile(packageFile, "keep\n");
-    await fsPromises.writeFile(rootFile, "stale\n");
-
-    cleanTsdownOutputRoots({
-      cwd: rootDir,
-      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      spawnSync: () => ({ status: 1, stdout: "" }),
-    });
-
-    await expect(fsPromises.readFile(packageFile, "utf8")).resolves.toBe("keep\n");
-    await expectPathMissing(rootFile);
   });
 
   it("prunes untracked generated declaration files that shadow source entries", async () => {
