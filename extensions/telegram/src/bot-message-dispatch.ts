@@ -1899,6 +1899,18 @@ export const dispatchTelegramMessage = async ({
                       }
                       if (segment.lane === "reasoning") {
                         reasoningStepState.noteReasoningHint();
+                        if (interleavedProgressEnabled) {
+                          const appended = appendInterleavedReasoning(
+                            segment.update.text,
+                            segment.update.replace ? { replace: true } : undefined,
+                          );
+                          if (appended) {
+                            reasoningStepState.noteReasoningDelivered();
+                            await flushBufferedFinalAnswer();
+                            blockDelivered = true;
+                          }
+                          continue;
+                        }
                       }
                       if (segment.lane === "answer" && info.kind === "tool") {
                         if (interleavedProgressEnabled) {

@@ -2534,6 +2534,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(updates.at(-1)).toContain("tool: Exec (completed)");
   });
 
+  it("folds final reasoning into the interleaved progress lane", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver(
+          { text: "<think>Final check</think>Answer" },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      telegramCfg: {
+        streaming: {
+          mode: "partial",
+          preview: { toolProgress: true, interleavedProgress: true },
+        },
+      },
+    });
+
+    const lastReasoningUpdate = String(reasoningDraftStream.update.mock.calls.at(-1)?.[0]);
+    expect(lastReasoningUpdate).toContain("tool: Exec");
+    expect(lastReasoningUpdate).toContain("Final check");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+  });
+
   it("replaces reasoning snapshots on the reasoning lane", async () => {
     const { reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
