@@ -56,7 +56,7 @@ describe("skill workshop auto-capture", () => {
       skillKey: "github-pr-workflow",
       scanState: "clean",
     });
-    const proposal = await inspectSkillProposal(proposals.proposals[0]!.id, { workspaceDir });
+    const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
     expect(proposal?.content).toContain("status: proposal");
     expect(proposal?.content).toContain("always check CI before final response");
   });

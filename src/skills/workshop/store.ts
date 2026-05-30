@@ -188,7 +188,7 @@ export function prepareSkillProposalSupportFiles(
 }
 
 function assertSupportPathSetIsFileOnly(paths: readonly string[]): void {
-  const sorted = [...paths].sort((a, b) => a.localeCompare(b));
+  const sorted = paths.toSorted((a, b) => a.localeCompare(b));
   for (const filePath of sorted) {
     if (!filePath.includes("/")) {
       throw new Error("Support file paths must include a file below an allowed support directory.");

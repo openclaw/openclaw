@@ -206,7 +206,7 @@ export async function resolvePendingSkillProposal(input: {
       .join(", ");
     throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
   }
-  const matched = await readRequiredProposal(matches[0]!.id, input.workspaceDir);
+  const matched = await readRequiredProposal(matches[0].id, input.workspaceDir);
   if (matched.record.status !== "pending") {
     throw new Error(
       `Only pending proposals can be revised. Current status: ${matched.record.status}.`,
@@ -638,7 +638,7 @@ async function cleanupCreatedSupportFiles(
   writtenSupportPaths: readonly string[],
 ): Promise<void> {
   await Promise.allSettled(
-    [...writtenSupportPaths].reverse().map(async (relativePath) => {
+    writtenSupportPaths.toReversed().map(async (relativePath) => {
       await removeWorkspaceSupportFile({ skillDir: record.target.skillDir, relativePath });
     }),
   );
@@ -651,7 +651,7 @@ async function restoreUpdatedSupportFiles(params: {
 }): Promise<void> {
   const previousByPath = new Map(params.previousSupportFiles.map((file) => [file.path, file]));
   await Promise.allSettled(
-    [...params.writtenSupportPaths].reverse().map(async (relativePath) => {
+    params.writtenSupportPaths.toReversed().map(async (relativePath) => {
       const previous = previousByPath.get(relativePath);
       if (!previous) {
         return;
