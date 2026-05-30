@@ -85,6 +85,22 @@ describe("agent run terminal outcome", () => {
     });
   });
 
+  it("does not treat provider-started errors as timeouts without timeout attribution", () => {
+    expect(
+      buildAgentRunTerminalOutcome({
+        status: "error",
+        error: "provider authentication failed",
+        stopReason: "error",
+        providerStarted: true,
+      }),
+    ).toMatchObject({
+      reason: "failed",
+      status: "error",
+      error: "provider authentication failed",
+      providerStarted: true,
+    });
+  });
+
   it("prefers hard timeout evidence over default rpc cancellation metadata", () => {
     const timeout = buildAgentRunTerminalOutcome({
       status: "timeout",

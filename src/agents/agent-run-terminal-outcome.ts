@@ -79,11 +79,11 @@ export function buildAgentRunTerminalOutcome(
   const timeoutPhase = normalizeAgentRunTimeoutPhase(input.timeoutPhase);
   const providerStarted = normalizeProviderStarted(input.providerStarted);
   const rawError = asNonEmptyString(input.error);
-  // Queue and gateway-draining timeouts are wait-layer uncertainty. Only
-  // provider-started or provider-phase timeouts are sticky child-run facts.
+  // Queue and gateway-draining timeouts are wait-layer uncertainty. Provider
+  // errors need explicit timeout attribution; providerStarted only proves reach.
   const hardTimeout =
     isHardAgentRunTimeoutPhase(timeoutPhase) ||
-    ((input.status === "timeout" || input.status === "error") && providerStarted === true);
+    (input.status === "timeout" && providerStarted === true);
   const aborted = isAbortedAgentStopReason(stopReason);
   // ACP/model `stop` can be a normal successful finish. Treat rpc/stop as
   // cancellation only for non-success terminal payloads from abort paths.
