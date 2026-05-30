@@ -9,6 +9,7 @@ export {
   OPENAI_DEFAULT_TTS_MODEL,
   OPENAI_DEFAULT_TTS_VOICE,
 } from "./default-models.js";
+export { discoverOpenAIModels, resetOpenAIDiscoveryCacheForTest } from "./discovery.js";
 export { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 export { loginOpenAICodexOAuth } from "./openai-codex-oauth.runtime.js";
 export { refreshOpenAICodexToken } from "./openai-codex-provider.runtime.js";
