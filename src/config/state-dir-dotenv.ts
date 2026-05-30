@@ -14,6 +14,10 @@ function isBlockedServiceEnvVar(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
 }
 
+function containsUnresolvedShellReference(value: string): boolean {
+  return /\$[\w{(]/.test(value);
+}
+
 function parseStateDirDotEnvContent(content: string): Record<string, string> {
   const parsed = dotenv.parse(content);
   const entries: Record<string, string> = {};
@@ -26,6 +30,13 @@ function parseStateDirDotEnvContent(content: string): Record<string, string> {
       continue;
     }
     if (isBlockedServiceEnvVar(key)) {
+      continue;
+    }
+    // Skip values that still contain unresolved shell variable references
+    // ($VAR or ${VAR}). dotenv does not expand them, so persisting them into
+    // a single-quoted LaunchAgent/systemd env file would store the literal
+    // reference string rather than the intended credential value.
+    if (containsUnresolvedShellReference(value)) {
       continue;
     }
     entries[key] = value;
