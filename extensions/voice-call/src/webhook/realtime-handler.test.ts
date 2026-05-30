@@ -487,7 +487,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("triggers an OpenAI realtime initial greeting without replacing session instructions", async () => {
+  it("adds OpenAI realtime initial greetings to session instructions without an explicit trigger", async () => {
     let callbacks:
       | {
           onReady?: () => void;
@@ -538,10 +538,10 @@ describe("RealtimeCallHandler path routing", () => {
 
         callbacks?.onReady?.();
 
-        expect(createBridge.mock.calls[0]?.[0].instructions).toBe("Be helpful.");
-        expect(triggerGreeting).toHaveBeenCalledWith(
+        expect(createBridge.mock.calls[0]?.[0].instructions).toBe(
           'Be helpful.\n\nStart the call by greeting the caller naturally. Include this greeting in your first spoken reply: "Hi! Just a quick test of the voice setup."',
         );
+        expect(triggerGreeting).not.toHaveBeenCalled();
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
