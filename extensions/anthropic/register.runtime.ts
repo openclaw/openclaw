@@ -6,6 +6,7 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
+  ProviderResolveUsageAuthContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -677,6 +678,20 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   };
 }
 
+async function resolveAnthropicUsageAuth(ctx: ProviderResolveUsageAuthContext) {
+  const oauthToken = await ctx.resolveOAuthToken();
+  if (oauthToken) {
+    return oauthToken;
+  }
+
+  const apiKey = ctx.resolveApiKeyFromConfigAndStore();
+  if (apiKey && validateAnthropicSetupToken(apiKey) === undefined) {
+    return { token: apiKey };
+  }
+
+  return { token: "" };
+}
+
 export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
   const defaultAnthropicModel = DEFAULT_ANTHROPIC_MODEL;
@@ -802,7 +817,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
     wrapStreamFn: wrapAnthropicProviderStream,
-    resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
+    resolveUsageAuth: resolveAnthropicUsageAuth,
     fetchUsageSnapshot: async (ctx) =>
       await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
     isCacheTtlEligible: () => true,
