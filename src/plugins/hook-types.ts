@@ -91,6 +91,11 @@ export type PluginHookName =
   | "before_message_write"
   | "session_start"
   | "session_end"
+  /**
+   * @deprecated Core prepares thread-bound subagent bindings through channel
+   * session-binding adapters before `subagent_spawned` fires. Use
+   * `subagent_spawned` for post-launch observation in new plugins.
+   */
   | "subagent_spawning"
   | "subagent_delivery_target"
   | "subagent_spawned"
@@ -1045,6 +1050,11 @@ export type PluginHookHandlerMap = {
     event: PluginHookSessionEndEvent,
     ctx: PluginHookSessionContext,
   ) => Promise<void> | void;
+  /**
+   * @deprecated Core prepares thread-bound subagent bindings through channel
+   * session-binding adapters before `subagent_spawned` fires. Use
+   * `subagent_spawned` for post-launch observation in new plugins.
+   */
   subagent_spawning: (
     event: PluginHookSubagentSpawningEvent,
     ctx: PluginHookSubagentContext,
