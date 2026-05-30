@@ -599,11 +599,28 @@ function isCurrentSourceTargetParam(
   return Array.from(explicitCandidates).some((candidate) => currentCandidates.has(candidate));
 }
 
+function hasExplicitNonCurrentChannelParam(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+): boolean {
+  const explicitChannel = normalizeOptionalLowercaseString(params.channel);
+  if (!explicitChannel) {
+    return false;
+  }
+  const currentChannelProvider = normalizeOptionalLowercaseString(
+    input.toolContext?.currentChannelProvider,
+  );
+  return !currentChannelProvider || explicitChannel !== currentChannelProvider;
+}
+
 function applyImplicitSourceReplySendPolicy(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
 ) {
   if (input.action !== "send" || input.sourceReplyDeliveryMode !== "message_tool_only") {
+    return;
+  }
+  if (hasExplicitNonCurrentChannelParam(input, params)) {
     return;
   }
   if (hasExplicitTargetParam(params) && !isCurrentSourceTargetParam(input, params)) {

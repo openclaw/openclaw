@@ -302,6 +302,62 @@ describe("runMessageAction core send routing", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
+  it("preserves required delivery when message-tool-only sends to another explicit channel", async () => {
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "telegram",
+      messageId: "m1",
+      chatId: "C999",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      runMessageAction({
+        cfg: {
+          channels: {
+            telegram: {
+              enabled: true,
+            },
+          },
+          tools: {
+            message: {
+              crossContext: {
+                allowAcrossProviders: true,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "telegram",
+          message: "explicit channel-only durable send",
+          bestEffort: false,
+        },
+        toolContext: {
+          currentChannelProvider: "slack",
+          currentChannelId: "channel:C123",
+        },
+        sessionKey: "agent:main:slack:channel:C123",
+        sourceReplyDeliveryMode: "message_tool_only",
+        dryRun: false,
+      }),
+    ).rejects.toThrow("missing reconcileUnknownSend");
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it("applies TTS to message-tool sends before core outbound delivery", async () => {
     const sendMedia = vi.fn().mockResolvedValue({
       channel: "testchat",
