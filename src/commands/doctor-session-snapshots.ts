@@ -377,6 +377,9 @@ export async function noteSessionSnapshotHealth(params?: {
             continue;
           }
 
+          const jsonEscaped = JSON.stringify(finding.cachedPath).slice(1, -1);
+          const jsonEscapedExpected = JSON.stringify(finding.expectedPath).slice(1, -1);
+
           if (finding.field === "skillsSnapshot.prompt") {
             const snapshot = session.skillsSnapshot;
             if (!isRecord(snapshot)) {
