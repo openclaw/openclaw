@@ -892,7 +892,7 @@ describe("resolveModel", () => {
     const model = expectResolvedModel(result);
 
     expect(model.contextWindow).toBe(100_000);
-    expect(model.contextTokens).toBe(90_000);
+    expect((model as { contextTokens?: number }).contextTokens).toBe(90_000);
     expect(model.maxTokens).toBe(512);
   });
 
