@@ -1103,10 +1103,15 @@ describe("model-selection", () => {
       expect(result.allowedCatalog).toEqual([
         { provider: "ollama", id: "existing", name: "Existing" },
         {
+          api: "ollama",
+          compat: undefined,
+          contextTokens: undefined,
           provider: "ollama",
           id: "glm-5.1:cloud",
           name: "GLM 5.1 Cloud",
           contextWindow: 131_072,
+          input: undefined,
+          reasoning: undefined,
         },
       ]);
       expect(result.allowedKeys.has("ollama/glm-5.1:cloud")).toBe(true);

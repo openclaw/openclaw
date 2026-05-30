@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { withSuppressedNotes } from "../../terminal/note.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
@@ -215,7 +215,7 @@ export async function ensureConfigReady(params: {
     { isPluginPackagingRuntimeOutputInvalidConfigSnapshot },
     { formatPluginPackagingRuntimeOutputRecoveryHint },
   ] = await Promise.all([
-    import("../../terminal/theme.js"),
+    import("../../../packages/terminal-core/src/theme.js"),
     import("../../utils.js"),
     import("../command-format.js"),
     import("../../config/recovery-policy.js"),

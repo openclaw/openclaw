@@ -25,9 +25,15 @@ import {
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
+import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
+const MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS = new Set<SubagentAnnounceDeliveryFailureReason>([
+  "generated_media_missing",
+  "message_tool_delivery_missing",
+  "visible_reply_missing",
+]);
 
 export type MediaGenerationTaskHandle = {
   taskId: string;
@@ -556,10 +562,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     return true;
   }
   const canTryDirectCompletionFallback =
-    delivery.error === "completion agent did not deliver generated media" ||
-    delivery.error === "completion agent did not produce a visible reply" ||
-    delivery.error ===
-      "completion agent did not use the message tool for message-tool-only delivery";
+    delivery.reason != null && MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS.has(delivery.reason);
   if (params.status === "ok" && canTryDirectCompletionFallback) {
     const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
     const delivered = await tryDeliverMediaGenerationDirect({

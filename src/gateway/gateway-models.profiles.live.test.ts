@@ -746,18 +746,17 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
   it("defaults to the release live model budget", () => {
     expect(resolveGatewayLiveModelTimeoutMs("", undefined, 90_000)).toBe(300_000);
   });
-
-  it("never goes below the probe timeout", () => {
-    expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
-  });
 });
 
 describe("resolveGatewayLiveTranscriptTimeoutMs", () => {
   it("uses the model budget for transcript waits", () => {
     expect(resolveGatewayLiveTranscriptTimeoutMs(90_000, 180_000)).toBe(180_000);
   });
+});
 
+describe("gateway live timeout floors", () => {
   it("never goes below the probe timeout", () => {
+    expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
     expect(resolveGatewayLiveTranscriptTimeoutMs(240_000, 180_000)).toBe(240_000);
   });
 });

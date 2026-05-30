@@ -95,6 +95,43 @@ export function asPositiveSafeInteger(value: unknown): number | undefined {
 
 export const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 export const MAX_TIMER_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_TIMEOUT_MS / 1000);
+export const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
+export const UNIX_EPOCH_ISO_STRING = "1970-01-01T00:00:00.000Z";
+
+export function asDateTimestampMs(value: unknown): number | undefined {
+  return asFiniteNumberInRange(value, {
+    min: -MAX_DATE_TIMESTAMP_MS,
+    max: MAX_DATE_TIMESTAMP_MS,
+  });
+}
+
+export function timestampMsToIsoString(value: unknown): string | undefined {
+  const timestampMs = asDateTimestampMs(value);
+  return timestampMs === undefined ? undefined : new Date(timestampMs).toISOString();
+}
+
+export function resolveDateTimestampMs(
+  value: unknown,
+  fallbackValue: unknown = Date.now(),
+): number {
+  return asDateTimestampMs(value) ?? asDateTimestampMs(fallbackValue) ?? 0;
+}
+
+export function resolveTimestampMsToIsoString(
+  value: unknown,
+  fallbackValue: unknown = Date.now(),
+): string {
+  return (
+    timestampMsToIsoString(value) ?? timestampMsToIsoString(fallbackValue) ?? UNIX_EPOCH_ISO_STRING
+  );
+}
+
+export function timestampMsToIsoFileStamp(
+  value: unknown,
+  fallbackValue: unknown = Date.now(),
+): string {
+  return resolveTimestampMsToIsoString(value, fallbackValue).replaceAll(":", "-");
+}
 
 export function clampTimerTimeoutMs(valueMs: unknown, minMs = 1): number | undefined {
   const value = asFiniteNumber(valueMs);
@@ -124,6 +161,16 @@ export function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: number, minM
     return min;
   }
   return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
+}
+
+export function addTimerTimeoutGraceMs(timeoutMs: unknown, graceMs = 5_000): number | undefined {
+  const timeout = asFiniteNumber(timeoutMs);
+  const grace = asFiniteNumber(graceMs);
+  if (timeout === undefined || grace === undefined) {
+    return undefined;
+  }
+  const withGrace = timeout + grace;
+  return Number.isFinite(withGrace) ? clampTimerTimeoutMs(withGrace) : MAX_TIMER_TIMEOUT_MS;
 }
 
 export function finiteSecondsToTimerSafeMilliseconds(
@@ -201,33 +248,59 @@ export function nonNegativeSecondsToSafeMilliseconds(value: unknown): number | u
   return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
 }
 
+export function resolveExpiresAtMsFromDurationMs(
+  value: unknown,
+  opts: { nowMs?: number; bufferMs?: number; minRemainingMs?: number } = {},
+): number | undefined {
+  const durationMs = asPositiveSafeInteger(value);
+  if (durationMs === undefined) {
+    return undefined;
+  }
+  const nowMs = asDateTimestampMs(opts.nowMs ?? Date.now());
+  const bufferMs = asFiniteNumber(opts.bufferMs ?? 0);
+  if (nowMs === undefined || bufferMs === undefined) {
+    return undefined;
+  }
+  const expiresAt = nowMs + durationMs - bufferMs;
+  if (!Number.isSafeInteger(expiresAt) || timestampMsToIsoString(expiresAt) === undefined) {
+    return undefined;
+  }
+  const minRemainingMs = opts.minRemainingMs;
+  if (minRemainingMs === undefined) {
+    return expiresAt;
+  }
+  const minExpiresAt = nowMs + minRemainingMs;
+  if (!Number.isSafeInteger(minExpiresAt) || timestampMsToIsoString(minExpiresAt) === undefined) {
+    return expiresAt;
+  }
+  return Math.max(expiresAt, minExpiresAt);
+}
+
 export function resolveExpiresAtMsFromDurationSeconds(
   value: unknown,
   opts: { nowMs?: number; bufferMs?: number; minRemainingMs?: number } = {},
 ): number | undefined {
   const durationMs = positiveSecondsToSafeMilliseconds(value);
-  if (durationMs === undefined) {
-    return undefined;
-  }
-  const nowMs = opts.nowMs ?? Date.now();
-  const expiresAt = nowMs + durationMs - (opts.bufferMs ?? 0);
-  if (!Number.isSafeInteger(expiresAt)) {
-    return undefined;
-  }
-  const minRemainingMs = opts.minRemainingMs;
-  return minRemainingMs === undefined ? expiresAt : Math.max(expiresAt, nowMs + minRemainingMs);
+  return durationMs === undefined ? undefined : resolveExpiresAtMsFromDurationMs(durationMs, opts);
 }
 
 export function resolveExpiresAtMsFromEpochSeconds(
   value: unknown,
-  opts: { bufferMs?: number } = {},
+  opts: { bufferMs?: number; maxMs?: number } = {},
 ): number | undefined {
-  const epochMs = positiveSecondsToSafeMilliseconds(value);
+  const epochMs =
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.trunc(value) * 1000
+      : positiveSecondsToSafeMilliseconds(value);
   if (epochMs === undefined) {
     return undefined;
   }
   const expiresAt = epochMs - (opts.bufferMs ?? 0);
-  return Number.isSafeInteger(expiresAt) ? expiresAt : undefined;
+  if (!Number.isSafeInteger(expiresAt)) {
+    return undefined;
+  }
+  const maxMs = opts.maxMs;
+  return maxMs === undefined || expiresAt <= maxMs ? expiresAt : undefined;
 }
 
 export function resolveExpiresAtMsFromDurationOrEpoch(

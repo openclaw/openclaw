@@ -284,6 +284,7 @@ export async function initSessionState(params: {
   const sessionStoreLoadStartMs = ingressTimingEnabled ? Date.now() : 0;
   const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
     skipCache: true,
+    clone: false,
   });
   if (ingressTimingEnabled) {
     log.info(

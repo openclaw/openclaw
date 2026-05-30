@@ -26,7 +26,7 @@ function createPayloadCapture(opts?: { initialReasoning?: unknown }) {
 
 const codexModel = {
   api: "openai-codex-responses",
-  provider: "openai-codex",
+  provider: "openai",
   id: "gpt-5.1-codex",
 } as Model<"openai-codex-responses">;
 
@@ -493,7 +493,7 @@ describe("createOpenAIThinkingLevelWrapper", () => {
     },
     {
       api: "openai-codex-responses",
-      provider: "openai-codex",
+      provider: "openai",
       id: "gpt-5.5",
     },
   ] as const)("preserves xhigh for $provider/$id", (model) => {

@@ -4,6 +4,7 @@ import { getInvalidPersistedCronJobReason } from "../cron/persisted-shape.js";
 import { coerceFiniteScheduleNumber } from "../cron/schedule.js";
 import { inferLegacyName } from "../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../cron/stagger.js";
+import { timestampMsToIsoString } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -418,8 +419,12 @@ export function normalizeStoredCronJobs(
             : atRaw
               ? parseAbsoluteTimeMs(atRaw)
               : null;
-      if (parsedAtMs !== null) {
-        sched.at = new Date(parsedAtMs).toISOString();
+      const parsedAt = parsedAtMs !== null ? timestampMsToIsoString(parsedAtMs) : undefined;
+      const fallbackAtMs = !parsedAt && atRaw ? parseAbsoluteTimeMs(atRaw) : null;
+      const fallbackAt = fallbackAtMs !== null ? timestampMsToIsoString(fallbackAtMs) : undefined;
+      const normalizedAt = parsedAt ?? fallbackAt;
+      if (normalizedAt) {
+        sched.at = normalizedAt;
         if ("atMs" in sched) {
           delete sched.atMs;
         }

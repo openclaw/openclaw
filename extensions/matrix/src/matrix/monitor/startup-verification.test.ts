@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureMatrixStartupVerification } from "./startup-verification.js";
 
 function createTempStateDir(): string {
@@ -80,6 +80,10 @@ function createHarness(params?: {
 }
 
 describe("ensureMatrixStartupVerification", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("skips automatic requests when the device is already verified", async () => {
     const tempHome = createTempStateDir();
     const harness = createHarness({ verified: true });
@@ -201,6 +205,27 @@ describe("ensureMatrixStartupVerification", () => {
     expect(harness.client.crypto.requestVerification).toHaveBeenCalledWith({ ownUser: true });
 
     expect(fs.existsSync(createStateFilePath(tempHome))).toBe(true);
+  });
+
+  it("falls back when startup verification nowMs is outside Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00.000Z"));
+    const tempHome = createTempStateDir();
+    const stateFilePath = createStateFilePath(tempHome);
+    const harness = createHarness();
+
+    const result = await ensureMatrixStartupVerification({
+      client: harness.client as never,
+      auth: createAuth(),
+      accountConfig: {},
+      stateFilePath,
+      nowMs: 8_640_000_000_000_001,
+    });
+
+    expect(result.kind).toBe("requested");
+    const state = JSON.parse(fs.readFileSync(stateFilePath, "utf-8")) as {
+      attemptedAt?: string;
+    };
+    expect(state.attemptedAt).toBe("2026-05-30T12:00:00.000Z");
   });
 
   it("keeps startup verification failures non-fatal", async () => {

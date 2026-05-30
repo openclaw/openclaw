@@ -87,6 +87,17 @@ function pluginOwnsProviderRef(plugin: PluginManifestRecord, normalizedProvider:
   ) {
     return true;
   }
+  for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+    const alias = normalizeProviderId(rawAlias);
+    const targetProvider = normalizeProviderId(target);
+    if (
+      alias === normalizedProvider &&
+      targetProvider &&
+      plugin.providers.some((providerId) => normalizeProviderId(providerId) === targetProvider)
+    ) {
+      return true;
+    }
+  }
   for (const [rawAlias, target] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
     const alias = normalizeProviderId(rawAlias);
     const targetProvider = normalizeProviderId(target.provider);

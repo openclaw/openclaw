@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { listAgentHarnessIds } from "../agents/harness/registry.js";
+import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -1021,6 +1022,103 @@ describe("loadOpenClawPlugins", () => {
     expect(metrics.registerMs).toEqual(expect.any(Number));
     expect(metrics.registerFailedCount).toBe(0);
     expect(metrics.loadAndRegisterMs).toEqual(expect.any(Number));
+  });
+
+  it("resolves ${ENV_VAR} references in plugin config before handing config to the plugin", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "env-config-probe",
+      filename: "env-config-probe.cjs",
+      // Schema must permit apiKey, otherwise the empty-schema guard rejects the
+      // config before register() runs and the env substitution is never exercised.
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { apiKey: { type: "string" } },
+      },
+      body: `module.exports = {
+  id: "env-config-probe",
+  register(api) {
+    globalThis.envConfigProbeResult = api.pluginConfig;
+  },
+};`,
+    });
+    const probe = globalThis as unknown as Record<string, unknown>;
+    const entries = {
+      "env-config-probe": { config: { apiKey: "${ENV_CONFIG_PROBE_SECRET}" } },
+    };
+
+    // Case 1: the referenced variable is present in process.env.
+    delete probe.envConfigProbeResult;
+    withEnv({ ENV_CONFIG_PROBE_SECRET: "process-env-secret" }, () => {
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: { allow: ["env-config-probe"], entries },
+        options: { resolveRawConfigEnvVars: true },
+      });
+    });
+    // Before the fix, the plugin received the literal "${ENV_CONFIG_PROBE_SECRET}".
+    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "process-env-secret" });
+
+    // Case 2: the referenced variable lives only in the loader's explicit env,
+    // not in process.env — proving the substitution honors the per-load env.
+    delete probe.envConfigProbeResult;
+    expect(process.env.ENV_CONFIG_PROBE_SECRET).toBeUndefined();
+    loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: { allow: ["env-config-probe"], entries },
+      options: {
+        env: { ...process.env, ENV_CONFIG_PROBE_SECRET: "explicit-env-secret" },
+        resolveRawConfigEnvVars: true,
+      },
+    });
+    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "explicit-env-secret" });
+
+    // Case 3: config.env.vars participates in the same effective env as config IO.
+    delete probe.envConfigProbeResult;
+    withEnv({ ENV_CONFIG_PROBE_SECRET: undefined }, () => {
+      loadOpenClawPlugins({
+        cache: false,
+        workspaceDir: plugin.dir,
+        config: {
+          env: {
+            vars: {
+              ENV_CONFIG_PROBE_PLUGIN_FILE: plugin.file,
+              ENV_CONFIG_PROBE_SECRET: "config-env-secret",
+            },
+          },
+          plugins: {
+            load: { paths: ["${ENV_CONFIG_PROBE_PLUGIN_FILE}"] },
+            allow: ["env-config-probe"],
+            entries,
+          },
+        },
+        resolveRawConfigEnvVars: true,
+      });
+    });
+    expect(probe.envConfigProbeResult).toMatchObject({ apiKey: "config-env-secret" });
+
+    // Case 4: config that already went through read-time substitution must not
+    // be processed again. Escaped placeholders intentionally become literals.
+    delete probe.envConfigProbeResult;
+    const resolvedEscapedEntries = resolveConfigEnvVars(
+      {
+        "env-config-probe": { config: { apiKey: "$${ENV_CONFIG_PROBE_SECRET}" } },
+      },
+      { ENV_CONFIG_PROBE_SECRET: "should-not-leak" } as NodeJS.ProcessEnv,
+    ) as typeof entries;
+    withEnv({ ENV_CONFIG_PROBE_SECRET: "process-env-secret" }, () => {
+      loadRegistryFromSinglePlugin({
+        plugin,
+        pluginConfig: {
+          allow: ["env-config-probe"],
+          entries: structuredClone(resolvedEscapedEntries),
+        },
+      });
+    });
+    expect(probe.envConfigProbeResult).toMatchObject({
+      apiKey: "${ENV_CONFIG_PROBE_SECRET}",
+    });
   });
 
   it("emits loader startup trace failure counts for load and register failures", () => {

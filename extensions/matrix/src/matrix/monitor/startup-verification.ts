@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type { MatrixConfig } from "../../types.js";
 import { resolveMatrixStoragePaths } from "../client/storage.js";
 import type { MatrixAuth } from "../client/types.js";
@@ -93,6 +94,14 @@ function resolveRetryAfterMs(params: {
   }
   const remaining = attemptedAtMs + params.cooldownMs - params.nowMs;
   return remaining > 0 ? remaining : undefined;
+}
+
+function resolveStartupVerificationTimestamp(nowMs: unknown): string {
+  return (
+    timestampMsToIsoString(nowMs) ??
+    timestampMsToIsoString(Date.now()) ??
+    "1970-01-01T00:00:00.000Z"
+  );
 }
 
 function shouldHonorCooldown(params: {
@@ -189,6 +198,7 @@ export async function ensureMatrixStartupVerification(params: {
   );
   const cooldownMs = cooldownHours * 60 * 60 * 1000;
   const nowMs = params.nowMs ?? Date.now();
+  const attemptedAt = resolveStartupVerificationTimestamp(nowMs);
   const state = await readStartupVerificationState(statePath);
   const stateCooldownMs = resolveStateCooldownMs(state, cooldownMs);
   if (shouldHonorCooldown({ state, verification, stateCooldownMs, nowMs })) {
@@ -208,7 +218,7 @@ export async function ensureMatrixStartupVerification(params: {
     await writeJsonFileAtomically(statePath, {
       userId: verification.userId,
       deviceId: verification.deviceId,
-      attemptedAt: new Date(nowMs).toISOString(),
+      attemptedAt,
       outcome: "requested",
       requestId: request.id,
       transactionId: request.transactionId,
@@ -224,7 +234,7 @@ export async function ensureMatrixStartupVerification(params: {
     await writeJsonFileAtomically(statePath, {
       userId: verification.userId,
       deviceId: verification.deviceId,
-      attemptedAt: new Date(nowMs).toISOString(),
+      attemptedAt,
       outcome: "failed",
       error,
     } satisfies MatrixStartupVerificationState).catch(() => {});

@@ -566,6 +566,8 @@ export const tr: TranslationMap = {
     eventMoved: "Taşındı",
     eventMovedTo: "{status} durumuna taşındı",
     eventLinked: "Oturum bağlandı",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "Üstlenildi",
     eventHeartbeat: "Heartbeat",
     eventExecutionUpdated: "Aracı güncellendi",

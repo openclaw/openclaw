@@ -26,14 +26,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
     ).toBe(true);
     expect(
       shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-        provider: "openai-codex",
-        useExplicitModels: false,
-        providerFilter: null,
-        resolveProviderOwners,
-      }),
-    ).toBe(true);
-    expect(
-      shouldExcludeProviderFromDefaultHighSignalLiveSweep({
         provider: "codex-cli",
         useExplicitModels: false,
         providerFilter: null,
@@ -51,22 +43,6 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
         resolveProviderOwners,
       }),
     ).toBe(false);
-    expect(
-      shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-        provider: "openai-codex",
-        useExplicitModels: false,
-        providerFilter: new Set(["codex-cli"]),
-        resolveProviderOwners,
-      }),
-    ).toBe(false);
-    expect(
-      shouldExcludeProviderFromDefaultHighSignalLiveSweep({
-        provider: "openai-codex",
-        useExplicitModels: false,
-        providerFilter: new Set(["openai"]),
-        resolveProviderOwners,
-      }),
-    ).toBe(false);
   });
 
   it("keeps dedicated harness providers when the caller uses explicit model selection", () => {
@@ -79,10 +55,18 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
     ).toBe(false);
   });
 
-  it("does not exclude ordinary providers", () => {
+  it("does not exclude ordinary or legacy OpenAI provider ids", () => {
     expect(
       shouldExcludeProviderFromDefaultHighSignalLiveSweep({
         provider: "openai",
+        useExplicitModels: false,
+        providerFilter: null,
+        resolveProviderOwners,
+      }),
+    ).toBe(false);
+    expect(
+      shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+        provider: "openai-codex",
         useExplicitModels: false,
         providerFilter: null,
         resolveProviderOwners,

@@ -238,7 +238,12 @@ function mapProvider(
   usageByProvider: Map<string, { windows: UsageWindow[]; plan?: string }>,
   expectsOAuthSet: Set<string>,
 ): ModelAuthStatusProvider {
-  const usageKey = resolveUsageProviderId(prov.provider);
+  const usageProfile = prov.profiles.find(
+    (profile) => profile.type === "oauth" || profile.type === "token",
+  );
+  const usageKey = resolveUsageProviderId(prov.provider, {
+    credentialType: usageProfile?.type,
+  });
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
   const rollup = aggregateOAuthStatus(prov, Date.now(), expectsOAuthSet.has(prov.provider));
   return {
@@ -432,7 +437,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         ...new Set(
           authHealth.profiles
             .filter((p) => p.type === "oauth" || p.type === "token")
-            .map((p) => resolveUsageProviderId(p.provider))
+            .map((p) => resolveUsageProviderId(p.provider, { credentialType: p.type }))
             .filter((id): id is UsageProviderId => Boolean(id)),
         ),
       ];
