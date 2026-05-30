@@ -44,8 +44,8 @@ openclaw gateway run
     - Binding beyond loopback without auth is blocked (safety guardrail).
     - `lan`, `tailnet`, and `custom` currently resolve over IPv4-only BYOH paths.
     - IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy if the host itself is IPv6-only.
-    - `SIGUSR1` triggers an in-process restart when authorized (`commands.restart` is enabled by default; set `commands.restart: false` to block manual restart, while gateway tool/config apply/update remain allowed).
-    - `SIGINT`/`SIGTERM` handlers stop the gateway process, but they don't restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
+    - Process signal behavior is documented in [Process Signals](#process-signals).
+    - `SIGINT`/`SIGTERM` handlers stop the gateway process, but they do not restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
 
   </Accordion>
 </AccordionGroup>
@@ -122,6 +122,19 @@ openclaw gateway restart --force
 `openclaw gateway restart --safe` asks the running Gateway to preflight active OpenClaw work before restarting. If queued operations, reply delivery, embedded runs, or task runs are active, the Gateway reports the blockers, coalesces duplicate safe restart requests, and restarts once the active work drains. Plain `restart` keeps the existing service-manager behavior for compatibility. Use `--force` only when you explicitly want the immediate override path.
 
 `openclaw gateway restart --safe --skip-deferral` runs the same OpenClaw-aware coordinated restart as `--safe`, but bypasses the active-work deferral gate so the Gateway emits the restart immediately even when blockers are reported. Use it as the operator escape hatch when a deferral has been pinned by a stuck task run and `--safe` alone would wait indefinitely. `--skip-deferral` requires `--safe`.
+
+## Process Signals
+
+The Gateway installs handlers for the signals that are part of the OpenClaw lifecycle contract. Use `openclaw gateway restart` for managed-service restarts; it routes to the Gateway restart path and avoids relying on platform-specific hangup behavior.
+
+| Signal    | Foreground Gateway                                                                                                                                    | Supervised Gateway (`launchd`, `systemd`, `schtasks`)                 |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `SIGTERM` | Graceful shutdown.                                                                                                                                    | Graceful shutdown.                                                    |
+| `SIGINT`  | Graceful shutdown.                                                                                                                                    | Graceful shutdown.                                                    |
+| `SIGUSR1` | Authorized in-process restart.                                                                                                                        | Authorized in-process restart.                                        |
+| `SIGHUP`  | No OpenClaw handler; Node.js default behavior applies. On non-Windows platforms this terminates the process, normally as exit `129` (`128 + SIGHUP`). | Ignored so terminal hangups do not stop a supervisor-managed Gateway. |
+
+`SIGUSR1` restart requires restart commands to be authorized. `commands.restart` is enabled by default; set `commands.restart: false` to block manual restart while gateway tool, config apply, and update restart paths remain allowed.
 
 <Warning>
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.
