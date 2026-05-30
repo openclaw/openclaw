@@ -39,6 +39,12 @@ Send media:
 }
 ```
 
+Generated-image delivery:
+
+- For images created by an OpenClaw image tool, attach every returned structured attachment when using the message tool.
+- If replying normally and the runtime supports media pickup, put each local media file on its own line as `MEDIA: /absolute/path/to/file.png`.
+- Do not paste local generated-image paths as ordinary chat text and call it done; Discord may show "media failed" because no uploadable attachment was handed to the gateway.
+
 Components v2:
 
 ```json
