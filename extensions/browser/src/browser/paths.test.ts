@@ -324,6 +324,26 @@ describe("resolveExistingUploadPaths", () => {
     });
   });
 
+  it("rejects nested absolute inbound media paths", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const nestedDir = path.join(inboundMediaDir, "nested");
+      await fs.mkdir(nestedDir, { recursive: true });
+      const nestedFile = path.join(nestedDir, "secret.pdf");
+      await fs.writeFile(nestedFile, "secret", "utf8");
+
+      const result = await resolveExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: [nestedFile],
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("direct child of inbound media directory");
+      }
+    });
+  });
+
   it("rejects files outside both managed upload roots", async () => {
     await withFixtureRoot(async ({ baseDir, inboundMediaDir, uploadsDir }) => {
       const outsideFile = path.join(baseDir, "secret.txt");
@@ -455,6 +475,26 @@ describe("resolveStrictExistingUploadPaths", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error).toContain("regular non-symlink file");
+      }
+    });
+  });
+
+  it("rejects nested absolute inbound media paths at use time", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const nestedDir = path.join(inboundMediaDir, "nested");
+      await fs.mkdir(nestedDir, { recursive: true });
+      const nestedFile = path.join(nestedDir, "secret.pdf");
+      await fs.writeFile(nestedFile, "secret", "utf8");
+
+      const result = await resolveStrictExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: [nestedFile],
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("direct child of inbound media directory");
       }
     });
   });

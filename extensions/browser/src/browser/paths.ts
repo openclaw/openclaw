@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -130,6 +131,61 @@ function resolveManagedInboundMediaRefs(params: {
   return { ok: true, paths };
 }
 
+async function isDirectInboundMediaFile(params: {
+  inboundMediaDir: string;
+  resolvedPath: string;
+}): Promise<boolean> {
+  let inboundRoot: string;
+  try {
+    inboundRoot = await fs.realpath(params.inboundMediaDir);
+  } catch {
+    inboundRoot = path.resolve(params.inboundMediaDir);
+  }
+  const relativePath = path.relative(inboundRoot, params.resolvedPath);
+  return (
+    Boolean(relativePath) &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath) &&
+    !relativePath.includes("/") &&
+    !relativePath.includes("\\")
+  );
+}
+
+async function resolveDirectInboundMediaPath(params: {
+  inboundMediaDir: string;
+  requestedPath: string;
+  strict: boolean;
+}): Promise<ExistingPathsResult | StrictExistingPathsResult> {
+  const inboundPathsResult = params.strict
+    ? await resolveStrictExistingPathsWithinRoot({
+        rootDir: params.inboundMediaDir,
+        requestedPaths: [params.requestedPath],
+        scopeLabel: `inbound media directory (${params.inboundMediaDir})`,
+      })
+    : await resolveExistingPathsWithinRoot({
+        rootDir: params.inboundMediaDir,
+        requestedPaths: [params.requestedPath],
+        scopeLabel: `inbound media directory (${params.inboundMediaDir})`,
+      });
+  if (!inboundPathsResult.ok) {
+    return inboundPathsResult;
+  }
+  const resolvedPath = inboundPathsResult.paths[0] ?? params.requestedPath;
+  if (
+    !(await isDirectInboundMediaFile({
+      inboundMediaDir: params.inboundMediaDir,
+      resolvedPath,
+    }))
+  ) {
+    return {
+      ok: false,
+      error: `Invalid media reference: must be a direct child of inbound media directory (${params.inboundMediaDir})`,
+    };
+  }
+  return inboundPathsResult;
+}
+
 export async function resolveExistingUploadPaths({
   requestedPaths,
   uploadDir = DEFAULT_UPLOAD_DIR,
@@ -155,10 +211,10 @@ export async function resolveExistingUploadPaths({
       continue;
     }
 
-    const inboundPathsResult = await resolveExistingPathsWithinRoot({
-      rootDir: inboundMediaDir,
-      requestedPaths: [requestedPath],
-      scopeLabel: `inbound media directory (${inboundMediaDir})`,
+    const inboundPathsResult = await resolveDirectInboundMediaPath({
+      inboundMediaDir,
+      requestedPath,
+      strict: false,
     });
     if (!inboundPathsResult.ok) {
       return inboundPathsResult;
@@ -193,10 +249,10 @@ export async function resolveStrictExistingUploadPaths({
       continue;
     }
 
-    const inboundPathsResult = await resolveStrictExistingPathsWithinRoot({
-      rootDir: inboundMediaDir,
-      requestedPaths: [requestedPath],
-      scopeLabel: `inbound media directory (${inboundMediaDir})`,
+    const inboundPathsResult = await resolveDirectInboundMediaPath({
+      inboundMediaDir,
+      requestedPath,
+      strict: true,
     });
     if (!inboundPathsResult.ok) {
       return inboundPathsResult;
