@@ -106,6 +106,7 @@ export function claudeCliSessionTranscriptPath(params: {
 }
 
 const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
+const CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES = 1024 * 1024;
 
 export async function claudeCliSessionTranscriptHasContent(params: {
   sessionId: string | undefined;
@@ -166,10 +167,18 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
 
     const fh = await fs.open(filePath, "r");
     try {
-      const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
+      const tailBytes = Math.min(stat.size, CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES);
+      const start = stat.size - tailBytes;
+      const buffer = Buffer.alloc(tailBytes);
+      const { bytesRead } = await fh.read(buffer, 0, tailBytes, start);
+      let tailText = buffer.toString("utf-8", 0, bytesRead);
+      if (start > 0) {
+        const firstNewline = tailText.indexOf("\n");
+        tailText = firstNewline === -1 ? "" : tailText.slice(firstNewline + 1);
+      }
       let lastAssistantToolUseIds: Set<string> = new Set();
       let answeredToolResultIds: Set<string> = new Set();
-      for await (const line of rl) {
+      for (const line of tailText.split(/\r?\n/)) {
         if (!line.trim()) {
           continue;
         }
