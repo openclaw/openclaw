@@ -49,6 +49,7 @@ import {
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
+  configureTaskRegistryMaintenance,
   getInspectableTaskAuditSummary,
   previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
@@ -106,6 +107,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   listTaskRecords?: () => ReturnType<typeof createTaskRecord>[];
   acpEntry?: AcpSessionStoreEntry;
   acpEntries?: AcpSessionStoreEntry[];
+  hasActiveAcpTurn?: (sessionKey: string) => boolean;
   sessionBindings?: SessionBindingRecord[];
   closeAcpSession?: (params: {
     cfg: AcpSessionStoreEntry["cfg"];
@@ -137,6 +139,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
     isCronJobActive: () => false,
     getAgentRunContext: () => undefined,
+    hasActiveAcpTurn: params.hasActiveAcpTurn ?? (() => false),
     hasActiveTaskForChildSessionKey: ({ sessionKey, excludeTaskId }) => {
       const normalized = sessionKey.trim().toLowerCase();
       return Array.from(params.currentTasks.values()).some(
@@ -187,7 +190,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       params.currentTasks.set(patch.taskId, next);
       return next;
     },
-    isCronRuntimeAuthoritative: () => true,
+    isRuntimeAuthoritative: () => true,
     resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
     loadCronStoreSync: () => ({ version: 1, jobs: [] }),
     readCronRunLogEntriesSync: () => [],
@@ -1956,6 +1959,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryMemoryForTest();
+      configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
 
       const task = createTaskRecord({
         runtime: "acp",
@@ -1989,6 +1993,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryMemoryForTest();
+      configureTaskRegistryMaintenance({ runtimeAuthoritative: true });
       const now = Date.now();
 
       const task = createTaskRecord({
@@ -2638,6 +2643,7 @@ describe("task-registry", () => {
         parseAgentSessionKey: () => null,
         isCronJobActive: () => false,
         getAgentRunContext: () => undefined,
+        hasActiveAcpTurn: () => false,
         hasActiveTaskForChildSessionKey: () => false,
         deleteTaskRecordById: () => false,
         ensureTaskRegistryReady: () => {},
@@ -2650,7 +2656,7 @@ describe("task-registry", () => {
         maybeDeliverTaskTerminalUpdate: async () => null,
         resolveTaskForLookupToken: () => undefined,
         setTaskCleanupAfterById: () => null,
-        isCronRuntimeAuthoritative: () => true,
+        isRuntimeAuthoritative: () => true,
         resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
         loadCronStoreSync: () => ({ version: 1, jobs: [] }),
         readCronRunLogEntriesSync: () => [],

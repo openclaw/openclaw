@@ -39,6 +39,7 @@ import {
   resolveRuntimeHandleIdentifiersFromIdentity,
   resolveSessionIdentityFromMeta,
 } from "../runtime/session-identity.js";
+import { clearAcpTurnActive, markAcpTurnActive } from "./active-turns.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import {
   applyManagerRuntimeControls,
@@ -824,6 +825,13 @@ export class AcpSessionManager {
         };
         const shouldAttemptFailover = (backendIdx: number) =>
           backendIdx < candidateBackends.length - 1;
+
+        // Liveness spans the whole task, not one attempt: mark once before the backend loop
+        // (after the ready-meta check, so a pre-loop throw cannot leak it) and clear it at the
+        // terminal mark, so a slow init or failover cleanup never leaves the task look reclaimable.
+        if (taskContext) {
+          markAcpTurnActive(sessionKey);
+        }
 
         for (let backendIdx = 0; backendIdx < candidateBackends.length; backendIdx += 1) {
           const currentBackend = candidateBackends[backendIdx];
@@ -2346,6 +2354,11 @@ export class AcpSessionManager {
       terminalOutcome?: "succeeded" | "blocked" | null;
     },
   ): void {
+    // Terminal means the turn is no longer live: release the liveness marker set before the
+    // backend loop so maintenance can reclaim the record once it is durably terminal.
+    if (params.sessionKey) {
+      clearAcpTurnActive(params.sessionKey);
+    }
     try {
       if (params.status === "succeeded") {
         completeTaskRunByRunId({
