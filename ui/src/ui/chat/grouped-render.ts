@@ -1705,7 +1705,6 @@ function renderGroupedMessage(
                           ? renderExpandedToolCardContent(
                               singleToolCard,
                               opts.sessionKey,
-                              opts.agentId,
                               onOpenSidebar,
                               opts.canvasPluginSurfaceUrl,
                               opts.embedSandboxMode ?? "scripts",

@@ -576,7 +576,7 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
     expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
   });
-  it("adds a full-message request when opening tool details", () => {
+  it("does not add a full-message request for ambiguous tool details", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();
     render(
@@ -604,11 +604,6 @@ describe("tool-cards", () => {
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
     expect(sidebar.kind).toBe("markdown");
-    expect(sidebar.fullMessageRequest).toEqual({
-      sessionKey: "main",
-      agentId: "work",
-      messageId: "msg-tool-full",
-      kind: "tool_output",
-    });
+    expect(sidebar.fullMessageRequest).toBeUndefined();
   });
 });

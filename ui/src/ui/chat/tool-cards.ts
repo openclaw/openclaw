@@ -471,17 +471,13 @@ export function buildPreviewSidebarContent(
 function buildToolSidebarFullMessageRequest(
   card: ToolCard,
   sessionKey: string | undefined,
-  agentId: string | undefined,
 ): FullMessageRequest | undefined {
   if (!sessionKey || !card.messageId) {
     return undefined;
   }
-  return {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-    messageId: card.messageId,
-    kind: "tool_output",
-  };
+  // A transcript entry can contain multiple tool blocks. Until the request can
+  // identify a specific block, upgrading by message id can show the wrong tool.
+  return undefined;
 }
 
 export function renderRawOutputToggle(text: string) {
@@ -615,7 +611,6 @@ export function renderToolCard(
               ${renderExpandedToolCardContent(
                 card,
                 opts.sessionKey,
-                opts.agentId,
                 opts.onOpenSidebar,
                 opts.canvasPluginSurfaceUrl,
                 opts.embedSandboxMode ?? "scripts",
@@ -631,7 +626,6 @@ export function renderToolCard(
 export function renderExpandedToolCardContent(
   card: ToolCard,
   sessionKey?: string,
-  agentId?: string,
   onOpenSidebar?: (content: SidebarContent) => void,
   canvasPluginSurfaceUrl?: string | null,
   embedSandboxMode: EmbedSandboxMode = "scripts",
@@ -643,7 +637,7 @@ export function renderExpandedToolCardContent(
   const hasInput = Boolean(card.inputText?.trim());
   const isError = isToolCardError(card);
   const canOpenSidebar = Boolean(onOpenSidebar);
-  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey, agentId);
+  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey);
   const previewSidebarContent =
     card.preview?.kind === "canvas"
       ? buildPreviewSidebarContent(card.preview, card.outputText, { fullMessageRequest })
@@ -726,11 +720,7 @@ export function renderToolCardSidebar(
   const hasText = Boolean(card.outputText?.trim());
   const hasPreview = Boolean(preview);
   const isError = isToolCardError(card);
-  const fullMessageRequest = buildToolSidebarFullMessageRequest(
-    card,
-    options?.sessionKey,
-    options?.agentId,
-  );
+  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, options?.sessionKey);
   const sidebarContent =
     preview?.kind === "canvas"
       ? buildPreviewSidebarContent(preview, card.outputText, { fullMessageRequest })
