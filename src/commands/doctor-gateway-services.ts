@@ -35,6 +35,7 @@ import {
 } from "../daemon/systemd.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { VERSION } from "../version.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { resolveGatewayAuthTokenForService } from "./doctor-gateway-auth-token.js";
@@ -182,6 +183,17 @@ function shouldDeferUpdateModeSystemdServiceRepair(params: {
     isDoctorUpdateRepairMode(params.repairMode) &&
     !params.shouldForce
   );
+}
+
+async function isWindowsGatewayRunningForUpdateRepair(params: {
+  service: ReturnType<typeof resolveGatewayService>;
+  env: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  if (process.platform !== "win32") {
+    return false;
+  }
+  const runtime = await params.service.readRuntime(params.env).catch(() => null);
+  return runtime?.status === "running";
 }
 
 async function suppressRunningSystemdExecStartRepairs(params: {
@@ -402,7 +414,7 @@ export async function maybeRepairGatewayServiceConfig(
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
-  options: { allowExecSecretRefs?: boolean } = {},
+  options: { allowExecSecretRefs?: boolean; lastTouchedVersionOverride?: string } = {},
 ) {
   if (resolveIsNixMode(process.env)) {
     note("Nix mode detected; skip service updates.", "Gateway");
@@ -474,6 +486,15 @@ export async function maybeRepairGatewayServiceConfig(
       message:
         "Gateway service OPENCLAW_GATEWAY_TOKEN should be unset when gateway.auth.token is SecretRef-managed",
       detail: "service token is stale",
+      level: "recommended",
+    });
+  }
+  const serviceVersion = normalizeOptionalString(command.environment?.OPENCLAW_SERVICE_VERSION);
+  if (serviceVersion && serviceVersion !== VERSION) {
+    audit.issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayVersionMismatch,
+      message: "Gateway service version does not match the current CLI.",
+      detail: `${serviceVersion} -> ${VERSION}`,
       level: "recommended",
     });
   }
@@ -633,8 +654,11 @@ export async function maybeRepairGatewayServiceConfig(
       ? normalizeOptionalString(cfg.gateway.auth.token)
       : undefined;
   let cfgForServiceInstall = cfg;
+  // Windows update repairs rewrite the Scheduled Task immediately, so migrate an
+  // embedded legacy token first; otherwise the restarted gateway loses auth.
+  const updateRepairWillRewriteWindowsTask = updateRepairMode && process.platform === "win32";
   if (
-    !updateRepairMode &&
+    (!updateRepairMode || updateRepairWillRewriteWindowsTask) &&
     !tokenRefConfigured &&
     !configuredGatewayToken &&
     gatewayTokenForRepair
@@ -654,6 +678,13 @@ export async function maybeRepairGatewayServiceConfig(
       await replaceConfigFile({
         nextConfig: nextCfg,
         afterWrite: { mode: "auto" },
+        ...(options.lastTouchedVersionOverride
+          ? {
+              writeOptions: {
+                lastTouchedVersionOverride: options.lastTouchedVersionOverride,
+              },
+            }
+          : {}),
       });
       cfgForServiceInstall = nextCfg;
       note(
@@ -677,8 +708,18 @@ export async function maybeRepairGatewayServiceConfig(
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
   });
+  const updateRepairShouldInstall =
+    updateRepairMode &&
+    (await isWindowsGatewayRunningForUpdateRepair({
+      service,
+      env: serviceInstallEnv,
+    }));
+  // Windows `install` activates the task/login item. In update mode, only take
+  // that path when the gateway was already running; stopped installs stay staged.
+  const repairService =
+    updateRepairMode && !updateRepairShouldInstall ? service.stage : service.install;
   try {
-    await (updateRepairMode ? service.stage : service.install)({
+    await repairService({
       env: serviceInstallEnv,
       stdout: process.stdout,
       warn: (message) => note(message, "Gateway"),
