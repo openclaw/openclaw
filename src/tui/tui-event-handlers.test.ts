@@ -219,7 +219,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
   });
 
-  it("renders terminal lifecycle errors and clears the active run", () => {
+  it("renders terminal lifecycle errors after retry grace and clears the active run", () => {
+    vi.useFakeTimers();
     const { state, chatLog, tui, setActivityStatus, loadHistory, handleAgentEvent } =
       createHandlersHarness({
         state: { activeChatRunId: "run-error" },
@@ -231,15 +232,23 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       data: { phase: "error", endedAt: Date.now(), error: "provider exploded" },
     });
 
+    expect(chatLog.addSystem).not.toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-error");
+    expect(setActivityStatus).toHaveBeenCalledWith("error");
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(15_000);
+
     expect(chatLog.dismissPendingSystem).toHaveBeenCalledWith("run-error");
     expect(chatLog.addSystem).toHaveBeenCalledWith("run error: provider exploded");
     expect(state.activeChatRunId).toBeNull();
-    expect(setActivityStatus).toHaveBeenCalledWith("error");
     expect(loadHistory).toHaveBeenCalled();
-    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+    expect(tui.requestRender).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 
   it("deduplicates delayed chat errors after terminal lifecycle errors", () => {
+    vi.useFakeTimers();
     const { state, chatLog, tui, handleAgentEvent, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: "run-error" },
     });
@@ -249,6 +258,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       stream: "lifecycle",
       data: { phase: "error", endedAt: Date.now(), error: "provider exploded" },
     });
+    vi.advanceTimersByTime(15_000);
 
     handleChatEvent({
       runId: "run-error",
@@ -260,7 +270,34 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledTimes(1);
     expect(chatLog.addSystem).toHaveBeenCalledWith("run error: provider exploded");
     expect(state.activeChatRunId).toBeNull();
-    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+    expect(tui.requestRender).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("cancels pending terminal lifecycle errors when a retry starts", () => {
+    vi.useFakeTimers();
+    const { state, chatLog, setActivityStatus, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-retry" },
+    });
+
+    handleAgentEvent({
+      runId: "run-retry",
+      stream: "lifecycle",
+      data: { phase: "error", endedAt: Date.now(), error: "provider exploded" },
+    });
+
+    handleAgentEvent({
+      runId: "run-retry",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: Date.now() },
+    });
+
+    vi.advanceTimersByTime(15_000);
+
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith("run error: provider exploded");
+    expect(state.activeChatRunId).toBe("run-retry");
+    expect(setActivityStatus).toHaveBeenCalledWith("running");
+    vi.useRealTimers();
   });
 
   it("keeps retryable lifecycle errors active until a terminal lifecycle event arrives", () => {
