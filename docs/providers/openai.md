@@ -215,7 +215,7 @@ Choose your preferred auth method and follow the setup steps.
     model.
 
     <Warning>
-    OpenClaw does **not** expose `openai/gpt-5.3-codex-spark`. Live OpenAI API requests reject that direct provider route. Use `openai-codex/gpt-5.3-codex-spark` only when the Codex catalog exposes it for your signed-in account.
+    OpenClaw does **not** expose `gpt-5.3-codex-spark` on the direct OpenAI API-key route. It is available only through Codex subscription catalog entries when your signed-in account exposes it.
     </Warning>
 
   </Tab>
@@ -273,9 +273,9 @@ Choose your preferred auth method and follow the setup steps.
     Prefer `openai/gpt-5.5` for new subscription-backed agent config. Older
     `openai-codex/gpt-*` refs are legacy OpenClaw routes, not the native Codex runtime
     path; run `openclaw doctor --fix` when you want to migrate them to canonical
-    `openai/*` refs. `openai-codex/gpt-5.3-codex-spark` is the exception for
-    accounts whose legacy Codex catalog advertises that model; direct `openai/*`
-    and Azure refs for it remain suppressed.
+    `openai/*` refs. `gpt-5.3-codex-spark` remains limited to accounts whose
+    Codex subscription catalog advertises that model; direct OpenAI API-key and
+    Azure refs for it remain suppressed.
     </Warning>
 
     <Note>
