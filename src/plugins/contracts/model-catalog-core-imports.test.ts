@@ -11,6 +11,10 @@ const LEGACY_MODEL_CATALOG_BRIDGES = new Map([
     "@openclaw/model-catalog-core/model-catalog-refs",
   ],
   [
+    path.join(REPO_ROOT, "src/model-catalog/normalize.ts"),
+    "@openclaw/model-catalog-core/model-catalog-normalize",
+  ],
+  [
     path.join(REPO_ROOT, "src/config/model-refs.ts"),
     "@openclaw/model-catalog-core/configured-model-refs",
   ],

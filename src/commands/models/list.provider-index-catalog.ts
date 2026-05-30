@@ -4,7 +4,7 @@ import {
   loadOpenClawProviderIndex,
   planProviderIndexModelCatalogRows,
 } from "../../model-catalog/index.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import type { NormalizedModelCatalogRow } from "../../model-catalog/types.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 
 export function loadProviderIndexCatalogRowsForList(params: {

@@ -1,5 +1,4 @@
 export { mergeModelCatalogRowsByAuthority } from "./authority.js";
-export { normalizeModelCatalog, normalizeModelCatalogRows } from "./normalize.js";
 export { loadOpenClawProviderIndex } from "./provider-index/index.js";
 export {
   planManifestModelCatalogRows,

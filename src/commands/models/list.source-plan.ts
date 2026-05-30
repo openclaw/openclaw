@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import type { NormalizedModelCatalogRow } from "../../model-catalog/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 

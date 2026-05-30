@@ -1,9 +1,6 @@
-import {
-  buildModelCatalogMergeKey,
-  buildModelCatalogRef,
-} from "@openclaw/model-catalog-core/model-catalog-refs";
 import { describe, expect, it } from "vitest";
 import { normalizeModelCatalog, normalizeModelCatalogRows } from "./index.js";
+import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 
 describe("model catalog normalization", () => {
   it("normalizes catalog ownership, aliases, suppressions, and row fields", () => {

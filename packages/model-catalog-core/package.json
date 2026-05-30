@@ -24,6 +24,16 @@
       "import": "./dist/model-catalog-refs.mjs",
       "default": "./dist/model-catalog-refs.mjs"
     },
+    "./model-catalog-normalize": {
+      "types": "./dist/model-catalog-normalize.d.mts",
+      "import": "./dist/model-catalog-normalize.mjs",
+      "default": "./dist/model-catalog-normalize.mjs"
+    },
+    "./model-catalog-types": {
+      "types": "./dist/model-catalog-types.d.mts",
+      "import": "./dist/model-catalog-types.mjs",
+      "default": "./dist/model-catalog-types.mjs"
+    },
     "./provider-id": {
       "types": "./dist/provider-id.d.mts",
       "import": "./dist/provider-id.mjs",

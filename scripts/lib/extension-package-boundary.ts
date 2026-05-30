@@ -66,6 +66,12 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/model-catalog-core/model-catalog-refs": [
     "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-refs.d.ts",
   ],
+  "@openclaw/model-catalog-core/model-catalog-normalize": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
+  ],
+  "@openclaw/model-catalog-core/model-catalog-types": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-types.d.ts",
+  ],
   "@openclaw/model-catalog-core/provider-id": [
     "../dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
   ],

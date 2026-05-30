@@ -470,7 +470,9 @@ function buildModelCatalogCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/model-catalog-core/src/index.ts",
     "configured-model-refs": "packages/model-catalog-core/src/configured-model-refs.ts",
+    "model-catalog-normalize": "packages/model-catalog-core/src/model-catalog-normalize.ts",
     "model-catalog-refs": "packages/model-catalog-core/src/model-catalog-refs.ts",
+    "model-catalog-types": "packages/model-catalog-core/src/model-catalog-types.ts",
     "provider-id": "packages/model-catalog-core/src/provider-id.ts",
     "provider-model-id-normalization":
       "packages/model-catalog-core/src/provider-model-id-normalization.ts",

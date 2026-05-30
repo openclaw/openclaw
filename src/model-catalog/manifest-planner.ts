@@ -1,10 +1,10 @@
+import { normalizeModelCatalogProviderRows } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import {
   buildModelCatalogMergeKey,
   normalizeModelCatalogProviderId,
 } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
-import { normalizeModelCatalogProviderRows } from "./normalize.js";
 import type {
   ModelCatalog,
   ModelCatalogAlias,
