@@ -274,6 +274,8 @@ function resolveTranscriptPolicyCacheKey(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     }),
+    dropReasoningFromHistory:
+      params.config.models?.providers?.[params.provider]?.dropReasoningFromHistory,
   });
 }
 
@@ -331,6 +333,16 @@ export function resolveTranscriptPolicy(params: {
           model: params.model,
         }),
       );
+
+  // Apply user-configured override for reasoning content replay behavior.
+  // Users can set dropReasoningFromHistory: false in provider config to preserve
+  // reasoning/thinking blocks (e.g. reasoning_content) for openai-completions providers.
+  const configuredDropReasoning =
+    params.config?.models?.providers?.[params.provider ?? ""]?.dropReasoningFromHistory;
+  if (typeof configuredDropReasoning === "boolean") {
+    policy.dropReasoningFromHistory = configuredDropReasoning;
+  }
+
   if (cacheConfig && cacheKey) {
     let configCache = transcriptPolicyCache.get(cacheConfig);
     if (!configCache) {

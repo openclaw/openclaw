@@ -487,6 +487,8 @@ const ModelProviderSchema = z
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
+    /** If false, preserve reasoning/thinking blocks in replayed history for openai-completions providers. */
+    dropReasoningFromHistory: z.boolean().optional(),
     models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict();

@@ -186,6 +186,8 @@ export type ModelProviderConfig = {
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;
+  /** If false, preserve reasoning/thinking blocks in replayed history for openai-completions providers. */
+  dropReasoningFromHistory?: boolean;
   models: ModelDefinitionConfig[];
 };
 
