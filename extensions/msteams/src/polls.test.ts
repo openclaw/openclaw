@@ -363,6 +363,77 @@ describe("state poll store", () => {
     await expect(store.getPoll("poll-recent")).resolves.toMatchObject({ id: "poll-recent" });
     await expect(store.getPoll("poll-0000")).resolves.toBeNull();
   });
+
+  it("deletes vote buckets when pruning over the poll cap", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const metadataStore = createPluginStateKeyedStoreForTests<Omit<MSTeamsPoll, "votes">>(
+      "msteams",
+      {
+        namespace: "polls",
+        maxEntries: 2000,
+        env,
+      },
+    );
+    const voteBucketStore = createPluginStateKeyedStoreForTests<{
+      pollId: string;
+      bucket: string;
+      votes: Record<string, string[]>;
+      updatedAt: string;
+    }>("msteams", {
+      namespace: "poll-vote-buckets",
+      maxEntries: 32_032,
+      env,
+    });
+    const pollStateKey = (pollId: string) =>
+      crypto.createHash("sha256").update(pollId).digest("hex");
+    const voteBucket = (pollId: string, voterId: string) => {
+      const hash = crypto
+        .createHash("sha256")
+        .update(pollId)
+        .update("\0")
+        .update(voterId)
+        .digest("hex");
+      return String(Number.parseInt(hash.slice(0, 8), 16) % 32).padStart(4, "0");
+    };
+    const baseMs = Date.now() - 60_000;
+    const oldPollId = "poll-old";
+
+    for (const [index, id] of [
+      oldPollId,
+      ...Array.from({ length: 999 }, (_, entryIndex) => `poll-existing-${entryIndex}`),
+    ].entries()) {
+      await metadataStore.register(pollStateKey(id), {
+        id,
+        question: "Pick",
+        options: ["A", "B"],
+        maxSelections: 1,
+        createdAt: new Date(baseMs + index).toISOString(),
+      });
+    }
+    const oldBucket = voteBucket(oldPollId, "user-old");
+    await voteBucketStore.register(`${pollStateKey(oldPollId)}:${oldBucket}`, {
+      pollId: oldPollId,
+      bucket: oldBucket,
+      votes: { "user-old": ["0"] },
+      updatedAt: new Date(baseMs).toISOString(),
+    });
+
+    const store = createMSTeamsPollStoreState({ env });
+    await store.createPoll({
+      id: "poll-new",
+      question: "New?",
+      options: ["A", "B"],
+      maxSelections: 1,
+      createdAt: new Date(baseMs + 2_000_000).toISOString(),
+      votes: { "user-new": ["1"] },
+    });
+
+    await expect(store.getPoll(oldPollId)).resolves.toBeNull();
+    const buckets = await voteBucketStore.entries();
+    expect(buckets.some((row) => row.value.pollId === oldPollId)).toBe(false);
+    expect(buckets.some((row) => row.value.pollId === "poll-new")).toBe(true);
+  });
 });
 
 describe("memory poll store", () => {

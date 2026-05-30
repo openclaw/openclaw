@@ -490,7 +490,7 @@ export function createMSTeamsPollStoreState(
     });
     for (const row of sorted.slice(0, rows.length - MAX_POLLS)) {
       await pollStore.delete(row.key);
-      await deletePollVotes(row.key);
+      await deletePollVotes(row.value.id);
     }
   };
 
