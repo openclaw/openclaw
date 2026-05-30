@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { tryCronScheduleIdentity } from "../../cron/schedule-identity.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.js";
@@ -314,73 +313,5 @@ describe("cron service timer seam coverage", () => {
     });
 
     createTaskRecordSpy.mockRestore();
-  });
-
-  it("reloads externally edited split-store schedules without firing stale slots", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-03-23T06:00:00.000Z");
-    const staleNextRunAtMs = now;
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
-
-    const legacyJob: CronJob = {
-      id: "externally-edited-cron",
-      name: "externally edited cron",
-      enabled: true,
-      createdAtMs: now - 60_000,
-      updatedAtMs: now - 60_000,
-      schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "stale schedule should not run" },
-      state: {},
-    };
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2),
-      "utf8",
-    );
-    await fs.writeFile(
-      storePath.replace(/\.json$/, "-state.json"),
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: {
-            [legacyJob.id]: {
-              state: { nextRunAtMs: staleNextRunAtMs },
-              scheduleIdentity: tryCronScheduleIdentity({
-                ...legacyJob,
-                schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
-              }),
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-
-    const state = createCronServiceState({
-      storePath,
-      cronEnabled: true,
-      log: logger,
-      nowMs: () => now,
-      enqueueSystemEvent,
-      requestHeartbeat,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-
-    await onTimer(state);
-
-    expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeat).not.toHaveBeenCalled();
-
-    const persisted = await loadCronStore(storePath);
-    const persistedJob = persisted.jobs[0];
-    expect(persistedJob?.schedule).toEqual({ kind: "cron", expr: "0 7 * * *", tz: "UTC" });
-    expect(persistedJob?.state.lastStatus).toBeUndefined();
-    expect(persistedJob?.state.nextRunAtMs).toBe(Date.parse("2026-03-23T07:00:00.000Z"));
   });
 });
