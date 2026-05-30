@@ -215,12 +215,20 @@ function runWrapper(
 ) {
   const binDir = makeFakeCrabbox(helpText);
   const gitBinDir = options.gitResponses ? makeFakeGit(options.gitResponses) : "";
+  const inheritedEnv = { ...process.env } as Record<string, string | undefined>;
+  // Keep wrapper tests hermetic: CI agents may set CRABBOX_* vars globally.
+  inheritedEnv.CRABBOX_PROVIDER = "";
+  inheritedEnv.OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS = "";
+  inheritedEnv.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON = undefined;
+  inheritedEnv.OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS = undefined;
+  inheritedEnv.OPENCLAW_FAKE_GIT_RESPONSES = undefined;
+
   return spawnSync(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
     input: options.input,
     env: {
-      ...process.env,
+      ...inheritedEnv,
       PATH: [...(options.extraPathEntries ?? []), binDir, gitBinDir, process.env.PATH ?? ""]
         .filter(Boolean)
         .join(path.delimiter),
