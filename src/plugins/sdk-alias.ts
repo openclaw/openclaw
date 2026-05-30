@@ -836,6 +836,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
   {
     packageName: "@openclaw/model-catalog-core",
     packageDir: "model-catalog-core",
+    subpath: "model-catalog-refs",
+    srcFile: "model-catalog-refs.ts",
+    distFile: "model-catalog-refs.mjs",
+  },
+  {
+    packageName: "@openclaw/model-catalog-core",
+    packageDir: "model-catalog-core",
     subpath: "provider-id",
     srcFile: "provider-id.ts",
     distFile: "provider-id.mjs",

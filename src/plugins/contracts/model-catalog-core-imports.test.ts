@@ -7,6 +7,10 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const LEGACY_MODEL_CATALOG_BRIDGES = new Map([
   [path.join(REPO_ROOT, "src/agents/provider-id.ts"), "@openclaw/model-catalog-core/provider-id"],
   [
+    path.join(REPO_ROOT, "src/model-catalog/refs.ts"),
+    "@openclaw/model-catalog-core/model-catalog-refs",
+  ],
+  [
     path.join(REPO_ROOT, "src/config/model-refs.ts"),
     "@openclaw/model-catalog-core/configured-model-refs",
   ],

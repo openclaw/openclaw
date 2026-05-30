@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
@@ -7,7 +8,6 @@ import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-fi
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
   normalizeModelCatalog,
-  normalizeModelCatalogProviderId,
   type ModelCatalog,
   type ModelCatalogAlias,
   type ModelCatalogCost,

@@ -248,6 +248,16 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/model-catalog-core/model-catalog-refs",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "model-catalog-refs.ts",
+        ),
+      },
+      {
         find: "@openclaw/model-catalog-core/provider-id",
         replacement: path.join(repoRoot, "packages", "model-catalog-core", "src", "provider-id.ts"),
       },
