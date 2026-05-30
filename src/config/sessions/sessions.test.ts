@@ -880,6 +880,59 @@ describe("session store writer queue", () => {
     expect(store[key]?.model).toBe("gpt-5.4");
   });
 
+  it("preserves ACP metadata written to disk after a stale cache snapshot", async () => {
+    const key = "agent:codex:acp:binding:telegram:default:cafebabe";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp-race",
+        updatedAt: 100,
+      },
+    });
+
+    // Populate the object cache with an entry that predates ACP initialization.
+    loadSessionStore(storePath);
+
+    const acp = {
+      backend: "acpx",
+      agent: "codex",
+      runtimeSessionName: "codex-telegram",
+      mode: "oneshot" as const,
+      state: "idle" as const,
+      lastActivityAt: 200,
+    };
+    await fsPromises.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [key]: {
+            sessionId: "sess-acp-race",
+            updatedAt: 200,
+            acp,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        store[key] = {
+          sessionId: "sess-acp-race",
+          updatedAt: 300,
+          status: "done",
+        } as SessionEntry;
+      },
+      { skipMaintenance: true },
+    );
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.acp).toEqual(acp);
+    expect(store[key]?.status).toBe("done");
+  });
+
   it("allows explicit ACP metadata removal through the ACP session helper", async () => {
     const key = "agent:codex:acp:binding:discord:default:deadbeef";
     const { storePath } = await makeTmpStore({

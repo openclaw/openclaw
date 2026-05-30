@@ -881,7 +881,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
-  it("still forwards non-timeout config controls for claude-agent-acp", async () => {
+  it("normalizes supported claude-agent-acp config controls and drops unsupported ones", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:claude:acp:test",
@@ -903,13 +903,54 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       key: "model",
       value: "claude-sonnet-4.6",
     });
+    await runtime.setConfigOption({
+      handle,
+      key: "thinking",
+      value: "high",
+    });
+    await runtime.setConfigOption({
+      handle,
+      key: "approval_policy",
+      value: "never",
+    });
 
-    expect(setConfigOption).toHaveBeenCalledOnce();
-    expect(setConfigOption).toHaveBeenCalledWith({
+    expect(setConfigOption).toHaveBeenCalledTimes(2);
+    expect(setConfigOption).toHaveBeenNthCalledWith(1, {
       handle,
       key: "model",
       value: "claude-sonnet-4.6",
     });
+    expect(setConfigOption).toHaveBeenNthCalledWith(2, {
+      handle,
+      key: "effort",
+      value: "high",
+    });
+  });
+
+  it("drops config controls for unknown ACP adapters instead of forwarding unsupported calls", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:gemini:acp:test",
+        agentCommand: "gemini acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:gemini:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:gemini:acp:test",
+      acpxRecordId: "agent:gemini:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "timeout",
+      value: "60",
+    });
+
+    expect(setConfigOption).not.toHaveBeenCalled();
   });
 
   it("recognizes claude-agent-acp commands", () => {

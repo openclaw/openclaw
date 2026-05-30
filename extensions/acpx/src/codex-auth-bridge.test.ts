@@ -35,12 +35,14 @@ function restoreEnv(name: keyof typeof previousEnv): void {
 }
 
 function generatedCodexPaths(stateDir: string): {
+  authPath: string;
   configPath: string;
   wrapperPath: string;
 } {
   const baseDir = path.join(stateDir, "acpx");
   const codexHome = path.join(baseDir, "codex-home");
   return {
+    authPath: path.join(codexHome, "auth.json"),
     configPath: path.join(codexHome, "config.toml"),
     wrapperPath: path.join(baseDir, "codex-acp-wrapper.mjs"),
   };
@@ -345,7 +347,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(launched.codexHome).toBeNull();
   });
 
-  it("does not copy source Codex auth", async () => {
+  it("symlinks source Codex auth into the isolated Codex home", async () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
     const agentDir = path.join(root, "agent");
@@ -423,6 +425,10 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("CODEX_HOME: codexHome");
     expect(wrapper).not.toContain(sourceCodexHome);
+    const isolatedAuthLink = await fs.readlink(generated.authPath);
+    expect(path.resolve(path.dirname(generated.authPath), isolatedAuthLink)).toBe(
+      path.join(sourceCodexHome, "auth.json"),
+    );
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex-source", "auth.json"));
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });

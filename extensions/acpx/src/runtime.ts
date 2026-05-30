@@ -447,6 +447,13 @@ function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never 
 // See openclaw/openclaw#73071.
 const SUPPORTED_RUNTIME_SESSION_MODES = new Set(["persistent", "oneshot"] as const);
 const WIRE_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
+const CLAUDE_ACP_SUPPORTED_CONFIG_KEYS = new Set(["model", "mode", "effort"]);
+const CLAUDE_ACP_THINKING_CONFIG_KEYS = new Set([
+  "thinking",
+  "thought_level",
+  "reasoning_effort",
+  "effort",
+]);
 
 function assertSupportedRuntimeSessionMode(
   mode: unknown,
@@ -1123,7 +1130,8 @@ export class AcpxRuntime implements AcpRuntime {
     const command = await this.resolveCommandForHandle(input.handle);
     const key = input.key.trim().toLowerCase();
     const isCodexAcp = isCodexAcpCommand(command);
-    if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcpCommand(command))) {
+    const isClaudeAcp = isClaudeAcpCommand(command);
+    if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcp)) {
       return;
     }
     if (isCodexAcp) {
@@ -1158,8 +1166,25 @@ export class AcpxRuntime implements AcpRuntime {
           return;
         }
       }
+      await delegate.setConfigOption(input);
+      return;
     }
-    await delegate.setConfigOption(input);
+    if (isClaudeAcp) {
+      if (CLAUDE_ACP_SUPPORTED_CONFIG_KEYS.has(key)) {
+        await delegate.setConfigOption(input);
+        return;
+      }
+      if (CLAUDE_ACP_THINKING_CONFIG_KEYS.has(key)) {
+        await delegate.setConfigOption({
+          ...input,
+          key: "effort",
+        });
+      }
+      return;
+    }
+    if (isOpenClawBridgeCommand(command)) {
+      await delegate.setConfigOption(input);
+    }
   }
 
   async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {

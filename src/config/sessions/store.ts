@@ -747,6 +747,17 @@ export async function updateSessionStore<T>(
   return await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
     const previousAcpByKey = collectAcpMetadataSnapshot(store);
+    try {
+      const diskStore = loadSessionStore(storePath, { skipCache: true, clone: false });
+      for (const [sessionKey, acp] of collectAcpMetadataSnapshot(diskStore)) {
+        if (!previousAcpByKey.has(sessionKey)) {
+          previousAcpByKey.set(sessionKey, acp);
+        }
+      }
+    } catch {
+      // Preserve best-effort write behaviour if the on-disk store is temporarily unavailable.
+      // The in-memory snapshot still protects metadata visible to this writer.
+    }
     const result = await mutator(store);
     if (opts?.skipSaveWhenResult?.(result)) {
       restoreUnchangedSessionStoreCache(storePath, store);
