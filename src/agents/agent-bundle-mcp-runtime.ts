@@ -516,14 +516,9 @@ export function createSessionMcpRuntime(params: {
           transportType: resolved.transportType,
           detachStderr: resolved.detachStderr,
         };
+        // Phase 1: reconnect the transport.
         try {
           await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
-          sessions.set(serverName, newSession);
-          logWarn(`bundle-mcp: server "${serverName}" reconnected successfully.`);
-          return (await client.callTool({
-            name: toolName,
-            arguments: isMcpConfigRecord(input) ? input : {},
-          })) as CallToolResult;
         } catch (reconnectError) {
           await disposeSession(newSession);
           logWarn(
@@ -531,8 +526,17 @@ export function createSessionMcpRuntime(params: {
               reconnectError instanceof Error ? reconnectError.message : String(reconnectError)
             }`,
           );
-          throw error; // throw original error
+          throw error; // throw original transport-death error
         }
+        sessions.set(serverName, newSession);
+        logWarn(`bundle-mcp: server "${serverName}" reconnected successfully.`);
+        // Phase 2: retry the tool call on the fresh session.
+        // If this fails, it's a normal MCP error from the healthy server,
+        // not a transport issue. Let it propagate directly.
+        return (await client.callTool({
+          name: toolName,
+          arguments: isMcpConfigRecord(input) ? input : {},
+        })) as CallToolResult;
       }
     },
     async dispose() {
