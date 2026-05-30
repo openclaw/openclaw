@@ -72,6 +72,20 @@ const mockChatCommands: ChatCommandDefinition[] = [
 ];
 
 const mockPluginSpecs = [{ name: "tts", description: "Text to speech", acceptsArgs: false }];
+const runtimeMocks = vi.hoisted(() => ({
+  gatewayRegistry: null as null | {
+    commands: Array<{
+      pluginId: string;
+      command: {
+        name: string;
+        description: string;
+        acceptsArgs?: boolean;
+        nativeNames?: Record<string, string>;
+        channels?: string[];
+      };
+    }>;
+  },
+}));
 
 vi.mock("../../auto-reply/commands-registry.js", () => ({
   listChatCommandsForConfig: vi.fn(() => mockChatCommands),
@@ -80,15 +94,66 @@ vi.mock("../../skills/discovery/chat-commands.js", () => ({
   listSkillCommandsForAgents: vi.fn(() => mockSkillCommands),
 }));
 vi.mock("../../plugins/command-specs.js", () => ({
-  getPluginCommandSpecs: vi.fn((provider?: string) => {
+  getPluginCommandEntrySpecs: vi.fn((provider?: string) => {
     if (provider === "whatsapp") {
-      return [];
+      return [{ name: "tts", description: "Text to speech", acceptsArgs: false }];
     }
     if (provider === "discord") {
-      return [{ name: "discord_tts", description: "Text to speech", acceptsArgs: false }];
+      return [
+        {
+          name: "tts",
+          nativeName: "discord_tts",
+          description: "Text to speech",
+          acceptsArgs: false,
+        },
+      ];
     }
-    return mockPluginSpecs;
+    return mockPluginSpecs.map((entry) => ({
+      name: entry.name,
+      nativeName: entry.name,
+      description: entry.description,
+      acceptsArgs: entry.acceptsArgs,
+    }));
   }),
+  getPluginCommandEntrySpecsFromRegistrations: vi.fn(
+    (
+      commands: Array<{
+        command: {
+          name: string;
+          description: string;
+          acceptsArgs?: boolean;
+          nativeNames?: Record<string, string>;
+          channels?: string[];
+        };
+      }>,
+      provider?: string,
+    ) => {
+      return commands
+        .filter(
+          (entry) =>
+            !provider || !entry.command.channels || entry.command.channels.includes(provider),
+        )
+        .map((entry) => {
+          const spec: {
+            name: string;
+            nativeName?: string;
+            description: string;
+            acceptsArgs: boolean;
+          } = {
+            name: entry.command.name.trim(),
+            description: entry.command.description.trim(),
+            acceptsArgs: entry.command.acceptsArgs ?? false,
+          };
+          if (provider !== "whatsapp") {
+            spec.nativeName =
+              (provider ? entry.command.nativeNames?.[provider] : undefined) ??
+              entry.command.nativeNames?.default ??
+              entry.command.name.trim();
+          }
+          return spec;
+        });
+    },
+  ),
 }));
 vi.mock("../../plugins/commands.js", () => ({
   listPluginCommands: vi.fn(() => [
@@ -99,6 +164,9 @@ vi.mock("../../plugins/commands.js", () => ({
       acceptsArgs: false,
     },
   ]),
+}));
+vi.mock("../../plugins/runtime.js", () => ({
+  getActivePluginGatewayCommandRegistry: vi.fn(() => runtimeMocks.gatewayRegistry),
 }));
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -202,6 +270,7 @@ function collectBuiltinNames(commands: readonly { name: string; source: string }
 
 describe("commands.list handler", () => {
   beforeEach(() => {
+    runtimeMocks.gatewayRegistry = null;
     vi.clearAllMocks();
   });
 
@@ -384,6 +453,119 @@ describe("commands.list handler", () => {
     expect(plugin?.name).toBe("tts");
     expect(plugin?.nativeName).toBe("discord_tts");
     expect(plugin?.textAliases).toEqual(["/tts"]);
+  });
+
+  it("reads plugin commands from the gateway registry before the global command table", () => {
+    runtimeMocks.gatewayRegistry = {
+      commands: [
+        {
+          pluginId: "phone-control",
+          command: {
+            name: "  phone  ",
+            description: "  Control paired phones  ",
+            acceptsArgs: true,
+          },
+        },
+      ],
+    };
+
+    const { payload } = callHandler();
+    const { commands } = payload as {
+      commands: Array<{
+        name: string;
+        description: string;
+        source: string;
+        textAliases?: string[];
+        acceptsArgs?: boolean;
+      }>;
+    };
+    const phone = commands.find((c) => c.source === "plugin");
+
+    expect(phone?.name).toBe("phone");
+    expect(phone?.description).toBe("Control paired phones");
+    expect(phone?.textAliases).toEqual(["/phone"]);
+    expect(phone?.acceptsArgs).toBe(true);
+    expect(commands.find((c) => c.source === "plugin" && c.name === "tts")).toBeUndefined();
+  });
+
+  it("keeps provider-filtered native plugin names paired with their text aliases", () => {
+    runtimeMocks.gatewayRegistry = {
+      commands: [
+        {
+          pluginId: "android-only",
+          command: {
+            name: "android_only",
+            description: "Android-only command",
+            channels: ["android"],
+          },
+        },
+        {
+          pluginId: "phone-control",
+          command: {
+            name: "phone",
+            description: "Control paired phones",
+            acceptsArgs: true,
+            channels: ["discord"],
+            nativeNames: { discord: "discord_phone" },
+          },
+        },
+      ],
+    };
+
+    const { payload } = callHandler({ provider: "discord" });
+    const { commands } = payload as {
+      commands: Array<{
+        name: string;
+        source: string;
+        textAliases?: string[];
+        nativeName?: string;
+      }>;
+    };
+    const plugin = commands.find((c) => c.source === "plugin");
+
+    expect(plugin?.name).toBe("discord_phone");
+    expect(plugin?.nativeName).toBe("discord_phone");
+    expect(plugin?.textAliases).toEqual(["/phone"]);
+    expect(
+      commands.find((c) => c.source === "plugin" && c.name === "android_only"),
+    ).toBeUndefined();
+  });
+
+  it("filters provider-incompatible plugin commands from the text surface", () => {
+    runtimeMocks.gatewayRegistry = {
+      commands: [
+        {
+          pluginId: "android-only",
+          command: {
+            name: "android_only",
+            description: "Android-only command",
+            channels: ["android"],
+          },
+        },
+        {
+          pluginId: "phone-control",
+          command: {
+            name: "phone",
+            description: "Control paired phones",
+            channels: ["discord"],
+          },
+        },
+      ],
+    };
+
+    const { payload } = callHandler({ provider: "discord", scope: "text" });
+    const { commands } = payload as {
+      commands: Array<{
+        name: string;
+        source: string;
+        textAliases?: string[];
+      }>;
+    };
+
+    expect(
+      commands.find((c) => c.source === "plugin" && c.name === "android_only"),
+    ).toBeUndefined();
+    expect(commands.find((c) => c.source === "plugin")?.textAliases).toEqual(["/phone"]);
   });
 
   it("returns provider-specific plugin command names", () => {

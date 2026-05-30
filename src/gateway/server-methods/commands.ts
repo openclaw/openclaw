@@ -29,8 +29,11 @@ import type {
 } from "../../auto-reply/commands-registry.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getPluginCommandSpecs } from "../../plugins/command-specs.js";
-import { listPluginCommands } from "../../plugins/commands.js";
+import {
+  getPluginCommandEntrySpecs,
+  getPluginCommandEntrySpecsFromRegistrations,
+} from "../../plugins/command-specs.js";
+import { getActivePluginGatewayCommandRegistry } from "../../plugins/runtime.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { listSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -179,24 +182,28 @@ function buildPluginCommandEntries(params: {
   nameSurface: CommandNameSurface;
   cfg: OpenClawConfig;
 }): CommandEntry[] {
-  const pluginTextSpecs = listPluginCommands();
-  const pluginNativeSpecs = getPluginCommandSpecs(params.provider, { config: params.cfg });
+  const gatewayRegistry = getActivePluginGatewayCommandRegistry();
+  const pluginSpecs = gatewayRegistry
+    ? getPluginCommandEntrySpecsFromRegistrations(gatewayRegistry.commands, params.provider, {
+        config: params.cfg,
+      })
+    : getPluginCommandEntrySpecs(params.provider, { config: params.cfg });
   const entries: CommandEntry[] = [];
 
-  for (const [index, textSpec] of pluginTextSpecs.entries()) {
-    const nativeSpec = pluginNativeSpecs[index];
-    const nativeName = nativeSpec?.name;
+  for (const spec of pluginSpecs) {
     entries.push({
       name: clampString(
-        params.nameSurface === "text" ? textSpec.name : (nativeName ?? textSpec.name),
+        params.nameSurface === "text" ? spec.name : (spec.nativeName ?? spec.name),
         COMMAND_NAME_MAX_LENGTH,
       ),
-      ...(nativeName ? { nativeName: clampString(nativeName, COMMAND_NAME_MAX_LENGTH) } : {}),
-      textAliases: [`/${clampString(textSpec.name, COMMAND_NAME_MAX_LENGTH)}`],
-      description: clampDescription(textSpec.description),
+      ...(spec.nativeName
+        ? { nativeName: clampString(spec.nativeName, COMMAND_NAME_MAX_LENGTH) }
+        : {}),
+      textAliases: [`/${clampString(spec.name, COMMAND_NAME_MAX_LENGTH)}`],
+      description: clampDescription(spec.description),
       source: "plugin",
       scope: "both",
-      acceptsArgs: textSpec.acceptsArgs,
+      acceptsArgs: spec.acceptsArgs,
     });
   }
 
