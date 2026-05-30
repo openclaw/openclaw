@@ -711,7 +711,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
-  it("projects mirrored history when an oversized thread-bootstrap binding has no active context engine", async () => {
+  it("does not inject mirrored history when a stale thread-bootstrap binding has no active context engine", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
@@ -792,10 +792,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       "turn/start",
     ]);
     const inputText = getRequestInputText(harness);
-    expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).toContain("previous stale-bootstrap request");
-    expect(inputText).toContain("previous stale-bootstrap answer");
-    expect(inputText).toContain("Current user request:");
+    expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("previous stale-bootstrap request");
+    expect(inputText).not.toContain("previous stale-bootstrap answer");
+    expect(inputText).not.toContain("Current user request:");
     expect(inputText).toContain("hello");
 
     await harness.completeTurn("completed", "thread-fresh");

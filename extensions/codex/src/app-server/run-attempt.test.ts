@@ -1700,7 +1700,7 @@ describe("runCodexAppServerAttempt", () => {
       { runId?: string; sessionId?: string },
     ];
     expect(hookInput.prompt).toBe("hello");
-    expect(hookInput.messages?.[0]?.role).toBe("assistant");
+    expect(hookInput.messages).toEqual([]);
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
@@ -1719,7 +1719,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("projects mirrored history when starting Codex without a native thread binding", async () => {
+  it("does not inject mirrored history when starting Codex without a native thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
@@ -1740,14 +1740,14 @@ describe("runCodexAppServerAttempt", () => {
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
 
-    expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).toContain("we are fixing the Opik default project");
-    expect(inputText).toContain("Opik default project context");
-    expect(inputText).toContain("Current user request:");
+    expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("we are fixing the Opik default project");
+    expect(inputText).not.toContain("Opik default project context");
+    expect(inputText).not.toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("projects newer mirrored history when resuming an existing Codex thread binding", async () => {
+  it("does not inject newer mirrored history when resuming an existing Codex thread binding", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
@@ -1779,14 +1779,14 @@ describe("runCodexAppServerAttempt", () => {
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
 
-    expect(inputText).toContain("OpenClaw assembled context for this turn:");
-    expect(inputText).toContain("we were discussing the Sonnet leak screenshots");
-    expect(inputText).toContain("David Ondrej was mentioned in that prior thread");
-    expect(inputText).toContain("Current user request:");
+    expect(inputText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("we were discussing the Sonnet leak screenshots");
+    expect(inputText).not.toContain("David Ondrej was mentioned in that prior thread");
+    expect(inputText).not.toContain("Current user request:");
     expect(inputText).toContain("is the previous message trustworthy?");
   });
 
-  it("does not reproject Codex-owned mirrored messages on consecutive resumes", async () => {
+  it("does not project mirrored messages on consecutive resumes", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
@@ -1821,8 +1821,8 @@ describe("runCodexAppServerAttempt", () => {
     const firstInputText =
       (firstTurnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]
         ?.text ?? "";
-    expect(firstInputText).toContain("OpenClaw assembled context for this turn:");
-    expect(firstInputText).toContain("we were discussing the Sonnet leak screenshots");
+    expect(firstInputText).not.toContain("OpenClaw assembled context for this turn:");
+    expect(firstInputText).not.toContain("we were discussing the Sonnet leak screenshots");
     expect(firstInputText).toContain("is the previous message trustworthy?");
 
     const secondHarness = createResumeHarness();
