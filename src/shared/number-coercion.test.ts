@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  asDateTimestampMs,
   asFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
@@ -119,6 +120,11 @@ describe("number-coercion", () => {
   });
 
   test("timestamp ISO helper rejects Date-invalid timestamps", () => {
+    expect(asDateTimestampMs(0)).toBe(0);
+    expect(asDateTimestampMs(8_640_000_000_000_000)).toBe(8_640_000_000_000_000);
+    expect(asDateTimestampMs(8_640_000_000_000_001)).toBeUndefined();
+    expect(asDateTimestampMs(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(asDateTimestampMs("0")).toBeUndefined();
     expect(timestampMsToIsoString(0)).toBe("1970-01-01T00:00:00.000Z");
     expect(timestampMsToIsoString(8_640_000_000_000_000)).toBe("+275760-09-13T00:00:00.000Z");
     expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();

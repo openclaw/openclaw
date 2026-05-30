@@ -12,7 +12,6 @@ import {
 } from "./postinstall-bundled-plugins.mjs";
 
 const logLevel = process.env.OPENCLAW_BUILD_VERBOSE ? "info" : "warn";
-const extraArgs = process.argv.slice(2);
 const INEFFECTIVE_DYNAMIC_IMPORT_MARKER = "[INEFFECTIVE_DYNAMIC_IMPORT]";
 const UNRESOLVED_IMPORT_RE = /\[UNRESOLVED_IMPORT\]/;
 const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
@@ -355,6 +354,32 @@ function resolveTsdownEnv(env, params = {}) {
   };
 }
 
+export function tsdownBuildUsage() {
+  return [
+    "Usage: node scripts/tsdown-build.mjs [tsdown args...]",
+    "",
+    "Builds OpenClaw with tsdown and validates emitted import diagnostics.",
+    "",
+    "Options:",
+    "  -h, --help  Show this help without starting tsdown.",
+    "",
+    "Other arguments are forwarded to tsdown.",
+  ].join("\n");
+}
+
+export function parseTsdownBuildArgs(argv) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    return {
+      forwardedArgs: [],
+      help: true,
+    };
+  }
+  return {
+    forwardedArgs: argv,
+    help: false,
+  };
+}
+
 export function createTsdownOutputScanner(params = {}) {
   const maxCaptureBytes = params.maxCaptureBytes ?? DEFAULT_CAPTURE_BYTES;
   let captured = "";
@@ -399,13 +424,14 @@ export function createTsdownOutputScanner(params = {}) {
 
 export function resolveTsdownBuildInvocation(params = {}) {
   const env = resolveTsdownEnv(params.env ?? process.env, params);
+  const forwardedArgs = params.args ?? [];
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
-    ...extraArgs,
+    ...forwardedArgs,
   ];
   if (env.OPENCLAW_BUILD_ALL_NO_PNPM === "1") {
     return {
@@ -540,11 +566,16 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
+  const args = parseTsdownBuildArgs(process.argv.slice(2));
+  if (args.help) {
+    console.log(tsdownBuildUsage());
+    process.exit(0);
+  }
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
   cleanTsdownOutputRoots();
-  const invocation = resolveTsdownBuildInvocation();
+  const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
   const result = await runTsdownBuildInvocation(invocation);
 
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {

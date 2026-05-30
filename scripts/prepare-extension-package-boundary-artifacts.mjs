@@ -19,6 +19,7 @@ const PLUGIN_SDK_TYPE_INPUTS = [
   "packages/markdown-core/src",
   "packages/memory-host-sdk/src",
   "packages/media-generation-core/src",
+  "packages/media-understanding-common/src",
   "packages/terminal-core/src",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
