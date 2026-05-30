@@ -1564,6 +1564,8 @@ export async function startGatewayServer(
             bindHosts: httpBindHosts,
             port,
             tlsEnabled: gatewayTls.enabled,
+            controlUiEnabled,
+            authMode: resolvedAuth.mode,
             log,
             isNixMode,
             startupStartedAt: opts.startupStartedAt,
