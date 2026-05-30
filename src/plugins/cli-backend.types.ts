@@ -83,6 +83,13 @@ export type CliBackendPlugin = {
    */
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   /**
+   * When true, the backend manages its own transcript compaction lifecycle
+   * (e.g. Claude Code's internal auto-compaction). OpenClaw will skip its
+   * safeguard summarizer and return a no-op from the compaction path instead
+   * of fighting the backend's own compaction or hard-failing the turn.
+   */
+  ownsNativeCompaction?: boolean;
+  /**
    * Optional live-smoke metadata owned by the backend plugin.
    *
    * Keep provider-specific test wiring here instead of scattering it across

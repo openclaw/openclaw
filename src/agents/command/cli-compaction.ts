@@ -29,6 +29,7 @@ import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImp
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/selection.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { resolveCliBackendConfig as resolveCliBackendConfigImpl } from "../cli-backends.js";
 import {
   clearCliSessionInStore as clearCliSessionInStoreImpl,
   recordCliCompactionInStore as recordCliCompactionInStoreImpl,
@@ -69,6 +70,7 @@ type CliCompactionDeps = {
   ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPluginImpl;
   maybeCompactAgentHarnessSession: typeof maybeCompactAgentHarnessSessionImpl;
   clearCliSessionInStore: typeof clearCliSessionInStoreImpl;
+  resolveCliBackendConfig: typeof resolveCliBackendConfigImpl;
   recordCliCompactionInStore: typeof recordCliCompactionInStoreImpl;
 };
 
@@ -117,6 +119,7 @@ const cliCompactionDeps: CliCompactionDeps = {
   ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginImpl,
   maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionImpl,
   clearCliSessionInStore: clearCliSessionInStoreImpl,
+  resolveCliBackendConfig: resolveCliBackendConfigImpl,
   recordCliCompactionInStore: recordCliCompactionInStoreImpl,
 };
 
@@ -137,6 +140,7 @@ export function resetCliCompactionTestDeps(): void {
     ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginImpl,
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionImpl,
     clearCliSessionInStore: clearCliSessionInStoreImpl,
+    resolveCliBackendConfig: resolveCliBackendConfigImpl,
     recordCliCompactionInStore: recordCliCompactionInStoreImpl,
   });
 }
@@ -522,6 +526,21 @@ export async function runCliTurnCompactionLifecycle(params: {
     !preemptiveCompaction.shouldCompact &&
     currentTokenCount <= preemptiveCompaction.promptBudgetBeforeReserve
   ) {
+    return params.sessionEntry;
+  }
+
+  // When the backend declares native compaction ownership but has no harness
+  // compaction endpoint (e.g. claude-cli — Claude Code compacts its own
+  // transcript internally), skip both native-harness and context-engine
+  // compaction. The backend will handle it; OpenClaw returns a no-op.
+  const resolvedBackend = cliCompactionDeps.resolveCliBackendConfig(params.provider, params.cfg);
+  if (
+    resolvedBackend?.ownsNativeCompaction &&
+    !isNativeHarnessCompactionSession(params.sessionEntry, params.provider)
+  ) {
+    log.info(
+      `CLI backend "${params.provider}" owns native compaction — deferring to backend`,
+    );
     return params.sessionEntry;
   }
 
