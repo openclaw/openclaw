@@ -291,14 +291,12 @@ same sub-agent session.
 
 ### Thread supporting channels
 
-**Discord** is currently the only supported channel. It supports
-persistent thread-bound subagent sessions (`sessions_spawn` with
-`thread: true`), manual thread controls (`/focus`, `/unfocus`, `/agents`,
-`/session idle`, `/session max-age`), and adapter keys
-`channels.discord.threadBindings.enabled`,
-`channels.discord.threadBindings.idleHours`,
-`channels.discord.threadBindings.maxAgeHours`, and
-`channels.discord.threadBindings.spawnSessions`.
+Any channel with a session-binding adapter can support persistent
+thread-bound subagent sessions (`sessions_spawn` with `thread: true`).
+Bundled adapters currently include Discord threads, Matrix threads,
+Telegram forum topics, and current-conversation bindings for Feishu.
+Use the per-channel `threadBindings` config keys for enablement,
+timeouts, and `spawnSessions`.
 
 ### Quick flow
 

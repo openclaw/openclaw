@@ -141,7 +141,9 @@ observation-only.
 
 **Subagents**
 
-- `subagent_spawning` / `subagent_delivery_target` / `subagent_spawned` / `subagent_ended` - coordinate subagent routing and completion delivery
+- `subagent_spawned` / `subagent_ended` - observe subagent launch and completion.
+- `subagent_delivery_target` - compatibility hook for completion delivery when no core session binding can project a route.
+- `subagent_spawning` - deprecated compatibility hook. Core now prepares `thread: true` subagent bindings through channel session-binding adapters before `subagent_spawned` fires.
 - `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
 
 **Lifecycle**

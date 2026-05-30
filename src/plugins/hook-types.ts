@@ -612,6 +612,11 @@ type PluginHookSubagentSpawnBase = {
   threadRequested: boolean;
 };
 
+/**
+ * @deprecated Core prepares thread-bound subagent bindings through channel
+ * session-binding adapters before `subagent_spawned` fires. Use
+ * `subagent_spawned` for post-launch observation in new plugins.
+ */
 export type PluginHookSubagentSpawningEvent = PluginHookSubagentSpawnBase;
 
 export type PluginHookSubagentSpawningResult =
