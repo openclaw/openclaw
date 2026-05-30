@@ -303,6 +303,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           timeoutSeconds: account.config.timeoutSeconds,
           proxy: account.config.proxy,
           network: account.config.network,
+          spooledUpdateHandlerTimeoutMs: account.config.spooledUpdateHandlerTimeoutMs,
         },
       });
       await pollingSession.runUntilAbort();

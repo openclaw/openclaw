@@ -66,6 +66,19 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("accepts spooledUpdateHandlerTimeoutMs overrides per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      spooledUpdateHandlerTimeoutMs: 300_000,
+      accounts: { ops: { spooledUpdateHandlerTimeoutMs: 600_000 } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.spooledUpdateHandlerTimeoutMs).toBe(300_000);
+      expect(res.data.accounts?.ops?.spooledUpdateHandlerTimeoutMs).toBe(600_000);
+    }
+  });
+
   it("accepts mediaGroupFlushMs overrides per account", () => {
     const res = TelegramConfigSchema.safeParse({
       mediaGroupFlushMs: 750,
@@ -127,6 +140,17 @@ describe("telegram custom commands schema", () => {
   it("rejects pollingStallThresholdMs outside the watchdog bounds", () => {
     expectTelegramConfigIssue({ pollingStallThresholdMs: 29_999 }, "pollingStallThresholdMs");
     expectTelegramConfigIssue({ pollingStallThresholdMs: 600_001 }, "pollingStallThresholdMs");
+  });
+
+  it("rejects spooledUpdateHandlerTimeoutMs outside the isolated ingress handler bounds", () => {
+    expectTelegramConfigIssue(
+      { spooledUpdateHandlerTimeoutMs: 29_999 },
+      "spooledUpdateHandlerTimeoutMs",
+    );
+    expectTelegramConfigIssue(
+      { spooledUpdateHandlerTimeoutMs: 3_600_001 },
+      "spooledUpdateHandlerTimeoutMs",
+    );
   });
 
   it("accepts textChunkLimit", () => {
