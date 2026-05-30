@@ -419,6 +419,59 @@ describe("server-channels auto restart", () => {
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
+  it("consumes startup failures during immediate recovery restart", async () => {
+    const unhandledRejection = vi.fn();
+    process.on("unhandledRejection", unhandledRejection);
+    try {
+      const releaseFirstTask = createDeferred();
+      let isConfiguredCalls = 0;
+      const startAccount = vi.fn(
+        async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+          await new Promise<void>((resolve) => {
+            abortSignal.addEventListener("abort", () => {}, { once: true });
+            void releaseFirstTask.promise.then(resolve);
+          }),
+      );
+      installTestRegistry(
+        createTestPlugin({
+          startAccount,
+          isConfigured: () => {
+            isConfiguredCalls += 1;
+            if (isConfiguredCalls > 1) {
+              throw new Error("restart config missing");
+            }
+            return true;
+          },
+        }),
+      );
+      const manager = createManager();
+
+      await manager.startChannels();
+      const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+        manual: false,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await recoveryStopTask;
+
+      releaseFirstTask.resolve();
+      await waitForMicrotaskCondition(
+        () =>
+          manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.lastError ===
+          "restart config missing",
+        "expected immediate recovery restart failure to be recorded",
+      );
+      await flushMicrotasks();
+
+      const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+      expect(startAccount).toHaveBeenCalledTimes(1);
+      expect(account?.running).toBe(false);
+      expect(account?.restartPending).toBe(false);
+      expect(unhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandledRejection);
+    }
+  });
+
   it("lets manual stops cancel recovery restart after recovery stop times out", async () => {
     const releaseFirstTask = createDeferred();
     const startAccount = vi.fn(
@@ -455,6 +508,15 @@ describe("server-channels auto restart", () => {
     expect(account?.restartPending).toBe(false);
     expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await waitForMicrotaskCondition(
+      () => hoisted.sleepWithAbort.mock.calls.length === 1,
+      "expected later ordinary exit to use restart backoff",
+    );
+
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(hoisted.sleepWithAbort.mock.calls[0]?.[0]).toBe(10);
   });
 
   it("marks enabled/configured when account descriptors omit them", () => {

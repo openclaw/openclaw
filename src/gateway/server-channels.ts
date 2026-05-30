@@ -594,6 +594,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             })
             .then(async () => {
               if (manuallyStopped.has(rKey)) {
+                recoveryStopTimedOut.delete(rKey);
                 return;
               }
               if (recoveryStopTimedOut.has(rKey)) {
@@ -611,9 +612,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 if (store.aborts.get(id) === abort) {
                   store.aborts.delete(id);
                 }
-                await startChannelInternal(channelId, id, {
-                  preserveManualStop: true,
-                });
+                try {
+                  await startChannelInternal(channelId, id, {
+                    preserveManualStop: true,
+                  });
+                } catch {
+                  // abort or startup failure — runtime state was recorded by startChannelInternal
+                }
                 return;
               }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
