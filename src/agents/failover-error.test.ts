@@ -1279,6 +1279,15 @@ describe("buildFailoverRemediationHint", () => {
     expect(buildProviderReauthCommand("custom\nprovider")).toBeUndefined();
   });
 
+  it("wraps rendered provider commands in the standard CLI formatter", () => {
+    expect(buildProviderReauthCommand("anthropic", { OPENCLAW_PROFILE: "work" })).toBe(
+      "openclaw --profile work models auth login --provider 'anthropic' --force",
+    );
+    expect(buildProviderReauthCommand("anthropic", { OPENCLAW_CONTAINER_HINT: "dev" })).toBe(
+      "openclaw --container dev models auth login --provider 'anthropic' --force",
+    );
+  });
+
   it("returns undefined for non-auth reasons", () => {
     const err = new FailoverError("429", {
       reason: "rate_limit",

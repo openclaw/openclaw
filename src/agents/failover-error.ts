@@ -1,4 +1,5 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { formatCliCommand } from "../cli/command-format.js";
 import { readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
@@ -564,12 +565,18 @@ function quotePosixShellArg(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function buildProviderReauthCommand(provider: string): string | undefined {
+export function buildProviderReauthCommand(
+  provider: string,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): string | undefined {
   const trimmed = provider.trim();
   if (!trimmed || hasControlCharacter(trimmed)) {
     return undefined;
   }
-  return `openclaw models auth login --provider ${quotePosixShellArg(trimmed)} --force`;
+  return formatCliCommand(
+    `openclaw models auth login --provider ${quotePosixShellArg(trimmed)} --force`,
+    env,
+  );
 }
 
 function hasControlCharacter(value: string): boolean {
