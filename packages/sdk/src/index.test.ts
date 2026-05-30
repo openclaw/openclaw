@@ -182,6 +182,24 @@ describe("OpenClaw SDK", () => {
     expect(result.error?.message).toBe("provider request timed out");
   });
 
+  it("does not map provider-started wait errors to timed_out without timeout attribution", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "error",
+        runId: "run_provider_error",
+        providerStarted: true,
+        error: "provider authentication failed",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_provider_error");
+
+    expect(result.runId).toBe("run_provider_error");
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toBe("provider authentication failed");
+  });
+
   it("does not treat successful provider-started wait snapshots as timed_out", async () => {
     const transport = new FakeTransport({
       "agent.wait": {
@@ -1150,9 +1168,31 @@ describe("OpenClaw SDK", () => {
       providerStarted: true,
     });
 
-    const hardTimeoutEnd = normalizeGatewayEvent({
+    const providerStartedError = normalizeGatewayEvent({
       event: "agent",
       seq: 8,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "error",
+          error: "provider authentication failed",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(providerStartedError.type).toBe("run.failed");
+    expect(providerStartedError.runId).toBe("run_1");
+    expect(providerStartedError.data).toEqual({
+      phase: "error",
+      error: "provider authentication failed",
+      providerStarted: true,
+    });
+
+    const hardTimeoutEnd = normalizeGatewayEvent({
+      event: "agent",
+      seq: 9,
       payload: {
         runId: "run_1",
         stream: "lifecycle",
@@ -1174,7 +1214,7 @@ describe("OpenClaw SDK", () => {
 
     const providerStartedEnd = normalizeGatewayEvent({
       event: "agent",
-      seq: 9,
+      seq: 10,
       payload: {
         runId: "run_1",
         stream: "lifecycle",

@@ -61,7 +61,7 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
   const pendingError = record.pendingError === true;
   const timeoutPhase =
     typeof record.timeoutPhase === "string" ? record.timeoutPhase.toLowerCase() : undefined;
-  const statusAlreadyTimeoutAttributed = status === "timeout" || status === "error";
+  const statusAlreadyTimeoutAttributed = status === "timeout" || status === "timed_out";
   const hardTimeout =
     !pendingError &&
     ((record.providerStarted === true && statusAlreadyTimeoutAttributed) ||

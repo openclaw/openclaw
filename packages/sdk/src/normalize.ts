@@ -86,7 +86,7 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
       return normalizeLifecycleEndEventType(data);
     }
     if (phase === "error") {
-      if (hasHardTimeoutMetadata(data, true)) {
+      if (hasHardTimeoutMetadata(data, false)) {
         return "run.timed_out";
       }
       return "run.failed";
