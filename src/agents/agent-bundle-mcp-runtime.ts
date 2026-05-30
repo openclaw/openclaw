@@ -472,10 +472,68 @@ export function createSessionMcpRuntime(params: {
       if (!session) {
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
-      return (await session.client.callTool({
-        name: toolName,
-        arguments: isMcpConfigRecord(input) ? input : {},
-      })) as CallToolResult;
+      try {
+        return (await session.client.callTool({
+          name: toolName,
+          arguments: isMcpConfigRecord(input) ? input : {},
+        })) as CallToolResult;
+      } catch (error) {
+        // If the call failed because the child process died ("Not connected",
+        // EPIPE, ERR_STREAM_DESTROYED), try to reconnect the server once.
+        const msg = error instanceof Error ? error.message : String(error);
+        const isTransportDead =
+          msg.includes("Not connected") ||
+          msg.includes("EPIPE") ||
+          msg.includes("ERR_STREAM_DESTROYED") ||
+          msg.includes("write after end") ||
+          msg.includes("This socket has been ended");
+        if (!isTransportDead) {
+          throw error;
+        }
+        failIfDisposed();
+        logWarn(
+          `bundle-mcp: server "${serverName}" transport died mid-call (${msg}), attempting reconnect…`,
+        );
+        // Dispose the dead session and reconnect.
+        await disposeSession(session);
+        sessions.delete(serverName);
+        const rawServer = loaded.mcpServers[serverName];
+        if (!rawServer) {
+          throw error; // server config gone, can't reconnect
+        }
+        const resolved = resolveMcpTransport(serverName, rawServer);
+        if (!resolved) {
+          throw error;
+        }
+        const client = new Client(
+          { name: "openclaw-bundle-mcp", version: "0.0.0" },
+          { jsonSchemaValidator: createBundleMcpJsonSchemaValidator() },
+        );
+        const newSession: BundleMcpSession = {
+          serverName,
+          client,
+          transport: resolved.transport,
+          transportType: resolved.transportType,
+          detachStderr: resolved.detachStderr,
+        };
+        try {
+          await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+          sessions.set(serverName, newSession);
+          logWarn(`bundle-mcp: server "${serverName}" reconnected successfully.`);
+          return (await client.callTool({
+            name: toolName,
+            arguments: isMcpConfigRecord(input) ? input : {},
+          })) as CallToolResult;
+        } catch (reconnectError) {
+          await disposeSession(newSession);
+          logWarn(
+            `bundle-mcp: server "${serverName}" reconnect failed: ${
+              reconnectError instanceof Error ? reconnectError.message : String(reconnectError)
+            }`,
+          );
+          throw error; // throw original error
+        }
+      }
     },
     async dispose() {
       if (disposed) {
