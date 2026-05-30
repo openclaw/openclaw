@@ -18,8 +18,15 @@ const DEFAULT_XIAOMI_TTS_BASE_URL = "https://api.xiaomimimo.com/v1";
 const DEFAULT_XIAOMI_TTS_MODEL = "mimo-v2.5-tts";
 const DEFAULT_XIAOMI_TTS_VOICE = "mimo_default";
 const DEFAULT_XIAOMI_TTS_FORMAT = "mp3";
+const XIAOMI_TTS_VOICE_DESIGN_MODEL = "mimo-v2.5-tts-voicedesign";
+const DEFAULT_XIAOMI_TTS_VOICE_DESIGN_STYLE =
+  "Warm, natural, and friendly voice with clear pronunciation and conversational pacing.";
 
-const XIAOMI_TTS_MODELS = ["mimo-v2.5-tts", "mimo-v2-tts"] as const;
+const XIAOMI_TTS_MODELS = [
+  "mimo-v2.5-tts",
+  "mimo-v2-tts",
+  XIAOMI_TTS_VOICE_DESIGN_MODEL,
+] as const;
 
 const XIAOMI_TTS_VOICES = [
   "mimo_default",
@@ -182,6 +189,25 @@ function buildXiaomiTtsMessages(params: { text: string; style?: string }) {
   ];
 }
 
+function isXiaomiVoiceDesignModel(model: string): boolean {
+  return model === XIAOMI_TTS_VOICE_DESIGN_MODEL;
+}
+
+function resolveXiaomiVoiceDesignStyle(style: string | undefined): string {
+  return trimToUndefined(style) ?? DEFAULT_XIAOMI_TTS_VOICE_DESIGN_STYLE;
+}
+
+function buildXiaomiTtsAudio(params: {
+  model: string;
+  voice: string;
+  format: XiaomiTtsFormat;
+}): { format: XiaomiTtsFormat; voice?: string } {
+  if (isXiaomiVoiceDesignModel(params.model)) {
+    return { format: params.format };
+  }
+  return { format: params.format, voice: params.voice };
+}
+
 function decodeXiaomiAudioData(body: unknown): Buffer {
   const root = asObject(body);
   const choices = Array.isArray(root?.choices) ? root.choices : [];
@@ -209,6 +235,9 @@ async function xiaomiTTS(params: {
   const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+  const resolvedStyle = isXiaomiVoiceDesignModel(model)
+    ? resolveXiaomiVoiceDesignStyle(style)
+    : style;
 
   try {
     const { response, release } = await fetchWithSsrFGuard({
@@ -221,8 +250,8 @@ async function xiaomiTTS(params: {
         },
         body: JSON.stringify({
           model,
-          messages: buildXiaomiTtsMessages({ text, style }),
-          audio: { format, voice },
+          messages: buildXiaomiTtsMessages({ text, style: resolvedStyle }),
+          audio: buildXiaomiTtsAudio({ model, voice, format }),
         }),
         signal: controller.signal,
       },
