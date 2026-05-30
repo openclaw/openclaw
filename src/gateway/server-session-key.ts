@@ -45,10 +45,13 @@ function setResolvedSessionKeyCache(
       resolvedSessionKeyByRunId.delete(oldest);
     }
   }
-  const expiresAt =
-    sessionKey === null ? resolveExpiresAtMsFromDurationMs(RUN_LOOKUP_MISS_TTL_MS) : null;
-  if (sessionKey === null && expiresAt === undefined) {
-    return;
+  let expiresAt: number | null = null;
+  if (sessionKey === null) {
+    const missExpiresAt = resolveExpiresAtMsFromDurationMs(RUN_LOOKUP_MISS_TTL_MS);
+    if (missExpiresAt === undefined) {
+      return;
+    }
+    expiresAt = missExpiresAt;
   }
   resolvedSessionKeyByRunId.set(cacheKey, {
     sessionKey,

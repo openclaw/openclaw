@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveFeishuSenderName } from "./bot-sender-name.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -16,7 +17,7 @@ const account = {
   appId: "app-id",
   appSecret: "secret",
   domain: "feishu",
-  config: {},
+  config: FeishuConfigSchema.parse({}),
 } satisfies ResolvedFeishuAccount;
 
 function mockUserNames(...names: string[]): ReturnType<typeof vi.fn> {
