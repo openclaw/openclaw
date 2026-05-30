@@ -40,6 +40,15 @@
       "@openclaw/model-catalog-core/configured-model-refs": [
         "./packages/model-catalog-core/src/configured-model-refs.ts"
       ],
+      "@openclaw/model-catalog-core/model-catalog-normalize": [
+        "./packages/model-catalog-core/src/model-catalog-normalize.ts"
+      ],
+      "@openclaw/model-catalog-core/model-catalog-refs": [
+        "./packages/model-catalog-core/src/model-catalog-refs.ts"
+      ],
+      "@openclaw/model-catalog-core/model-catalog-types": [
+        "./packages/model-catalog-core/src/model-catalog-types.ts"
+      ],
       "@openclaw/model-catalog-core/provider-id": [
         "./packages/model-catalog-core/src/provider-id.ts"
       ],
@@ -140,6 +149,11 @@
       ],
       "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
       "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
+      "@openclaw/web-content-core": ["./packages/web-content-core/src/index.ts"],
+      "@openclaw/web-content-core/provider-runtime-shared": [
+        "./packages/web-content-core/src/provider-runtime-shared.ts"
+      ],
+      "@openclaw/web-content-core/*": ["./packages/web-content-core/src/*"],
       "@openclaw/speech-core": ["./packages/speech-core/runtime-api.ts"],
       "@openclaw/speech-core/api": ["./packages/speech-core/api.ts"],
       "@openclaw/speech-core/runtime-api": ["./packages/speech-core/runtime-api.ts"],

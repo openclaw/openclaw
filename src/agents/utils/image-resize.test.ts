@@ -89,7 +89,7 @@ describe("image resize utility", () => {
         maxHeight: 2_000,
         maxWidth: 2_000,
       },
-      maxBase64Bytes: 4_000,
+      maxBytes: 3_000,
       opaque: { format: "jpeg", quality: 70 },
       search: {
         compressionLevel: [6, 9],

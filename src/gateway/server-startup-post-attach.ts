@@ -568,7 +568,7 @@ async function prewarmConfiguredPrimaryModel(params: {
   if (!explicitPrimary) {
     return;
   }
-  const { normalizeProviderId } = await import("../agents/provider-id.js");
+  const { normalizeProviderId } = await import("@openclaw/model-catalog-core/provider-id");
   if (
     isConfiguredCliBackendPrimary({
       cfg: params.cfg,

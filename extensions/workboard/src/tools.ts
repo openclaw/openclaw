@@ -189,9 +189,7 @@ export function createWorkboardTools(params: {
   context?: OpenClawPluginToolContext;
   store?: WorkboardStore;
 }): AnyAgentTool[] {
-  const store =
-    params.store ??
-    WorkboardStore.open((options) => params.api.runtime.state.openKeyedStore(options));
+  const store = params.store ?? WorkboardStore.openSqlite();
   const ownerId = contextOwner(params.context);
   const readScopedCardToolParams = async (rawParams: unknown): Promise<WorkboardToolCardParams> => {
     const input = readCardToolParams(rawParams, ownerId);
@@ -537,6 +535,66 @@ export function createWorkboardTools(params: {
       },
     },
     {
+      name: "workboard_attachment_add",
+      label: "Workboard Attachment Add",
+      description:
+        "Store a small Workboard attachment in plugin SQLite KV and link it to the card.",
+      parameters: Type.Object(
+        {
+          id: cardIdField(),
+          fileName: Type.String({ description: "Attachment file name." }),
+          contentBase64: Type.String({ description: "Base64 attachment content." }),
+          mimeType: Type.Optional(Type.String({ description: "Attachment MIME type." })),
+          note: Type.Optional(Type.String({ description: "Optional attachment note." })),
+          token: ScopedClaimTokenField,
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        return redactedCardResult(await store.addAttachment(id, record, scope));
+      },
+    },
+    {
+      name: "workboard_attachment_read",
+      label: "Workboard Attachment Read",
+      description: "Read one Workboard attachment from plugin SQLite KV.",
+      parameters: Type.Object(
+        {
+          id: Type.String({ description: "Attachment id." }),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const id = readStringParam(rawParams as Record<string, unknown>, "id", {
+          required: true,
+        });
+        const attachment = await store.getAttachment(id);
+        if (!attachment) {
+          throw new Error(`attachment not found: ${id}`);
+        }
+        return jsonResult(attachment);
+      },
+    },
+    {
+      name: "workboard_attachment_delete",
+      label: "Workboard Attachment Delete",
+      description: "Delete one Workboard attachment from plugin SQLite KV and the card index.",
+      parameters: Type.Object(
+        {
+          id: cardIdField(),
+          attachmentId: Type.String({ description: "Attachment id." }),
+          token: ScopedClaimTokenField,
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        const attachmentId = readStringParam(record, "attachmentId", { required: true });
+        return redactedCardResult(await store.deleteAttachment(id, attachmentId, scope));
+      },
+    },
+    {
       name: "workboard_block",
       label: "Workboard Block",
       description: "Block a claimed Workboard card with a durable reason and release the claim.",
@@ -588,6 +646,23 @@ export function createWorkboardTools(params: {
                 kind: Type.String({ description: "scratch, dir, or worktree." }),
                 path: Type.Optional(Type.String({ description: "Absolute dir/worktree path." })),
                 branch: Type.Optional(Type.String({ description: "Suggested branch." })),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+          orchestration: Type.Optional(
+            Type.Object(
+              {
+                autoDecompose: Type.Optional(
+                  Type.Boolean({ description: "Mark ready triage cards for decomposition." }),
+                ),
+                autoDecomposePerDispatch: Type.Optional(
+                  Type.Number({ description: "Maximum orchestration candidates per dispatch." }),
+                ),
+                defaultAssignee: Type.Optional(Type.String({ description: "Default assignee." })),
+                orchestratorProfile: Type.Optional(
+                  Type.String({ description: "Orchestrator profile id." }),
+                ),
               },
               { additionalProperties: false },
             ),
@@ -793,6 +868,36 @@ export function createWorkboardTools(params: {
         jsonResult(await store.listNotificationSubscriptions(rawParams as Record<string, unknown>)),
     },
     {
+      name: "workboard_notify_events",
+      label: "Workboard Notify Events",
+      description: "Read replay-safe Workboard notification events without advancing cursors.",
+      parameters: Type.Object(
+        {
+          subscriptionId: Type.Optional(Type.String({ description: "Subscription id." })),
+          boardId: Type.Optional(Type.String({ description: "Board id." })),
+          cardId: Type.Optional(Type.String({ description: "Card id." })),
+          limit: Type.Optional(Type.Number({ description: "Maximum events. Default 50." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) =>
+        jsonResult(await store.notificationEvents(rawParams as Record<string, unknown>)),
+    },
+    {
+      name: "workboard_notify_advance",
+      label: "Workboard Notify Advance",
+      description: "Read Workboard notification events and advance the subscription cursor.",
+      parameters: Type.Object(
+        {
+          subscriptionId: Type.String({ description: "Subscription id." }),
+          limit: Type.Optional(Type.Number({ description: "Maximum events. Default 50." })),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) =>
+        jsonResult(await store.advanceNotificationEvents(rawParams as Record<string, unknown>)),
+    },
+    {
       name: "workboard_notify_unsubscribe",
       label: "Workboard Notify Unsubscribe",
       description: "Delete a persisted Workboard notification subscription.",
@@ -881,7 +986,48 @@ export function createWorkboardTools(params: {
           promoted: result.promoted.map(redactClaimToken),
           reclaimed: result.reclaimed.map(redactClaimToken),
           blocked: result.blocked.map(redactClaimToken),
+          orchestrated: result.orchestrated.map(redactClaimToken),
         });
+      },
+    },
+    {
+      name: "workboard_worker_log",
+      label: "Workboard Worker Log",
+      description: "Append a persisted worker log entry to a Workboard card.",
+      parameters: Type.Object(
+        {
+          id: cardIdField(),
+          level: Type.Optional(Type.String({ description: "info, warning, or error." })),
+          message: Type.String({ description: "Worker log message." }),
+          sessionKey: Type.Optional(Type.String({ description: "Linked session key." })),
+          runId: Type.Optional(Type.String({ description: "Linked run id." })),
+          token: ScopedClaimTokenField,
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const { record, id, scope } = await readScopedCardToolParams(rawParams);
+        return redactedCardResult(await store.addWorkerLog(id, record, scope));
+      },
+    },
+    {
+      name: "workboard_protocol_violation",
+      label: "Workboard Protocol Violation",
+      description:
+        "Block a card and record a worker protocol violation when work stops without complete/block.",
+      parameters: Type.Object(
+        {
+          id: cardIdField(),
+          detail: Type.Optional(Type.String({ description: "Violation detail." })),
+          sessionKey: Type.Optional(Type.String({ description: "Linked session key." })),
+          runId: Type.Optional(Type.String({ description: "Linked run id." })),
+          token: ScopedClaimTokenField,
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (_toolCallId, rawParams) => {
+        const { record, id, scope } = await readClaimedCardToolParams(rawParams);
+        return redactedCardResult(await store.recordProtocolViolation(id, record, scope));
       },
     },
   ];

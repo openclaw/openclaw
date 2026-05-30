@@ -164,6 +164,13 @@ const HOST_READ_DECLARED_TEXT_ERROR =
   "and trusted generated HTML reports for local reads";
 const MB = 1024 * 1024;
 
+function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
+  if (/^\s*media:\/\//i.test(mediaUrl)) {
+    return mediaUrl;
+  }
+  return mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+}
+
 function getTextStats(text: string): { printableRatio: number } {
   if (!text) {
     return { printableRatio: 0 };
@@ -819,11 +826,7 @@ async function loadWebMediaInternal(
     hostReadCapability = false,
     imageCompression,
   } = options;
-  // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
-  // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
-  if (!/^\s*media:\/\//i.test(mediaUrl)) {
-    mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
-  }
+  mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
@@ -834,6 +837,7 @@ async function loadWebMediaInternal(
     }
   }
   mediaUrl = (await resolveHostedPluginMediaUrl(mediaUrl)) ?? mediaUrl;
+  mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
 
   const optimizeAndClampImage = async (
     buffer: Buffer,

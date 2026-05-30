@@ -4,6 +4,24 @@ import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/qa-otel-smoke.ts";
 
 describe("qa-otel-smoke receiver bounds", () => {
+  it("accepts package-manager forwarded arguments", () => {
+    expect(
+      testing.parseArgs([
+        "--",
+        "--collector",
+        "docker",
+        "--provider-mode",
+        "mock-openai",
+        "--scenario",
+        "otel-trace-smoke",
+      ]),
+    ).toMatchObject({
+      collectorMode: "docker",
+      providerMode: "mock-openai",
+      scenarioId: "otel-trace-smoke",
+    });
+  });
+
   it("parses body-size limit env values as strict positive integers", () => {
     expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
     expect(

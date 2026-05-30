@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { resolveGpt5SystemPromptContribution } from "../agents/gpt5-prompt-overlay.js";
@@ -5,7 +6,6 @@ import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
 } from "../agents/plugin-text-transforms.js";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -631,11 +631,7 @@ export function matchesProviderContextOverflowWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderFailoverErrorContext;
 }): boolean {
-  const plugins = params.provider
-    ? [resolveProviderHookPlugin({ ...params, provider: params.provider })].filter(
-        (plugin): plugin is ProviderPlugin => Boolean(plugin),
-      )
-    : resolveProviderPluginsForHooks(params);
+  const plugins = resolveProviderPluginsForScopedHook(params);
   for (const plugin of plugins) {
     if (plugin.matchesContextOverflowError?.(params.context)) {
       return true;
@@ -651,11 +647,7 @@ export function classifyProviderFailoverReasonWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderFailoverErrorContext;
 }) {
-  const plugins = params.provider
-    ? [resolveProviderHookPlugin({ ...params, provider: params.provider })].filter(
-        (plugin): plugin is ProviderPlugin => Boolean(plugin),
-      )
-    : resolveProviderPluginsForHooks(params);
+  const plugins = resolveProviderPluginsForScopedHook(params);
   for (const plugin of plugins) {
     const reason = plugin.classifyFailoverReason?.(params.context);
     if (reason) {
@@ -663,6 +655,36 @@ export function classifyProviderFailoverReasonWithPlugin(params: {
     }
   }
   return undefined;
+}
+
+function resolveProviderPluginsForScopedHook(params: {
+  provider?: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderFailoverErrorContext;
+}): ProviderPlugin[] {
+  if (!params.provider) {
+    return resolveProviderPluginsForHooks(params);
+  }
+  const plugin = resolveProviderHookPlugin({ ...params, provider: params.provider });
+  if (plugin) {
+    return [plugin];
+  }
+  if (hasStructuredFailoverDescriptor(params.context)) {
+    return [];
+  }
+  // Custom provider ids may only name their canonical API in config, and the
+  // legacy message classifier only has the runtime id here. Preserve its old
+  // broad hook scan for descriptor-free messages, but do not let unrelated
+  // hooks override structured HTTP/auth signals.
+  return resolveProviderPluginsForHooks(params);
+}
+
+function hasStructuredFailoverDescriptor(context: ProviderFailoverErrorContext): boolean {
+  return (
+    context.status !== undefined || context.code !== undefined || context.errorType !== undefined
+  );
 }
 
 export function formatProviderAuthProfileApiKeyWithPlugin(params: {

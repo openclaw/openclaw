@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_DATE_TIMESTAMP_MS } from "../shared/number-coercion.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 
 const { readCodexCliCredentialsCachedMock } = vi.hoisted(() => ({
@@ -374,6 +375,35 @@ describe("buildAuthHealthSummary", () => {
 
     expect(statuses["github-copilot:invalid-expires"]).toBe("missing");
     expect(reasonCodes["github-copilot:invalid-expires"]).toBe("invalid_expires");
+  });
+
+  it("does not expose out-of-range oauth expiry values in health rollups", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "openai-codex:bad-expiry": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "oauth-access",
+          refresh: "oauth-refresh",
+          expires: MAX_DATE_TIMESTAMP_MS + 1,
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    });
+
+    const profile = summary.profiles.find((entry) => entry.profileId === "openai-codex:bad-expiry");
+    const provider = summary.providers.find((entry) => entry.provider === "openai-codex");
+
+    expect(profile?.status).toBe("missing");
+    expect(profile?.expiresAt).toBeUndefined();
+    expect(provider?.status).toBe("missing");
+    expect(provider?.expiresAt).toBeUndefined();
   });
 
   it("does not normalize provider aliases when filtering and grouping profile health", () => {

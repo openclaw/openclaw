@@ -8,6 +8,7 @@ import {
   clampPositiveTimerTimeoutMs,
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
+  isFutureDateTimestampMs,
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
   nonNegativeSecondsToSafeMilliseconds,
@@ -136,6 +137,14 @@ describe("number-coercion", () => {
     expect(timestampMsToIsoString("0")).toBeUndefined();
   });
 
+  test("future timestamp helper rejects invalid Date timestamps", () => {
+    expect(isFutureDateTimestampMs(1_001, { nowMs: 1_000 })).toBe(true);
+    expect(isFutureDateTimestampMs(1_000, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(999, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(8_640_000_000_000_001, { nowMs: 1_000 })).toBe(false);
+    expect(isFutureDateTimestampMs(1_001, { nowMs: Number.NaN })).toBe(false);
+  });
+
   test("timestamp fallback helpers resolve Date-invalid timestamps", () => {
     expect(resolveDateTimestampMs(1_000)).toBe(1_000);
     expect(resolveDateTimestampMs(Number.POSITIVE_INFINITY, 1_000)).toBe(1_000);
@@ -194,6 +203,7 @@ describe("number-coercion", () => {
     expect(resolveExpiresAtMsFromEpochSeconds("3600", { bufferMs: 300 })).toBe(3_599_700);
     expect(resolveExpiresAtMsFromEpochSeconds("100", { maxMs: 99_999 })).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds(Number.MAX_SAFE_INTEGER)).toBeUndefined();
+    expect(resolveExpiresAtMsFromEpochSeconds(8_640_000_000_001)).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds("1e309")).toBeUndefined();
   });
 
@@ -203,6 +213,7 @@ describe("number-coercion", () => {
     );
     expect(resolveExpiresAtMsFromDurationOrEpoch(1_700_000_000)).toBe(1_700_000_000_000);
     expect(resolveExpiresAtMsFromDurationOrEpoch(1_700_000_000_000)).toBe(1_700_000_000_000);
+    expect(resolveExpiresAtMsFromDurationOrEpoch(8_640_000_000_000_001)).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationOrEpoch(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationOrEpoch(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
   });

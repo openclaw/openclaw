@@ -3822,6 +3822,40 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("does not store qmd embed backoff when the process clock is invalid", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    const { manager } = await createManager({ mode: "status" });
+    try {
+      (
+        manager as unknown as {
+          noteEmbedFailure: (reason: string, err: unknown) => void;
+        }
+      ).noteEmbedFailure("manual", new Error("embed failed"));
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    const status = manager.status() as { custom?: { qmd?: { embedBackoffUntil?: number | null } } };
+    expect(status.custom?.qmd?.embedBackoffUntil).toBeNull();
+    await manager.close();
+  });
+
   it("runs periodic embed maintenance even when regular update scheduling is disabled", async () => {
     vi.useFakeTimers();
     cfg = {

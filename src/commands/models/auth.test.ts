@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 
 type AuthRunCall = {
   agentDir?: string;
@@ -1209,6 +1210,22 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/coder",
     });
+  });
+
+  it("rejects pasted token expiries that cannot fit in the Date timestamp range", async () => {
+    const runtime = createRuntime();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    mocks.clackText.mockResolvedValue("openai-token");
+    try {
+      await expect(
+        modelsAuthPasteTokenCommand({ provider: "openai", expiresIn: "1ms" }, runtime),
+      ).rejects.toThrow("resulting token expiry is outside Date range");
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
   it("rejects OpenAI API keys pasted as OpenAI Codex token material", async () => {

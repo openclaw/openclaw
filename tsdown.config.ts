@@ -10,6 +10,7 @@ import {
   pluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mjs";
+import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -447,6 +448,13 @@ function buildTerminalCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildWebContentCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/web-content-core/src/index.ts",
+    "provider-runtime-shared": "packages/web-content-core/src/provider-runtime-shared.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -470,6 +478,9 @@ function buildModelCatalogCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/model-catalog-core/src/index.ts",
     "configured-model-refs": "packages/model-catalog-core/src/configured-model-refs.ts",
+    "model-catalog-normalize": "packages/model-catalog-core/src/model-catalog-normalize.ts",
+    "model-catalog-refs": "packages/model-catalog-core/src/model-catalog-refs.ts",
+    "model-catalog-types": "packages/model-catalog-core/src/model-catalog-types.ts",
     "provider-id": "packages/model-catalog-core/src/provider-id.ts",
     "provider-model-id-normalization":
       "packages/model-catalog-core/src/provider-model-id-normalization.ts",
@@ -581,7 +592,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildAgentCoreDistEntries(),
-    outDir: "packages/agent-core/dist",
+    outDir: tsdownPackageOutputRoot("agent-core"),
     deps: {
       neverBundle: shouldExternalizeAgentCoreDependency,
     },
@@ -590,7 +601,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildGatewayProtocolDistEntries(),
-    outDir: "packages/gateway-protocol/dist",
+    outDir: tsdownPackageOutputRoot("gateway-protocol"),
     deps: {
       neverBundle: shouldExternalizeGatewayProtocolDependency,
     },
@@ -599,7 +610,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildGatewayClientDistEntries(),
-    outDir: "packages/gateway-client/dist",
+    outDir: tsdownPackageOutputRoot("gateway-client"),
     deps: {
       neverBundle: shouldExternalizeGatewayClientDependency,
     },
@@ -608,7 +619,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildNetPolicyDistEntries(),
-    outDir: "packages/net-policy/dist",
+    outDir: tsdownPackageOutputRoot("net-policy"),
     deps: {
       neverBundle: shouldExternalizeNetPolicyDependency,
     },
@@ -617,19 +628,19 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildMediaGenerationCoreDistEntries(),
-    outDir: "packages/media-generation-core/dist",
+    outDir: tsdownPackageOutputRoot("media-generation-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildMediaUnderstandingCoreDistEntries(),
-    outDir: "packages/media-understanding-common/dist",
+    outDir: tsdownPackageOutputRoot("media-understanding-common"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildMarkdownCoreDistEntries(),
-    outDir: "packages/markdown-core/dist",
+    outDir: tsdownPackageOutputRoot("markdown-core"),
     deps: {
       neverBundle: shouldExternalizeMarkdownCoreDependency,
     },
@@ -638,7 +649,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildTerminalCoreDistEntries(),
-    outDir: "packages/terminal-core/dist",
+    outDir: tsdownPackageOutputRoot("terminal-core"),
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
     },
@@ -646,8 +657,14 @@ export default defineConfig([
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildWebContentCoreDistEntries(),
+    outDir: "packages/web-content-core/dist",
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildSpeechCoreDistEntries(),
-    outDir: "packages/speech-core/dist",
+    outDir: tsdownPackageOutputRoot("speech-core"),
     deps: {
       neverBundle: shouldExternalizeSpeechCoreDependency,
     },
@@ -656,7 +673,7 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildLlmCoreDistEntries(),
-    outDir: "packages/llm-core/dist",
+    outDir: tsdownPackageOutputRoot("llm-core"),
     deps: {
       neverBundle: shouldExternalizeLlmCoreDependency,
     },
@@ -665,13 +682,13 @@ export default defineConfig([
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildModelCatalogCoreDistEntries(),
-    outDir: "packages/model-catalog-core/dist",
+    outDir: tsdownPackageOutputRoot("model-catalog-core"),
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildLlmRuntimeDistEntries(),
-    outDir: "packages/llm-runtime/dist",
+    outDir: tsdownPackageOutputRoot("llm-runtime"),
     deps: {
       neverBundle: shouldExternalizeLlmRuntimeDependency,
     },

@@ -1374,6 +1374,97 @@ describe("chat session controls", () => {
     expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
   });
 
+  it("keeps agent switch targets after scoped session refreshes", () => {
+    const { state } = createChatHeaderState();
+    const onSwitchSession = vi.fn();
+    state.sessionKey = "agent:alpha:main";
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 3,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        { key: "agent:alpha:main", kind: "direct", updatedAt: 4 },
+        { key: "agent:beta:dashboard:beta-recent", kind: "direct", updatedAt: 3 },
+        { key: "agent:beta:main", kind: "direct", updatedAt: 2 },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    state.sessionsResultAgentId = "alpha";
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [{ key: "agent:alpha:main", kind: "direct", updatedAt: 5 }],
+    };
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    const agentSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-agent-filter="true"]',
+    );
+    agentSelect!.value = "beta";
+    agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
+  });
+
+  it("clears cached agent switch targets after a scoped empty refresh", () => {
+    const { state } = createChatHeaderState();
+    const onSwitchSession = vi.fn();
+    state.sessionKey = "agent:alpha:main";
+    state.agentsList = {
+      defaultId: "alpha",
+      mainKey: "agent:alpha:main",
+      scope: "all",
+      agents: [
+        { id: "alpha", name: "Deep Chat" },
+        { id: "beta", name: "Coding" },
+      ],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 2,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        { key: "agent:alpha:main", kind: "direct", updatedAt: 4 },
+        { key: "agent:beta:dashboard:deleted", kind: "direct", updatedAt: 3 },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    state.sessionsResultAgentId = "beta";
+    state.sessionsResult = {
+      ts: 1,
+      path: "",
+      count: 0,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [],
+    };
+    render(renderChatSessionSelect(state, onSwitchSession), container);
+
+    const agentSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-agent-filter="true"]',
+    );
+    agentSelect!.value = "beta";
+    agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:main");
+  });
+
   it("renders selector labels from the active locale", async () => {
     await i18n.setLocale("zh-CN");
     const { state } = createChatHeaderState();
@@ -2338,6 +2429,81 @@ describe("chat session controls", () => {
 
     const rerendered = getChatModelSelect(container);
     expect(rerendered.value).toBe("openai/gpt-5-mini");
+  });
+
+  it("keeps the selected model visible after switching away and back to a session", async () => {
+    const sessionA = "agent:main:session-a";
+    const sessionB = "agent:main:session-b";
+    const catalog = createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG, {
+      id: "claude-opus-4.5",
+      name: "Claude Opus 4.5",
+      provider: "bedrock",
+    });
+    const { state } = createChatHeaderState({ models: catalog });
+    let rows: GatewaySessionRow[] = [
+      { key: sessionA, kind: "direct", label: "Session A", updatedAt: 2 },
+      { key: sessionB, kind: "direct", label: "Session B", updatedAt: 1 },
+    ];
+    const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === "sessions.patch") {
+        const key = typeof params.key === "string" ? params.key : "";
+        const nextModel = typeof params.model === "string" ? params.model.trim() : "";
+        rows = rows.map((row) => {
+          if (row.key !== key) {
+            return row;
+          }
+          const nextRow: GatewaySessionRow = { ...row };
+          if (!nextModel) {
+            delete nextRow.model;
+            delete nextRow.modelProvider;
+            return nextRow;
+          }
+          const slashIndex = nextModel.indexOf("/");
+          if (slashIndex > 0) {
+            nextRow.modelProvider = nextModel.slice(0, slashIndex);
+          } else {
+            delete nextRow.modelProvider;
+          }
+          nextRow.model = slashIndex > 0 ? nextModel.slice(slashIndex + 1) : nextModel;
+          return nextRow;
+        });
+        return { ok: true, key };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResultFromRows(rows);
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "tools.effective") {
+        return { agentId: "main", profile: "coding", groups: [] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    state.sessionKey = sessionA;
+    state.settings.sessionKey = sessionA;
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const modelSelect = getChatModelSelect(container);
+    expect(modelSelect.value).toBe("");
+
+    modelSelect.value = "bedrock/claude-opus-4.5";
+    modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    await flushTasks();
+
+    state.sessionKey = sessionB;
+    state.settings.sessionKey = sessionB;
+    render(renderChatSessionSelect(state), container);
+    expect(getChatModelSelect(container).value).toBe("");
+
+    state.sessionKey = sessionA;
+    state.settings.sessionKey = sessionA;
+    render(renderChatSessionSelect(state), container);
+
+    expect(getChatModelSelect(container).value).toBe("bedrock/claude-opus-4.5");
   });
 
   it("uses default thinking options when the active session is absent", () => {

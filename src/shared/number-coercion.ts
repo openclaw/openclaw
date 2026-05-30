@@ -105,6 +105,15 @@ export function asDateTimestampMs(value: unknown): number | undefined {
   });
 }
 
+export function isFutureDateTimestampMs(
+  value: unknown,
+  opts: { nowMs?: number } = {},
+): value is number {
+  const timestampMs = asDateTimestampMs(value);
+  const nowMs = asDateTimestampMs(opts.nowMs ?? Date.now());
+  return timestampMs !== undefined && nowMs !== undefined && timestampMs > nowMs;
+}
+
 export function timestampMsToIsoString(value: unknown): string | undefined {
   const timestampMs = asDateTimestampMs(value);
   return timestampMs === undefined ? undefined : new Date(timestampMs).toISOString();
@@ -299,6 +308,9 @@ export function resolveExpiresAtMsFromEpochSeconds(
   if (!Number.isSafeInteger(expiresAt)) {
     return undefined;
   }
+  if (timestampMsToIsoString(expiresAt) === undefined) {
+    return undefined;
+  }
   const maxMs = opts.maxMs;
   return maxMs === undefined || expiresAt <= maxMs ? expiresAt : undefined;
 }
@@ -321,7 +333,7 @@ export function resolveExpiresAtMsFromDurationOrEpoch(
   }
   const absoluteMillisecondsThreshold = opts.absoluteMillisecondsThreshold ?? 1_000_000_000_000;
   if (parsed < absoluteMillisecondsThreshold) {
-    return positiveSecondsToSafeMilliseconds(parsed);
+    return resolveExpiresAtMsFromEpochSeconds(parsed);
   }
-  return parsed;
+  return asDateTimestampMs(parsed);
 }

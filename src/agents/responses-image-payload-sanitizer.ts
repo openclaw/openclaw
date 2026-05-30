@@ -42,7 +42,3 @@ export function sanitizeResponsesImagePayload<T extends Record<string, unknown>>
 export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
   return sanitizeSharedInlineImageDataUrl(imageUrl);
 }
-
-export function invalidInlineImageText(label: string): string {
-  return `[${label}] ${IMAGE_OMITTED_TEXT}`;
-}

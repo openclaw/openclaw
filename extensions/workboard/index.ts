@@ -8,7 +8,7 @@ export default definePluginEntry({
   name: "Workboard",
   description: "Dashboard workboard for agent-owned issues and sessions.",
   register(api) {
-    const store = WorkboardStore.open((options) => api.runtime.state.openKeyedStore(options));
+    const store = WorkboardStore.openSqlite();
     registerWorkboardGatewayMethods({ api, store });
     api.registerTool((context) => createWorkboardTools({ api, context, store }), {
       names: [
@@ -19,6 +19,9 @@ export default definePluginEntry({
         "workboard_claim",
         "workboard_heartbeat",
         "workboard_complete",
+        "workboard_attachment_add",
+        "workboard_attachment_read",
+        "workboard_attachment_delete",
         "workboard_block",
         "workboard_boards",
         "workboard_board_create",
@@ -30,6 +33,8 @@ export default definePluginEntry({
         "workboard_decompose",
         "workboard_notify_subscribe",
         "workboard_notify_list",
+        "workboard_notify_events",
+        "workboard_notify_advance",
         "workboard_notify_unsubscribe",
         "workboard_promote",
         "workboard_reassign",
@@ -38,6 +43,8 @@ export default definePluginEntry({
         "workboard_release",
         "workboard_comment",
         "workboard_proof",
+        "workboard_worker_log",
+        "workboard_protocol_violation",
         "workboard_unblock",
       ],
       optional: true,

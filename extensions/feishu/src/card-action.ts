@@ -1,8 +1,9 @@
 import {
   asDateTimestampMs,
+  isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
@@ -55,11 +56,20 @@ export function resetProcessedFeishuCardActionTokensForTests(): void {
 }
 
 function pruneProcessedCardActionTokens(now: number): void {
+  const validNow = asDateTimestampMs(now);
+  if (validNow === undefined) {
+    processedCardActionTokens.clear();
+    return;
+  }
   for (const [key, entry] of processedCardActionTokens.entries()) {
-    if (entry.expiresAt <= now) {
+    if (!isFutureDateTimestampMs(entry.expiresAt, { nowMs: validNow })) {
       processedCardActionTokens.delete(key);
     }
   }
+}
+
+function resolveProcessedCardActionTokenExpiresAt(now: number): number | undefined {
+  return resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, { nowMs: now });
 }
 
 function beginFeishuCardActionToken(params: {
@@ -75,13 +85,17 @@ function beginFeishuCardActionToken(params: {
   }
   const key = `${params.accountId}:${normalizedToken}`;
   const existing = processedCardActionTokens.get(key);
-  if (existing && existing.expiresAt > now) {
+  if (existing && isFutureDateTimestampMs(existing.expiresAt, { nowMs: now })) {
     return false;
   }
-  processedCardActionTokens.set(key, {
-    status: "inflight",
-    expiresAt: now + FEISHU_CARD_ACTION_TOKEN_TTL_MS,
-  });
+  processedCardActionTokens.delete(key);
+  const expiresAt = resolveProcessedCardActionTokenExpiresAt(now);
+  if (expiresAt !== undefined) {
+    processedCardActionTokens.set(key, {
+      status: "inflight",
+      expiresAt,
+    });
+  }
   return true;
 }
 
@@ -95,9 +109,15 @@ function completeFeishuCardActionToken(params: {
   if (!normalizedToken) {
     return;
   }
-  processedCardActionTokens.set(`${params.accountId}:${normalizedToken}`, {
+  const key = `${params.accountId}:${normalizedToken}`;
+  const expiresAt = resolveProcessedCardActionTokenExpiresAt(now);
+  if (expiresAt === undefined) {
+    processedCardActionTokens.delete(key);
+    return;
+  }
+  processedCardActionTokens.set(key, {
     status: "completed",
-    expiresAt: now + FEISHU_CARD_ACTION_TOKEN_TTL_MS,
+    expiresAt,
   });
 }
 
@@ -150,6 +170,7 @@ async function dispatchSyntheticCommand(params: {
   account: ReturnType<typeof resolveFeishuRuntimeAccount>;
   botOpenId?: string;
   runtime?: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   accountId?: string;
   chatType?: "p2p" | "group";
 }): Promise<void> {
@@ -164,6 +185,7 @@ async function dispatchSyntheticCommand(params: {
     event: buildSyntheticMessageEvent(params.event, params.command, resolvedChatType),
     botOpenId: params.botOpenId,
     runtime: params.runtime,
+    channelRuntime: params.channelRuntime,
     accountId: params.accountId,
   });
 }
@@ -322,6 +344,7 @@ export async function handleFeishuCardAction(params: {
   event: FeishuCardActionEvent;
   botOpenId?: string;
   runtime?: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   accountId?: string;
 }): Promise<void> {
   const { cfg, event, runtime, accountId } = params;
@@ -445,6 +468,7 @@ export async function handleFeishuCardAction(params: {
           account,
           botOpenId: params.botOpenId,
           runtime,
+          channelRuntime: params.channelRuntime,
           accountId,
           chatType: envelope.c?.t,
         });
@@ -475,6 +499,7 @@ export async function handleFeishuCardAction(params: {
       account,
       botOpenId: params.botOpenId,
       runtime,
+      channelRuntime: params.channelRuntime,
       accountId,
     });
     completeFeishuCardActionToken({ token: event.token, accountId: account.accountId });

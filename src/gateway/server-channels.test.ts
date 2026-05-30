@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import {
   type ChannelGatewayContext,
   type ChannelId,
@@ -12,7 +11,6 @@ import {
 } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { createChannelRuntimeContextRegistry } from "../plugins/runtime/channel-runtime-contexts.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -54,6 +52,7 @@ function createTestPlugin(params?: {
   order?: number;
   account?: TestAccount;
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
+  stopAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["stopAccount"];
   listAccountIds?: ChannelPlugin<TestAccount>["config"]["listAccountIds"];
   includeDescribeAccount?: boolean;
   describeAccount?: ChannelPlugin<TestAccount>["config"]["describeAccount"];
@@ -81,6 +80,9 @@ function createTestPlugin(params?: {
   const gateway: NonNullable<ChannelPlugin<TestAccount>["gateway"]> = {};
   if (params?.startAccount) {
     gateway.startAccount = params.startAccount;
+  }
+  if (params?.stopAccount) {
+    gateway.stopAccount = params.stopAccount;
   }
   return {
     id,
@@ -155,9 +157,8 @@ function installTestRegistry(
 }
 
 function createManager(options?: {
-  channelRuntime?: ChannelRuntimeSurface;
-  resolveChannelRuntime?: () => ChannelRuntimeSurface | Promise<ChannelRuntimeSurface>;
-  resolveStartupChannelRuntime?: () => ChannelRuntimeSurface | Promise<ChannelRuntimeSurface>;
+  channelRuntime?: PluginRuntime["channel"];
+  resolveChannelRuntime?: () => PluginRuntime["channel"] | Promise<PluginRuntime["channel"]>;
   getRuntimeConfig?: () => Record<string, unknown>;
   channelIds?: ChannelId[];
   startupTrace?: { measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T> };
@@ -181,9 +182,6 @@ function createManager(options?: {
     ...(options?.channelRuntime ? { channelRuntime: options.channelRuntime } : {}),
     ...(options?.resolveChannelRuntime
       ? { resolveChannelRuntime: options.resolveChannelRuntime }
-      : {}),
-    ...(options?.resolveStartupChannelRuntime
-      ? { resolveStartupChannelRuntime: options.resolveStartupChannelRuntime }
       : {}),
     ...(options?.startupTrace ? { startupTrace: options.startupTrace } : {}),
   });
@@ -271,6 +269,20 @@ describe("server-channels auto restart", () => {
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
     expect(account?.running).toBe(false);
     expect(account?.lastError).toBeNull();
+  });
+
+  it("does not enumerate configured accounts when stopping a never-started channel", async () => {
+    const listAccountIds = vi.fn(() => [DEFAULT_ACCOUNT_ID]);
+    const resolveAccount = vi.fn(() => ({ enabled: true, configured: true }));
+    const stopAccount = vi.fn(async () => undefined);
+    installTestRegistry(createTestPlugin({ listAccountIds, resolveAccount, stopAccount }));
+    const manager = createManager();
+
+    await manager.stopChannel("discord");
+
+    expect(listAccountIds).not.toHaveBeenCalled();
+    expect(resolveAccount).not.toHaveBeenCalled();
+    expect(stopAccount).not.toHaveBeenCalled();
   });
 
   it("does not auto-restart after manual stop during backoff", async () => {
@@ -767,32 +779,31 @@ describe("server-channels auto restart", () => {
     expect(ctx?.channelRuntime).not.toBe(channelRuntime);
   });
 
-  it("uses a lightweight startup runtime for bundled channels", async () => {
+  it("passes the full runtime path to bundled channel startup", async () => {
     const fullRuntime = {
       ...createRuntimeChannel(),
       marker: "full-channel-runtime",
     } as PluginRuntime["channel"] & { marker: string };
-    const startupRuntime = {
-      runtimeContexts: createChannelRuntimeContextRegistry(),
-      marker: "startup-channel-runtime",
-    };
     const resolveChannelRuntime = vi.fn(() => fullRuntime);
-    const resolveStartupChannelRuntime = vi.fn(() => startupRuntime);
     const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
 
-    installTestRegistry({ plugin: createTestPlugin({ startAccount }), origin: "bundled" });
-    const manager = createManager({ resolveChannelRuntime, resolveStartupChannelRuntime });
+    installTestRegistry({
+      plugin: createTestPlugin({ startAccount }),
+      origin: "bundled",
+    });
+    const manager = createManager({ resolveChannelRuntime });
 
     await manager.startChannels();
 
-    expect(resolveStartupChannelRuntime).toHaveBeenCalledTimes(1);
-    expect(resolveChannelRuntime).not.toHaveBeenCalled();
+    expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
     const ctx = firstStartAccountContext(startAccount);
     expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
-      "startup-channel-runtime",
+      "full-channel-runtime",
     );
-    expect(ctx?.channelRuntime).not.toBe(startupRuntime);
+    expect(typeof (ctx?.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound.run).toBe(
+      "function",
+    );
   });
 
   it("keeps the full runtime path for non-bundled channels", async () => {
@@ -800,20 +811,14 @@ describe("server-channels auto restart", () => {
       ...createRuntimeChannel(),
       marker: "full-channel-runtime",
     } as PluginRuntime["channel"] & { marker: string };
-    const startupRuntime = {
-      runtimeContexts: createChannelRuntimeContextRegistry(),
-      marker: "startup-channel-runtime",
-    };
     const resolveChannelRuntime = vi.fn(() => fullRuntime);
-    const resolveStartupChannelRuntime = vi.fn(() => startupRuntime);
     const startAccount = vi.fn(async (_ctx: ChannelGatewayContext<TestAccount>) => {});
 
     installTestRegistry({ plugin: createTestPlugin({ startAccount }), origin: "workspace" });
-    const manager = createManager({ resolveChannelRuntime, resolveStartupChannelRuntime });
+    const manager = createManager({ resolveChannelRuntime });
 
     await manager.startChannels();
 
-    expect(resolveStartupChannelRuntime).not.toHaveBeenCalled();
     expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     const ctx = firstStartAccountContext(startAccount);
     expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(

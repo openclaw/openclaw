@@ -4,6 +4,7 @@ export {
   asDateTimestampMs,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
+  isFutureDateTimestampMs,
   parseFiniteNumber,
   clampTimerTimeoutMs,
   clampPositiveTimerTimeoutMs,

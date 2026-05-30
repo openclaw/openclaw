@@ -1,7 +1,6 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
-import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
@@ -177,23 +176,12 @@ const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 
 let cachedChannelRuntimePromise: Promise<PluginRuntime["channel"]> | null = null;
-let cachedStartupChannelRuntimePromise: Promise<ChannelRuntimeSurface> | null = null;
 
 function getChannelRuntime() {
   cachedChannelRuntimePromise ??= import("../plugins/runtime/runtime-channel.js").then(
     ({ createRuntimeChannel }) => createRuntimeChannel(),
   );
   return cachedChannelRuntimePromise;
-}
-
-function getStartupChannelRuntime() {
-  cachedStartupChannelRuntimePromise ??=
-    import("../plugins/runtime/channel-runtime-contexts.js").then(
-      ({ createChannelRuntimeContextRegistry }) => ({
-        runtimeContexts: createChannelRuntimeContextRegistry(),
-      }),
-    );
-  return cachedStartupChannelRuntimePromise;
 }
 
 async function closeMcpLoopbackServerOnDemand(): Promise<void> {
@@ -864,7 +852,6 @@ export async function startGatewayServer(
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
-    resolveStartupChannelRuntime: getStartupChannelRuntime,
     getPluginHttpRouteRegistry: () => pluginRegistry,
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,

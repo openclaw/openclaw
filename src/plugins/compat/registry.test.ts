@@ -164,6 +164,11 @@ const knownDeprecatedSurfaceMarkers = [
     marker: "@deprecated Use gateway_stop",
   },
   {
+    code: "legacy-subagent-spawning-hook",
+    file: "src/plugins/hook-types.ts",
+    marker: "@deprecated Core prepares thread-bound subagent bindings",
+  },
+  {
     code: "deprecated-memory-embedding-provider-api",
     file: "src/plugins/types.ts",
     marker: "registerMemoryEmbeddingProvider",

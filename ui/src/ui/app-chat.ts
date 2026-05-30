@@ -45,7 +45,7 @@ import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
-import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
+import type { ChatAttachment, ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 
@@ -77,7 +77,7 @@ export type ChatHost = ChatInputHistoryState & {
   sessionsShowArchived?: boolean;
   updateComplete?: Promise<unknown>;
   requestUpdate?: () => void;
-  refreshSessionsAfterChat: Set<string>;
+  refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
   assistantAgentId?: string | null;
@@ -250,6 +250,12 @@ function resolveSelectedGlobalAgentId(
   return agentId ? normalizeAgentId(agentId) : undefined;
 }
 
+function resolveDefaultAgentIdForList(host: Pick<ChatHost, "agentsList" | "hello">): string {
+  return normalizeAgentId(
+    host.agentsList?.defaultId ?? readHelloDefaultAgentId(host) ?? DEFAULT_AGENT_ID,
+  );
+}
+
 function scopedAgentIdForSession(host: ChatHost, sessionKey: string | undefined | null) {
   return isGlobalSessionKey(sessionKey)
     ? resolveSelectedGlobalAgentId(host)
@@ -289,6 +295,32 @@ export function scopedAgentParamsForSession(
     ? resolveSelectedGlobalAgentId(host)
     : resolveGlobalAliasAgentId(host, sessionKey);
   return agentId ? { agentId } : {};
+}
+
+export function scopedAgentListParamsForSession(
+  host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
+  sessionKey: string,
+) {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const agentId =
+    parsed?.agentId ??
+    (normalizedSessionKey === "global"
+      ? resolveSelectedGlobalAgentId(host)
+      : normalizedSessionKey === "unknown"
+        ? undefined
+        : resolveDefaultAgentIdForList(host));
+  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
+}
+
+export function scopedAgentListParamsForRefreshTarget(
+  host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
+  target: ChatSessionRefreshTarget,
+) {
+  const agentId =
+    normalizeOptionalString(target.agentId) ??
+    scopedAgentListParamsForSession(host, target.sessionKey).agentId;
+  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
 }
 
 export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
@@ -593,12 +625,17 @@ async function sendQueuedChatMessage(
       }
     }
     if (prepared.refreshSessions) {
+      const refreshTarget = {
+        sessionKey,
+        agentId: prepared.agentId,
+      };
       if (ack.status === "ok") {
         void loadSessions(host as unknown as SessionsState, {
           ...createChatSessionsLoadOverrides(host),
+          ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
         });
       } else {
-        host.refreshSessionsAfterChat.add(ack.runId);
+        host.refreshSessionsAfterChat.set(ack.runId, refreshTarget);
       }
     }
     discardChatAttachmentDataUrls(excludeComposerAttachments(host, attachments));
@@ -1299,7 +1336,7 @@ export async function refreshChat(
   const secondaryRefresh = Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
-      ...scopedAgentParamsForSession(host, host.sessionKey),
+      ...scopedAgentListParamsForSession(host, host.sessionKey),
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),

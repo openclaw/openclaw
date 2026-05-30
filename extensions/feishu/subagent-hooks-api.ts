@@ -10,10 +10,6 @@ function loadFeishuSubagentHooksModule() {
 }
 
 export function registerFeishuSubagentHooks(api: OpenClawPluginApi): void {
-  api.on("subagent_spawning", async (event, ctx) => {
-    const { handleFeishuSubagentSpawning } = await loadFeishuSubagentHooksModule();
-    return await handleFeishuSubagentSpawning(event, ctx);
-  });
   api.on("subagent_delivery_target", async (event) => {
     const { handleFeishuSubagentDeliveryTarget } = await loadFeishuSubagentHooksModule();
     return handleFeishuSubagentDeliveryTarget(event);

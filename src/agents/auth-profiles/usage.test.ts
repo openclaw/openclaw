@@ -5,6 +5,7 @@ import {
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
+  markAuthProfileBlockedUntil,
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
@@ -782,6 +783,62 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       expect(testCase.readUntil(stats)).toBe(testCase.expectedUntil(now));
     });
   }
+});
+
+describe("markAuthProfileBlockedUntil", () => {
+  it("keeps a later active blocked-until timestamp", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T18:00:00.000Z"));
+    const laterBlockedUntil = Date.parse("2031-01-01T00:00:00.000Z");
+    const store = makeStore({
+      "openai-codex:default": {
+        blockedUntil: laterBlockedUntil,
+      },
+    });
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai-codex:default",
+        blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
+        source: "codex_rate_limits",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(store.usageStats?.["openai-codex:default"]?.blockedUntil).toBe(laterBlockedUntil);
+  });
+
+  it("ignores blocked-until updates when the process clock is invalid", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const store = makeStore({});
+    try {
+      await markAuthProfileBlockedUntil({
+        store,
+        profileId: "openai-codex:default",
+        blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
+        source: "codex_rate_limits",
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(store.usageStats).toEqual({});
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
+
+  it("ignores blocked-until updates outside the valid Date range", async () => {
+    const store = makeStore({});
+
+    await markAuthProfileBlockedUntil({
+      store,
+      profileId: "openai-codex:default",
+      blockedUntil: Number.MAX_SAFE_INTEGER,
+      source: "codex_rate_limits",
+    });
+
+    expect(store.usageStats).toEqual({});
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
 });
 
 describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {

@@ -172,7 +172,15 @@ describe("Feishu Card Action Handler", () => {
     const event: FeishuCardActionEvent = {
       operator: { open_id: "u123", user_id: "uid1", union_id: "un1" },
       token: "tok1",
-      action: { value: { text: "/ping" }, tag: "button" },
+      action: {
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: "feishu.quick_actions.ping",
+          q: "/ping",
+          c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
+        }),
+        tag: "button",
+      },
       context: { open_id: "u123", user_id: "uid1", chat_id: "chat1" },
     };
 
@@ -529,6 +537,20 @@ describe("Feishu Card Action Handler", () => {
     await handleFeishuCardAction({ cfg, event, runtime });
 
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache callback tokens when token ttl expiry overflows", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    const event = createCardActionEvent({
+      token: "tok10-boundary",
+      actionValue: { text: "/help" },
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledTimes(2);
   });
 
   it("rejects empty callback tokens before dispatch", async () => {

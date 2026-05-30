@@ -116,7 +116,7 @@ import {
   indexPluginNodeCapabilitySurfaces,
   mintPluginNodeCapabilityToken,
   type PluginNodeCapabilitySurface,
-  resolvePluginNodeCapabilityTtlMs,
+  resolvePluginNodeCapabilityExpiresAtMs,
   setClientPluginNodeCapability,
 } from "../../plugin-node-capability.js";
 import { parseGatewayRole } from "../../role-policy.js";
@@ -1635,8 +1635,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         if (pluginSurfaceBaseUrl) {
           for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
             const capability = mintPluginNodeCapabilityToken();
-            const expiresAtMs =
-              Date.now() + resolvePluginNodeCapabilityTtlMs(pluginCapabilitySurface);
+            const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
+            if (expiresAtMs === undefined) {
+              continue;
+            }
             const scopedUrl =
               buildPluginNodeCapabilityScopedHostUrl(pluginSurfaceBaseUrl, capability) ??
               pluginSurfaceBaseUrl;

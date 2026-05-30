@@ -1005,6 +1005,15 @@ function findEntry(catalog: ToolSearchCatalogSession, id: string): ToolSearchCat
   return entry;
 }
 
+function findEntryByExactId(catalog: ToolSearchCatalogSession, id: string): ToolSearchCatalogEntry {
+  const needle = id.trim();
+  const entry = catalog.entries.find((candidate) => candidate.id === needle);
+  if (!entry) {
+    throw new ToolInputError(`Unknown tool id: ${needle}`);
+  }
+  return entry;
+}
+
 function readId(args: unknown): string {
   const params = asToolParamsRecord(args);
   const value = params.id ?? params.toolId ?? params.name;
@@ -1113,6 +1122,33 @@ export class ToolSearchRuntime {
   ) => {
     const catalog = resolveCatalog(this.ctx);
     const entry = findEntry(catalog, id);
+    return await this.callEntry(catalog, entry, input, options);
+  };
+
+  callExactId = async (
+    id: string,
+    input?: unknown,
+    options?: {
+      parentToolCallId?: string;
+      signal?: AbortSignal;
+      onUpdate?: AgentToolUpdateCallback;
+    },
+  ) => {
+    const catalog = resolveCatalog(this.ctx);
+    const entry = findEntryByExactId(catalog, id);
+    return await this.callEntry(catalog, entry, input, options);
+  };
+
+  private readonly callEntry = async (
+    catalog: ToolSearchCatalogSession,
+    entry: ToolSearchCatalogEntry,
+    input?: unknown,
+    options?: {
+      parentToolCallId?: string;
+      signal?: AbortSignal;
+      onUpdate?: AgentToolUpdateCallback;
+    },
+  ) => {
     catalog.callCount += 1;
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;

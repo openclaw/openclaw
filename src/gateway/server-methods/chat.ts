@@ -504,7 +504,7 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
         }
         const trimmed = mediaUrl.trim();
         if (trimmed) {
-          lines.push(`MEDIA:${trimmed}`);
+          lines.push(`Attachment: ${trimmed}`);
         }
       }
       if (payload.audioAsVoice && parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))) {

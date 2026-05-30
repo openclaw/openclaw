@@ -297,6 +297,49 @@ describe("media-understanding runtime", () => {
     });
   });
 
+  it("passes media scope context through file media understanding requests", async () => {
+    const output: MediaUnderstandingOutput = {
+      kind: "image.description",
+      attachmentIndex: 0,
+      provider: "vision-plugin",
+      model: "vision-v1",
+      text: "image ok",
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, path: "/tmp/sample.jpg", mime: "image/jpeg" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [output],
+    });
+
+    await describeImageFile({
+      filePath: "/tmp/sample.jpg",
+      mime: "image/jpeg",
+      cfg: {} as OpenClawConfig,
+      scopeContext: {
+        sessionKey: "agent:main:telegram:dm:123",
+        channel: "telegram",
+        chatType: "private",
+      },
+    });
+
+    expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
+      MediaPath: "/tmp/sample.jpg",
+      MediaType: "image/jpeg",
+      SessionKey: "agent:main:telegram:dm:123",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "private",
+    });
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      ctx: {
+        SessionKey: "agent:main:telegram:dm:123",
+        Surface: "telegram",
+        ChatType: "private",
+      },
+    });
+  });
+
   it("passes image file URLs as remote media understanding inputs", async () => {
     const output: MediaUnderstandingOutput = {
       kind: "image.description",

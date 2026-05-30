@@ -42,9 +42,18 @@ async function persistSessionEntryUpdate(params: {
   if (!params.storePath) {
     return;
   }
-  await updateSessionStore(params.storePath, (store) => {
-    store[params.sessionKey!] = { ...store[params.sessionKey!], ...params.nextEntry };
-  });
+  await updateSessionStore(
+    params.storePath,
+    (store) => {
+      const next = { ...store[params.sessionKey!], ...params.nextEntry };
+      store[params.sessionKey!] = next;
+      return next;
+    },
+    {
+      resolveSingleEntryPersistence: (entry) =>
+        entry && params.sessionKey ? { sessionKey: params.sessionKey, entry } : null,
+    },
+  );
 }
 
 function emitCompactionSessionLifecycleHooks(params: {

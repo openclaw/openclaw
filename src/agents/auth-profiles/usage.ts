@@ -1,10 +1,12 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromEpochSeconds,
 } from "../../shared/number-coercion.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
@@ -118,6 +120,11 @@ function shouldProbeWhamForFailure(
       reason === "unclassified" ||
       reason === "unknown")
   );
+}
+
+function resolveActiveWindowUntil(value: unknown, now: number): number {
+  const timestampMs = asDateTimestampMs(value);
+  return timestampMs !== undefined && timestampMs > now ? timestampMs : 0;
 }
 
 function resolveWhamResetMs(window: WhamUsageWindow | undefined, now: number): number | null {
@@ -812,8 +819,7 @@ export async function markAuthProfileBlockedUntil(params: {
   if (
     !profile ||
     isAuthCooldownBypassedForProvider(profile.provider) ||
-    !Number.isFinite(blockedUntil) ||
-    blockedUntil <= Date.now()
+    !isFutureDateTimestampMs(blockedUntil)
   ) {
     return;
   }
@@ -828,16 +834,13 @@ export async function markAuthProfileBlockedUntil(params: {
       if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
         return false;
       }
-      const now = Date.now();
+      const now = asDateTimestampMs(Date.now());
+      if (now === undefined) {
+        return false;
+      }
       previousStats = freshStore.usageStats?.[profileId];
       updateTime = now;
-      const existingBlockedUntil = previousStats?.blockedUntil;
-      const activeBlockedUntil =
-        typeof existingBlockedUntil === "number" &&
-        Number.isFinite(existingBlockedUntil) &&
-        existingBlockedUntil > now
-          ? existingBlockedUntil
-          : 0;
+      const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
       nextStats = {
         ...previousStats,
         blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
@@ -876,15 +879,12 @@ export async function markAuthProfileBlockedUntil(params: {
     return;
   }
 
-  const now = Date.now();
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined) {
+    return;
+  }
   previousStats = store.usageStats?.[profileId];
-  const existingBlockedUntil = previousStats?.blockedUntil;
-  const activeBlockedUntil =
-    typeof existingBlockedUntil === "number" &&
-    Number.isFinite(existingBlockedUntil) &&
-    existingBlockedUntil > now
-      ? existingBlockedUntil
-      : 0;
+  const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
   nextStats = {
     ...previousStats,
     blockedUntil: Math.max(activeBlockedUntil, blockedUntil),

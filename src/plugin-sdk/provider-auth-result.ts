@@ -8,6 +8,7 @@ import {
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
+import { asDateTimestampMs } from "../shared/number-coercion.js";
 
 function normalizeAgentModelConfigForAuthResult(value: unknown): unknown {
   if (typeof value === "string") {
@@ -140,13 +141,14 @@ export function buildOauthProviderAuthResult(params: {
     profilePrefix: params.profilePrefix,
     profileName: params.profileName ?? email,
   });
+  const expires = asDateTimestampMs(params.expires);
 
   const credential: AuthProfileCredential = {
     type: "oauth",
     provider: params.providerId,
     access: params.access,
     ...(params.refresh ? { refresh: params.refresh } : {}),
-    ...(Number.isFinite(params.expires) ? { expires: params.expires as number } : {}),
+    ...(expires !== undefined ? { expires } : {}),
     ...(email ? { email } : {}),
     ...(displayName ? { displayName } : {}),
     ...params.credentialExtra,
