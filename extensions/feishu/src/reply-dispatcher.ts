@@ -409,9 +409,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
-  const updateStreamingStatusLine = (nextStatusLine: string) => {
+  const updateStreamingStatusLine = (
+    nextStatusLine: string,
+    options?: { startIfNeeded?: boolean },
+  ) => {
     statusLine = nextStatusLine;
-    if (!streaming?.isActive() && !streamingStartPromise && renderMode !== "card") {
+    const hasStreamingSession = Boolean(streaming?.isActive() || streamingStartPromise);
+    if (!hasStreamingSession && (options?.startIfNeeded === false || renderMode !== "card")) {
       return;
     }
     startStreaming();
@@ -536,9 +540,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
             }),
           );
+        const streamingCardEnabledForReplyKind = streamingEnabled && info?.kind === "final";
         const useCard =
           hasText &&
-          (renderMode === "card" ||
+          (streamingCardEnabledForReplyKind ||
+            renderMode === "card" ||
             (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
             (renderMode === "auto" && shouldUseCard(text)));
         const skipTextForDuplicateFinal =
@@ -580,7 +586,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
           }
 
-          if (streaming?.isActive()) {
+          const shouldStreamText = info?.kind === "block" || info?.kind === "final";
+          if (streaming?.isActive() && shouldStreamText) {
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
@@ -684,6 +691,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!cleaned) {
               return;
             }
+            startStreaming();
             queueStreamingUpdate(cleaned, {
               dedupeWithLastPartial: true,
               mode: "snapshot",
@@ -729,7 +737,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onAssistantMessageStart: streamingEnabled
         ? () => {
-            updateStreamingStatusLine("");
+            updateStreamingStatusLine("", { startIfNeeded: false });
           }
         : undefined,
       onCompactionStart: streamingEnabled
