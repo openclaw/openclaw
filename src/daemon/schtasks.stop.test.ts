@@ -32,7 +32,12 @@ vi.mock("../utils.js", async () => {
   };
 });
 
-const { restartScheduledTask, stopScheduledTask } = await import("./schtasks.js");
+const {
+  restartScheduledTask,
+  resumeScheduledTaskAutoStartAfterUpdate,
+  stopScheduledTask,
+  suspendScheduledTaskAutoStartForUpdate,
+} = await import("./schtasks.js");
 const GATEWAY_PORT = 18789;
 const SUCCESS_RESPONSE = { code: 0, stdout: "", stderr: "" } as const;
 
@@ -108,6 +113,113 @@ afterEach(() => {
 });
 
 describe("Scheduled Task stop/restart cleanup", () => {
+  it("can suspend and resume Scheduled Task autostart without stopping the running task", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        {
+          ...SUCCESS_RESPONSE,
+          stdout: "<Task><Settings><Enabled>true</Enabled></Settings></Task>",
+        },
+        { ...SUCCESS_RESPONSE },
+      );
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(true);
+
+      pushSuccessfulSchtasksResponses(3);
+
+      await expect(resumeScheduledTaskAutoStartAfterUpdate(env)).resolves.toBe(true);
+
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway", "/XML"],
+        ["/Change", "/TN", "OpenClaw Gateway", "/DISABLE"],
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway"],
+        ["/Change", "/TN", "OpenClaw Gateway", "/ENABLE"],
+      ]);
+      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(inspectPortUsage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not change Scheduled Task state when the task is not registered", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        {
+          code: 1,
+          stdout: "",
+          stderr: "ERROR: The system cannot find the file specified.",
+        },
+      );
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(false);
+
+      expect(schtasksCalls).toEqual([["/Query"], ["/Query", "/TN", "OpenClaw Gateway", "/XML"]]);
+    });
+  });
+
+  it("does not change Scheduled Task state when schtasks is unavailable", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push({
+        code: 1,
+        stdout: "",
+        stderr: "ERROR: Access is denied.",
+      });
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(false);
+
+      expect(schtasksCalls).toEqual([["/Query"]]);
+    });
+  });
+
+  it("does not resume a Scheduled Task that was already disabled", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        {
+          ...SUCCESS_RESPONSE,
+          stdout:
+            "<Task><Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers><Settings><Enabled>false</Enabled></Settings></Task>",
+        },
+      );
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(false);
+
+      expect(schtasksCalls).toEqual([["/Query"], ["/Query", "/TN", "OpenClaw Gateway", "/XML"]]);
+    });
+  });
+
+  it("does not resume when Scheduled Task enabled state is unavailable", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      schtasksResponses.push({ ...SUCCESS_RESPONSE }, { ...SUCCESS_RESPONSE, stdout: "<Task />" });
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(false);
+
+      expect(schtasksCalls).toEqual([["/Query"], ["/Query", "/TN", "OpenClaw Gateway", "/XML"]]);
+    });
+  });
+
+  it("reads NUL-separated Scheduled Task XML enabled state", async () => {
+    await withPreparedGatewayTask(async ({ env }) => {
+      const xml = "<Task><Settings><Enabled>true</Enabled></Settings></Task>";
+      schtasksResponses.push(
+        { ...SUCCESS_RESPONSE },
+        { ...SUCCESS_RESPONSE, stdout: `\uFEFF${xml.split("").join("\u0000")}` },
+        { ...SUCCESS_RESPONSE },
+      );
+
+      await expect(suspendScheduledTaskAutoStartForUpdate(env)).resolves.toBe(true);
+
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway", "/XML"],
+        ["/Change", "/TN", "OpenClaw Gateway", "/DISABLE"],
+      ]);
+    });
+  });
+
   it("kills lingering verified gateway listeners after schtasks stop", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(3);

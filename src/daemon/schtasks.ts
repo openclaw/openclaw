@@ -1280,6 +1280,63 @@ function isTaskNotRunning(res: { stdout: string; stderr: string; code: number })
   return detail.includes("not running");
 }
 
+function parseScheduledTaskXmlEnabled(output: string): boolean | null {
+  const normalizedOutput = output.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
+  const settings = /<Settings(?:\s[^>]*)?>([\s\S]*?)<\/Settings>/iu.exec(normalizedOutput);
+  const match = settings?.[1] ? /<Enabled>\s*(true|false)\s*<\/Enabled>/iu.exec(settings[1]) : null;
+  if (!match?.[1]) {
+    return null;
+  }
+  return match[1].toLowerCase() === "true";
+}
+
+async function changeScheduledTaskEnabledState(params: {
+  env: GatewayServiceEnv;
+  enabled: boolean;
+}): Promise<boolean> {
+  try {
+    await assertSchtasksAvailable();
+  } catch (err) {
+    if (!params.enabled) {
+      return false;
+    }
+    throw err;
+  }
+  const taskName = resolveTaskName(params.env);
+  if (params.enabled) {
+    if (!(await isRegisteredScheduledTask(params.env))) {
+      return false;
+    }
+  } else {
+    const query = await execSchtasks(["/Query", "/TN", taskName, "/XML"]);
+    if (query.code !== 0) {
+      return false;
+    }
+    if (parseScheduledTaskXmlEnabled(query.stdout) !== true) {
+      return false;
+    }
+  }
+  const action = params.enabled ? "/ENABLE" : "/DISABLE";
+  const res = await execSchtasks(["/Change", "/TN", taskName, action]);
+  if (res.code !== 0) {
+    const detail = (res.stderr || res.stdout).trim() || "unknown error";
+    throw new Error(`schtasks ${params.enabled ? "enable" : "disable"} failed: ${detail}`);
+  }
+  return true;
+}
+
+export async function suspendScheduledTaskAutoStartForUpdate(
+  env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+): Promise<boolean> {
+  return await changeScheduledTaskEnabledState({ env, enabled: false });
+}
+
+export async function resumeScheduledTaskAutoStartAfterUpdate(
+  env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+): Promise<boolean> {
+  return await changeScheduledTaskEnabledState({ env, enabled: true });
+}
+
 export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
   try {
