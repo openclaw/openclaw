@@ -17,6 +17,12 @@ type SkillResearchAgentContext = {
 
 const log = createSubsystemLogger("skills/research");
 
+function buildAutoCaptureUpdateContent(existingSkill: string, capturedContent: string): string {
+  return [existingSkill.trimEnd(), "", "## Captured Update", "", capturedContent.trim(), ""].join(
+    "\n",
+  );
+}
+
 export async function runSkillResearchAutoCapture(params: {
   event: SkillResearchAgentEndEvent;
   ctx: SkillResearchAgentContext;
@@ -73,7 +79,7 @@ export async function runSkillResearchAutoCapture(params: {
             config: params.config,
             agentId: params.ctx.agentId,
             skillName: proposal.skillName,
-            content: proposal.content,
+            content: buildAutoCaptureUpdateContent(existingSkill, proposal.content),
             createdBy: "skill-workshop",
             goal: proposal.goal,
             evidence: proposal.evidence,
