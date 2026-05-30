@@ -13,6 +13,8 @@ import { clearCodexAppServerBinding, type CodexAppServerThreadBinding } from "./
 // thread that is already too close to the server-side window for the next turn.
 const CODEX_APP_SERVER_NATIVE_THREAD_FALLBACK_MAX_TOKENS = 300_000;
 const CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS = 20_000;
+const CODEX_APP_SERVER_NATIVE_THREAD_MIN_PROMPT_BUDGET_TOKENS = 8_000;
+const CODEX_APP_SERVER_NATIVE_THREAD_MIN_PROMPT_BUDGET_RATIO = 0.5;
 const CODEX_APP_SERVER_BYTE_UNITS: Record<string, number> = {
   b: 1,
   k: 1024,
@@ -250,7 +252,15 @@ function resolveCodexAppServerNativeThreadTokenFuse(params: {
       : 0;
   const contextWindow =
     params.modelContextWindow ?? CODEX_APP_SERVER_NATIVE_THREAD_FALLBACK_MAX_TOKENS;
-  return Math.max(1, contextWindow - params.reserveTokens - projectedTurnTokens);
+  const minPromptBudget = Math.min(
+    CODEX_APP_SERVER_NATIVE_THREAD_MIN_PROMPT_BUDGET_TOKENS,
+    Math.max(1, Math.floor(contextWindow * CODEX_APP_SERVER_NATIVE_THREAD_MIN_PROMPT_BUDGET_RATIO)),
+  );
+  const effectiveReserveTokens = Math.min(
+    params.reserveTokens,
+    Math.max(0, contextWindow - minPromptBudget),
+  );
+  return Math.max(1, contextWindow - effectiveReserveTokens - projectedTurnTokens);
 }
 
 function maxFiniteNumber(values: Array<number | undefined>): number | undefined {
