@@ -1,18 +1,27 @@
 import { randomUUID } from "node:crypto";
 import {
+  WORKBOARD_DIAGNOSTIC_KINDS,
+  WORKBOARD_DIAGNOSTIC_SEVERITIES,
   WORKBOARD_EXECUTION_ENGINES,
   WORKBOARD_EXECUTION_MODES,
   WORKBOARD_EXECUTION_STATUSES,
   WORKBOARD_ATTEMPT_STATUSES,
   WORKBOARD_EVENT_KINDS,
   WORKBOARD_LINK_TYPES,
+  WORKBOARD_NOTIFICATION_KINDS,
   WORKBOARD_PRIORITIES,
   WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
   WORKBOARD_TEMPLATE_IDS,
   type WorkboardCard,
+  type WorkboardArtifact,
   type WorkboardAttemptStatus,
+  type WorkboardClaim,
   type WorkboardComment,
+  type WorkboardDiagnostic,
+  type WorkboardDiagnosticAction,
+  type WorkboardDiagnosticKind,
+  type WorkboardDiagnosticSeverity,
   type WorkboardEvent,
   type WorkboardEventKind,
   type WorkboardExecution,
@@ -22,6 +31,8 @@ import {
   type WorkboardLink,
   type WorkboardLinkType,
   type WorkboardMetadata,
+  type WorkboardNotification,
+  type WorkboardNotificationKind,
   type WorkboardPriority,
   type WorkboardProof,
   type WorkboardProofStatus,
@@ -37,7 +48,14 @@ const MAX_CARD_ATTEMPTS = 30;
 const MAX_CARD_COMMENTS = 50;
 const MAX_CARD_LINKS = 50;
 const MAX_CARD_PROOF = 40;
+const MAX_CARD_ARTIFACTS = 40;
+const MAX_CARD_DIAGNOSTICS = 12;
+const MAX_CARD_NOTIFICATIONS = 20;
 const MAX_CARD_METADATA_BYTES = 24 * 1024;
+const DEFAULT_CLAIM_TTL_MS = 30 * 60 * 1000;
+const READY_STRANDED_MS = 60 * 60 * 1000;
+const RUNNING_HEARTBEAT_STALE_MS = 20 * 60 * 1000;
+const BLOCKED_TOO_LONG_MS = 24 * 60 * 60 * 1000;
 
 export type PersistedWorkboardCard = {
   version: 1;
@@ -82,6 +100,39 @@ export type WorkboardProofInput = {
   command?: unknown;
   url?: unknown;
   note?: unknown;
+};
+export type WorkboardArtifactInput = {
+  label?: unknown;
+  url?: unknown;
+  path?: unknown;
+  mimeType?: unknown;
+};
+export type WorkboardClaimInput = {
+  ownerId?: unknown;
+  token?: unknown;
+  ttlSeconds?: unknown;
+};
+export type WorkboardHeartbeatInput = {
+  token?: unknown;
+  ownerId?: unknown;
+  note?: unknown;
+};
+export type WorkboardBulkInput = {
+  ids?: unknown;
+  patch?: unknown;
+  archived?: unknown;
+};
+export type WorkboardMutationScope = {
+  ownerId?: unknown;
+  token?: unknown;
+};
+
+export type WorkboardDiagnosticsResult = {
+  diagnostics: Array<{
+    card: WorkboardCard;
+    diagnostics: WorkboardDiagnostic[];
+  }>;
+  count: number;
 };
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -410,6 +461,154 @@ function normalizeProof(value: unknown): WorkboardProof | null {
   };
 }
 
+function normalizeArtifact(value: unknown): WorkboardArtifact | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = normalizeOptionalString(record.id) ?? randomUUID();
+  const createdAt = normalizeTimestamp(record.createdAt, Date.now());
+  const label = normalizeBoundedString(record.label, undefined, 160, "artifact label");
+  const url = normalizeBoundedString(record.url, undefined, 2000, "artifact URL");
+  const artifactPath = normalizeBoundedString(record.path, undefined, 2000, "artifact path");
+  const mimeType = normalizeBoundedString(record.mimeType, undefined, 160, "artifact MIME type");
+  if (!url && !artifactPath) {
+    return null;
+  }
+  return {
+    id,
+    createdAt,
+    ...(label ? { label } : {}),
+    ...(url ? { url } : {}),
+    ...(artifactPath ? { path: artifactPath } : {}),
+    ...(mimeType ? { mimeType } : {}),
+  };
+}
+
+function normalizeClaim(value: unknown, fallback?: WorkboardClaim): WorkboardClaim | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback;
+  }
+  const record = value as Record<string, unknown>;
+  const ownerId = normalizeBoundedString(record.ownerId, fallback?.ownerId, 120, "claim owner");
+  const token = normalizeBoundedString(record.token, fallback?.token, 160, "claim token");
+  const claimedAt = normalizeTimestamp(record.claimedAt, fallback?.claimedAt ?? Date.now());
+  const lastHeartbeatAt = normalizeTimestamp(
+    record.lastHeartbeatAt,
+    fallback?.lastHeartbeatAt ?? claimedAt,
+  );
+  const expiresAt = normalizeTimestamp(record.expiresAt, fallback?.expiresAt ?? 0);
+  if (!ownerId || !token || !claimedAt || !lastHeartbeatAt) {
+    return undefined;
+  }
+  return {
+    ownerId,
+    token,
+    claimedAt,
+    lastHeartbeatAt,
+    ...(expiresAt ? { expiresAt } : {}),
+  };
+}
+
+function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAction | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const kind =
+    record.kind === "claim" ||
+    record.kind === "unblock" ||
+    record.kind === "reassign" ||
+    record.kind === "add_proof" ||
+    record.kind === "open_session"
+      ? record.kind
+      : undefined;
+  const label = normalizeBoundedString(record.label, undefined, 120, "diagnostic action label");
+  return kind && label ? { kind, label } : null;
+}
+
+function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const kind = WORKBOARD_DIAGNOSTIC_KINDS.includes(record.kind as WorkboardDiagnosticKind)
+    ? (record.kind as WorkboardDiagnosticKind)
+    : undefined;
+  const severity = WORKBOARD_DIAGNOSTIC_SEVERITIES.includes(
+    record.severity as WorkboardDiagnosticSeverity,
+  )
+    ? (record.severity as WorkboardDiagnosticSeverity)
+    : "warning";
+  const title = normalizeBoundedString(record.title, undefined, 160, "diagnostic title");
+  const detail = normalizeBoundedString(record.detail, undefined, 800, "diagnostic detail");
+  const firstSeenAt = normalizeTimestamp(record.firstSeenAt, Date.now());
+  const lastSeenAt = normalizeTimestamp(record.lastSeenAt, firstSeenAt);
+  if (!kind || !title || !detail) {
+    return null;
+  }
+  return {
+    kind,
+    severity,
+    title,
+    detail,
+    firstSeenAt,
+    lastSeenAt,
+    count:
+      typeof record.count === "number" && Number.isFinite(record.count)
+        ? Math.max(1, Math.trunc(record.count))
+        : 1,
+    actions: Array.isArray(record.actions)
+      ? record.actions
+          .map(normalizeDiagnosticAction)
+          .filter((action): action is WorkboardDiagnosticAction => action !== null)
+          .slice(0, 4)
+      : [],
+  };
+}
+
+function normalizeNotification(value: unknown): WorkboardNotification | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const id = normalizeOptionalString(record.id) ?? randomUUID();
+  const kind = WORKBOARD_NOTIFICATION_KINDS.includes(record.kind as WorkboardNotificationKind)
+    ? (record.kind as WorkboardNotificationKind)
+    : undefined;
+  const createdAt = normalizeTimestamp(record.createdAt, Date.now());
+  const message = normalizeBoundedString(record.message, undefined, 240, "notification message");
+  if (!kind || !message) {
+    return null;
+  }
+  const sessionKey = normalizeBoundedString(record.sessionKey, undefined, 240, "session key");
+  const runId = normalizeBoundedString(record.runId, undefined, 120, "run id");
+  return {
+    id,
+    kind,
+    createdAt,
+    message,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+  };
+}
+
+function normalizeProofInput(input: WorkboardProofInput, now: number): WorkboardProof {
+  const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
+  const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
+  const url = normalizeBoundedString(input.url, undefined, 2000, "proof URL");
+  const note = normalizeBoundedString(input.note, undefined, 2000, "proof note");
+  return {
+    id: randomUUID(),
+    status: normalizeProofStatus(input.status, "unknown"),
+    createdAt: now,
+    ...(label ? { label } : {}),
+    ...(command ? { command } : {}),
+    ...(url ? { url } : {}),
+    ...(note ? { note } : {}),
+  };
+}
+
 function normalizeMetadata(value: unknown, fallback: WorkboardMetadata = {}): WorkboardMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return trimMetadataToBudget(fallback);
@@ -446,6 +645,29 @@ function normalizeMetadata(value: unknown, fallback: WorkboardMetadata = {}): Wo
           .filter((proof): proof is WorkboardProof => proof !== null)
           .slice(-MAX_CARD_PROOF)
       : fallback.proof,
+    artifacts: Array.isArray(record.artifacts)
+      ? record.artifacts
+          .map(normalizeArtifact)
+          .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
+          .slice(-MAX_CARD_ARTIFACTS)
+      : fallback.artifacts,
+    claim: Object.hasOwn(record, "claim")
+      ? record.claim
+        ? normalizeClaim(record.claim, fallback.claim)
+        : undefined
+      : fallback.claim,
+    diagnostics: Array.isArray(record.diagnostics)
+      ? record.diagnostics
+          .map(normalizeDiagnostic)
+          .filter((diagnostic): diagnostic is WorkboardDiagnostic => diagnostic !== null)
+          .slice(-MAX_CARD_DIAGNOSTICS)
+      : fallback.diagnostics,
+    notifications: Array.isArray(record.notifications)
+      ? record.notifications
+          .map(normalizeNotification)
+          .filter((notification): notification is WorkboardNotification => notification !== null)
+          .slice(-MAX_CARD_NOTIFICATIONS)
+      : fallback.notifications,
     templateId: normalizeTemplateId(record.templateId) ?? fallback.templateId,
     archivedAt: hasArchivedAt
       ? normalizeTimestamp(record.archivedAt, 0) || undefined
@@ -529,6 +751,10 @@ function removeUndefinedMetadataFields(metadata: WorkboardMetadata): WorkboardMe
     "comments",
     "links",
     "proof",
+    "artifacts",
+    "claim",
+    "diagnostics",
+    "notifications",
     "templateId",
     "archivedAt",
     "stale",
@@ -544,6 +770,19 @@ function removeUndefinedMetadataFields(metadata: WorkboardMetadata): WorkboardMe
     }
   }
   return next;
+}
+
+function clearDiagnostics(
+  metadata: WorkboardMetadata | undefined,
+  kinds: readonly WorkboardDiagnosticKind[],
+): WorkboardMetadata {
+  if (!metadata?.diagnostics) {
+    return metadata ?? {};
+  }
+  return {
+    ...metadata,
+    diagnostics: metadata.diagnostics.filter((entry) => !kinds.includes(entry.kind)),
+  };
 }
 
 function metadataIsEmpty(metadata: WorkboardMetadata | undefined): boolean {
@@ -568,8 +807,17 @@ function trimMetadataToBudget(metadata: WorkboardMetadata): WorkboardMetadata {
     const currentSize = metadataByteSize(next);
     if (next.attempts?.length) {
       next = removeUndefinedMetadataFields({ ...next, attempts: dropFirst(next.attempts) });
+    } else if (next.diagnostics?.length) {
+      next = removeUndefinedMetadataFields({ ...next, diagnostics: dropFirst(next.diagnostics) });
+    } else if (next.notifications?.length) {
+      next = removeUndefinedMetadataFields({
+        ...next,
+        notifications: dropFirst(next.notifications),
+      });
     } else if (next.proof?.length) {
       next = removeUndefinedMetadataFields({ ...next, proof: dropFirst(next.proof) });
+    } else if (next.artifacts?.length) {
+      next = removeUndefinedMetadataFields({ ...next, artifacts: dropFirst(next.artifacts) });
     } else if (next.links?.length) {
       next = removeUndefinedMetadataFields({ ...next, links: dropFirst(next.links) });
     } else if (next.comments?.length) {
@@ -703,6 +951,12 @@ function updateEvent(
       ...(cardSessionKey(next) ? { sessionKey: cardSessionKey(next) } : {}),
     };
   }
+  if (existing.metadata?.claim?.token !== next.metadata?.claim?.token) {
+    return { kind: "claimed" };
+  }
+  if (existing.metadata?.claim?.lastHeartbeatAt !== next.metadata?.claim?.lastHeartbeatAt) {
+    return { kind: "heartbeat" };
+  }
   if (
     existing.execution?.status !== next.execution?.status ||
     existing.execution?.engine !== next.execution?.engine ||
@@ -752,6 +1006,22 @@ function updateEvent(
   ) {
     return { kind: "proof_added" };
   }
+  if (
+    (existing.metadata?.artifacts?.length ?? 0) !== (next.metadata?.artifacts?.length ?? 0) ||
+    latestMetadataIdChanged(existing.metadata?.artifacts, next.metadata?.artifacts)
+  ) {
+    return { kind: "artifact_added" };
+  }
+  if ((existing.metadata?.diagnostics?.length ?? 0) !== (next.metadata?.diagnostics?.length ?? 0)) {
+    return { kind: "diagnostic" };
+  }
+  if (
+    (existing.metadata?.notifications?.length ?? 0) !==
+      (next.metadata?.notifications?.length ?? 0) ||
+    latestMetadataIdChanged(existing.metadata?.notifications, next.metadata?.notifications)
+  ) {
+    return { kind: "notification" };
+  }
   if (!existing.metadata?.archivedAt && next.metadata?.archivedAt) {
     return { kind: "archived" };
   }
@@ -786,6 +1056,228 @@ function removeUndefinedCardFields(card: WorkboardCard): WorkboardCard {
     delete next.metadata;
   }
   return next;
+}
+
+function assertCanMutateClaimedCard(
+  card: WorkboardCard,
+  scope: WorkboardMutationScope | undefined,
+) {
+  if (!scope) {
+    return;
+  }
+  const claim = card.metadata?.claim;
+  if (!claim) {
+    return;
+  }
+  const ownerId = normalizeOptionalString(scope.ownerId);
+  const token = normalizeOptionalString(scope.token);
+  if (claim.ownerId === ownerId || (token && claim.token === token)) {
+    return;
+  }
+  throw new Error(`card is claimed by ${claim.ownerId}.`);
+}
+
+function diagnostic(
+  params: {
+    kind: WorkboardDiagnosticKind;
+    severity: WorkboardDiagnosticSeverity;
+    title: string;
+    detail: string;
+    actions: WorkboardDiagnosticAction[];
+  },
+  now: number,
+): WorkboardDiagnostic {
+  return {
+    ...params,
+    firstSeenAt: now,
+    lastSeenAt: now,
+    count: 1,
+  };
+}
+
+function mergeDiagnostics(
+  previous: readonly WorkboardDiagnostic[] | undefined,
+  next: WorkboardDiagnostic[],
+): WorkboardDiagnostic[] {
+  const byKind = new Map(previous?.map((entry) => [entry.kind, entry]));
+  return next.map((entry) => {
+    const prior = byKind.get(entry.kind);
+    return prior
+      ? {
+          ...entry,
+          firstSeenAt: prior.firstSeenAt,
+          count: prior.count + 1,
+        }
+      : entry;
+  });
+}
+
+function computeCardDiagnostics(card: WorkboardCard, now: number): WorkboardDiagnostic[] {
+  const diagnostics: WorkboardDiagnostic[] = [];
+  const claim = card.metadata?.claim;
+  const lastHeartbeatAt = claim?.lastHeartbeatAt ?? card.execution?.updatedAt ?? card.updatedAt;
+  if (
+    (card.status === "todo" || card.status === "backlog") &&
+    card.agentId &&
+    now - card.updatedAt > READY_STRANDED_MS
+  ) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "stranded_ready",
+          severity: "warning",
+          title: "Assigned card is waiting",
+          detail: "The card has an assigned agent but has not been claimed recently.",
+          actions: [{ kind: "claim", label: "Claim card" }],
+        },
+        now,
+      ),
+    );
+  }
+  if (card.status === "running" && now - lastHeartbeatAt > RUNNING_HEARTBEAT_STALE_MS) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "running_without_heartbeat",
+          severity: "error",
+          title: "Running card has no recent heartbeat",
+          detail: "The linked run or claim has not reported recent activity.",
+          actions: [
+            { kind: "open_session", label: "Open session" },
+            { kind: "reassign", label: "Reassign card" },
+          ],
+        },
+        now,
+      ),
+    );
+  }
+  if (card.status === "blocked" && now - card.updatedAt > BLOCKED_TOO_LONG_MS) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "blocked_too_long",
+          severity: "warning",
+          title: "Blocked card needs attention",
+          detail: "The card has been blocked for more than a day.",
+          actions: [{ kind: "unblock", label: "Move to todo" }],
+        },
+        now,
+      ),
+    );
+  }
+  if ((card.metadata?.failureCount ?? 0) >= 2) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "repeated_failures",
+          severity: "error",
+          title: "Repeated run failures",
+          detail: "Multiple attempts failed or blocked on this card.",
+          actions: [{ kind: "reassign", label: "Reassign card" }],
+        },
+        now,
+      ),
+    );
+  }
+  if (
+    card.status === "done" &&
+    !(card.metadata?.proof?.length || card.metadata?.artifacts?.length)
+  ) {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "missing_proof",
+          severity: "warning",
+          title: "Done card has no proof",
+          detail: "The card is marked done without proof or an attached artifact.",
+          actions: [{ kind: "add_proof", label: "Add proof" }],
+        },
+        now,
+      ),
+    );
+  }
+  if (card.sessionKey && !card.execution && card.status === "running") {
+    diagnostics.push(
+      diagnostic(
+        {
+          kind: "orphaned_session",
+          severity: "warning",
+          title: "Running card has only a loose session link",
+          detail: "The card is running but has no execution record for lifecycle handoff.",
+          actions: [{ kind: "open_session", label: "Open session" }],
+        },
+        now,
+      ),
+    );
+  }
+  return diagnostics;
+}
+
+function capText(value: string | undefined, max: number): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function buildWorkerContext(card: WorkboardCard): string {
+  const lines = [
+    `# Workboard card ${card.id}`,
+    `Title: ${card.title}`,
+    `Status: ${card.status}`,
+    `Priority: ${card.priority}`,
+    `Agent: ${card.agentId ?? "(default)"}`,
+  ];
+  if (card.notes) {
+    lines.push("", "## Notes", capText(card.notes, 4000) ?? "");
+  }
+  const attempts = card.metadata?.attempts?.slice(-8) ?? [];
+  if (attempts.length) {
+    lines.push("", "## Recent attempts");
+    for (const attempt of attempts) {
+      lines.push(
+        `- ${attempt.status} ${attempt.model ?? ""} ${attempt.error ? `error=${capText(attempt.error, 240)}` : ""}`.trim(),
+      );
+    }
+  }
+  const comments = card.metadata?.comments?.slice(-12) ?? [];
+  if (comments.length) {
+    lines.push("", "## Recent comments");
+    for (const comment of comments) {
+      lines.push(`- ${capText(comment.body, 400)}`);
+    }
+  }
+  const proof = card.metadata?.proof?.slice(-8) ?? [];
+  if (proof.length) {
+    lines.push("", "## Proof");
+    for (const entry of proof) {
+      lines.push(
+        `- ${entry.status}: ${capText(entry.label ?? entry.command ?? entry.url ?? entry.note, 400)}`,
+      );
+    }
+  }
+  const artifacts = card.metadata?.artifacts?.slice(-8) ?? [];
+  if (artifacts.length) {
+    lines.push("", "## Artifacts");
+    for (const artifact of artifacts) {
+      lines.push(`- ${capText(artifact.label ?? artifact.url ?? artifact.path, 400)}`);
+    }
+  }
+  const links = card.metadata?.links?.slice(-8) ?? [];
+  if (links.length) {
+    lines.push("", "## Links");
+    for (const link of links) {
+      lines.push(`- ${link.type}: ${link.title ?? link.url ?? link.targetCardId ?? ""}`);
+    }
+  }
+  const diagnostics = computeCardDiagnostics(card, Date.now());
+  if (diagnostics.length) {
+    lines.push("", "## Active diagnostics");
+    for (const entry of diagnostics) {
+      lines.push(`- ${entry.severity}: ${entry.title}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 export class WorkboardStore {
@@ -968,17 +1460,24 @@ export class WorkboardStore {
     return { deleted: await this.store.delete(id.trim()) };
   }
 
-  async addComment(id: string, input: WorkboardCommentInput): Promise<WorkboardCard> {
+  async addComment(
+    id: string,
+    input: WorkboardCommentInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
     const now = Date.now();
     const body = normalizeBoundedString(input.body, undefined, 2000, "comment body");
     if (!body) {
       throw new Error("comment body is required.");
     }
     const comment = { id: randomUUID(), body, createdAt: now };
-    return await this.updateMetadata(id, (existing) => ({
-      ...existing.metadata,
-      comments: [...(existing.metadata?.comments ?? []), comment].slice(-MAX_CARD_COMMENTS),
-    }));
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      return {
+        ...existing.metadata,
+        comments: [...(existing.metadata?.comments ?? []), comment].slice(-MAX_CARD_COMMENTS),
+      };
+    });
   }
 
   async addLink(id: string, input: WorkboardLinkInput): Promise<WorkboardCard> {
@@ -1003,25 +1502,205 @@ export class WorkboardStore {
     }));
   }
 
-  async addProof(id: string, input: WorkboardProofInput): Promise<WorkboardCard> {
+  async addProof(
+    id: string,
+    input: WorkboardProofInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
     const now = Date.now();
-    const label = normalizeBoundedString(input.label, undefined, 160, "proof label");
-    const command = normalizeBoundedString(input.command, undefined, 1000, "proof command");
-    const url = normalizeBoundedString(input.url, undefined, 2000, "proof URL");
-    const note = normalizeBoundedString(input.note, undefined, 2000, "proof note");
-    const proof: WorkboardProof = {
-      id: randomUUID(),
-      status: normalizeProofStatus(input.status, "unknown"),
-      createdAt: now,
-      ...(label ? { label } : {}),
-      ...(command ? { command } : {}),
-      ...(url ? { url } : {}),
-      ...(note ? { note } : {}),
-    };
-    return await this.updateMetadata(id, (existing) => ({
-      ...existing.metadata,
-      proof: [...(existing.metadata?.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-    }));
+    const proof = normalizeProofInput(input, now);
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+      return {
+        ...metadata,
+        proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
+      };
+    });
+  }
+
+  async addProofWithArtifact(
+    id: string,
+    proofInput: WorkboardProofInput,
+    artifactInput: WorkboardArtifactInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    const now = Date.now();
+    const proof = normalizeProofInput(proofInput, now);
+    const artifact = normalizeArtifact({ ...artifactInput, createdAt: now });
+    if (!artifact) {
+      throw new Error("artifact url or path is required.");
+    }
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+      return {
+        ...metadata,
+        proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
+        artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
+      };
+    });
+  }
+
+  async addArtifact(
+    id: string,
+    input: WorkboardArtifactInput,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    const artifact = normalizeArtifact({ ...input, createdAt: Date.now() });
+    if (!artifact) {
+      throw new Error("artifact url or path is required.");
+    }
+    return await this.updateMetadata(id, (existing) => {
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+      return {
+        ...metadata,
+        artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
+      };
+    });
+  }
+
+  async claim(
+    id: string,
+    input: WorkboardClaimInput,
+  ): Promise<{ card: WorkboardCard; token: string }> {
+    const now = Date.now();
+    const ownerId = normalizeBoundedString(input.ownerId, undefined, 120, "claim owner");
+    if (!ownerId) {
+      throw new Error("claim ownerId is required.");
+    }
+    const ttlSeconds =
+      typeof input.ttlSeconds === "number" && Number.isFinite(input.ttlSeconds)
+        ? Math.max(1, Math.trunc(input.ttlSeconds))
+        : undefined;
+    const token =
+      normalizeBoundedString(input.token, undefined, 160, "claim token") ?? randomUUID();
+    const expiresAt = now + (ttlSeconds ? ttlSeconds * 1000 : DEFAULT_CLAIM_TTL_MS);
+    const card = await this.updateMetadata(id, (existing) => {
+      const existingClaim = existing.metadata?.claim;
+      if (existingClaim && existingClaim.expiresAt && existingClaim.expiresAt > now) {
+        throw new Error(`card already claimed by ${existingClaim.ownerId}.`);
+      }
+      const metadata = clearDiagnostics(existing.metadata, ["stranded_ready"]);
+      return {
+        ...metadata,
+        claim: { ownerId, token, claimedAt: now, lastHeartbeatAt: now, expiresAt },
+      };
+    });
+    const next = await this.update(card.id, {
+      status: card.status === "backlog" || card.status === "todo" ? "running" : card.status,
+      agentId: card.agentId ?? ownerId,
+    });
+    return { card: next, token };
+  }
+
+  async heartbeat(id: string, input: WorkboardHeartbeatInput): Promise<WorkboardCard> {
+    const note = normalizeBoundedString(input.note, undefined, 400, "heartbeat note");
+    const card = await this.updateMetadata(id, (existing) => {
+      const claim = existing.metadata?.claim;
+      if (!claim) {
+        throw new Error("card is not claimed.");
+      }
+      const now = Math.max(Date.now(), claim.lastHeartbeatAt + 1);
+      const token = normalizeOptionalString(input.token);
+      const ownerId = normalizeOptionalString(input.ownerId);
+      if (token && token !== claim.token) {
+        throw new Error("claim token does not match.");
+      }
+      if (!token && ownerId && ownerId !== claim.ownerId) {
+        throw new Error("claim owner does not match.");
+      }
+      const nextClaim = {
+        ...claim,
+        lastHeartbeatAt: now,
+        expiresAt: claim.expiresAt
+          ? now +
+            Math.max(
+              1,
+              claim.expiresAt > claim.claimedAt
+                ? claim.expiresAt - claim.lastHeartbeatAt
+                : DEFAULT_CLAIM_TTL_MS,
+            )
+          : undefined,
+      };
+      const metadata = clearDiagnostics(existing.metadata, ["running_without_heartbeat"]);
+      return {
+        ...metadata,
+        claim: removeUndefinedMetadataFields({ claim: nextClaim }).claim,
+        comments: note
+          ? [...(metadata.comments ?? []), { id: randomUUID(), body: note, createdAt: now }].slice(
+              -MAX_CARD_COMMENTS,
+            )
+          : metadata.comments,
+      };
+    });
+    return card;
+  }
+
+  async releaseClaim(
+    id: string,
+    input: WorkboardHeartbeatInput & { status?: unknown } = {},
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      const status =
+        input.status === undefined
+          ? existing.status
+          : normalizeStatus(input.status, existing.status);
+      const claim = existing.metadata?.claim;
+      if (claim) {
+        const token = normalizeOptionalString(input.token);
+        const ownerId = normalizeOptionalString(input.ownerId);
+        if (token && token !== claim.token) {
+          throw new Error("claim token does not match.");
+        }
+        if (!token && ownerId && ownerId !== claim.ownerId) {
+          throw new Error("claim owner does not match.");
+        }
+      }
+      return await this.updateCard(id, {
+        status,
+        metadata: { ...existing.metadata, claim: undefined },
+      });
+    });
+  }
+
+  async unblock(id: string, scope?: WorkboardMutationScope): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card not found: ${id}`);
+      }
+      assertCanMutateClaimedCard(existing, scope);
+      const metadata = clearDiagnostics(existing.metadata, ["blocked_too_long"]);
+      return await this.updateCard(id, { status: "todo", metadata: { ...metadata, stale: null } });
+    });
+  }
+
+  async bulkUpdate(input: WorkboardBulkInput): Promise<{ cards: WorkboardCard[] }> {
+    const ids = Array.isArray(input.ids)
+      ? input.ids.filter((id): id is string => typeof id === "string" && id.trim() !== "")
+      : [];
+    if (ids.length === 0) {
+      throw new Error("ids are required.");
+    }
+    const patch =
+      input.patch && typeof input.patch === "object" && !Array.isArray(input.patch)
+        ? (input.patch as WorkboardCardPatch)
+        : {};
+    const cards: WorkboardCard[] = [];
+    for (const id of ids) {
+      const updated =
+        input.archived === undefined
+          ? await this.update(id, patch)
+          : await this.archive(id, input.archived);
+      cards.push(updated);
+    }
+    return { cards };
   }
 
   async archive(id: string, archived: unknown): Promise<WorkboardCard> {
@@ -1034,6 +1713,59 @@ export class WorkboardStore {
 
   async exportCards(): Promise<{ cards: WorkboardCard[]; exportedAt: number }> {
     return { cards: await this.list(), exportedAt: Date.now() };
+  }
+
+  async diagnostics(now = Date.now()): Promise<WorkboardDiagnosticsResult> {
+    const cards = await this.list();
+    const rows = cards.flatMap((card) => {
+      const diagnostics = computeCardDiagnostics(card, now);
+      return diagnostics.length ? [{ card, diagnostics }] : [];
+    });
+    return {
+      diagnostics: rows,
+      count: rows.reduce((total, row) => total + row.diagnostics.length, 0),
+    };
+  }
+
+  async refreshDiagnostics(now = Date.now()): Promise<WorkboardDiagnosticsResult> {
+    return await this.enqueueMutation(async () => {
+      const cards = await this.list();
+      const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
+      for (const card of cards) {
+        const latest = await this.get(card.id);
+        if (!latest) {
+          continue;
+        }
+        const diagnostics = mergeDiagnostics(
+          latest.metadata?.diagnostics,
+          computeCardDiagnostics(latest, now),
+        );
+        if (diagnostics.length === 0 && !latest.metadata?.diagnostics?.length) {
+          continue;
+        }
+        const metadata = trimMetadataToBudget({ ...latest.metadata, diagnostics });
+        const next = removeUndefinedCardFields({
+          ...latest,
+          metadata: metadataIsEmpty(metadata) ? undefined : metadata,
+        });
+        await this.store.register(next.id, { version: 1, card: next });
+        if (diagnostics.length > 0) {
+          rows.push({ card: next, diagnostics });
+        }
+      }
+      return {
+        diagnostics: rows,
+        count: rows.reduce((total, row) => total + row.diagnostics.length, 0),
+      };
+    });
+  }
+
+  async buildWorkerContext(id: string): Promise<string> {
+    const card = await this.get(id);
+    if (!card) {
+      throw new Error(`card not found: ${id}`);
+    }
+    return buildWorkerContext(card);
   }
 
   static open(

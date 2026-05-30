@@ -1102,6 +1102,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(result.ok).toBe(true);
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
+        agentId: "main",
         sessionFile: "/tmp/rotated-session.jsonl",
         sessionKey: TEST_SESSION_KEY,
       });
@@ -1576,6 +1577,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect(result.ok).toBe(true);
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
+        agentId: "main",
         sessionFile: TEST_SESSION_FILE,
         sessionKey: TEST_SESSION_KEY,
       });

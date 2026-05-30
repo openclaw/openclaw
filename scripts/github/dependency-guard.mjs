@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { appendFile, readFile } from "node:fs/promises";
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
 export const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
 export const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
@@ -89,63 +90,47 @@ function shellQuote(value) {
   return `'${sanitizeDisplayValue(value).replaceAll("'", "'\\''")}'`;
 }
 
+function* dependencyOverrideCandidates({ comments, expectedSha, newerThan }) {
+  if (!expectedSha) {
+    return;
+  }
+  const commandPattern = /^\/allow-dependencies-change(?:\s+(.+))?$/gimu;
+  for (const comment of comments.toReversed()) {
+    const body = comment.body ?? "";
+    for (const match of body.matchAll(commandPattern)) {
+      const reason = match[1]?.trim();
+      const login = comment.user?.login;
+      if (!login || !isCommentNewerThan(comment, newerThan)) {
+        continue;
+      }
+      yield {
+        login,
+        reason: reason ? sanitizeDisplayValue(reason) : null,
+        sha: expectedSha,
+        url: comment.html_url,
+      };
+    }
+  }
+}
+
 export function findDependencyOverrideCommand({
   comments,
   expectedSha,
   isSecurityMember,
   newerThan,
 }) {
-  if (!expectedSha) {
-    return null;
-  }
-  const commandPattern = /^\/allow-dependencies-change(?:\s+(.+))?$/gimu;
-  for (const comment of comments.toReversed()) {
-    const body = comment.body ?? "";
-    for (const match of body.matchAll(commandPattern)) {
-      const reason = match[1]?.trim();
-      const login = comment.user?.login;
-      if (!login || !isCommentNewerThan(comment, newerThan)) {
-        continue;
-      }
-      if (isSecurityMember(login)) {
-        return {
-          login,
-          reason: reason ? sanitizeDisplayValue(reason) : null,
-          sha: expectedSha,
-          url: comment.html_url,
-        };
-      }
+  for (const candidate of dependencyOverrideCandidates({ comments, expectedSha, newerThan })) {
+    if (isSecurityMember(candidate.login)) {
+      return candidate;
     }
   }
   return null;
 }
 
-export async function findDependencyOverrideCommandAsync({
-  comments,
-  expectedSha,
-  isSecurityMember,
-  newerThan,
-}) {
-  if (!expectedSha) {
-    return null;
-  }
-  const commandPattern = /^\/allow-dependencies-change(?:\s+(.+))?$/gimu;
-  for (const comment of comments.toReversed()) {
-    const body = comment.body ?? "";
-    for (const match of body.matchAll(commandPattern)) {
-      const reason = match[1]?.trim();
-      const login = comment.user?.login;
-      if (!login || !isCommentNewerThan(comment, newerThan)) {
-        continue;
-      }
-      if (await isSecurityMember(login)) {
-        return {
-          login,
-          reason: reason ? sanitizeDisplayValue(reason) : null,
-          sha: expectedSha,
-          url: comment.html_url,
-        };
-      }
+export async function findDependencyOverrideCommandAsync(input) {
+  for (const candidate of dependencyOverrideCandidates(input)) {
+    if (await input.isSecurityMember(candidate.login)) {
+      return candidate;
     }
   }
   return null;
@@ -318,47 +303,9 @@ function githubErrorBodyTooLarge(maxBytes) {
 }
 
 export async function readBoundedGitHubErrorText(response, maxBytes = GITHUB_ERROR_BODY_MAX_BYTES) {
-  const contentLength = Number(response.headers.get("content-length") ?? "");
-  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw githubErrorBodyTooLarge(maxBytes);
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks = [];
-  let totalBytes = 0;
-  let canceled = false;
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        break;
-      }
-
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        canceled = true;
-        await reader.cancel().catch(() => undefined);
-        throw githubErrorBodyTooLarge(maxBytes);
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-
-  return chunks.join("");
+  return await readBoundedResponseText(response, "GitHub error", maxBytes, {
+    createTooLargeError: () => githubErrorBodyTooLarge(maxBytes),
+  });
 }
 
 export function githubApi(token) {

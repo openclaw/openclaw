@@ -20,7 +20,6 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
-import { resolveSkillSource } from "../loading/source.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type {
   SkillEntry,
@@ -29,6 +28,11 @@ import type {
   SkillsInstallPreferences,
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import {
+  buildSkillIndexEntries,
+  normalizeSkillIndexName,
+  type SkillIndexEntry,
+} from "./skill-index.js";
 
 export type SkillStatusConfigCheck = RequirementConfigCheck;
 
@@ -74,8 +78,55 @@ export type SkillStatusReport = {
   skills: SkillStatusEntry[];
 };
 
-function resolveSkillKey(entry: SkillEntry): string {
-  return entry.metadata?.skillKey ?? entry.skill.name;
+export function resolveSkillStatusEntry(
+  skills: readonly SkillStatusEntry[],
+  requestedName: string,
+): SkillStatusEntry | null {
+  const raw = requestedName.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const lower = raw.toLowerCase();
+  const normalized = normalizeSkillIndexName(raw);
+  let caseInsensitiveMatch: SkillStatusEntry | null = null;
+  let caseInsensitiveMatches = 0;
+  let normalizedMatch: SkillStatusEntry | null = null;
+  let normalizedMatches = 0;
+
+  for (const skill of skills) {
+    if (skill.name === raw || skill.skillKey === raw) {
+      return skill;
+    }
+
+    const nameLower = skill.name.toLowerCase();
+    const keyLower = skill.skillKey.toLowerCase();
+    if (nameLower === lower || keyLower === lower) {
+      caseInsensitiveMatch = skill;
+      caseInsensitiveMatches += 1;
+      continue;
+    }
+
+    if (
+      normalized &&
+      (normalizeSkillIndexName(skill.name) === normalized ||
+        normalizeSkillIndexName(skill.skillKey) === normalized)
+    ) {
+      normalizedMatch = skill;
+      normalizedMatches += 1;
+    }
+  }
+
+  if (caseInsensitiveMatches > 1) {
+    return null;
+  }
+  if (caseInsensitiveMatches === 1) {
+    return caseInsensitiveMatch;
+  }
+  if (normalizedMatches === 1) {
+    return normalizedMatch;
+  }
+  return null;
 }
 
 function selectPreferredInstallSpec(
@@ -186,46 +237,27 @@ function normalizeInstallOptions(
   return [toOption(preferred.spec, preferred.index)];
 }
 
-function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
-  if (entry.exposure) {
-    return (
-      entry.exposure.includeInAvailableSkillsPrompt ||
-      !("includeInAvailableSkillsPrompt" in entry.exposure)
-    );
-  }
-  if (entry.invocation) {
-    return !entry.invocation.disableModelInvocation;
-  }
-  return !entry.skill.disableModelInvocation;
-}
-
-function isSkillUserInvocable(entry: SkillEntry): boolean {
-  if (entry.exposure) {
-    return entry.exposure.userInvocable || !("userInvocable" in entry.exposure);
-  }
-  if (entry.invocation) {
-    return entry.invocation.userInvocable || !("userInvocable" in entry.invocation);
-  }
-  return true;
-}
+type BuildSkillStatusContext = {
+  config?: OpenClawConfig;
+  prefs: SkillsInstallPreferences;
+  eligibility?: SkillEligibilityContext;
+  allowBundled: ReadonlySet<string> | undefined;
+  agentSkillFilter?: string[];
+  workspaceDir: string;
+  clawhubLockRead: ClawHubSkillsLockfileStatusRead;
+};
 
 function buildSkillStatus(
-  entry: SkillEntry,
-  config?: OpenClawConfig,
-  prefs?: SkillsInstallPreferences,
-  eligibility?: SkillEligibilityContext,
-  bundledNames?: Set<string>,
-  agentSkillFilter?: string[],
-  workspaceDir?: string,
-  clawhubLockRead?: ClawHubSkillsLockfileStatusRead,
+  indexed: SkillIndexEntry,
+  context: BuildSkillStatusContext,
 ): SkillStatusEntry {
-  const skillKey = resolveSkillKey(entry);
+  const entry = indexed.entry;
+  const skillKey = indexed.skillKey;
+  const { config, prefs, eligibility, allowBundled, agentSkillFilter, workspaceDir } = context;
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
-  const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
-  const blockedByAgentFilter =
-    agentSkillFilter !== undefined && !agentSkillFilter.includes(entry.skill.name);
+  const blockedByAgentFilter = agentSkillFilter !== undefined && !indexed.agentAllowed;
   const always = entry.metadata?.always === true;
   const isEnvSatisfied = (envName: string) =>
     Boolean(
@@ -234,10 +266,8 @@ function buildSkillStatus(
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
-  const skillSource = resolveSkillSource(entry.skill);
-  const bundled =
-    skillSource === "openclaw-bundled" ||
-    (skillSource === "unknown" && bundledNames?.has(entry.skill.name) === true);
+  const skillSource = indexed.source;
+  const bundled = indexed.bundled;
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
@@ -250,7 +280,7 @@ function buildSkillStatus(
     });
   const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
   const availableToAgent = eligible && !blockedByAgentFilter;
-  const userInvocable = isSkillUserInvocable(entry);
+  const userInvocable = indexed.userInvocable;
 
   const clawhub =
     workspaceDir && !bundled
@@ -258,7 +288,7 @@ function buildSkillStatus(
           workspaceDir,
           skillDir: entry.skill.baseDir,
           skillKey,
-          lockRead: clawhubLockRead,
+          lockRead: context.clawhubLockRead,
         })
       : undefined;
   const skillCard = resolveLocalSkillCardStatusSync(entry.skill.baseDir);
@@ -279,13 +309,13 @@ function buildSkillStatus(
     blockedByAllowlist,
     blockedByAgentFilter,
     eligible,
-    modelVisible: availableToAgent && isSkillVisibleInAvailableSkillsPrompt(entry),
+    modelVisible: availableToAgent && indexed.promptVisible,
     userInvocable,
     commandVisible: availableToAgent && userInvocable,
     requirements: required,
     missing,
     configChecks,
-    install: normalizeInstallOptions(entry, prefs ?? resolveSkillsInstallPreferences(config)),
+    install: normalizeInstallOptions(entry, prefs),
     ...(clawhub ? { clawhub } : {}),
     ...(skillCard ? { skillCard } : {}),
   };
@@ -314,23 +344,27 @@ export function buildWorkspaceSkillStatus(
       bundledSkillsDir: bundledContext.dir,
     });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
+  const allowBundled = resolveBundledAllowlist(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);
+  const skillIndexEntries = buildSkillIndexEntries(skillEntries, {
+    bundledNames: bundledContext.names,
+    agentSkillFilter,
+  });
   return {
     workspaceDir,
     managedSkillsDir,
     agentId: opts?.agentId,
     agentSkillFilter,
-    skills: skillEntries.map((entry) =>
-      buildSkillStatus(
-        entry,
-        opts?.config,
+    skills: skillIndexEntries.map((entry) =>
+      buildSkillStatus(entry, {
+        config: opts?.config,
         prefs,
-        opts?.eligibility,
-        bundledContext.names,
+        eligibility: opts?.eligibility,
+        allowBundled,
         agentSkillFilter,
         workspaceDir,
         clawhubLockRead,
-      ),
+      }),
     ),
   };
 }

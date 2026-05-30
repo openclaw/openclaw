@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { floatFlag, intFlag, parseFlagArgs, stringFlag } from "../../scripts/lib/arg-utils.mjs";
+import {
+  floatFlag,
+  intFlag,
+  parseFlagArgs,
+  stringFlag,
+  stringListFlag,
+} from "../../scripts/lib/arg-utils.mjs";
 
 describe("scripts/lib/arg-utils parseFlagArgs", () => {
   it("ignores the conventional option separator by default", () => {
@@ -28,6 +34,14 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     });
   });
 
+  it("collects repeatable string flags", () => {
+    const parsed = parseFlagArgs(["--match", "alpha", "--match=beta"], { match: [] as string[] }, [
+      stringListFlag("--match", "match"),
+    ]);
+
+    expect(parsed.match).toEqual(["alpha", "beta"]);
+  });
+
   it("rejects missing string flag values before consuming the next option", () => {
     expect(() =>
       parseFlagArgs(["--base", "--head", "HEAD"], { base: "origin/main", head: "HEAD" }, [
@@ -35,6 +49,19 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
         stringFlag("--head", "head"),
       ]),
     ).toThrow("--base requires a value");
+  });
+
+  it("can reject short options as string values for CLIs that reserve short flags", () => {
+    expect(() =>
+      parseFlagArgs(["--output", "-h"], { output: "" }, [
+        stringFlag("--output", "output", { rejectShortOptions: true }),
+      ]),
+    ).toThrow("--output requires a value");
+    expect(() =>
+      parseFlagArgs(["--match=-h"], { match: [] as string[] }, [
+        stringListFlag("--match", "match", { rejectShortOptions: true }),
+      ]),
+    ).toThrow("--match requires a value");
   });
 
   it("rejects missing and malformed numeric flag values", () => {

@@ -1,10 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WorkboardStore, type WorkboardKeyedStore } from "./store.js";
 
-function createMemoryStore(): WorkboardKeyedStore {
+function createMemoryStore(options?: {
+  beforeRegister?: (
+    key: string,
+    value: NonNullable<Awaited<ReturnType<WorkboardKeyedStore["lookup"]>>>,
+  ) => Promise<void> | void;
+}): WorkboardKeyedStore {
   const entries = new Map<string, Awaited<ReturnType<WorkboardKeyedStore["lookup"]>>>();
   return {
     async register(key, value) {
+      await options?.beforeRegister?.(key, value);
       entries.set(key, value);
     },
     async lookup(key) {
@@ -289,6 +295,17 @@ describe("WorkboardStore", () => {
     });
     expect(proven.events?.at(-1)).toMatchObject({ kind: "proof_added" });
 
+    const artifacted = await store.addArtifact(card.id, {
+      label: "Screenshot",
+      path: "/tmp/workboard.png",
+      mimeType: "image/png",
+    });
+    expect(artifacted.metadata?.artifacts?.[0]).toMatchObject({
+      label: "Screenshot",
+      path: "/tmp/workboard.png",
+    });
+    expect(artifacted.events?.at(-1)).toMatchObject({ kind: "artifact_added" });
+
     const archived = await store.archive(card.id, true);
     expect(archived.metadata?.archivedAt).toBeGreaterThan(0);
     expect(archived.events?.at(-1)).toMatchObject({ kind: "archived" });
@@ -378,6 +395,250 @@ describe("WorkboardStore", () => {
       cards: [expect.objectContaining({ id: card.id, metadata: { templateId: "docs" } })],
       exportedAt: expect.any(Number),
     });
+  });
+
+  it("claims cards, heartbeats, and releases the claim", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Coordinate worker", status: "todo" });
+
+    const claimed = await store.claim(card.id, { ownerId: "main", ttlSeconds: 60 });
+
+    expect(claimed.token).toBeTruthy();
+    expect(claimed.card.status).toBe("running");
+    expect(claimed.card.agentId).toBe("main");
+    expect(claimed.card.metadata?.claim).toMatchObject({ ownerId: "main" });
+
+    await expect(store.claim(card.id, { ownerId: "other" })).rejects.toThrow(/already claimed/);
+
+    const heartbeat = await store.heartbeat(card.id, {
+      ownerId: "main",
+      note: "Still running tests.",
+    });
+    expect(heartbeat.events?.at(-1)).toMatchObject({ kind: "heartbeat" });
+    expect(heartbeat.metadata?.comments?.at(-1)?.body).toBe("Still running tests.");
+
+    await expect(store.heartbeat(card.id, { ownerId: "other" })).rejects.toThrow(/owner/);
+
+    const released = await store.releaseClaim(card.id, { ownerId: "main", status: "review" });
+    expect(released.status).toBe("review");
+    expect(released.metadata?.claim).toBeUndefined();
+  });
+
+  it("extends claim expiry by the original TTL on heartbeat", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({ title: "Long run" });
+      await store.claim(card.id, { ownerId: "main", ttlSeconds: 60 });
+
+      vi.setSystemTime(31_000);
+      const heartbeat = await store.heartbeat(card.id, { ownerId: "main" });
+
+      expect(heartbeat.metadata?.claim).toMatchObject({
+        claimedAt: 1_000,
+        lastHeartbeatAt: 31_000,
+        expiresAt: 91_000,
+      });
+
+      vi.setSystemTime(61_000);
+      const secondHeartbeat = await store.heartbeat(card.id, { ownerId: "main" });
+      expect(secondHeartbeat.metadata?.claim).toMatchObject({
+        claimedAt: 1_000,
+        lastHeartbeatAt: 61_000,
+        expiresAt: 121_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the claim when release status validation fails", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Keep claim" });
+    await store.claim(card.id, { ownerId: "main", token: "token-1" });
+
+    await expect(
+      store.releaseClaim(card.id, { ownerId: "main", token: "token-1", status: "invalid" }),
+    ).rejects.toThrow(/status must be one of/);
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: { claim: { ownerId: "main", token: "token-1" } },
+    });
+  });
+
+  it("checks mutation claim scope inside queued card writes", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Scoped mutation" });
+    await store.claim(card.id, { ownerId: "main", token: "token-1" });
+
+    await expect(
+      store.addComment(card.id, { body: "stale write" }, { ownerId: "other" }),
+    ).rejects.toThrow(/claimed by main/);
+    await expect(store.get(card.id)).resolves.not.toMatchObject({
+      metadata: { comments: [expect.objectContaining({ body: "stale write" })] },
+    });
+
+    await expect(
+      store.addComment(card.id, { body: "owner write" }, { ownerId: "main" }),
+    ).resolves.toMatchObject({
+      metadata: { comments: [expect.objectContaining({ body: "owner write" })] },
+    });
+  });
+
+  it("clears resolved proof diagnostics when adding proof", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Needs proof",
+      status: "done",
+      metadata: {
+        diagnostics: [
+          {
+            kind: "missing_proof",
+            severity: "warning",
+            title: "Missing proof",
+            detail: "Done card needs proof.",
+            actions: [],
+            detectedAt: 10,
+          },
+        ],
+      },
+    });
+
+    const updated = await store.addProof(card.id, { status: "passed", label: "CI" });
+
+    expect(updated.metadata?.proof).toEqual([expect.objectContaining({ label: "CI" })]);
+    expect(updated.metadata?.diagnostics).toBeUndefined();
+  });
+
+  it("clears resolved proof diagnostics when adding an artifact", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Needs artifact",
+      status: "done",
+      metadata: {
+        diagnostics: [
+          {
+            kind: "missing_proof",
+            severity: "warning",
+            title: "Missing proof",
+            detail: "Done card needs proof.",
+            actions: [],
+            detectedAt: 10,
+          },
+        ],
+      },
+    });
+
+    const updated = await store.addArtifact(card.id, { label: "log", path: "/tmp/log.txt" });
+
+    expect(updated.metadata?.artifacts).toEqual([expect.objectContaining({ label: "log" })]);
+    expect(updated.metadata?.diagnostics).toBeUndefined();
+  });
+
+  it("does not commit proof when proof artifact validation fails", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Atomic proof" });
+
+    await expect(
+      store.addProofWithArtifact(
+        card.id,
+        { status: "passed", label: "CI" },
+        { path: "x".repeat(2001) },
+      ),
+    ).rejects.toThrow(/artifact path/);
+
+    await expect(store.get(card.id)).resolves.not.toMatchObject({
+      metadata: { proof: [expect.objectContaining({ label: "CI" })] },
+    });
+  });
+
+  it("computes and refreshes card diagnostics", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const ready = await store.create({
+      title: "Ready too long",
+      agentId: "main",
+      position: 10,
+    });
+    const running = await store.create({ title: "Loose run", status: "running", sessionKey: "s1" });
+    const failed = await store.create({
+      title: "Failed twice",
+      status: "blocked",
+      metadata: { failureCount: 2 },
+    });
+
+    const now = Date.now() + 2 * 24 * 60 * 60 * 1000;
+    const diagnostics = await store.refreshDiagnostics(now);
+
+    expect(diagnostics.count).toBeGreaterThanOrEqual(4);
+    await expect(store.get(ready.id)).resolves.toMatchObject({ updatedAt: ready.updatedAt });
+    await expect(store.get(ready.id)).resolves.toMatchObject({
+      metadata: { diagnostics: [expect.objectContaining({ kind: "stranded_ready" })] },
+    });
+    await expect(store.get(running.id)).resolves.toMatchObject({
+      metadata: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ kind: "running_without_heartbeat" }),
+          expect.objectContaining({ kind: "orphaned_session" }),
+        ]),
+      },
+    });
+    await expect(store.get(failed.id)).resolves.toMatchObject({
+      metadata: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ kind: "blocked_too_long" }),
+          expect.objectContaining({ kind: "repeated_failures" }),
+        ]),
+      },
+    });
+  });
+
+  it("does not drop concurrent updates while refreshing diagnostics", async () => {
+    let store!: WorkboardStore;
+    let proofPromise: Promise<unknown> | undefined;
+    let triggered = false;
+    const keyed = createMemoryStore({
+      async beforeRegister(_key, value) {
+        if (triggered || !value.card.metadata?.diagnostics?.length) {
+          return;
+        }
+        triggered = true;
+        proofPromise = store.addProof(value.card.id, { status: "passed", label: "CI" });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+    });
+    store = new WorkboardStore(keyed);
+    const card = await store.create({ title: "Ready too long", agentId: "main" });
+
+    await store.refreshDiagnostics(Date.now() + 2 * 24 * 60 * 60 * 1000);
+    await proofPromise;
+
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      metadata: {
+        diagnostics: [expect.objectContaining({ kind: "stranded_ready" })],
+        proof: [expect.objectContaining({ label: "CI" })],
+      },
+    });
+  });
+
+  it("builds bounded worker context from card metadata", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Write docs",
+      notes: "Acceptance:\n- mention tools",
+      agentId: "main",
+      metadata: {
+        comments: [{ id: "comment-1", body: "Need proof.", createdAt: 10 }],
+        proof: [{ id: "proof-1", status: "passed", command: "pnpm test", createdAt: 12 }],
+        artifacts: [
+          { id: "artifact-1", label: "Failure screenshot", path: "/tmp/fail.png", createdAt: 13 },
+        ],
+      },
+    });
+
+    await expect(store.buildWorkerContext(card.id)).resolves.toContain("## Recent comments");
+    await expect(store.buildWorkerContext(card.id)).resolves.toContain("pnpm test");
+    await expect(store.buildWorkerContext(card.id)).resolves.toContain("Failure screenshot");
   });
 
   it("rejects invalid status values", async () => {

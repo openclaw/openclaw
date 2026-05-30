@@ -1,3 +1,4 @@
+import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
@@ -11,6 +12,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import {
   clearAgentRunContext,
@@ -336,6 +338,27 @@ function createAgentCommandSessionWorkingCopy(params: {
   return result;
 }
 
+function resolveExplicitAgentCommandSessionKey(params: {
+  rawExplicitSessionKey?: string;
+  agentIdOverride?: string;
+  shouldScopeDefaultAgentKey?: boolean;
+  cfg: OpenClawConfig;
+}): string | undefined {
+  if (
+    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
+    !params.shouldScopeDefaultAgentKey
+  ) {
+    return params.rawExplicitSessionKey;
+  }
+  return scopeLegacySessionKeyToAgent({
+    agentId:
+      params.agentIdOverride ??
+      (params.shouldScopeDefaultAgentKey ? resolveDefaultAgentId(params.cfg) : undefined),
+    sessionKey: params.rawExplicitSessionKey,
+    mainKey: params.cfg.session?.mainKey,
+  });
+}
+
 async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
@@ -369,16 +392,17 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
       );
     }
   }
-  const shouldScopeDefaultAgentKey =
+  const shouldScopeDefaultAgentKey = Boolean(
     rawExplicitSessionKey &&
     !agentIdOverride &&
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
-    !isUnscopedSessionKeySentinel(rawExplicitSessionKey);
-  const explicitSessionKey = scopeLegacySessionKeyToAgent({
-    agentId:
-      agentIdOverride ?? (shouldScopeDefaultAgentKey ? resolveDefaultAgentId(cfg) : undefined),
-    sessionKey: rawExplicitSessionKey,
-    mainKey: cfg.session?.mainKey,
+    !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
+  );
+  const explicitSessionKey = resolveExplicitAgentCommandSessionKey({
+    rawExplicitSessionKey,
+    agentIdOverride,
+    shouldScopeDefaultAgentKey,
+    cfg,
   });
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
@@ -638,10 +662,12 @@ async function agentCommandInternal(
           throw agentPolicyError;
         }
 
+        const acpImageAttachments = resolveInlineAgentImageAttachments(opts.images);
         await acpManager.runTurn({
           cfg,
           sessionKey,
           text: body,
+          attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
           mode: "prompt",
           requestId: runId,
           signal: opts.abortSignal,
@@ -1575,13 +1601,19 @@ async function agentCommandInternal(
     try {
       await fallbackTrajectoryRecorder?.flush();
 
+      const rotatedSessionFile = result.meta.agentMeta?.sessionFile;
+      const effectiveSessionId = rotatedSessionFile
+        ? (result.meta.agentMeta?.sessionId ?? sessionId)
+        : sessionId;
+      const effectiveSessionFile = rotatedSessionFile ?? attemptSessionFile;
+
       // Update token+model fields in the session store.
       if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
         await updateSessionStoreAfterAgentRun({
           cfg,
           contextTokensOverride: agentCfg?.contextTokens,
-          sessionId,
+          sessionId: effectiveSessionId,
           sessionKey,
           storePath,
           sessionStore,
@@ -1612,20 +1644,20 @@ async function agentCommandInternal(
           const transcriptSessionEntry: SessionEntry | undefined = suppressVisibleSessionEffects
             ? {
                 ...(sessionEntry ?? {
-                  sessionId,
+                  sessionId: effectiveSessionId,
                   updatedAt: Date.now(),
                   sessionStartedAt: Date.now(),
                 }),
-                sessionId,
-                sessionFile: attemptSessionFile,
+                sessionId: effectiveSessionId,
+                sessionFile: effectiveSessionFile,
               }
             : sessionEntry;
           sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
             body,
             transcriptBody,
             result,
-            sessionId,
-            sessionKey: sessionKey ?? sessionId,
+            sessionId: effectiveSessionId,
+            sessionKey: sessionKey ?? effectiveSessionId,
             sessionEntry: transcriptSessionEntry,
             sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
             storePath: suppressVisibleSessionEffects ? undefined : storePath,
@@ -1649,8 +1681,8 @@ async function agentCommandInternal(
             await loadCliCompactionRuntime()
           ).runCliTurnCompactionLifecycle({
             cfg,
-            sessionId,
-            sessionKey: sessionKey ?? sessionId,
+            sessionId: effectiveSessionId,
+            sessionKey: sessionKey ?? effectiveSessionId,
             sessionEntry,
             sessionStore,
             storePath,
@@ -1721,7 +1753,7 @@ async function agentCommandInternal(
                 clone: false,
               });
               const freshEntry = freshStore[sessionKey];
-              if (!freshEntry || freshEntry.sessionId !== sessionId) {
+              if (!freshEntry || freshEntry.sessionId !== effectiveSessionId) {
                 return undefined;
               }
               sessionStore[sessionKey] = freshEntry;
@@ -1742,7 +1774,7 @@ async function agentCommandInternal(
         resolveFreshSessionEntryForDelivery
           ? {
               ...deliveryParams,
-              expectedSessionIdForFreshDelivery: sessionId,
+              expectedSessionIdForFreshDelivery: effectiveSessionId,
               resolveFreshSessionEntryForDelivery,
             }
           : deliveryParams,
@@ -1830,6 +1862,7 @@ export async function agentCommandFromIngress(
 export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
+  resolveExplicitAgentCommandSessionKey,
 };
 
 /** @deprecated Use `testing`. */

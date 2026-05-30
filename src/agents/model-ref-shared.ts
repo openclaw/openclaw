@@ -2,8 +2,10 @@ import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
 } from "../plugin-sdk/provider-model-id-normalize.js";
-import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginManifestModelIdNormalizationProvider } from "../plugins/manifest.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -16,6 +18,82 @@ export type ProviderModelIdNormalizationOptions = {
   allowManifestNormalization?: boolean;
   manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
 };
+
+function collectManifestModelIdNormalizationPolicies(
+  plugins: readonly Pick<PluginManifestRecord, "modelIdNormalization">[],
+): Map<string, PluginManifestModelIdNormalizationProvider> {
+  const policies = new Map<string, PluginManifestModelIdNormalizationProvider>();
+  for (const plugin of plugins) {
+    for (const [provider, policy] of Object.entries(plugin.modelIdNormalization?.providers ?? {})) {
+      policies.set(normalizeLowercaseStringOrEmpty(provider), policy);
+    }
+  }
+  return policies;
+}
+
+function hasProviderPrefix(modelId: string): boolean {
+  return modelId.includes("/");
+}
+
+function formatPrefixedModelId(prefix: string, modelId: string): string {
+  return `${prefix.replace(/\/+$/u, "")}/${modelId.replace(/^\/+/u, "")}`;
+}
+
+function normalizeProviderModelIdWithManifestPlugins(params: {
+  provider: string;
+  plugins: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  modelId: string;
+}): string | undefined {
+  const policy = collectManifestModelIdNormalizationPolicies(params.plugins).get(
+    normalizeLowercaseStringOrEmpty(params.provider),
+  );
+  if (!policy) {
+    return undefined;
+  }
+
+  let modelId = params.modelId.trim();
+  if (!modelId) {
+    return modelId;
+  }
+
+  for (const prefix of policy.stripPrefixes ?? []) {
+    const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
+    if (normalizedPrefix && normalizeLowercaseStringOrEmpty(modelId).startsWith(normalizedPrefix)) {
+      modelId = modelId.slice(prefix.length);
+      break;
+    }
+  }
+
+  modelId = policy.aliases?.[normalizeLowercaseStringOrEmpty(modelId)] ?? modelId;
+
+  if (!hasProviderPrefix(modelId)) {
+    for (const rule of policy.prefixWhenBareAfterAliasStartsWith ?? []) {
+      if (normalizeLowercaseStringOrEmpty(modelId).startsWith(rule.modelPrefix.toLowerCase())) {
+        return formatPrefixedModelId(rule.prefix, modelId);
+      }
+    }
+    if (policy.prefixWhenBare) {
+      return formatPrefixedModelId(policy.prefixWhenBare, modelId);
+    }
+  }
+
+  return modelId;
+}
+
+function resolveManifestNormalizationPlugins(
+  options: ProviderModelIdNormalizationOptions,
+): readonly Pick<PluginManifestRecord, "modelIdNormalization">[] | undefined {
+  if (options.manifestPlugins) {
+    return options.manifestPlugins;
+  }
+  return (
+    getCurrentPluginMetadataSnapshot({
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    })?.plugins ??
+    resolvePluginMetadataSnapshot({ config: {}, allowWorkspaceScopedCurrent: true }).plugins
+  );
+}
 
 export function modelKey(provider: string, model: string): string {
   const providerId = provider.trim();
@@ -42,16 +120,15 @@ export function normalizeStaticProviderModelId(
   if (options.allowManifestNormalization === false) {
     return normalizeBuiltInProviderModelId(normalizedProvider, model);
   }
-  const manifestModelId =
-    normalizeProviderModelIdWithManifest({
-      provider: normalizedProvider,
-      plugins: options.manifestPlugins,
-      context: {
+  const manifestPlugins = resolveManifestNormalizationPlugins(options);
+  const manifestModelId = manifestPlugins
+    ? normalizeProviderModelIdWithManifestPlugins({
         provider: normalizedProvider,
+        plugins: manifestPlugins,
         modelId: model,
-      },
-    }) ?? model;
-  return normalizeBuiltInProviderModelId(normalizedProvider, manifestModelId);
+      })
+    : undefined;
+  return normalizeBuiltInProviderModelId(normalizedProvider, manifestModelId ?? model);
 }
 
 function normalizeBuiltInProviderModelId(provider: string, model: string): string {
@@ -61,6 +138,10 @@ function normalizeBuiltInProviderModelId(provider: string, model: string): strin
   if (provider === "openrouter") {
     const trimmed = model.trim();
     return trimmed && !trimmed.includes("/") ? `openrouter/${trimmed}` : model;
+  }
+  if (provider === "nvidia") {
+    const trimmed = model.trim();
+    return trimmed && !trimmed.includes("/") ? `nvidia/${trimmed}` : model;
   }
   if (provider === "xai") {
     const xaiAliases: Record<string, string> = {

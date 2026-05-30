@@ -20,6 +20,7 @@ import {
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
 } from "./number-coercion.js";
 
 describe("number-coercion", () => {
@@ -88,6 +89,10 @@ describe("number-coercion", () => {
     expect(clampTimerTimeoutMs(0, 10)).toBe(10);
     expect(clampTimerTimeoutMs(10_000_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(clampTimerTimeoutMs(Number.NaN)).toBeUndefined();
+    expect(resolveTimerTimeoutMs(Number.NaN, 5000)).toBe(5000);
+    expect(resolveTimerTimeoutMs(Number.NaN, 0, 0)).toBe(0);
+    expect(resolveTimerTimeoutMs(Number.NaN, Number.POSITIVE_INFINITY, 25)).toBe(25);
+    expect(resolveTimerTimeoutMs(Number.MAX_SAFE_INTEGER, 5000)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   test("seconds helpers reject unsafe millisecond values", () => {

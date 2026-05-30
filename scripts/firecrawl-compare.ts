@@ -2,6 +2,7 @@ import { pathToFileURL } from "node:url";
 import { fetchFirecrawlContent } from "../extensions/firecrawl/api.ts";
 import { extractReadableContent } from "../src/agents/tools/web-tools.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.ts";
 
 const DEFAULT_URLS = [
   "https://en.wikipedia.org/wiki/Web_scraping",
@@ -33,91 +34,16 @@ function truncate(value: string, max = 180): string {
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
-function responseBodyTooLargeError(label: string, maxBytes: number): Error {
-  return new Error(`${label} response body exceeded ${maxBytes} bytes`);
-}
-
-async function readBoundedResponseText(
+function readBoundedResponseText(
   response: Response,
   label: string,
   signal: AbortSignal,
   maxBytes = FETCH_HTML_MAX_BYTES,
 ): Promise<string> {
-  const contentLength = Number(response.headers.get("content-length") ?? "");
-  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw responseBodyTooLargeError(label, maxBytes);
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let totalBytes = 0;
-  let canceled = false;
-
-  try {
-    for (;;) {
-      const { done, value } = await readResponseChunk(reader, label, signal, () => {
-        canceled = true;
-      });
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        break;
-      }
-
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        canceled = true;
-        await reader.cancel().catch(() => undefined);
-        throw responseBodyTooLargeError(label, maxBytes);
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-
-  return chunks.join("");
-}
-
-async function readResponseChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  label: string,
-  signal: AbortSignal,
-  markCanceled: () => void,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  if (signal.aborted) {
-    markCanceled();
-    await reader.cancel().catch(() => undefined);
-    throw signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`);
-  }
-
-  let removeAbortListener: (() => void) | undefined;
-  const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
-    const onAbort = () => {
-      markCanceled();
-      void reader.cancel().catch(() => undefined);
-      reject(
-        signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`),
-      );
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+  return readBoundedResponseTextWithLimit(response, label, maxBytes, {
+    createTooLargeError: (message) => new Error(message),
+    signal,
   });
-
-  try {
-    return await Promise.race([reader.read(), abortPromise]);
-  } finally {
-    removeAbortListener?.();
-  }
 }
 
 async function fetchHtml(

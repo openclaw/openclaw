@@ -1981,6 +1981,7 @@ export async function runEmbeddedAgent(
                   await runPostCompactionSideEffects({
                     config: params.config,
                     sessionKey: params.sessionKey,
+                    agentId: sessionAgentId,
                     sessionFile: activeSessionFile,
                   });
                 }
@@ -2210,6 +2211,7 @@ export async function runEmbeddedAgent(
                     }),
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    agentId: sessionAgentId,
                     config: params.config,
                   });
                   if (truncResult.truncated) {
@@ -2272,6 +2274,7 @@ export async function runEmbeddedAgent(
                   maxCharsOverride: toolResultMaxChars,
                   sessionId: activeSessionId,
                   sessionKey: params.sessionKey,
+                  agentId: sessionAgentId,
                   config: params.config,
                 });
                 if (truncResult.truncated) {

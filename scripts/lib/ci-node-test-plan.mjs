@@ -360,13 +360,23 @@ const SPLIT_NODE_SHARDS = new Map([
       },
       ...createAgenticCommandSplitShards(),
       {
-        shardName: "agentic-agents",
-        configs: [
-          "test/vitest/vitest.agents-core.config.ts",
-          "test/vitest/vitest.agents-embedded-agent.config.ts",
-          "test/vitest/vitest.agents-support.config.ts",
-          "test/vitest/vitest.agents-tools.config.ts",
-        ],
+        shardName: "agentic-agents-core",
+        configs: ["test/vitest/vitest.agents-core.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-agents-embedded",
+        configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-agents-support",
+        configs: ["test/vitest/vitest.agents-support.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-agents-tools",
+        configs: ["test/vitest/vitest.agents-tools.config.ts"],
         requiresDist: false,
       },
       {

@@ -19,6 +19,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   asFiniteNumberInRange,
+  clampTimerTimeoutMs,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
 } from "../shared/number-coercion.js";
@@ -417,11 +418,13 @@ export function resolveModelRequestTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
-    return timeoutMs;
+    return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? clampTimerTimeoutMs(timeoutMs)
+      : undefined;
   }
   const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
   return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
-    ? Math.floor(modelTimeoutMs)
+    ? clampTimerTimeoutMs(modelTimeoutMs)
     : undefined;
 }
 

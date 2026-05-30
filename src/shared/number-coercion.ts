@@ -105,6 +105,15 @@ export function clampTimerTimeoutMs(valueMs: unknown, minMs = 1): number | undef
   return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
 }
 
+export function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: number, minMs = 1): number {
+  const value = asFiniteNumber(valueMs) ?? asFiniteNumber(fallbackMs);
+  const min = Math.max(0, Math.floor(minMs));
+  if (value === undefined) {
+    return min;
+  }
+  return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
+}
+
 export function finiteSecondsToTimerSafeMilliseconds(
   value: unknown,
   opts: { floorSeconds?: boolean } = {},

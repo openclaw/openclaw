@@ -163,6 +163,7 @@ describe("resolveBuildAllStep", () => {
     const step = getBuildAllStep("build:plugin-sdk:dts");
 
     expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
+    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
     expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
   });
 });
@@ -186,7 +187,6 @@ describe("resolveBuildAllSteps", () => {
       "check-plugin-sdk-exports",
       "plugins:assets:copy",
       "copy-hook-metadata",
-      "copy-copilot-sdk-manifest",
       "copy-export-html-templates",
       "ui:build",
       "write-build-info",

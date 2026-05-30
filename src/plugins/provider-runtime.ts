@@ -530,9 +530,17 @@ export function resolveProviderReasoningOutputModeWithPlugin(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   context: ProviderReasoningOutputModeContext;
 }): ProviderReasoningOutputMode | undefined {
-  const mode = resolveProviderRuntimePlugin(params)?.resolveReasoningOutputMode?.(params.context);
+  const mode = ensureProviderRuntimePluginHandle({
+    provider: params.provider,
+    modelId: params.context.modelId,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    runtimeHandle: params.runtimeHandle,
+  }).plugin?.resolveReasoningOutputMode?.(params.context);
   return mode === "native" || mode === "tagged" ? mode : undefined;
 }
 

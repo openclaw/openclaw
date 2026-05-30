@@ -880,6 +880,48 @@ describe("google transport stream", () => {
     expect(result.content).toEqual([{ type: "text", text: "ok" }]);
   });
 
+  it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-unsafe-adc-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    const tokenFetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: "ya29.unsafe-token",
+            expires_in: Number.MAX_SAFE_INTEGER,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "ya29.fresh-token", expires_in: 3600 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.unsafe-token",
+    });
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).resolves.toEqual({
+      Authorization: "Bearer ya29.fresh-token",
+    });
+
+    expect(tokenFetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes authorized_user ADC from the Windows APPDATA fallback for Google Vertex requests", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-appdata-adc-"));
     const homeDir = path.join(tempDir, "home");

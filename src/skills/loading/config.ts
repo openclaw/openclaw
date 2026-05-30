@@ -53,7 +53,7 @@ export function resolveSkillConfig(
   return entry;
 }
 
-function normalizeAllowlist(input: unknown): string[] | undefined {
+function normalizeAllowlist(input: unknown): ReadonlySet<string> | undefined {
   if (!input) {
     return undefined;
   }
@@ -61,7 +61,7 @@ function normalizeAllowlist(input: unknown): string[] | undefined {
     return undefined;
   }
   const normalized = normalizeStringEntries(input);
-  return normalized.length > 0 ? normalized : undefined;
+  return normalized.length > 0 ? new Set(normalized) : undefined;
 }
 
 const BUNDLED_SOURCES = new Set(["openclaw-bundled"]);
@@ -70,35 +70,35 @@ function isBundledSkill(entry: SkillEntry): boolean {
   return BUNDLED_SOURCES.has(resolveSkillSource(entry.skill));
 }
 
-export function resolveBundledAllowlist(config?: OpenClawConfig): string[] | undefined {
+export function resolveBundledAllowlist(config?: OpenClawConfig): ReadonlySet<string> | undefined {
   return normalizeAllowlist(config?.skills?.allowBundled);
 }
 
-export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: string[]): boolean {
-  if (!allowlist || allowlist.length === 0) {
+export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet<string>): boolean {
+  if (!allowlist || allowlist.size === 0) {
     return true;
   }
   if (!isBundledSkill(entry)) {
     return true;
   }
   const key = resolveSkillKey(entry.skill, entry);
-  return allowlist.includes(key) || allowlist.includes(entry.skill.name);
+  return allowlist.has(key) || allowlist.has(entry.skill.name);
 }
 
 export function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: OpenClawConfig;
+  bundledAllowlist: ReadonlySet<string> | undefined;
   eligibility?: SkillEligibilityContext;
 }): boolean {
-  const { entry, config, eligibility } = params;
+  const { entry, config, bundledAllowlist, eligibility } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
 
   if (skillConfig?.enabled === false) {
     return false;
   }
-  if (!isBundledSkillAllowed(entry, allowBundled)) {
+  if (!isBundledSkillAllowed(entry, bundledAllowlist)) {
     return false;
   }
   return evaluateRuntimeEligibility({
