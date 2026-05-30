@@ -358,10 +358,19 @@ export function createEventHandlers(context: EventHandlerContext) {
     void refreshSessionInfo?.();
   };
 
-  const renderTerminalLifecycleError = (runId: string, errorMessage: string) => {
+  const renderTerminalRunError = (params: {
+    runId: string;
+    errorMessage: string;
+    requireActiveOrPending?: boolean;
+  }): boolean => {
+    const { runId, errorMessage } = params;
     const wasActiveRun = state.activeChatRunId === runId;
-    if (!wasActiveRun && state.pendingChatRunId !== runId) {
-      return;
+    if (
+      params.requireActiveOrPending === true &&
+      !wasActiveRun &&
+      state.pendingChatRunId !== runId
+    ) {
+      return false;
     }
     const renderedError = formatRawAssistantErrorForUi(errorMessage);
     chatLog.dismissPendingSystem(runId);
@@ -369,6 +378,13 @@ export function createEventHandlers(context: EventHandlerContext) {
     noteFinalizedRun(runId, { displayedFinal: true });
     terminateRun({ runId, wasActiveRun, status: "error" });
     maybeRefreshHistoryForRun(runId);
+    return true;
+  };
+
+  const renderTerminalLifecycleError = (runId: string, errorMessage: string) => {
+    if (!renderTerminalRunError({ runId, errorMessage, requireActiveOrPending: true })) {
+      return;
+    }
     tui.requestRender(true);
   };
 
@@ -618,12 +634,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
-      const errorMessage = evt.errorMessage ?? "unknown";
-      const renderedError = formatRawAssistantErrorForUi(errorMessage);
-      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
-      maybeRefreshHistoryForRun(evt.runId);
+      renderTerminalRunError({
+        runId: evt.runId,
+        errorMessage: evt.errorMessage ?? "unknown",
+      });
     }
     tui.requestRender();
   };
