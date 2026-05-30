@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRecord } from "../utils.js";
 import {
   mergeProviders,
@@ -164,6 +165,62 @@ function filterWritableProviders(
   return Object.keys(next).length === Object.keys(providers).length ? providers : next;
 }
 
+const syntheticAuthLoader = createLazyImportLoader(
+  () => import("../plugins/provider-runtime.js"),
+);
+
+async function applySyntheticProviderAuth(params: {
+  providers: Record<string, ProviderConfig>;
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<Record<string, ProviderConfig>> {
+  let mutated = false;
+  const next: Record<string, ProviderConfig> = {};
+
+  for (const [key, provider] of Object.entries(params.providers)) {
+    // Skip providers that already have a configured apiKey.
+    if (typeof provider.apiKey === "string" && provider.apiKey.trim()) {
+      next[key] = provider;
+      continue;
+    }
+    // Skip providers without models or without a baseUrl.
+    if (
+      !Array.isArray(provider.models) ||
+      provider.models.length === 0 ||
+      !provider.baseUrl?.trim()
+    ) {
+      next[key] = provider;
+      continue;
+    }
+    // Resolve synthetic auth from provider plugins (#88267).
+    // Self-hosted providers like Ollama provide a synthetic key at runtime;
+    // apply it here so isWritableProviderConfig keeps them in models.json.
+    const { resolveProviderSyntheticAuthWithPlugin } = await syntheticAuthLoader.load();
+    const synthetic = resolveProviderSyntheticAuthWithPlugin({
+      provider: key,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      context: {
+        config: params.cfg,
+        provider: key,
+        providerConfig: provider as Parameters<
+          typeof resolveProviderSyntheticAuthWithPlugin
+        >[0]["context"]["providerConfig"],
+      },
+    });
+    if (synthetic?.apiKey) {
+      mutated = true;
+      next[key] = { ...provider, apiKey: synthetic.apiKey };
+      continue;
+    }
+    next[key] = provider;
+  }
+
+  return mutated ? next : params.providers;
+}
+
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -247,8 +304,14 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
+  const authResolvedProviders = await applySyntheticProviderAuth({
+    providers: secretEnforcedProviders,
+    cfg,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
   const finalProviders = applyNativeStreamingUsageCompat(
-    filterWritableProviders(secretEnforcedProviders),
+    filterWritableProviders(authResolvedProviders),
   );
   const splitProviders = splitProvidersByPluginOwner({
     providers: finalProviders,
