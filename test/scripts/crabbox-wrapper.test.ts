@@ -412,7 +412,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("provider=aws");
   });
 
-  it("keeps the configured provider for Windows runs when Azure is unavailable", () => {
+  it("keeps the AWS provider env for Windows runs when Azure is unavailable", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--target", "windows", "--", "echo ok"],
