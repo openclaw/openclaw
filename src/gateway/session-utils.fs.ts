@@ -598,45 +598,19 @@ export async function readSessionMessageByIdAsync(
   if (!filePath) {
     return { oversized: false, found: false };
   }
-  let seq = 0;
-  let result: { message?: unknown; seq?: number; oversized: boolean; found: boolean } | undefined;
-  await visitTranscriptLinesAsync(filePath, (line) => {
-    if (result || !line.trim()) {
-      return;
-    }
-    if (isOversizedTranscriptLine(line)) {
-      if (extractJsonStringFieldPrefix(line, "id") === messageId) {
-        result = { oversized: true, found: true };
-      }
-      return;
-    }
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line) as unknown;
-    } catch {
-      return;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return;
-    }
-    const record = parsed as Record<string, unknown>;
-    const visible = Boolean(record.message) || record.type === "compaction";
-    if (!visible) {
-      return;
-    }
-    seq += 1;
-    if (normalizeTailEntryString(record.id) !== messageId) {
-      return;
-    }
-    result = {
-      message: parsedSessionEntryToMessage(record, seq),
-      seq,
-      oversized: false,
-      found: true,
-    };
-  });
-  return result ?? { oversized: false, found: false };
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { oversized: false, found: false };
+  }
+  const entry = index.entries.find((candidate) => candidate.id === messageId);
+  if (!entry) {
+    return { oversized: false, found: false };
+  }
+  if (entry.byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {
+    return { oversized: true, found: true, seq: entry.seq };
+  }
+  const message = indexedTranscriptEntryToMessage(entry);
+  return { message, seq: entry.seq, oversized: false, found: true };
 }
 
 export async function visitSessionMessagesAsync(

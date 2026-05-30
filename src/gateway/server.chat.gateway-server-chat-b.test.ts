@@ -1489,6 +1489,55 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.message.get does not return inactive branch entries", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-root",
+          parentId: null,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "question" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          id: "msg-stale",
+          parentId: "msg-root",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "stale branch" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          id: "msg-active",
+          parentId: "msg-root",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "active branch" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const stale = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-stale",
+      });
+      expect(stale.ok).toBe(false);
+      expect(stale.unavailableReason).toBe("not_found");
+
+      const active = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-active",
+      });
+      expect(active.ok).toBe(true);
+      expect(JSON.stringify(active.message)).toContain("active branch");
+    });
+  });
+
   test("chat.history still drops assistant NO_REPLY entries before truncation", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
