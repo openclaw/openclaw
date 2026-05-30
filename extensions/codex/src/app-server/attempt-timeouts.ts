@@ -101,8 +101,20 @@ export function resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
   return resolvePositiveIntegerTimeoutMs(value, defaultMs);
 }
 
-export function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {
-  return resolvePositiveIntegerTimeoutMs(value, CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS);
+export function resolveCodexTurnTerminalIdleTimeoutMs(
+  value: number | undefined,
+  effectiveRunTimeoutMs?: number,
+): number {
+  // No explicit override: follow the effective run-timeout budget so a run
+  // configured with a longer timeout is not cut short by the internal 30-minute
+  // default terminal-idle watchdog (the early-abort reported in #85242). Take the
+  // larger of the 30-minute floor and the run budget so existing protection is
+  // never shortened, and fall back to the 30-minute default when no budget is known.
+  const defaultMs =
+    effectiveRunTimeoutMs !== undefined && Number.isFinite(effectiveRunTimeoutMs)
+      ? Math.max(CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS, Math.floor(effectiveRunTimeoutMs))
+      : CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
+  return resolvePositiveIntegerTimeoutMs(value, defaultMs);
 }
 
 export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {
