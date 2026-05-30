@@ -969,14 +969,16 @@ enum ExecApprovalsStore {
                     normalized.append(ExecDenylistEntry(
                         id: entry.id,
                         pattern: entry.pattern,
-                        flags: entry.flags))
+                        flags: entry.flags,
+                        reason: entry.reason))
                 }
                 continue
             }
             normalized.append(ExecDenylistEntry(
                 id: entry.id,
                 pattern: pattern,
-                flags: flags?.isEmpty == false ? flags : nil))
+                flags: flags?.isEmpty == false ? flags : nil,
+                reason: entry.reason))
         }
         self.migrateUneditedManagedDefaultDenylistEntries(&normalized)
         return normalized

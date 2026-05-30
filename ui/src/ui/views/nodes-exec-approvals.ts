@@ -173,11 +173,7 @@ export function resolveExecApprovalsState(props: NodesProps): ExecApprovalsState
   const denylist = Array.isArray((selectedAgent as { denylist?: unknown })?.denylist)
     ? ((selectedAgent as { denylist?: ExecApprovalsDenylistEntry[] }).denylist ?? [])
     : [];
-  const hasInvalidDenylistEntries = denylist.some(
-    (entry) =>
-      getDenylistPattern(entry).trim().length === 0 ||
-      !isValidDenylistFlags(getDenylistFlags(entry)),
-  );
+  const hasInvalidDenylistEntries = formHasInvalidDenylistEntries(form);
   return {
     ready,
     disabled: props.execApprovalsSaving || props.execApprovalsLoading,
@@ -567,6 +563,23 @@ function getDenylistFlagsText(flags: unknown): string | undefined {
 
 function isValidDenylistFlags(flags: unknown): boolean {
   return flags == null || (typeof flags === "string" && /^[imu]*$/u.test(flags.trim()));
+}
+
+function denylistHasInvalidEntries(entries: readonly ExecApprovalsDenylistEntry[]): boolean {
+  return entries.some(
+    (entry) =>
+      getDenylistPattern(entry).trim().length === 0 ||
+      !isValidDenylistFlags(getDenylistFlags(entry)),
+  );
+}
+
+function formHasInvalidDenylistEntries(form: ExecApprovalsFile | null): boolean {
+  if (!form?.agents) {
+    return false;
+  }
+  return Object.values(form.agents).some((agent) =>
+    Array.isArray(agent.denylist) ? denylistHasInvalidEntries(agent.denylist) : false,
+  );
 }
 
 function renderDenylistEntry(
