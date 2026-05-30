@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { writeCronStoreSnapshot } from "./service.issue-regressions.test-helpers.js";
 import { CronService } from "./service.js";
 import { createCronStoreHarness, createNoopLogger } from "./service.test-harness.js";
+import { loadCronStore } from "./store.js";
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-issue-35195-" });
@@ -40,20 +41,20 @@ describe("cron backup timing for edit", () => {
 
     await service.start();
 
-    const beforeEditRaw = await fs.readFile(store.storePath, "utf-8");
+    const beforeEditRaw = await fs.readFile(`${store.storePath}.migrated`, "utf-8");
 
     await service.update("job-35195", {
       payload: { kind: "systemEvent", text: "edited" },
     });
 
-    const backupRaw = await fs.readFile(`${store.storePath}.bak`, "utf-8");
-    expect(JSON.parse(backupRaw)).toEqual(JSON.parse(beforeEditRaw));
+    const archivedRaw = await fs.readFile(`${store.storePath}.migrated`, "utf-8");
+    expect(JSON.parse(archivedRaw)).toEqual(JSON.parse(beforeEditRaw));
 
-    const diskAfterEdit = JSON.parse(await fs.readFile(store.storePath, "utf-8"));
+    const persistedAfterEdit = await loadCronStore(store.storePath);
     const normalizedJob = {
-      ...diskAfterEdit.jobs[0],
+      ...persistedAfterEdit.jobs[0],
       payload: {
-        ...diskAfterEdit.jobs[0].payload,
+        ...persistedAfterEdit.jobs[0]?.payload,
         channel: "forum",
       },
     };
@@ -72,8 +73,8 @@ describe("cron backup timing for edit", () => {
 
     await service2.start();
 
-    const backupAfterNormalize = await fs.readFile(`${store.storePath}.bak`, "utf-8");
-    expect(JSON.parse(backupAfterNormalize)).toEqual(JSON.parse(beforeEditRaw));
+    const archivedAfterNormalize = await fs.readFile(`${store.storePath}.migrated`, "utf-8");
+    expect(JSON.parse(archivedAfterNormalize)).toEqual(JSON.parse(beforeEditRaw));
 
     service2.stop();
     await store.cleanup();

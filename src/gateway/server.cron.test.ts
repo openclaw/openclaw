@@ -5,6 +5,7 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { loadCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -608,10 +609,7 @@ describe("gateway server cron", () => {
       });
       const newJobId = expectCronJobIdFromResponse(addRes);
 
-      const persisted = JSON.parse(await fs.readFile(storePath as string, "utf-8")) as {
-        version?: unknown;
-        jobs?: Array<Record<string, unknown>>;
-      };
+      const persisted = await loadCronStore(storePath as string);
       expect(persisted.version).toBe(1);
       expect(persisted.jobs?.map((job) => job.id)).toEqual([
         "gw-legacy-alpha",

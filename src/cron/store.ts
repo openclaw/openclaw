@@ -442,10 +442,14 @@ function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): Cron
 
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronJob | null {
   const raw = structuredClone(job) as unknown as Record<string, unknown>;
+  const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
   normalizeCronJobIdentityFields(raw);
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
   if (!normalized || getInvalidPersistedCronJobReason(normalized)) {
     return null;
+  }
+  if (!hadDeleteAfterRun) {
+    delete normalized.deleteAfterRun;
   }
   const createdAtMs =
     typeof normalized.createdAtMs === "number" && Number.isFinite(normalized.createdAtMs)

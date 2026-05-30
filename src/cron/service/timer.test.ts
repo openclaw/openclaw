@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { tryCronScheduleIdentity } from "../../cron/schedule-identity.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.js";
-import { loadCronStore, saveCronStore } from "../../cron/store.js";
+import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
@@ -322,29 +323,44 @@ describe("cron service timer seam coverage", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
 
-    await saveCronStore(storePath, {
-      version: 1,
-      jobs: [
-        {
-          id: "externally-edited-cron",
-          name: "externally edited cron",
-          enabled: true,
-          createdAtMs: now - 60_000,
-          updatedAtMs: now - 60_000,
-          schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
-          sessionTarget: "main",
-          wakeMode: "now",
-          payload: { kind: "systemEvent", text: "stale schedule should not run" },
-          state: { nextRunAtMs: staleNextRunAtMs },
-        },
-      ],
-    });
-
-    const config = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      jobs: Array<Record<string, unknown>>;
+    const legacyJob: CronJob = {
+      id: "externally-edited-cron",
+      name: "externally edited cron",
+      enabled: true,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 60_000,
+      schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "stale schedule should not run" },
+      state: {},
     };
-    config.jobs[0].schedule = { kind: "cron", expr: "0 7 * * *", tz: "UTC" };
-    await fs.writeFile(storePath, JSON.stringify(config, null, 2), "utf8");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ version: 1, jobs: [legacyJob] }, null, 2),
+      "utf8",
+    );
+    await fs.writeFile(
+      storePath.replace(/\.json$/, "-state.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            [legacyJob.id]: {
+              state: { nextRunAtMs: staleNextRunAtMs },
+              scheduleIdentity: tryCronScheduleIdentity({
+                ...legacyJob,
+                schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
+              }),
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
 
     const state = createCronServiceState({
       storePath,
@@ -362,9 +378,9 @@ describe("cron service timer seam coverage", () => {
     expect(requestHeartbeat).not.toHaveBeenCalled();
 
     const persisted = await loadCronStore(storePath);
-    const job = persisted.jobs[0];
-    expect(job?.schedule).toEqual({ kind: "cron", expr: "0 7 * * *", tz: "UTC" });
-    expect(job?.state.lastStatus).toBeUndefined();
-    expect(job?.state.nextRunAtMs).toBe(Date.parse("2026-03-23T07:00:00.000Z"));
+    const persistedJob = persisted.jobs[0];
+    expect(persistedJob?.schedule).toEqual({ kind: "cron", expr: "0 7 * * *", tz: "UTC" });
+    expect(persistedJob?.state.lastStatus).toBeUndefined();
+    expect(persistedJob?.state.nextRunAtMs).toBe(Date.parse("2026-03-23T07:00:00.000Z"));
   });
 });

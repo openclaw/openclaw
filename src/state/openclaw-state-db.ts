@@ -130,11 +130,48 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): v
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
 }
 
+function backfillCronRunLogEntryJson(db: DatabaseSync): void {
+  if (!tableExists(db, "cron_run_logs") || !tableHasColumn(db, "cron_run_logs", "entry_json")) {
+    return;
+  }
+  const rows = db
+    .prepare(
+      `SELECT store_key, job_id, seq, ts
+         FROM cron_run_logs
+        WHERE entry_json = '{}'`,
+    )
+    .all() as Array<{
+    store_key: string;
+    job_id: string;
+    seq: number | bigint;
+    ts: number | bigint;
+  }>;
+  if (rows.length === 0) {
+    return;
+  }
+  const update = db.prepare(
+    `UPDATE cron_run_logs
+        SET entry_json = ?
+      WHERE store_key = ? AND job_id = ? AND seq = ?`,
+  );
+  for (const row of rows) {
+    update.run(
+      JSON.stringify({ ts: Number(row.ts), jobId: row.job_id, action: "finished" }),
+      row.store_key,
+      row.job_id,
+      row.seq,
+    );
+  }
+}
+
 function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "node_pairing_pending", "client_id TEXT");
   ensureColumn(db, "node_pairing_pending", "client_mode TEXT");
   ensureColumn(db, "node_pairing_paired", "client_id TEXT");
   ensureColumn(db, "node_pairing_paired", "client_mode TEXT");
+  ensureColumn(db, "cron_run_logs", "status TEXT");
+  ensureColumn(db, "cron_run_logs", "error TEXT");
+  ensureColumn(db, "cron_run_logs", "summary TEXT");
   ensureColumn(db, "cron_run_logs", "diagnostics_summary TEXT");
   ensureColumn(db, "cron_run_logs", "delivery_status TEXT");
   ensureColumn(db, "cron_run_logs", "delivery_error TEXT");
@@ -148,6 +185,9 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_run_logs", "model TEXT");
   ensureColumn(db, "cron_run_logs", "provider TEXT");
   ensureColumn(db, "cron_run_logs", "total_tokens INTEGER");
+  ensureColumn(db, "cron_run_logs", "entry_json TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(db, "cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0");
+  backfillCronRunLogEntryJson(db);
   ensureColumn(db, "cron_jobs", "description TEXT");
   ensureColumn(db, "cron_jobs", "delete_after_run INTEGER");
   ensureColumn(db, "cron_jobs", "agent_id TEXT");

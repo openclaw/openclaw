@@ -13,6 +13,7 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import * as schedule from "../schedule.js";
+import { loadCronStore, saveCronStore } from "../store.js";
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -1267,7 +1268,11 @@ describe("cron service timer regressions", () => {
         events.push(evt);
       },
       runIsolatedAgentJob: vi.fn(async (params: { job: { id: string } }) => {
-        await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [] }), "utf-8");
+        const persisted = await loadCronStore(store.storePath);
+        await saveCronStore(store.storePath, {
+          ...persisted,
+          jobs: persisted.jobs.filter((job) => job.id !== params.job.id),
+        });
         return {
           status: "ok" as const,
           summary: `finished ${params.job.id}`,
@@ -1329,7 +1334,11 @@ describe("cron service timer regressions", () => {
         events.push(evt);
       },
       runIsolatedAgentJob: vi.fn(async () => {
-        await fs.writeFile(store.storePath, JSON.stringify({ version: 1, jobs: [] }), "utf-8");
+        const persisted = await loadCronStore(store.storePath);
+        await saveCronStore(store.storePath, {
+          ...persisted,
+          jobs: persisted.jobs.filter((job) => job.id !== failedJob.id),
+        });
         return { status: "error" as const, error: "agent failed after removal" };
       }),
     });

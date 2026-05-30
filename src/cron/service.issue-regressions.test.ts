@@ -8,7 +8,7 @@ import {
   writeCronStoreSnapshot,
 } from "./service.issue-regressions.test-helpers.js";
 import { CronService } from "./service.js";
-import { loadCronStore } from "./store.js";
+import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob, CronJobState } from "./types.js";
 
 describe("Cron issue regressions", () => {
@@ -104,29 +104,32 @@ describe("Cron issue regressions", () => {
   it("does not rewrite unchanged stores during startup", async () => {
     const store = cronIssueRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-02-06T11:00:00.000Z");
-    await writeCronStoreSnapshot(store.storePath, [
-      {
-        id: "startup-stable",
-        name: "startup stable",
-        createdAtMs: scheduledAt - 60_000,
-        updatedAtMs: scheduledAt - 60_000,
-        enabled: true,
-        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "stable" },
-        state: { nextRunAtMs: scheduledAt },
-      },
-    ]);
-    const before = await fs.readFile(store.storePath, "utf8");
+    await saveCronStore(store.storePath, {
+      version: 1,
+      jobs: [
+        {
+          id: "startup-stable",
+          name: "startup stable",
+          createdAtMs: scheduledAt - 60_000,
+          updatedAtMs: scheduledAt - 60_000,
+          enabled: true,
+          schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "stable" },
+          state: { nextRunAtMs: scheduledAt },
+        },
+      ],
+    });
+    const before = await loadCronStore(store.storePath);
 
     const cron = await startCronForStore({
       storePath: store.storePath,
       cronEnabled: true,
     });
-    const after = await fs.readFile(store.storePath, "utf8");
+    const after = await loadCronStore(store.storePath);
 
-    expect(after).toBe(before);
+    expect(after).toEqual(before);
     cron.stop();
   });
 
@@ -292,7 +295,8 @@ describe("Cron issue regressions", () => {
     expect(storedJob.schedule.expr).toBe("0 * * * *");
     expect(storedJob.schedule.tz).toBe("UTC");
 
-    await writeCronStoreSnapshot(store.storePath, [
+    const invalidStore = cronIssueRegressionFixtures.makeStorePath();
+    await writeCronStoreSnapshot(invalidStore.storePath, [
       {
         id: "invalid-disabled-job",
         name: "invalid disabled job",
@@ -307,12 +311,15 @@ describe("Cron issue regressions", () => {
       },
     ]);
 
-    const invalidCron = await startCronForStore({ storePath: store.storePath, cronEnabled: false });
+    const invalidCron = await startCronForStore({
+      storePath: invalidStore.storePath,
+      cronEnabled: false,
+    });
     await expect(invalidCron.update("invalid-disabled-job", { enabled: true })).rejects.toThrow(
       "CronPattern",
     );
 
-    persisted = await loadCronStore(store.storePath);
+    persisted = await loadCronStore(invalidStore.storePath);
     storedJob = persisted.jobs.find((job) => job.id === "invalid-disabled-job");
     expect(storedJob?.enabled).toBe(false);
     expect(storedJob?.state.nextRunAtMs).toBeUndefined();
@@ -326,13 +333,12 @@ describe("Cron issue regressions", () => {
     const originalTarget = "https://t.me/obviyus";
     const rewrittenTarget = "-10012345/6789";
     const runIsolatedAgentJob = vi.fn(async (params: { job: { id: string } }) => {
-      const raw = await fs.readFile(store.storePath, "utf-8");
-      const persisted = JSON.parse(raw) as { version: number; jobs: CronJob[] };
+      const persisted = await loadCronStore(store.storePath);
       const targetJob = persisted.jobs.find((job) => job.id === params.job.id);
       if (targetJob?.delivery?.channel === "telegram") {
         targetJob.delivery.to = rewrittenTarget;
       }
-      await fs.writeFile(store.storePath, JSON.stringify(persisted), "utf-8");
+      await saveCronStore(store.storePath, persisted);
       return { status: "ok" as const, summary: "done", delivered: true };
     });
 

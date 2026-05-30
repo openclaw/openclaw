@@ -208,12 +208,9 @@ describe("cron service ops seam coverage", () => {
     }
 
     const loaded = await loadCronStore(storePath);
-    const raw = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
 
     expect(loaded.jobs.map((job) => job.id)).toEqual(["legacy-alpha", "legacy-beta", newJob.id]);
-    expect(raw.jobs.map((job) => job.id)).toEqual(["legacy-alpha", "legacy-beta", newJob.id]);
+    expect(await fs.stat(`${storePath}.migrated`)).toBeTruthy();
   });
 
   it("start marks interrupted running jobs failed, persists, and arms the timer", async () => {
@@ -327,7 +324,7 @@ describe("cron service ops seam coverage", () => {
       ),
       "utf-8",
     );
-    const configBefore = await fs.readFile(storePath, "utf-8");
+    const legacyArchivePath = `${storePath}.migrated`;
 
     const state = createCronServiceState({
       storePath,
@@ -342,14 +339,12 @@ describe("cron service ops seam coverage", () => {
     try {
       await start(state);
 
-      const configAfter = await fs.readFile(storePath, "utf-8");
-      const persistedState = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
-        jobs: Record<string, { updatedAtMs?: unknown; state?: { nextRunAtMs?: unknown } }>;
-      };
+      const persisted = await loadCronStore(storePath);
+      const job = persisted.jobs.find((entry) => entry.id === jobId);
 
-      expect(configAfter).toBe(configBefore);
-      expect(persistedState.jobs[jobId]?.updatedAtMs).toBe(createdAtMs);
-      expect(persistedState.jobs[jobId]?.state?.nextRunAtMs).toBe(nextRunAtMs);
+      expect(await fs.stat(legacyArchivePath)).toBeTruthy();
+      expect(job?.updatedAtMs).toBe(createdAtMs);
+      expect(job?.state?.nextRunAtMs).toBe(nextRunAtMs);
     } finally {
       stop(state);
     }
