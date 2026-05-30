@@ -133,6 +133,9 @@ export function resolveProbeBudgetMs(
   overallMs: number,
   target: Pick<GatewayStatusTarget, "kind" | "active" | "url">,
 ): number {
+  if (target.kind === "configRemote" || target.kind === "explicit") {
+    return overallMs;
+  }
   if (target.kind === "sshTunnel") {
     return Math.min(2000, overallMs);
   }
