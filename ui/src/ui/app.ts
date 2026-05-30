@@ -215,6 +215,7 @@ export class OpenClawApp extends LitElement {
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
+  @state() chatError: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
   eventLogBuffer: EventLogEntry[] = [];
   toolStreamSyncTimer: number | null = null;
@@ -1158,6 +1159,7 @@ export class OpenClawApp extends LitElement {
     }
     if (!this.client || !this.connected) {
       this.lastError = "Gateway not connected";
+      this.chatError = this.lastError;
       return;
     }
     this.realtimeTalkActive = true;
@@ -1174,6 +1176,10 @@ export class OpenClawApp extends LitElement {
           this.realtimeTalkDetail = detail ?? null;
           if (status === "idle" || status === "error") {
             this.realtimeTalkActive = status !== "idle";
+          }
+          if (status === "error" && this.realtimeTalkDetail) {
+            this.lastError = this.realtimeTalkDetail;
+            this.chatError = this.realtimeTalkDetail;
           }
         },
         onTranscript: (entry) => {
@@ -1199,6 +1205,7 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkStatus = "error";
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       this.lastError = this.realtimeTalkDetail;
+      this.chatError = this.realtimeTalkDetail;
     }
   }
 

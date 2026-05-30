@@ -983,6 +983,8 @@ export function renderApp(state: AppViewState) {
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
+  const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
+  const chatViewError = state.lastError;
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const chatHeaderHidden = isChat && (chatFocus || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
@@ -1999,9 +2001,7 @@ export function renderApp(state: AppViewState) {
                       </div>
                     `
                   : nothing}
-                ${state.lastError
-                  ? html`<div class="pill danger">${state.lastError}</div>`
-                  : nothing}
+                ${headerError ? html`<div class="pill danger">${headerError}</div>` : nothing}
                 ${isChat ? renderChatControls(state) : nothing}
               </div>
             </section>`}
@@ -2924,7 +2924,7 @@ export function renderApp(state: AppViewState) {
                   connected: state.connected,
                   canSend: state.connected,
                   disabledReason: chatDisabledReason,
-                  error: state.lastError,
+                  error: chatViewError,
                   runStatus: state.chatRunStatus,
                   onDismissError: () => dismissChatError(state),
                   sessions: state.sessionsResult,
@@ -3004,6 +3004,7 @@ export function renderApp(state: AppViewState) {
                       await loadChatHistory(state);
                     } catch (err) {
                       state.lastError = String(err);
+                      state.chatError = state.lastError;
                     }
                   },
                   agentsList: state.agentsList,

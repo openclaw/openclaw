@@ -54,6 +54,11 @@ const chatSessionPickerSearchControllers = new WeakMap<
   ChatSessionPickerSearchController
 >();
 
+function setChatError(state: AppViewState, error: string | null) {
+  state.lastError = error;
+  state.chatError = error;
+}
+
 export function renderChatSessionSelect(
   state: AppViewState,
   onSwitchSession: ChatSessionSwitchHandler = () => undefined,
@@ -1013,7 +1018,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
   }
   const targetSessionKey = state.sessionKey;
   const prevOverride = state.chatModelOverrides[targetSessionKey];
-  state.lastError = null;
+  setChatError(state, null);
   // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
   state.chatModelOverrides = {
     ...state.chatModelOverrides,
@@ -1040,7 +1045,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
     } catch (err) {
       // Roll back so the picker reflects the actual server model.
       state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
-      state.lastError = `Failed to set model: ${String(err)}`;
+      setChatError(state, `Failed to set model: ${String(err)}`);
       return false;
     } finally {
       clearPendingSwitch();
@@ -1086,7 +1091,7 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
   if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
     return;
   }
-  state.lastError = null;
+  setChatError(state, null);
   patchSessionThinkingLevel(state, targetSessionKey, normalizedNext);
   state.chatThinkingLevel = normalizedNext ?? null;
   try {
@@ -1098,7 +1103,7 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
   } catch (err) {
     patchSessionThinkingLevel(state, targetSessionKey, previousThinkingLevel);
     state.chatThinkingLevel = normalizedPrev ?? null;
-    state.lastError = `Failed to set thinking level: ${String(err)}`;
+    setChatError(state, `Failed to set thinking level: ${String(err)}`);
   }
 }
 
