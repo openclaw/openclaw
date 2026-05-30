@@ -6,7 +6,13 @@ import {
   getTaskByIdForOwner,
   resolveTaskForLookupTokenForOwner,
 } from "./task-owner-access.js";
-import { createTaskRecord, resetTaskRegistryForTests } from "./task-registry.js";
+import {
+  createTaskRecord,
+  reloadTaskRegistryFromStore,
+  resetTaskRegistryForTests,
+} from "./task-registry.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
@@ -141,6 +147,75 @@ describe("task owner access", () => {
         resolveTaskForLookupTokenForOwner({
           token: "system-task-run",
           callerOwnerKey: "agent:main:main",
+        }),
+      ).toBeUndefined();
+    });
+  });
+
+  it("requires a non-empty caller owner key", async () => {
+    await withTaskRegistryTempDir(() => {
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:child-blank-caller",
+        runId: "blank-caller-run",
+        task: "Blank caller guard",
+        status: "running",
+      });
+
+      expect(
+        getTaskByIdForOwner({
+          taskId: task.taskId,
+          callerOwnerKey: "   ",
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveTaskForLookupTokenForOwner({
+          token: "blank-caller-run",
+          callerOwnerKey: "",
+        }),
+      ).toBeUndefined();
+    });
+  });
+
+  it("does not expose restored legacy tasks with blank owner keys", async () => {
+    await withTaskRegistryTempDir(() => {
+      const legacyTask: TaskRecord = {
+        taskId: "task-legacy-blank-owner",
+        runtime: "subagent",
+        ownerKey: "   ",
+        scopeKind: "session",
+        requesterSessionKey: "agent:main:legacy",
+        childSessionKey: "agent:main:subagent:legacy-child",
+        runId: "legacy-blank-owner-run",
+        task: "Legacy blank owner",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: 1,
+      };
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: new Map([[legacyTask.taskId, legacyTask]]),
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+        },
+      });
+      reloadTaskRegistryFromStore();
+
+      expect(
+        getTaskByIdForOwner({
+          taskId: legacyTask.taskId,
+          callerOwnerKey: "",
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveTaskForLookupTokenForOwner({
+          token: "legacy-blank-owner-run",
+          callerOwnerKey: "   ",
         }),
       ).toBeUndefined();
     });
