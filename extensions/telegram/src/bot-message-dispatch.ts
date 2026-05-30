@@ -27,7 +27,6 @@ import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftLine,
-  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
@@ -2127,7 +2126,7 @@ export const dispatchTelegramMessage = async ({
                     !isRoomEvent && Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
-                    const sanitizedToolLine = formatChannelProgressDraftLineForEntry(
+                    const toolLine = buildChannelProgressDraftLineForEntry(
                       telegramCfg,
                       {
                         event: "tool",
@@ -2141,11 +2140,13 @@ export const dispatchTelegramMessage = async ({
                     if (toolName === undefined || isChannelProgressDraftWorkToolName(toolName)) {
                       const interleavedToolLine = resolveInterleavedToolLine({
                         showArgs: interleavedToolArgsEnabled,
-                        sanitizedLine: sanitizedToolLine,
+                        sanitizedLine: toolLine?.text,
+                        status: toolLine?.status,
+                        toolLabel: toolLine?.label,
                         toolName,
                       });
                       if (!appendInterleavedLine(interleavedToolLine, { startTimer: true })) {
-                        progressPromise = pushStreamToolProgress(sanitizedToolLine, {
+                        progressPromise = pushStreamToolProgress(toolLine, {
                           toolName,
                           startImmediately: true,
                         });
@@ -2157,23 +2158,33 @@ export const dispatchTelegramMessage = async ({
                     await progressPromise;
                   },
                   onItemEvent: async (payload) => {
-                    if (appendInterleavedLine(payload.title ?? payload.name ?? "working")) {
+                    const itemLine = buildChannelProgressDraftLineForEntry(telegramCfg, {
+                      event: "item",
+                      itemId: payload.itemId,
+                      itemKind: payload.kind,
+                      title: payload.title,
+                      name: payload.name,
+                      phase: payload.phase,
+                      status: payload.status,
+                      summary: payload.summary,
+                      progressText: payload.progressText,
+                      meta: payload.meta,
+                    });
+                    if (
+                      itemLine &&
+                      appendInterleavedLine(
+                        resolveInterleavedToolLine({
+                          showArgs: interleavedToolArgsEnabled,
+                          sanitizedLine: itemLine.text,
+                          status: itemLine.status,
+                          toolLabel: itemLine.label,
+                          toolName: itemLine.toolName ?? payload.name,
+                        }),
+                      )
+                    ) {
                       return;
                     }
-                    await pushStreamToolProgress(
-                      buildChannelProgressDraftLineForEntry(telegramCfg, {
-                        event: "item",
-                        itemId: payload.itemId,
-                        itemKind: payload.kind,
-                        title: payload.title,
-                        name: payload.name,
-                        phase: payload.phase,
-                        status: payload.status,
-                        summary: payload.summary,
-                        progressText: payload.progressText,
-                        meta: payload.meta,
-                      }),
-                    );
+                    await pushStreamToolProgress(itemLine);
                   },
                   onPlanUpdate: async (payload) => {
                     if (payload.phase !== "update") {
@@ -2216,7 +2227,26 @@ export const dispatchTelegramMessage = async ({
                     if (payload.phase !== "end") {
                       return;
                     }
-                    if (appendInterleavedLine(payload.title ?? "command")) {
+                    const commandLine = buildChannelProgressDraftLineForEntry(telegramCfg, {
+                      event: "command-output",
+                      phase: payload.phase,
+                      title: interleavedToolArgsEnabled ? payload.title : undefined,
+                      name: payload.name,
+                      status: payload.status,
+                      exitCode: payload.exitCode,
+                    });
+                    if (
+                      commandLine &&
+                      appendInterleavedLine(
+                        resolveInterleavedToolLine({
+                          showArgs: interleavedToolArgsEnabled,
+                          sanitizedLine: commandLine.text,
+                          status: commandLine.status,
+                          toolLabel: commandLine.label,
+                          toolName: commandLine.toolName ?? payload.name,
+                        }),
+                      )
+                    ) {
                       return;
                     }
                     await pushStreamToolProgress(

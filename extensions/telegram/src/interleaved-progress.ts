@@ -222,8 +222,14 @@ export function stripFinalAnswerFromInterleavedBody(params: {
 export function resolveInterleavedToolLine(params: {
   showArgs: boolean;
   sanitizedLine: string | undefined;
+  status?: string;
+  toolLabel?: string;
   toolName: string | undefined;
 }): string {
-  const nameOnly = params.toolName ? `tool: ${params.toolName}` : "tool running";
-  return params.showArgs && params.sanitizedLine ? params.sanitizedLine : nameOnly;
+  if (params.showArgs && params.sanitizedLine) {
+    return params.sanitizedLine;
+  }
+  const label = params.toolLabel ?? params.toolName;
+  const status = params.status ? ` (${params.status})` : "";
+  return label ? `tool: ${label}${status}` : "tool running";
 }

@@ -2489,6 +2489,51 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("hides command details in interleaved progress unless tool args are enabled", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test -- --run" },
+        detailMode: "raw",
+      });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        name: "exec",
+        progressText: "pnpm test -- --run",
+      });
+      await replyOptions?.onCommandOutput?.({
+        phase: "end",
+        title: "command pnpm test -- --run",
+        name: "exec",
+        exitCode: 0,
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      telegramCfg: {
+        streaming: {
+          mode: "partial",
+          preview: {
+            toolProgress: true,
+            interleavedProgress: true,
+            commandText: "status",
+          },
+        },
+      },
+    });
+
+    const updates = reasoningDraftStream.update.mock.calls.map((call) => String(call[0]));
+    expect(updates.join("\n")).not.toContain("pnpm test -- --run");
+    expect(updates.at(-1)).toContain("tool: Exec (completed)");
+  });
+
   it("replaces reasoning snapshots on the reasoning lane", async () => {
     const { reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,

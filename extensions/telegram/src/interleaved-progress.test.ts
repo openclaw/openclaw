@@ -30,6 +30,29 @@ describe("resolveInterleavedToolLine", () => {
     ).toBe(sanitized);
   });
 
+  it("uses sanitized labels when args are hidden", () => {
+    expect(
+      resolveInterleavedToolLine({
+        showArgs: false,
+        sanitizedLine: "🛠️ pnpm test -- --run",
+        toolLabel: "Exec",
+        toolName: "exec",
+      }),
+    ).toBe("tool: Exec");
+  });
+
+  it("keeps command status without command text when args are hidden", () => {
+    expect(
+      resolveInterleavedToolLine({
+        showArgs: false,
+        sanitizedLine: "🛠️ Exec: pnpm test -- --run",
+        status: "exit 1",
+        toolLabel: "Exec",
+        toolName: "exec",
+      }),
+    ).toBe("tool: Exec (exit 1)");
+  });
+
   it("falls back to name-only when opted in but no detail line was produced", () => {
     expect(
       resolveInterleavedToolLine({ showArgs: true, sanitizedLine: undefined, toolName: "Bash" }),
