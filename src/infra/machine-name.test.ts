@@ -5,12 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const execFileMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeChildProcessExecFile } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeChildProcessExecFile(
-    Object.assign(execFileMock, {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    execFile: Object.assign(execFileMock, {
       __promisify__: vi.fn(),
     }) as typeof import("node:child_process").execFile,
-  );
+  };
 });
 
 const originalVitest = process.env.VITEST;
