@@ -1,13 +1,10 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
-import {
-  ensureSessionStorePromptBlobsForPersistence,
-  hydrateSessionStoreSkillPromptRefs,
-  projectSessionStoreForPersistence,
-} from "../config/sessions/skill-prompt-blobs.js";
+import { hydrateSessionStoreSkillPromptRefs, resolveSessionSkillPromptBlobPath } from "../config/sessions/skill-prompt-blobs.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -277,16 +274,13 @@ function loadSessionStoreForSnapshotScan(storePath: string): Record<string, Sess
 }
 
 /**
- * Replace stale paths in a session's snapshot metadata fields.
- * Scoped to specific fields to avoid modifying unrelated session content
- * (transcripts, user messages, etc.).
+ * Replace stale paths in raw text content (blob files or inline prompts).
+ * Handles raw, JSON-escaped, and XML-escaped forms.
  */
-function replacePathsInSession(
-  session: Record<string, unknown>,
+function replaceStalePathsInText(
+  text: string,
   finding: StaleSessionSnapshotPathFinding,
-): number {
-  let count = 0;
-
+): string {
   const jsonEscaped = JSON.stringify(finding.cachedPath).slice(1, -1);
   const jsonEscapedExpected = JSON.stringify(finding.expectedPath).slice(1, -1);
   const xmlEscaped = finding.cachedPath
@@ -302,104 +296,17 @@ function replacePathsInSession(
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
 
-  if (finding.field === "skillsSnapshot.prompt") {
-    const snapshot = session.skillsSnapshot as Record<string, unknown> | undefined;
-    if (snapshot && typeof snapshot.prompt === "string") {
-      let prompt = snapshot.prompt;
-      const original = prompt;
-
-      if (prompt.includes(jsonEscaped)) {
-        count += prompt.split(jsonEscaped).length - 1;
-        prompt = prompt.replaceAll(jsonEscaped, jsonEscapedExpected);
-      }
-      if (prompt.includes(xmlEscaped)) {
-        count += prompt.split(xmlEscaped).length - 1;
-        prompt = prompt.replaceAll(xmlEscaped, xmlEscapedExpected);
-      }
-      if (prompt.includes(finding.cachedPath)) {
-        count += prompt.split(finding.cachedPath).length - 1;
-        prompt = prompt.replaceAll(finding.cachedPath, finding.expectedPath);
-      }
-
-      if (prompt !== original) {
-        snapshot.prompt = prompt;
-      }
-    }
-  } else if (finding.field === "skillsSnapshot.resolvedSkills") {
-    const snapshot = session.skillsSnapshot as Record<string, unknown> | undefined;
-    if (snapshot && Array.isArray(snapshot.resolvedSkills)) {
-      for (const entry of snapshot.resolvedSkills) {
-        if (!isRecord(entry)) {
-          continue;
-        }
-
-        for (const field of ["filePath", "baseDir"] as const) {
-          if (typeof entry[field] !== "string") {
-            continue;
-          }
-          let value = entry[field];
-          const original = value;
-
-          // For baseDir, also try directory form (without /SKILL.md suffix)
-          const candidates: Array<{ cached: string; expected: string }> = [
-            { cached: jsonEscaped, expected: jsonEscapedExpected },
-            { cached: finding.cachedPath, expected: finding.expectedPath },
-          ];
-          if (field === "baseDir") {
-            for (const suffix of ["/SKILL.md", "\\SKILL.md"]) {
-              if (finding.cachedPath.endsWith(suffix)) {
-                const cachedDir = finding.cachedPath.slice(0, -suffix.length);
-                const expectedDir = finding.expectedPath.slice(0, -suffix.length);
-                candidates.push(
-                  { cached: JSON.stringify(cachedDir).slice(1, -1), expected: JSON.stringify(expectedDir).slice(1, -1) },
-                  { cached: cachedDir, expected: expectedDir },
-                );
-              }
-            }
-          }
-
-          for (const { cached, expected } of candidates) {
-            if (value.includes(cached)) {
-              count += value.split(cached).length - 1;
-              value = value.replaceAll(cached, expected);
-            }
-          }
-
-          if (value !== original) {
-            entry[field] = value;
-          }
-        }
-      }
-    }
-  } else if (finding.field === "systemPromptReport.injectedWorkspaceFiles") {
-    const report = session.systemPromptReport as Record<string, unknown> | undefined;
-    if (report && Array.isArray(report.injectedWorkspaceFiles)) {
-      for (const entry of report.injectedWorkspaceFiles) {
-        if (!isRecord(entry) || typeof entry.path !== "string") {
-          continue;
-        }
-
-        let entryPath = entry.path;
-        const original = entryPath;
-
-        for (const { cached, expected } of [
-          { cached: jsonEscaped, expected: jsonEscapedExpected },
-          { cached: finding.cachedPath, expected: finding.expectedPath },
-        ]) {
-          if (entryPath.includes(cached)) {
-            count += entryPath.split(cached).length - 1;
-            entryPath = entryPath.replaceAll(cached, expected);
-          }
-        }
-
-        if (entryPath !== original) {
-          entry.path = entryPath;
-        }
-      }
-    }
+  let result = text;
+  if (result.includes(jsonEscaped)) {
+    result = result.replaceAll(jsonEscaped, jsonEscapedExpected);
   }
-
-  return count;
+  if (result.includes(xmlEscaped)) {
+    result = result.replaceAll(xmlEscaped, xmlEscapedExpected);
+  }
+  if (result.includes(finding.cachedPath)) {
+    result = result.replaceAll(finding.cachedPath, finding.expectedPath);
+  }
+  return result;
 }
 
 export async function noteSessionSnapshotHealth(params?: {
@@ -459,35 +366,135 @@ export async function noteSessionSnapshotHealth(params?: {
 
     for (const [storePath, findings] of findingsByStore) {
       try {
-        // Load store with hydration (same as scanner uses)
-        const store = loadSessionStoreForSnapshotScan(storePath);
         const raw = fs.readFileSync(storePath, "utf-8");
+        const sessions = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+        let modified = false;
 
         let storeCount = 0;
         for (const finding of findings) {
-          const session = store[finding.sessionKey] as Record<string, unknown> | undefined;
-          if (!session) {
+          const session = sessions[finding.sessionKey];
+          if (!isRecord(session)) {
             continue;
           }
-          storeCount += replacePathsInSession(session, finding);
+
+          if (finding.field === "skillsSnapshot.prompt") {
+            const snapshot = session.skillsSnapshot;
+            if (!isRecord(snapshot)) {
+              continue;
+            }
+            const promptRef = isRecord(snapshot.promptRef) ? snapshot.promptRef : undefined;
+
+            if (promptRef && typeof promptRef.hash === "string") {
+              // Blob-backed prompt: read blob, replace paths, write new blob
+              const blobPath = resolveSessionSkillPromptBlobPath(storePath, promptRef.hash);
+              if (blobPath && fs.existsSync(blobPath)) {
+                const blobContent = fs.readFileSync(blobPath, "utf-8");
+                const newBlob = replaceStalePathsInText(blobContent, finding);
+                if (newBlob !== blobContent) {
+                  const newHash = crypto.createHash("sha256").update(newBlob, "utf8").digest("hex");
+                  const newBytes = Buffer.byteLength(newBlob, "utf8");
+                  const newBlobPath = resolveSessionSkillPromptBlobPath(storePath, newHash);
+                  if (newBlobPath) {
+                    await fs.promises.mkdir(path.dirname(newBlobPath), { recursive: true });
+                    await writeTextAtomic(newBlobPath, newBlob, {
+                      durable: false,
+                      mode: 0o600,
+                      tempPrefix: path.basename(newBlobPath),
+                    });
+                    (snapshot.promptRef as Record<string, unknown>).hash = newHash;
+                    (snapshot.promptRef as Record<string, unknown>).bytes = newBytes;
+                    storeCount++;
+                    modified = true;
+                  }
+                }
+              }
+            } else if (typeof snapshot.prompt === "string") {
+              // Inline prompt: replace in raw JSON
+              const newPrompt = replaceStalePathsInText(snapshot.prompt, finding);
+              if (newPrompt !== snapshot.prompt) {
+                snapshot.prompt = newPrompt;
+                storeCount++;
+                modified = true;
+              }
+            }
+          } else if (finding.field === "skillsSnapshot.resolvedSkills") {
+            const snapshot = session.skillsSnapshot;
+            if (!isRecord(snapshot) || !Array.isArray(snapshot.resolvedSkills)) {
+              continue;
+            }
+            for (const entry of snapshot.resolvedSkills) {
+              if (!isRecord(entry)) {
+                continue;
+              }
+              for (const field of ["filePath", "baseDir"] as const) {
+                if (typeof entry[field] !== "string") {
+                  continue;
+                }
+                let value = entry[field];
+                const original = value;
+                const candidates = [
+                  { cached: jsonEscaped, expected: jsonEscapedExpected },
+                  { cached: finding.cachedPath, expected: finding.expectedPath },
+                ];
+                if (field === "baseDir") {
+                  for (const suffix of ["/SKILL.md", "\\SKILL.md"]) {
+                    if (finding.cachedPath.endsWith(suffix)) {
+                      const cachedDir = finding.cachedPath.slice(0, -suffix.length);
+                      const expectedDir = finding.expectedPath.slice(0, -suffix.length);
+                      candidates.push(
+                        { cached: JSON.stringify(cachedDir).slice(1, -1), expected: JSON.stringify(expectedDir).slice(1, -1) },
+                        { cached: cachedDir, expected: expectedDir },
+                      );
+                    }
+                  }
+                }
+                for (const { cached, expected } of candidates) {
+                  if (value.includes(cached)) {
+                    value = value.replaceAll(cached, expected);
+                  }
+                }
+                if (value !== original) {
+                  entry[field] = value;
+                  storeCount++;
+                  modified = true;
+                }
+              }
+            }
+          } else if (finding.field === "systemPromptReport.injectedWorkspaceFiles") {
+            const report = session.systemPromptReport;
+            if (!isRecord(report) || !Array.isArray(report.injectedWorkspaceFiles)) {
+              continue;
+            }
+            for (const entry of report.injectedWorkspaceFiles) {
+              if (!isRecord(entry) || typeof entry.path !== "string") {
+                continue;
+              }
+              let entryPath = entry.path;
+              const original = entryPath;
+              for (const { cached, expected } of [
+                { cached: jsonEscaped, expected: jsonEscapedExpected },
+                { cached: finding.cachedPath, expected: finding.expectedPath },
+              ]) {
+                if (entryPath.includes(cached)) {
+                  entryPath = entryPath.replaceAll(cached, expected);
+                }
+              }
+              if (entryPath !== original) {
+                entry.path = entryPath;
+                storeCount++;
+                modified = true;
+              }
+            }
+          }
         }
 
-        if (storeCount > 0) {
+        if (modified && storeCount > 0) {
           // Create backup before writing
           const backupPath = `${storePath}.bak.${Date.now()}`;
           await writeTextAtomic(backupPath, raw, { mode: 0o600 });
 
-          // Convert hydrated prompts back to promptRef blobs where needed
-          const { store: persisted, promptBlobs } = projectSessionStoreForPersistence({
-            storePath,
-            store: store as Record<string, SessionEntry>,
-          });
-
-          // Write prompt blob files
-          await ensureSessionStorePromptBlobsForPersistence({ storePath, promptBlobs: promptBlobs.values() });
-
-          // Atomic write to prevent partial writes or corruption
-          const fixed = JSON.stringify(persisted, null, 2);
+          // Atomic write — only modified fields changed, no hydration side effects
+          const fixed = JSON.stringify(sessions, null, 2);
           await writeTextAtomic(storePath, fixed, { mode: 0o600 });
           totalReplacements += storeCount;
           repairedStores++;
