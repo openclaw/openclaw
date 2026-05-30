@@ -9,6 +9,18 @@ import {
 type GatewayAuthTokenResolutionSource = "explicit" | "config" | "secretRef" | "env";
 type GatewayAuthTokenEnvFallback = "never" | "no-secret-ref" | "always";
 
+function withGatewayTokenEnvAlias(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const canonical = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
+  const legacy = trimToUndefined(env.OPENCLAW_GATEWAY_AUTH_TOKEN);
+  if (canonical || !legacy) {
+    return env;
+  }
+  return {
+    ...env,
+    OPENCLAW_GATEWAY_TOKEN: legacy,
+  };
+}
+
 export async function resolveGatewayAuthToken(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -36,7 +48,8 @@ export async function resolveGatewayAuthToken(params: {
     defaults: params.cfg.secrets?.defaults,
   }).ref;
   const envFallback = params.envFallback ?? "always";
-  const envToken = trimToUndefined(params.env.OPENCLAW_GATEWAY_TOKEN);
+  const env = withGatewayTokenEnvAlias(params.env);
+  const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
 
   if (!tokenRef) {
     const configToken = trimToUndefined(tokenInput);
@@ -59,7 +72,7 @@ export async function resolveGatewayAuthToken(params: {
 
   const resolved = await resolveConfiguredSecretInputString({
     config: params.cfg,
-    env: params.env,
+    env,
     value: tokenInput,
     path: "gateway.auth.token",
     unresolvedReasonStyle: params.unresolvedReasonStyle,

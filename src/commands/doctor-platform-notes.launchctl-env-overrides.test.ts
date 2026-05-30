@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  collectCodexAppServerSplitBrainWarning,
   collectMacLaunchAgentOverrideWarning,
   collectMacLaunchctlGatewayEnvOverrideWarning,
   collectMacStaleOpenClawUpdateLaunchdJobsWarning,
@@ -118,6 +119,32 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
 
     expect(getenv).not.toHaveBeenCalled();
     expect(noteFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("collectCodexAppServerSplitBrainWarning", () => {
+  it("warns when managed and unmanaged Codex app-servers both exist", async () => {
+    const warning = await collectCodexAppServerSplitBrainWarning({
+      listProcesses: async () =>
+        [
+          "123 node /Users/test/.openclaw/npm/node_modules/@openclaw/codex/node_modules/.bin/codex app-server --listen stdio://",
+          "456 node /opt/homebrew/bin/codex app-server --listen unix://",
+          "789 /opt/homebrew/bin/codex app-server proxy",
+        ].join("\n"),
+    });
+
+    expect(warning).toContain("Dual Codex app-server daemons detected");
+    expect(warning).toContain("Managed OpenClaw Codex app-server PID(s): 123");
+    expect(warning).toContain("Unmanaged system Codex app-server PID(s): 456, 789");
+  });
+
+  it("does nothing when only the managed Codex app-server exists", async () => {
+    await expect(
+      collectCodexAppServerSplitBrainWarning({
+        listProcesses: async () =>
+          "123 node /Users/test/.openclaw/npm/node_modules/@openclaw/codex/node_modules/.bin/codex app-server --listen stdio://",
+      }),
+    ).resolves.toBeNull();
   });
 });
 

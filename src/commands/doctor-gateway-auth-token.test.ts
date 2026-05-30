@@ -86,6 +86,32 @@ describe("resolveGatewayAuthTokenForService", () => {
     expect(resolved).toEqual({ token: "resolved-token" });
   });
 
+  it("resolves canonical gateway token SecretRef from the legacy env alias", async () => {
+    const resolved = await resolveGatewayAuthTokenForService(
+      {
+        gateway: {
+          auth: {
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_TOKEN",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        OPENCLAW_GATEWAY_AUTH_TOKEN: "legacy-token",
+      } as NodeJS.ProcessEnv,
+    );
+
+    expect(resolved).toEqual({ token: "legacy-token" });
+  });
+
   it("resolves env-template gateway.auth.token via SecretRef resolution", async () => {
     const resolved = await resolveGatewayAuthTokenForService(
       {
