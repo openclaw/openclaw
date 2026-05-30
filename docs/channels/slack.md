@@ -996,6 +996,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 
+    Explicit human mentions have a visible handler-timeout fail-safe. If the Slack event routes to the agent but the handler times out before producing assistant text, tool output, or another visible reply, OpenClaw posts one concise fallback to the same channel/thread target and dedupes it by Slack message, account, and agent. Automatic retry is intentionally not performed from this fail-safe because the timed-out handler may still have started side-effecting work.
+
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`

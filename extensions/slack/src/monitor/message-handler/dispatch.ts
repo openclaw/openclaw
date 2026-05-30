@@ -39,6 +39,7 @@ import {
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import {
@@ -82,6 +83,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
 import { recordInboundSession } from "../conversation.runtime.js";
+import { SlackRetryableInboundError } from "../inbound-delivery-state.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   createSlackReplyDeliveryPlan,
@@ -259,6 +261,20 @@ type SlackEventDeliveryAttempt = {
   textOverride?: string;
 };
 
+const SLACK_HANDLER_TIMEOUT_FALLBACK_TEXT =
+  "I received this, but my handler timed out before producing a reply. Please retry in a fresh handler.";
+const SLACK_HANDLER_TIMEOUT_FALLBACK_TTL_MS = 24 * 60 * 60 * 1000;
+const SLACK_HANDLER_TIMEOUT_FALLBACK_DEDUPE_KEY = Symbol.for(
+  "openclaw.slackHandlerTimeoutFallbacks",
+);
+const slackHandlerTimeoutFallbacks = resolveGlobalDedupeCache(
+  SLACK_HANDLER_TIMEOUT_FALLBACK_DEDUPE_KEY,
+  {
+    ttlMs: SLACK_HANDLER_TIMEOUT_FALLBACK_TTL_MS,
+    maxSize: 20_000,
+  },
+);
+
 const SLACK_STREAM_RECIPIENT_TEAM_CACHE_MAX = 2000;
 const slackStreamRecipientTeamCache = new Map<string, string>();
 
@@ -392,6 +408,10 @@ export function resetSlackStreamRecipientTeamCacheForTests(): void {
   slackStreamRecipientTeamCache.clear();
 }
 
+export function clearSlackHandlerTimeoutFallbackDedupeForTests(): void {
+  slackHandlerTimeoutFallbacks.clear();
+}
+
 export function createSlackEventDeliveryTracker() {
   const deliveredKeys = new Set<string>();
   return {
@@ -406,6 +426,109 @@ export function createSlackEventDeliveryTracker() {
       }
     },
   };
+}
+
+function readRecordString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function collectErrorMessages(
+  error: unknown,
+  messages: string[] = [],
+  seen = new Set<unknown>(),
+): string[] {
+  if (seen.has(error)) {
+    return messages;
+  }
+  seen.add(error);
+  const formatted = formatErrorMessage(error);
+  if (formatted) {
+    messages.push(formatted);
+  }
+  if (!isRecord(error)) {
+    return messages;
+  }
+  const promptError = error.promptError;
+  if (promptError && promptError !== error) {
+    collectErrorMessages(promptError, messages, seen);
+  }
+  const cause = error.cause;
+  if (cause && cause !== error) {
+    collectErrorMessages(cause, messages, seen);
+  }
+  return messages;
+}
+
+function hasCodexTurnCompletionIdleTimeoutFailure(
+  error: unknown,
+  seen = new Set<unknown>(),
+): boolean {
+  if (seen.has(error)) {
+    return false;
+  }
+  seen.add(error);
+  if (!isRecord(error)) {
+    return false;
+  }
+  const failure = error.codexAppServerFailure;
+  if (isRecord(failure) && failure.kind === "turn_completion_idle_timeout") {
+    return true;
+  }
+  const promptError = error.promptError;
+  if (
+    promptError &&
+    promptError !== error &&
+    hasCodexTurnCompletionIdleTimeoutFailure(promptError, seen)
+  ) {
+    return true;
+  }
+  const cause = error.cause;
+  if (cause && cause !== error && hasCodexTurnCompletionIdleTimeoutFailure(cause, seen)) {
+    return true;
+  }
+  return false;
+}
+
+function isSlackHandlerTimeoutError(error: unknown): boolean {
+  if (hasCodexTurnCompletionIdleTimeoutFailure(error)) {
+    return true;
+  }
+  return collectErrorMessages(error).some((message) =>
+    /\b(?:codex app-server (?:attempt timed out|turn idle timed out waiting for turn\/completed|startup timed out)|turn\/start timed out)\b/iu.test(
+      message,
+    ),
+  );
+}
+
+function isExplicitHumanSlackMention(prepared: PreparedSlackMessage): boolean {
+  if (!prepared.isRoomish || prepared.message.bot_id || !prepared.message.user) {
+    return false;
+  }
+  const context = prepared.ctxPayload as Record<string, unknown>;
+  const mentionSource = readRecordString(context, "MentionSource");
+  return (
+    context.ExplicitlyMentionedBot === true ||
+    mentionSource === "explicit_bot" ||
+    mentionSource === "explicit_subteam"
+  );
+}
+
+function buildSlackHandlerTimeoutFallbackKey(prepared: PreparedSlackMessage): string | null {
+  const messageTs = prepared.message.ts ?? prepared.message.event_ts;
+  if (!prepared.message.channel || !messageTs) {
+    return null;
+  }
+  return [
+    prepared.route.accountId,
+    prepared.route.agentId,
+    prepared.message.channel,
+    messageTs,
+  ].join(":");
 }
 
 function shouldUseStreaming(params: {
@@ -1823,13 +1946,51 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const anyReplyDelivered = hasVisibleInboundReplyDispatch(
+  const anyReplyDeliveredBeforeFallback = hasVisibleInboundReplyDispatch(
     { queuedFinal, counts },
     {
       observedReplyDelivery,
       fallbackDelivered: streamFallbackDelivered,
     },
   );
+  let handlerTimeoutFallbackDelivered = false;
+  let handlerTimeoutFallbackDeliveryFailed = false;
+  if (
+    dispatchError &&
+    !anyReplyDeliveredBeforeFallback &&
+    isExplicitHumanSlackMention(prepared) &&
+    isSlackHandlerTimeoutError(dispatchError)
+  ) {
+    const fallbackKey = buildSlackHandlerTimeoutFallbackKey(prepared);
+    if (fallbackKey && !slackHandlerTimeoutFallbacks.check(fallbackKey)) {
+      try {
+        await deliverNormally({
+          kind: "final",
+          payload: { text: SLACK_HANDLER_TIMEOUT_FALLBACK_TEXT } as ReplyPayload,
+        });
+        handlerTimeoutFallbackDelivered = true;
+        if (usedReplyThreadTs) {
+          recordSlackThreadParticipation(account.accountId, message.channel, usedReplyThreadTs, {
+            agentId: route.agentId,
+          });
+        }
+      } catch (fallbackError) {
+        handlerTimeoutFallbackDeliveryFailed = true;
+        slackHandlerTimeoutFallbacks.delete(fallbackKey);
+        runtime.error?.(
+          danger(
+            `slack: handler timeout fallback delivery failed: ${formatSlackError(fallbackError)}`,
+          ),
+        );
+      }
+    } else if (fallbackKey) {
+      logVerbose(
+        `slack: suppressed duplicate handler timeout fallback channel=${message.channel} ts=${message.ts ?? message.event_ts ?? "unknown"}`,
+      );
+    }
+  }
+
+  const anyReplyDelivered = anyReplyDeliveredBeforeFallback || handlerTimeoutFallbackDelivered;
 
   if (statusReactionsEnabled) {
     if (dispatchError) {
@@ -1860,6 +2021,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (dispatchError) {
+    if (handlerTimeoutFallbackDeliveryFailed) {
+      throw new SlackRetryableInboundError(
+        `slack handler timeout fallback delivery failed; retry inbound message: ${formatErrorMessage(
+          dispatchError,
+        )}`,
+        { cause: dispatchError },
+      );
+    }
     throw dispatchError;
   }
 

@@ -10,6 +10,7 @@ import type { SlackMonitorContext } from "./context.js";
 import {
   hasSlackInboundMessageDelivery,
   recordSlackInboundMessageDeliveries,
+  SlackRetryableInboundError,
 } from "./inbound-delivery-state.js";
 import {
   buildSlackDebounceKey,
@@ -33,12 +34,7 @@ export type SlackMessageHandler = (
 
 const APP_MENTION_RETRY_TTL_MS = 60_000;
 
-export class SlackRetryableInboundError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "SlackRetryableInboundError";
-  }
-}
+export { SlackRetryableInboundError } from "./inbound-delivery-state.js";
 
 function shouldDebounceSlackMessage(message: SlackMessageEvent, cfg: SlackMonitorContext["cfg"]) {
   const text = message.text ?? "";

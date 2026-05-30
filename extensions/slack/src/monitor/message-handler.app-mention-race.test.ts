@@ -224,6 +224,29 @@ describe("createSlackMessageHandler app_mention race handling", () => {
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps handler-timeout fallback delivery failures replayable at the handler boundary", async () => {
+    prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
+    dispatchPreparedSlackMessageMock
+      .mockRejectedValueOnce(
+        // Mirrors dispatch.ts when the explicit-mention fallback post fails:
+        // the event must stay replayable instead of being recorded delivered.
+        new SlackRetryableInboundError(
+          "slack handler timeout fallback delivery failed; retry inbound message: codex app-server attempt timed out",
+        ),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const handler = createTestHandler();
+
+    await expect(sendMentionEvent(handler, "1700000000.000275")).rejects.toThrow(
+      "slack handler timeout fallback delivery failed",
+    );
+    await expect(sendMentionEvent(handler, "1700000000.000275")).resolves.toBeUndefined();
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps message replay deduped after a non-retryable dispatch failure", async () => {
     prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
     dispatchPreparedSlackMessageMock.mockRejectedValueOnce(new Error("post-send failure"));
