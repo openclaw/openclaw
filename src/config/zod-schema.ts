@@ -1191,6 +1191,20 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        workshop: z
+          .object({
+            autonomous: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+            approvalPolicy: z.union([z.literal("pending"), z.literal("auto")]).optional(),
+            maxPending: z.number().int().min(1).optional(),
+            maxSkillBytes: z.number().int().min(1).optional(),
+          })
+          .strict()
+          .optional(),
         entries: z.record(z.string(), SkillEntrySchema).optional(),
       })
       .strict()

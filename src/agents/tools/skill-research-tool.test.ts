@@ -32,6 +32,24 @@ describe("skill_research tool", () => {
     expect(tools.some((tool) => tool.name === "skill_research")).toBe(true);
   });
 
+  it("stays exposed when autonomous proposal capture is disabled", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-research-tool-");
+    const tools = createOpenClawTools({
+      workspaceDir,
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: false,
+            },
+          },
+        },
+      },
+      disablePluginTools: true,
+    });
+    expect(tools.some((tool) => tool.name === "skill_research")).toBe(true);
+  });
+
   it("is not exposed from sandboxed OpenClaw tool sets", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-research-tool-");
     const tools = createOpenClawTools({
