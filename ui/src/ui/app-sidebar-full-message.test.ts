@@ -41,4 +41,46 @@ describe("OpenClawApp full-message sidebar upgrade", () => {
       unavailableReason: null,
     });
   });
+
+  it("updates canvas raw text from chat.message.get", async () => {
+    const { OpenClawApp } = await import("./app.ts");
+    const content: SidebarContent = {
+      kind: "canvas",
+      docId: "preview-1",
+      entryUrl: "https://example.test/preview",
+      rawText: "short\n...(truncated)...",
+      fullMessageRequest: {
+        sessionKey: "global",
+        agentId: "work",
+        messageId: "msg-2",
+        kind: "tool_output",
+      },
+    };
+    const request = vi.fn(async () => ({
+      ok: true,
+      message: { role: "assistant", text: "full canvas raw text" },
+    }));
+    const app = new OpenClawApp() as InstanceType<typeof OpenClawApp> & {
+      maybeUpgradeSidebarToFullMessage(content: SidebarContent): Promise<void>;
+    };
+    app.client = { request } as never;
+    app.sidebarContent = content;
+    app.sidebarError = null;
+
+    await app.maybeUpgradeSidebarToFullMessage(content);
+
+    expect(request).toHaveBeenCalledWith("chat.message.get", {
+      sessionKey: "global",
+      agentId: "work",
+      messageId: "msg-2",
+      maxChars: 500_000,
+    });
+    expect(app.sidebarContent).toMatchObject({
+      kind: "canvas",
+      docId: "preview-1",
+      entryUrl: "https://example.test/preview",
+      rawText: "full canvas raw text",
+      unavailableReason: null,
+    });
+  });
 });

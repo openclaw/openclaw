@@ -1343,29 +1343,26 @@ export class OpenClawApp extends LitElement {
       }
 
       const message = result.message as Record<string, unknown>;
-      const nextRawText =
-        content.kind === "canvas"
-          ? typeof content.rawText === "string"
-            ? content.rawText
-            : null
-          : typeof message.text === "string"
-            ? message.text
-            : typeof message.content === "string"
+      const fetchedMessageText =
+        typeof message.text === "string"
+          ? message.text
+          : typeof message.content === "string"
+            ? message.content
+            : Array.isArray(message.content)
               ? message.content
-              : Array.isArray(message.content)
-                ? message.content
-                    .map((block) =>
-                      block &&
-                      typeof block === "object" &&
-                      typeof (block as { text?: unknown }).text === "string"
-                        ? (block as { text: string }).text
-                        : null,
-                    )
-                    .filter((value): value is string => typeof value === "string")
-                    .join("\n")
-                : typeof content.rawText === "string"
-                  ? content.rawText
-                  : content.content;
+                  .map((block) =>
+                    block &&
+                    typeof block === "object" &&
+                    typeof (block as { text?: unknown }).text === "string"
+                      ? (block as { text: string }).text
+                      : null,
+                  )
+                  .filter((value): value is string => typeof value === "string")
+                  .join("\n")
+              : null;
+      const nextRawText =
+        fetchedMessageText ??
+        (typeof content.rawText === "string" ? content.rawText : content.content);
 
       if (content.kind === "markdown") {
         this.sidebarContent = {
