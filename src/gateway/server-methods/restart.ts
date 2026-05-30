@@ -2,6 +2,7 @@ import {
   createSafeGatewayRestartPreflight,
   requestSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
+import { getGatewayRestartPendingState } from "../../infra/restart.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function normalizeReason(value: unknown): string | undefined {
@@ -23,5 +24,8 @@ export const restartHandlers: GatewayRequestHandlers = {
   },
   "gateway.restart.preflight": async ({ respond }) => {
     respond(true, createSafeGatewayRestartPreflight());
+  },
+  "gateway.restart.pending": async ({ respond }) => {
+    respond(true, getGatewayRestartPendingState());
   },
 };

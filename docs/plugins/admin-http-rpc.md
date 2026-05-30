@@ -168,7 +168,7 @@ HTTP status follows the Gateway error when possible. For example, `INVALID_REQUE
 
 - discovery: `commands.list`
   Returns the HTTP RPC method names allowed by this plugin.
-- gateway: `health`, `status`, `logs.tail`, `usage.status`, `usage.cost`, `gateway.restart.request`
+- gateway: `health`, `status`, `logs.tail`, `usage.status`, `usage.cost`, `gateway.restart.pending`, `gateway.restart.request`
 - config: `config.get`, `config.schema`, `config.schema.lookup`, `config.set`, `config.patch`, `config.apply`
 - channels: `channels.status`, `channels.start`, `channels.stop`, `channels.logout`
 - web: `web.login.start`, `web.login.wait`

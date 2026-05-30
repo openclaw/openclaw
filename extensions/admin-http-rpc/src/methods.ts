@@ -5,6 +5,7 @@ const ADMIN_HTTP_RPC_ALLOWED_METHOD_GROUPS = {
     "logs.tail",
     "usage.status",
     "usage.cost",
+    "gateway.restart.pending",
     "gateway.restart.request",
   ],
   discovery: ["commands.list"],

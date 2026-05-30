@@ -11,6 +11,7 @@ import {
   consumeGatewaySigusr1RestartIntent,
   consumeGatewaySigusr1RestartAuthorization,
   emitGatewayRestart,
+  getGatewayRestartPendingState,
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   peekGatewaySigusr1RestartReason,
@@ -224,6 +225,60 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(1);
         const sigusr1Emits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1");
         expect(sigusr1Emits.length).toBe(1);
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("reports scheduled restart state without emitting restart", () => {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 0 } } });
+
+      scheduleGatewaySigusr1Restart({
+        delayMs: 1_000,
+        reason: "pending-state",
+        skipCooldown: true,
+        skipDeferral: true,
+      });
+
+      expect(getGatewayRestartPendingState(Date.now())).toMatchObject({
+        pending: true,
+        unconsumedSignal: false,
+        scheduled: true,
+        preparing: false,
+        activeDeferralPolls: 0,
+        delayMs: 1_000,
+        reason: "pending-state",
+        skipDeferral: true,
+        deferralTimeoutMs: 0,
+        effectiveDeferralTimeoutMs: null,
+        deferralTimeoutUnbounded: true,
+      });
+    });
+
+    it("reports in-flight restart state until the restart is marked handled", () => {
+      setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 1_000 } } });
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        expect(emitGatewayRestart("manual-restart")).toBe(true);
+
+        expect(getGatewayRestartPendingState()).toMatchObject({
+          pending: true,
+          unconsumedSignal: true,
+          scheduled: false,
+          reason: "manual-restart",
+          deferralTimeoutMs: 1_000,
+          effectiveDeferralTimeoutMs: 1_000,
+          deferralTimeoutUnbounded: false,
+        });
+
+        markGatewaySigusr1RestartHandled();
+        expect(getGatewayRestartPendingState()).toMatchObject({
+          pending: false,
+          unconsumedSignal: false,
+          scheduled: false,
+        });
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -650,10 +705,20 @@ describe("infra runtime", () => {
       try {
         setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 0 } } });
         setPreRestartDeferralCheck(() => 5); // always pending
-        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "config.patch" });
 
         await vi.advanceTimersByTimeAsync(0);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+        expect(getGatewayRestartPendingState()).toMatchObject({
+          pending: true,
+          scheduled: false,
+          preparing: true,
+          activeDeferralPolls: 1,
+          reason: "config.patch",
+          deferralTimeoutMs: 0,
+          effectiveDeferralTimeoutMs: null,
+          deferralTimeoutUnbounded: true,
+        });
 
         await vi.advanceTimersByTimeAsync(300_000);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
