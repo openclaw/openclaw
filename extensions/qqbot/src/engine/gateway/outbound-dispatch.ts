@@ -557,13 +557,11 @@ export async function dispatchOutbound(
   } catch {
     if (timeoutId) {
       clearTimeout(timeoutId);
+      timeoutId = null;
     }
   } finally {
-    // Always clear the response watchdog. Previously only the catch and
-    // block-deliver paths cleared it, so a dispatch that resolved without
-    // ever delivering (e.g. a model turn that produced no reply) left the
-    // timer armed; it then rejected the already-settled race promise as an
-    // unhandled "Response timeout", crashing the gateway (#88242).
+    // Dispatch can resolve without any deliver callback. Clear the watchdog
+    // before it can reject the already-settled race as an unhandled timeout.
     if (timeoutId) {
       clearTimeout(timeoutId);
       timeoutId = null;
