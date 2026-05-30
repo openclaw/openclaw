@@ -781,14 +781,11 @@ async function trySendAttachmentForTarget(params: {
     rememberIMessageReplyCache({
       accountId: params.accountId,
       messageId: resolvedId,
-      chatGuid:
-        params.target.kind === "chat_guid"
-          ? params.target.chatGuid
-          : params.target.kind === "chat_identifier"
-            ? params.target.chatIdentifier
-            : params.target.kind === "handle"
-              ? attachmentChatTarget
-              : attachmentChatTarget,
+      chatGuid: params.target.kind === "chat_guid" ? params.target.chatGuid : undefined,
+      chatIdentifier:
+        params.target.kind === "chat_identifier" || params.target.kind === "handle"
+          ? attachmentChatTarget
+          : undefined,
       chatId: params.target.kind === "chat_id" ? params.target.chatId : undefined,
       timestamp: Date.now(),
       isFromMe: true,

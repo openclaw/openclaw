@@ -7,6 +7,10 @@ import {
   resolveIMessageApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import type { IMessageRpcClient } from "./client.js";
+import {
+  findLatestIMessageEntryForChat,
+  resetIMessageShortIdState,
+} from "./monitor-reply-cache.js";
 import { sendMessageIMessage } from "./send.js";
 
 const IMESSAGE_TEST_CFG = {
@@ -48,6 +52,8 @@ function createApprovalText(id = "approval-123"): string {
 describe("sendMessageIMessage receipts", () => {
   afterEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
+    resetIMessageShortIdState();
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
   });
@@ -246,7 +252,7 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ message_id: 12345 });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
 
-    const result = await sendMessageIMessage("+155****4567", "", {
+    const result = await sendMessageIMessage("+15550004567", "", {
       config: IMESSAGE_TEST_CFG,
       client,
       mediaUrl: "/tmp/image.png",
@@ -259,8 +265,21 @@ describe("sendMessageIMessage receipts", () => {
     const attachmentArgs = runCliJson.mock.calls[0]?.[0] as string[];
     expect(attachmentArgs[0]).toBe("send-attachment");
     expect(attachmentArgs[1]).toBe("--chat");
-    expect(attachmentArgs[2]).toMatch(/^any;-;/);
+    expect(attachmentArgs[2]).toBe("any;-;+15550004567");
     expect(attachmentArgs.slice(3)).toEqual(["--file", "/tmp/image.png", "--transport", "auto"]);
+    expect(
+      findLatestIMessageEntryForChat({
+        accountId: "default",
+        chatIdentifier: "any;-;+15550004567",
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        messageId: "p:0/dm-media-guid",
+        chatGuid: undefined,
+        chatIdentifier: "any;-;+15550004567",
+        isFromMe: true,
+      }),
+    );
     expect(client.request).not.toHaveBeenCalled();
   });
 
@@ -268,7 +287,7 @@ describe("sendMessageIMessage receipts", () => {
     const client = createClient({ guid: "p:0/caption-guid" });
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
 
-    const result = await sendMessageIMessage("imessage:+155****4567", "caption", {
+    const result = await sendMessageIMessage("imessage:+15550004567", "caption", {
       config: IMESSAGE_TEST_CFG,
       client,
       mediaUrl: "/tmp/image.png",
@@ -280,7 +299,7 @@ describe("sendMessageIMessage receipts", () => {
     const captionAttachmentArgs = runCliJson.mock.calls[0]?.[0] as string[];
     expect(captionAttachmentArgs[0]).toBe("send-attachment");
     expect(captionAttachmentArgs[1]).toBe("--chat");
-    expect(captionAttachmentArgs[2]).toMatch(/^iMessage;-;/);
+    expect(captionAttachmentArgs[2]).toBe("iMessage;-;+15550004567");
     expect(captionAttachmentArgs.slice(3)).toEqual([
       "--file",
       "/tmp/image.png",
@@ -290,7 +309,7 @@ describe("sendMessageIMessage receipts", () => {
     expect(client.request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({
-        to: "+155****4567",
+        to: "+15550004567",
         text: "caption",
       }),
       expect.any(Object),
@@ -333,7 +352,7 @@ describe("sendMessageIMessage receipts", () => {
     const createClientImpl = vi.fn(async () => createdClient);
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
 
-    const result = await sendMessageIMessage("+155****4567", "caption", {
+    const result = await sendMessageIMessage("+15550004567", "caption", {
       config: IMESSAGE_TEST_CFG,
       createClient: createClientImpl,
       mediaUrl: "/tmp/image.png",
@@ -345,7 +364,7 @@ describe("sendMessageIMessage receipts", () => {
     expect(createdClient.request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({
-        to: "+155****4567",
+        to: "+15550004567",
         text: "caption",
       }),
       expect.any(Object),
