@@ -31,6 +31,8 @@ export type DiscordMessageRunQueueTestingHooks = {
   processDiscordMessage?: ProcessDiscordMessage;
 };
 
+type SkippedQueuedMessageCleanup = () => void;
+
 let messageProcessRuntimePromise:
   | Promise<typeof import("./message-handler.process.js")>
   | undefined;
@@ -73,10 +75,26 @@ async function processDiscordQueuedMessage(params: {
   }
 }
 
+function cleanupSkippedDiscordQueuedMessage(params: {
+  job: DiscordInboundJob;
+  replayGuard: ClaimableDedupe;
+}) {
+  try {
+    params.job.runtime.replyTypingFeedback?.onCleanup?.();
+  } finally {
+    releaseDiscordInboundReplay({
+      replayKeys: params.job.replayKeys,
+      error: new DiscordRetryableInboundError("discord queued run skipped before processing"),
+      replayGuard: params.replayGuard,
+    });
+  }
+}
+
 export function createDiscordMessageRunQueue(
   params: DiscordMessageRunQueueParams,
 ): DiscordMessageRunQueue {
   const replayGuard = params.replayGuard ?? createDiscordInboundReplayGuard();
+  const skippedCleanup = new Set<SkippedQueuedMessageCleanup>();
   const runQueue = createChannelRunQueue({
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
@@ -84,10 +102,38 @@ export function createDiscordMessageRunQueue(
       params.runtime.error(danger(`discord message run failed: ${String(error)}`));
     },
   });
+  let lifecycleActive = !params.abortSignal?.aborted;
+
+  const cleanupSkippedQueuedMessages = () => {
+    if (!lifecycleActive && skippedCleanup.size === 0) {
+      return;
+    }
+    lifecycleActive = false;
+    const cleanups = [...skippedCleanup];
+    skippedCleanup.clear();
+    for (const cleanup of cleanups) {
+      cleanup();
+    }
+  };
+
+  if (params.abortSignal?.aborted) {
+    cleanupSkippedQueuedMessages();
+  } else {
+    params.abortSignal?.addEventListener("abort", cleanupSkippedQueuedMessages, { once: true });
+  }
 
   return {
     enqueue(job) {
+      const cleanupSkipped = () => {
+        cleanupSkippedDiscordQueuedMessage({ job, replayGuard });
+      };
+      if (!lifecycleActive) {
+        cleanupSkipped();
+        return;
+      }
+      skippedCleanup.add(cleanupSkipped);
       runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+        skippedCleanup.delete(cleanupSkipped);
         await processDiscordQueuedMessage({
           job,
           lifecycleSignal,
@@ -96,6 +142,9 @@ export function createDiscordMessageRunQueue(
         });
       });
     },
-    deactivate: runQueue.deactivate,
+    deactivate() {
+      runQueue.deactivate();
+      cleanupSkippedQueuedMessages();
+    },
   };
 }
