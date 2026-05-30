@@ -46,32 +46,27 @@ function collectDirectoryIdsFromEntries(params: {
   entries?: readonly unknown[];
   normalizeId?: (entry: string) => string | null | undefined;
 }): string[] {
-  const ids: string[] = [];
-  for (const value of params.entries ?? []) {
-    const entry = normalizeOptionalString(String(value)) ?? "";
-    if (!entry || entry === "*") {
-      continue;
-    }
-    const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
-    const id = normalizeOptionalString(normalized) ?? "";
-    if (id) {
-      ids.push(id);
-    }
-  }
-  return ids;
+  return collectDirectoryIds(params.entries ?? [], params.normalizeId);
 }
 
 function collectDirectoryIdsFromMapKeys(params: {
   groups?: Record<string, unknown>;
   normalizeId?: (entry: string) => string | null | undefined;
 }): string[] {
+  return collectDirectoryIds(Object.keys(params.groups ?? {}), params.normalizeId);
+}
+
+function collectDirectoryIds(
+  values: Iterable<unknown>,
+  normalizeId?: (entry: string) => string | null | undefined,
+): string[] {
   const ids: string[] = [];
-  for (const key of Object.keys(params.groups ?? {})) {
-    const entry = normalizeOptionalString(key) ?? "";
+  for (const value of values) {
+    const entry = normalizeOptionalString(String(value)) ?? "";
     if (!entry || entry === "*") {
       continue;
     }
-    const normalized = params.normalizeId ? params.normalizeId(entry) : entry;
+    const normalized = normalizeId ? normalizeId(entry) : entry;
     const id = normalizeOptionalString(normalized) ?? "";
     if (id) {
       ids.push(id);

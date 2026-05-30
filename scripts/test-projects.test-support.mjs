@@ -37,7 +37,10 @@ import {
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
 import { isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
-import { resolveUnitFastTestIncludePattern } from "../test/vitest/vitest.unit-fast-paths.mjs";
+import {
+  resolveUnitFastTestIncludePattern,
+  resolveUnitFastTimerTestIncludePattern,
+} from "../test/vitest/vitest.unit-fast-paths.mjs";
 import {
   isBoundaryTestFile,
   isBundledPluginDependentUnitTestFile,
@@ -48,7 +51,7 @@ import {
 } from "./changed-lanes.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
-  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveVitestCliEntry,
   resolveVitestNodeArgs,
 } from "./run-vitest.mjs";
@@ -127,6 +130,7 @@ const PLUGIN_SDK_LIGHT_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk-light.conf
 const PLUGIN_SDK_VITEST_CONFIG = "test/vitest/vitest.plugin-sdk.config.ts";
 const PLUGINS_VITEST_CONFIG = "test/vitest/vitest.plugins.config.ts";
 const UNIT_FAST_VITEST_CONFIG = "test/vitest/vitest.unit-fast.config.ts";
+const UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
 const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts";
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
@@ -216,6 +220,10 @@ function interleaveSlowAndFastSpecs(sortedSpecs) {
     }
   }
   return ordered;
+}
+
+function uniqueOrdered(values) {
+  return [...new Set(values)];
 }
 
 export function orderFullSuiteSpecsForParallelRun(specs, shardTimings = new Map()) {
@@ -320,6 +328,7 @@ const VITEST_CONFIG_BY_KIND = {
   pluginSdkLight: PLUGIN_SDK_LIGHT_VITEST_CONFIG,
   process: PROCESS_VITEST_CONFIG,
   unitFast: UNIT_FAST_VITEST_CONFIG,
+  unitFastFakeTimers: UNIT_FAST_FAKE_TIMERS_VITEST_CONFIG,
   unitSecurity: UNIT_SECURITY_VITEST_CONFIG,
   unitSrc: UNIT_SRC_VITEST_CONFIG,
   unitSupport: UNIT_SUPPORT_VITEST_CONFIG,
@@ -356,20 +365,79 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
 ]);
 const BROAD_ONLY_TEST_HELPERS = new Set(["test/helpers/poll.ts"]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
+  [".crabbox.yaml", ["test/scripts/package-acceptance-workflow.test.ts"]],
+  [
+    ".github/workflows/ci-check-testbox.yml",
+    ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
+  ],
+  [
+    ".github/workflows/crabbox-hydrate.yml",
+    ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
+  ],
+  ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
+  ["scripts/crabbox-wrapper.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  [
+    "scripts/check-changelog-attributions.mjs",
+    ["test/scripts/check-changelog-attributions.test.ts"],
+  ],
+  [
+    "scripts/check-composite-action-input-interpolation.py",
+    ["test/scripts/check-composite-action-input-interpolation.test.ts"],
+  ],
+  ["scripts/check-dependency-pins.mjs", ["test/scripts/check-dependency-pins.test.ts"]],
   ["scripts/check-deadcode-unused-files.mjs", ["test/scripts/check-deadcode-unused-files.test.ts"]],
+  ["scripts/check-dynamic-import-warts.mjs", ["test/scripts/check-dynamic-import-warts.test.ts"]],
+  ["scripts/check-no-conflict-markers.mjs", ["test/scripts/check-no-conflict-markers.test.ts"]],
+  [
+    "scripts/check-workflows.mjs",
+    [
+      "test/scripts/check-composite-action-input-interpolation.test.ts",
+      "test/scripts/check-no-conflict-markers.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ],
+  ],
+  ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
+  ["scripts/dependency-changes-report.mjs", ["test/scripts/dependency-changes-report.test.ts"]],
+  [
+    "scripts/dependency-ownership-surface-report.mjs",
+    ["test/scripts/dependency-ownership-surface-report.test.ts"],
+  ],
+  [
+    "scripts/dependency-vulnerability-gate.mjs",
+    ["test/scripts/dependency-vulnerability-gate.test.ts"],
+  ],
   [
     "scripts/deadcode-unused-files.allowlist.mjs",
     ["test/scripts/check-deadcode-unused-files.test.ts"],
   ],
+  ["scripts/docs-link-audit.mjs", ["src/scripts/docs-link-audit.test.ts"]],
+  ["scripts/lib/arg-utils.mjs", ["test/scripts/arg-utils.test.ts"]],
+  [
+    "scripts/lib/bundled-plugin-build-entries.mjs",
+    ["test/scripts/bundled-plugin-build-entries.test.ts"],
+  ],
+  [
+    "scripts/lib/bundled-plugin-source-utils.mjs",
+    ["test/scripts/bundled-plugin-source-utils.test.ts"],
+  ],
+  ["scripts/lib/dev-tooling-safety.ts", ["test/scripts/dev-tooling-safety.test.ts"]],
   ["scripts/lib/docker-e2e-container.sh", ["test/scripts/docker-build-helper.test.ts"]],
   ["scripts/lib/docker-e2e-package.sh", ["test/scripts/docker-build-helper.test.ts"]],
+  ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
+  ["scripts/lib/local-heavy-check-runtime.mjs", ["test/scripts/local-heavy-check-runtime.test.ts"]],
+  ["scripts/lib/managed-child-process.mjs", ["test/scripts/managed-child-process.test.ts"]],
+  ["scripts/lib/npm-verify-exec.ts", ["test/scripts/npm-verify-exec.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
+  ["scripts/lib/source-file-scan-cache.mjs", ["test/scripts/source-file-scan-cache.test.ts"]],
+  ["scripts/lib/test-group-report.mjs", ["test/scripts/test-group-report.test.ts"]],
+  ["scripts/lib/ts-guard-utils.mjs", ["test/scripts/ts-guard-utils.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
   [
     "scripts/mantis/build-telegram-evidence.mjs",
@@ -390,13 +458,33 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
+  ["scripts/run-oxlint-shards.mjs", ["test/scripts/run-oxlint.test.ts"]],
+  ["scripts/run-with-env.mjs", ["test/scripts/run-with-env.test.ts"]],
   ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
   ["scripts/ci-run-timings.mjs", ["test/scripts/ci-run-timings.test.ts"]],
   ["scripts/docker-e2e.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/docker-e2e-rerun.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
   ["scripts/docker-e2e-timings.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
+  ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
   ["scripts/kova-ci-summary.mjs", ["test/scripts/kova-ci-summary.test.ts"]],
+  ["scripts/openclaw-npm-postpublish-verify.ts", ["test/openclaw-npm-postpublish-verify.test.ts"]],
+  ["scripts/openclaw-npm-release-check.ts", ["test/openclaw-npm-release-check.test.ts"]],
+  ["scripts/openclaw-prepack.ts", ["test/openclaw-prepack.test.ts"]],
+  ["scripts/package-changelog.mjs", ["test/scripts/package-changelog.test.ts"]],
+  ["scripts/package-mac-app.sh", ["test/scripts/package-mac-app.test.ts"]],
+  ["scripts/package-mac-dist.sh", ["test/scripts/package-mac-dist.test.ts"]],
+  ["scripts/package-openclaw-for-docker.mjs", ["test/scripts/package-openclaw-for-docker.test.ts"]],
+  ["scripts/postinstall-bundled-plugins.mjs", ["test/scripts/postinstall-bundled-plugins.test.ts"]],
+  ["scripts/prepare-git-hooks.mjs", ["test/scripts/prepare-git-hooks.test.ts"]],
+  [
+    "scripts/preinstall-package-manager-warning.mjs",
+    ["test/scripts/preinstall-package-manager-warning.test.ts"],
+  ],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
+  ["scripts/test-force.ts", ["test/scripts/test-force.test.ts"]],
+  ["scripts/test-live.mjs", ["test/scripts/test-live.test.ts"]],
+  ["scripts/tsdown-build.mjs", ["test/scripts/tsdown-build.test.ts"]],
+  ["scripts/verify.mjs", ["test/scripts/verify.test.ts"]],
   ["scripts/zai-fallback-repro.ts", ["test/scripts/zai-fallback-repro.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
@@ -411,7 +499,33 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "scripts/e2e/kitchen-sink-plugin-docker.sh",
-    ["test/scripts/plugin-prerelease-test-plan.test.ts"],
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/kitchen-sink-rpc-docker.sh",
+    [
+      "test/scripts/docker-build-helper.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/kitchen-sink-rpc-walk.mjs",
+    [
+      "test/scripts/kitchen-sink-rpc-walk.test.ts",
+      "test/scripts/plugin-prerelease-test-plan.test.ts",
+    ],
+  ],
+  [
+    "scripts/e2e/onboard-docker.sh",
+    ["test/scripts/docker-build-helper.test.ts", "test/scripts/openclaw-test-state.test.ts"],
+  ],
+  ["scripts/e2e/plugin-lifecycle-matrix-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
+  [
+    "scripts/e2e/release-media-memory-docker.sh",
+    ["test/scripts/docker-e2e-plan.test.ts", "test/scripts/release-media-memory-scenario.test.ts"],
   ],
   ["scripts/lib/vitest-shard-timings.mjs", ["test/scripts/vitest-shard-timings.test.ts"]],
   [
@@ -421,6 +535,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
+  ["scripts/tsdown-build.mjs", ["test/scripts/tsdown-build.test.ts"]],
   ["scripts/bundled-plugin-assets.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/bundle-a2ui.mjs", ["test/scripts/bundled-plugin-assets.test.ts"]],
   ["scripts/build-diffs-viewer-runtime.mjs", ["test/scripts/build-diffs-viewer-runtime.test.ts"]],
@@ -617,12 +732,15 @@ const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
+const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
 const VITEST_SHARD_NAME_ENV_KEY = "OPENCLAW_VITEST_SHARD_NAME";
 const CORE_RUNTIME_INFRA_STATE_SHARD_NAME = "core-runtime-infra-state";
-export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(
-  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(900_000);
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS = String(
+  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
 );
+const EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD = 12;
 const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
 const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
   "src/gateway/embeddings-http.test.ts",
@@ -639,6 +757,12 @@ const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
+const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
+  "vitest.config.ts",
+  DEFAULT_VITEST_CONFIG,
+  ...Object.values(VITEST_CONFIG_BY_KIND),
+  ...fullSuiteVitestShards.flatMap((shard) => [shard.config, ...shard.projects]),
+]);
 const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
@@ -782,6 +906,14 @@ function isTestFileTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
+function isTestSupportFileTarget(arg) {
+  if (/(?:^|\/)(?:test-helpers|test-support)(?:\/|$)/u.test(arg)) {
+    return true;
+  }
+  const basename = path.posix.basename(arg).replace(/\.[cm]?[jt]sx?$/u, "");
+  return /(?:^|[._-])test-(?:helpers|support)(?:[._-]|$)/u.test(basename);
+}
+
 function isLikelyFileTarget(arg) {
   return /(?:^|\/)[^/]+\.[A-Za-z0-9]+$/u.test(arg);
 }
@@ -790,7 +922,13 @@ function isPathLikeTargetArg(arg, cwd) {
   if (!arg || arg === "--" || arg.startsWith("-")) {
     return false;
   }
-  return isGlobTarget(arg) || isFileLikeTarget(arg) || isExistingPathTarget(arg, cwd);
+  const relative = toRepoRelativeTarget(arg, cwd);
+  return (
+    isGlobTarget(arg) ||
+    isFileLikeTarget(arg) ||
+    isVitestConfigPathLikeTarget(relative) ||
+    isExistingPathTarget(arg, cwd)
+  );
 }
 
 function toRepoRelativeTarget(arg, cwd) {
@@ -860,6 +998,51 @@ function includePatternMatchesAnyFile(pattern, files) {
   return files.some((file) => file === pattern || path.matchesGlob(file, pattern));
 }
 
+function resolveExplicitSourceTestTargets(targetArg, cwd, options = {}) {
+  const relative = toRepoRelativeTarget(targetArg, cwd);
+  const kind = classifyTarget(targetArg, cwd);
+  if (shouldUseWholeConfigTarget(kind, targetArg, cwd)) {
+    return null;
+  }
+  if (!isExistingFileTarget(targetArg, cwd)) {
+    return null;
+  }
+  if (isTestFileTarget(relative)) {
+    return null;
+  }
+  const preciseTargets = resolvePreciseChangedTestTargets(relative, {
+    cwd,
+    forceFullImportGraph: options.forceFullImportGraph === true,
+  });
+  if (preciseTargets && preciseTargets.length > 0) {
+    return [...new Set(preciseTargets)].toSorted((left, right) => left.localeCompare(right));
+  }
+  if (!isTestSupportFileTarget(relative)) {
+    return null;
+  }
+  return [
+    ...new Set(
+      resolveAffectedTestsFromImportGraph(relative, cwd, {
+        forceFull: options.forceFullImportGraph === true,
+      }),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function expandExplicitSourceTestTargets(targetArgs, cwd) {
+  const sourceTargetCount = targetArgs.filter((targetArg) => {
+    const relative = toRepoRelativeTarget(targetArg, cwd);
+    return isExistingFileTarget(targetArg, cwd) && !isTestFileTarget(relative);
+  }).length;
+  const forceFullImportGraph = sourceTargetCount > EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD;
+  return targetArgs.flatMap((targetArg) => {
+    const targets = resolveExplicitSourceTestTargets(targetArg, cwd, {
+      forceFullImportGraph,
+    });
+    return targets && targets.length > 0 ? targets : [targetArg];
+  });
+}
+
 export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
   const { targetArgs } = parseTestProjectsArgs(args, cwd);
   if (targetArgs.length === 0) {
@@ -874,7 +1057,10 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
   const unmatched = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
-    if (resolveVitestConfigTargetKind(relative)) {
+    if (
+      resolveVitestConfigTargetKind(relative) ||
+      (isVitestConfigFileTarget(relative) && isExistingFileTarget(targetArg, cwd))
+    ) {
       continue;
     }
     const kind = classifyTarget(targetArg, cwd);
@@ -901,6 +1087,17 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
     }
 
     if (isTestFileTarget(relative)) {
+      continue;
+    }
+
+    const explicitSupportTargets = resolveExplicitSourceTestTargets(targetArg, cwd);
+    if (explicitSupportTargets) {
+      if (explicitSupportTargets.length === 0) {
+        unmatched.push({
+          target: targetArg,
+          reason: "target-matched-no-test-files",
+        });
+      }
       continue;
     }
 
@@ -1192,11 +1389,13 @@ function getImportGraph(cwd) {
   return cachedImportGraph;
 }
 
-function resolveAffectedTestsFromImportGraph(changedPath, cwd) {
+function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {
   const normalized = normalizePathPattern(changedPath);
-  const targetedTargets = resolveAffectedTestsFromTargetedImportScan(normalized, cwd);
-  if (targetedTargets !== null) {
-    return targetedTargets;
+  if (options.forceFull !== true) {
+    const targetedTargets = resolveAffectedTestsFromTargetedImportScan(normalized, cwd);
+    if (targetedTargets !== null) {
+      return targetedTargets;
+    }
   }
 
   const { reverseImports, testFiles } = getImportGraph(cwd);
@@ -1223,6 +1422,16 @@ function resolveAffectedTestsFromImportGraph(changedPath, cwd) {
 
 function resolveVitestConfigTargetKind(relative) {
   return VITEST_CONFIG_TARGET_KIND_BY_PATH.get(relative) ?? null;
+}
+
+function isVitestConfigPathLikeTarget(relative) {
+  return (
+    relative === "vitest.config.ts" || /^test\/vitest\/vitest\..+\.config\.ts$/u.test(relative)
+  );
+}
+
+function isVitestConfigFileTarget(relative) {
+  return RUNNABLE_VITEST_CONFIG_TARGETS.has(relative);
 }
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
@@ -1333,10 +1542,10 @@ function shouldKeepBroadChangedRun(changedPaths) {
   );
 }
 
-function resolveToolingChangedTestTargets(changedPaths) {
+function resolveToolingChangedTestTargets(changedPaths, cwd = process.cwd()) {
   const targets = [];
   for (const changedPath of changedPaths) {
-    const testTargets = resolveToolingTestTargets(changedPath);
+    const testTargets = resolveToolingTestTargets(changedPath, cwd);
     if (!testTargets) {
       return null;
     }
@@ -1345,8 +1554,34 @@ function resolveToolingChangedTestTargets(changedPaths) {
   return [...new Set(targets)];
 }
 
-function resolveToolingTestTargets(changedPath) {
-  return TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
+function resolveConventionalToolingTestTargets(changedPath, cwd = process.cwd()) {
+  const match = /^scripts\/(.+)\.(?:mjs|ts|js|sh|py)$/u.exec(changedPath);
+  if (!match) {
+    return null;
+  }
+  const stem = match[1];
+  const basename = path.posix.basename(stem);
+  const dashedStem = stem.replaceAll("/", "-");
+  const candidates = [
+    `test/scripts/${stem}.test.ts`,
+    `test/scripts/${dashedStem}.test.ts`,
+    `test/scripts/${basename}.test.ts`,
+    `src/scripts/${stem}.test.ts`,
+    `src/scripts/${dashedStem}.test.ts`,
+    `src/scripts/${basename}.test.ts`,
+  ];
+  const targets = candidates.filter((candidate) => fs.existsSync(path.join(cwd, candidate)));
+  return targets.length > 0 ? targets : null;
+}
+
+function resolveToolingTestTargets(changedPath, cwd = process.cwd()) {
+  const explicitTargets =
+    TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
+  const conventionalTargets = resolveConventionalToolingTestTargets(changedPath, cwd);
+  if (explicitTargets && conventionalTargets) {
+    return uniqueOrdered([...explicitTargets, ...conventionalTargets]);
+  }
+  return explicitTargets ?? conventionalTargets;
 }
 
 function shouldUseBroadChangedTargets(env = process.env) {
@@ -1400,8 +1635,13 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
     return changedPath.startsWith("ui/src/") ? [changedPath] : null;
   }
+  if (options.skipImportGraph === true) {
+    return null;
+  }
   if (/^(?:src|test\/helpers|extensions|packages|ui\/src|ui\/config)\//u.test(changedPath)) {
-    const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd);
+    const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd, {
+      forceFull: options.forceFullImportGraph === true,
+    });
     if (affectedTests.length > 0) {
       return affectedTests;
     }
@@ -1413,16 +1653,21 @@ export function resolveChangedTestTargetPlan(changedPaths, options = {}) {
   if (changedPaths.length === 0) {
     return { mode: "none", targets: [] };
   }
-  const toolingTargets = resolveToolingChangedTestTargets(changedPaths);
+  const cwd = options.cwd ?? process.cwd();
+  const toolingTargets = resolveToolingChangedTestTargets(changedPaths, cwd);
   if (toolingTargets) {
     return { mode: "targets", targets: toolingTargets };
   }
   const changedLanes = detectChangedLanes(changedPaths);
   const env = options.env ?? {};
   const useBroadFallback = options.broad ?? shouldUseBroadChangedTargets(env);
+  const skipImportGraph = changedLanes.lanes.all && !useBroadFallback;
   const targets = [];
   for (const changedPath of changedPaths) {
-    const preciseTargets = resolvePreciseChangedTestTargets(changedPath, options);
+    const preciseTargets = resolvePreciseChangedTestTargets(changedPath, {
+      ...options,
+      skipImportGraph,
+    });
     if (preciseTargets) {
       targets.push(...preciseTargets);
       continue;
@@ -1506,6 +1751,9 @@ function classifyTarget(arg, cwd) {
   }
   if (relative.startsWith("src/plugins/contracts/")) {
     return "contractsPlugin";
+  }
+  if (resolveUnitFastTimerTestIncludePattern(relative)) {
+    return "unitFastFakeTimers";
   }
   if (resolveUnitFastTestIncludePattern(relative)) {
     return "unitFast";
@@ -1686,6 +1934,10 @@ function resolveLightLaneIncludePatterns(kind, targetArg, cwd) {
     const includePattern = resolveUnitFastTestIncludePattern(relative);
     return includePattern ? [includePattern] : null;
   }
+  if (kind === "unitFastFakeTimers") {
+    const includePattern = resolveUnitFastTimerTestIncludePattern(relative);
+    return includePattern ? [includePattern] : null;
+  }
   if (kind === "pluginSdkLight") {
     const includePattern = resolvePluginSdkLightIncludePattern(relative);
     return includePattern ? [includePattern] : null;
@@ -1747,9 +1999,20 @@ export function parseTestProjectsArgs(args, cwd = process.cwd()) {
   const forwardedArgs = [];
   const targetArgs = [];
   let watchMode = false;
+  let passthrough = false;
 
   for (const arg of args) {
     if (arg === "--") {
+      if (targetArgs.length > 0) {
+        passthrough = true;
+      }
+      continue;
+    }
+    if (passthrough) {
+      if (arg === "--watch") {
+        watchMode = true;
+      }
+      forwardedArgs.push(arg);
       continue;
     }
     if (arg === "--watch") {
@@ -1774,7 +2037,8 @@ export function buildVitestRunPlans(
   const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
-  const activeTargetArgs = changedTargetArgs ?? targetArgs;
+  const requestedTargetArgs = changedTargetArgs ?? targetArgs;
+  const activeTargetArgs = expandExplicitSourceTestTargets(requestedTargetArgs, cwd);
   const activeForwardedArgs =
     changedTargetArgs !== null ? stripChangedArgs(forwardedArgs) : forwardedArgs;
   if (changedTargetArgs !== null && activeTargetArgs.length === 0) {
@@ -1789,6 +2053,24 @@ export function buildVitestRunPlans(
         watchMode,
       },
     ];
+  }
+
+  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
+  const explicitConfigTargets = activeTargetArgs.map((targetArg) =>
+    toRepoRelativeTarget(targetArg, cwd),
+  );
+  if (explicitConfigTargets.every(isVitestConfigFileTarget)) {
+    if (watchMode && explicitConfigTargets.length > 1) {
+      throw new Error(
+        "watch mode with mixed test suites is not supported; target one suite at a time or use a dedicated suite command",
+      );
+    }
+    return explicitConfigTargets.map((config) => ({
+      config,
+      forwardedArgs: nonTargetArgs,
+      includePatterns: null,
+      watchMode,
+    }));
   }
 
   const groupedTargets = new Map();
@@ -1820,9 +2102,9 @@ export function buildVitestRunPlans(
     );
   }
 
-  const nonTargetArgs = activeForwardedArgs.filter((arg) => !activeTargetArgs.includes(arg));
   const orderedKinds = [
     "unitFast",
+    "unitFastFakeTimers",
     "default",
     "boundary",
     "toolingIsolated",
@@ -1880,7 +2162,9 @@ export function buildVitestRunPlans(
     "utils",
     "wizard",
     "e2e",
+    "extensionActiveMemory",
     "extensionAcpx",
+    "extensionCodex",
     "extensionDiffs",
     "extensionBrowser",
     "extensionDiscord",
@@ -1941,11 +2225,13 @@ export function buildVitestRunPlans(
       ? null
       : useWholeConfigTarget
         ? null
-        : grouped.flatMap((targetArg) => {
-            const lightLanePatterns = resolveLightLaneIncludePatterns(kind, targetArg, cwd);
-            return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
-          });
-    const scopedTargetArgs = useCliTargetArgs ? grouped : [];
+        : uniqueOrdered(
+            grouped.flatMap((targetArg) => {
+              const lightLanePatterns = resolveLightLaneIncludePatterns(kind, targetArg, cwd);
+              return lightLanePatterns ?? [toScopedIncludePattern(targetArg, cwd)];
+            }),
+          );
+    const scopedTargetArgs = useCliTargetArgs ? uniqueOrdered(grouped) : [];
     plans.push({
       config,
       forwardedArgs: [...nonTargetArgs, ...scopedTargetArgs],
@@ -2098,25 +2384,43 @@ export function applyDefaultMultiSpecVitestCachePaths(specs, params = {}) {
 
 export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
   const baseEnv = params.env ?? process.env;
-  if (Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+  if (
+    Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY) &&
+    Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY)
+  ) {
     return specs;
   }
   return specs.map((spec) => {
-    if (spec.watchMode || Object.hasOwn(spec.env ?? {}, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)) {
+    if (spec.watchMode) {
       return spec;
+    }
+    const env = spec.env ?? {};
+    const nextEnv = { ...env };
+    if (
+      !Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY) &&
+      !Object.hasOwn(env, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY)
+    ) {
+      nextEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY] = DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS;
+    }
+    if (
+      !Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY) &&
+      !Object.hasOwn(env, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY)
+    ) {
+      nextEnv[VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY] =
+        DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS;
     }
     return {
       ...spec,
-      env: {
-        ...spec.env,
-        [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
-      },
+      env: nextEnv,
     };
   });
 }
 
 export function shouldRetryVitestNoOutputTimeout(env = process.env) {
   const value = env[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim().toLowerCase();
+  if (value === undefined && isCiLikeEnv(env)) {
+    return false;
+  }
   return !["0", "false", "no", "off"].includes(value ?? "");
 }
 

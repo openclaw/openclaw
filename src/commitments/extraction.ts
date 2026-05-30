@@ -1,7 +1,7 @@
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
+import { asFiniteNumber, timestampMsToIsoString } from "../shared/number-coercion.js";
 import { normalizeOptionalString as asString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { resolveCommitmentsConfig } from "./config.js";
@@ -179,13 +179,30 @@ export async function hydrateCommitmentExtractionItem(params: {
 }
 
 function formatExistingPending(item: CommitmentExtractionItem) {
-  return item.existingPending.map((commitment) => ({
-    kind: commitment.kind,
-    reason: commitment.reason,
-    dedupeKey: commitment.dedupeKey,
-    earliest: new Date(commitment.earliestMs).toISOString(),
-    latest: new Date(commitment.latestMs).toISOString(),
-  }));
+  return item.existingPending.flatMap((commitment) => {
+    const earliest = timestampMsToIsoString(commitment.earliestMs);
+    const latest = timestampMsToIsoString(commitment.latestMs);
+    if (!earliest || !latest) {
+      return [];
+    }
+    return [
+      {
+        kind: commitment.kind,
+        reason: commitment.reason,
+        dedupeKey: commitment.dedupeKey,
+        earliest,
+        latest,
+      },
+    ];
+  });
+}
+
+function formatExtractionNow(valueMs: unknown): string {
+  return (
+    timestampMsToIsoString(valueMs) ??
+    timestampMsToIsoString(Date.now()) ??
+    "1970-01-01T00:00:00.000Z"
+  );
 }
 
 export function buildCommitmentExtractionPrompt(params: {
@@ -194,7 +211,7 @@ export function buildCommitmentExtractionPrompt(params: {
 }): string {
   const items = params.items.map((item) => ({
     itemId: item.itemId,
-    now: new Date(item.nowMs).toISOString(),
+    now: formatExtractionNow(item.nowMs),
     timezone: item.timezone,
     latestUserMessage: item.userText,
     assistantResponse: item.assistantText ?? "",

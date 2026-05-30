@@ -3,10 +3,10 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
@@ -21,11 +21,11 @@ import { stripStructuralPrefixes } from "./mentions.js";
 import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
-type SkillCommandsRuntime = typeof import("../skill-commands.runtime.js");
+type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.runtime.js");
 
 const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
-  () => import("../skill-commands.runtime.js"),
+  () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
 
@@ -200,6 +200,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   if (!commandResult.shouldContinue) {
     return { handled: true, reply: commandResult.reply };
   }
+  const continuationTriggerBodyNormalized = command.rawBodyNormalized;
 
   const directiveResult = await resolveReplyDirectives({
     ctx: params.ctx,
@@ -216,7 +217,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     sessionScope: sessionState.sessionScope,
     groupResolution: sessionState.groupResolution,
     isGroup: sessionState.isGroup,
-    triggerBodyNormalized: sessionState.triggerBodyNormalized,
+    triggerBodyNormalized: continuationTriggerBodyNormalized,
     resetTriggered: false,
     commandAuthorized: params.commandAuthorized,
     defaultProvider: params.defaultProvider,

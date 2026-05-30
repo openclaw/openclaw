@@ -1,10 +1,11 @@
 import fs from "node:fs";
-import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import { isDeepStrictEqual } from "node:util";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { loadJsonFile, repairJsonFilePermissions, saveJsonFile } from "../../infra/json-file.js";
 import { asFiniteNumber } from "../../shared/number-coercion.js";
 import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
-import { normalizeProviderId } from "../provider-id.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { resolveAuthStatePath } from "./paths.js";
 import type {
@@ -213,6 +214,10 @@ export function savePersistedAuthProfileState(
     }
     return null;
   }
-  saveJsonFile(statePath, payload);
+  if (isDeepStrictEqual(loadJsonFile(statePath), payload)) {
+    repairJsonFilePermissions(statePath);
+  } else {
+    saveJsonFile(statePath, payload);
+  }
   return payload;
 }

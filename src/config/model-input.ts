@@ -1,8 +1,8 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeGooglePreviewModelId,
   normalizeTogetherModelId,
-} from "../plugin-sdk/provider-model-id-normalize.js";
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,

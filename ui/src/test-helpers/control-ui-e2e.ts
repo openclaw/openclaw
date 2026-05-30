@@ -109,6 +109,17 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     publicDir: path.join(uiRoot, "public"),
     resolve: {
       alias: {
+        "@openclaw/net-policy/ip": path.join(repoRoot, "packages/net-policy/src/ip.ts"),
+        "@openclaw/net-policy/ipv4": path.join(repoRoot, "packages/net-policy/src/ipv4.ts"),
+        "@openclaw/net-policy/redact-sensitive-url": path.join(
+          repoRoot,
+          "packages/net-policy/src/redact-sensitive-url.ts",
+        ),
+        "@openclaw/net-policy/url-userinfo": path.join(
+          repoRoot,
+          "packages/net-policy/src/url-userinfo.ts",
+        ),
+        "@openclaw/net-policy": path.join(repoRoot, "packages/net-policy/src/index.ts"),
         json5: json5EsmPath,
       },
     },

@@ -1,8 +1,9 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModernModelRef } from "../plugins/provider-runtime.js";
+import { parseStrictNonNegativeInteger } from "../shared/number-coercion.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type ModelRef = {
   provider?: string | null;
@@ -20,7 +21,6 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m2.7",
   "openai/gpt-5.5",
-  "openai-codex/gpt-5.5",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
@@ -43,7 +43,7 @@ const SMALL_LIVE_MODEL_PRIORITY = [
 
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
 export const DEFAULT_SMALL_LIVE_MODEL_LIMIT = SMALL_LIVE_MODEL_PRIORITY.length;
-const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli", "openai-codex"]);
+const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli"]);
 const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([
   "fireworks",
   "google",
@@ -131,7 +131,6 @@ function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
   }
   return (
     provider === "openai" ||
-    provider === "openai-codex" ||
     provider === "codex-cli" ||
     provider === "opencode" ||
     provider === "github-copilot" ||
@@ -140,11 +139,14 @@ function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
 }
 
 function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean {
+  if (provider === "openai-codex") {
+    return true;
+  }
   if (!isOpenAiFamilyLiveModel(provider, id)) {
     return false;
   }
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
-  if (provider === "openai" || provider === "openai-codex") {
+  if (provider === "openai") {
     return modelName !== "gpt-5.5";
   }
   return !modelName.startsWith("gpt-5.2");
@@ -414,8 +416,7 @@ export function resolveHighSignalLiveModelLimit(params: {
 }): number {
   const trimmed = params.rawMaxModels?.trim();
   if (trimmed) {
-    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-    return Number.isSafeInteger(parsed) ? Math.max(0, parsed) : 0;
+    return parseStrictNonNegativeInteger(trimmed) ?? 0;
   }
   if (params.useExplicitModels) {
     return 0;

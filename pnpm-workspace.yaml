@@ -106,7 +106,6 @@ allowBuilds:
   koffi: false
   node-llama-cpp: true
   protobufjs: true
-  sharp: true
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true

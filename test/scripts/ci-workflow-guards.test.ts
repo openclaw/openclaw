@@ -74,9 +74,13 @@ describe("ci workflow guards", () => {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("fetch_timeout_seconds=90");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
       expect(checkoutStep.run, jobName).toContain(
         "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+      );
+      expect(checkoutStep.run, jobName).toContain(
+        'if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then',
       );
       expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
       expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
@@ -96,7 +100,7 @@ describe("ci workflow guards", () => {
     expect(workflow).not.toContain("$fetchInfo.RedirectStandardOutput = $true");
     expect(workflow).not.toContain("$fetchInfo.RedirectStandardError = $true");
     expect(workflow).toContain(
-      '--no-tags --no-progress --prune --no-recurse-submodules --depth=50',
+      "--no-tags --no-progress --prune --no-recurse-submodules --depth=50",
     );
     expect(workflow).toContain("$fetch = New-Object System.Diagnostics.Process");
     expect(workflow).toContain("$fetch.StartInfo = $fetchInfo");
@@ -131,6 +135,16 @@ describe("ci workflow guards", () => {
     expect(buildDistStep.run).toBe("pnpm build:ci-artifacts");
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Build Control UI");
     expect(buildArtifactSteps.some((step) => step.run === "pnpm ui:build")).toBe(false);
+  });
+
+  it("gives quiet Node test shards enough no-output runway", () => {
+    const workflow = readCiWorkflow();
+    const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
+    const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
+
+    expect(nodeTestJob["timeout-minutes"]).toBe(60);
+    expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("900000");
+    expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
   });
 
   it("uploads a CI timing summary after the run lanes finish", () => {

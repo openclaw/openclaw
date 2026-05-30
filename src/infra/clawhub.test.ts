@@ -62,15 +62,9 @@ async function expectStalledBodyReadTimeout(params: {
   download: () => Promise<unknown>;
   expectedError: RegExp;
   cancel: ReturnType<typeof vi.fn>;
-  timeoutMs: number;
 }): Promise<void> {
-  vi.useFakeTimers();
-  const downloadPromise = params.download();
-  const rejection = expect(downloadPromise).rejects.toThrow(params.expectedError);
-
-  await vi.advanceTimersByTimeAsync(0);
-  await vi.advanceTimersByTimeAsync(params.timeoutMs);
-  await rejection;
+  vi.useRealTimers();
+  await expect(params.download()).rejects.toThrow(params.expectedError);
 
   expect(params.cancel).toHaveBeenCalledTimes(1);
   expect(params.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
@@ -816,7 +810,6 @@ describe("clawhub helpers", () => {
         }),
       expectedError: /skill archive download for agentreceipt body stalled after 5ms/i,
       cancel: stalled.cancel,
-      timeoutMs: 5,
     });
   });
 
@@ -837,7 +830,6 @@ describe("clawhub helpers", () => {
       expectedError:
         /package archive download for @hyf\/zai-external-alpha body stalled after 5ms/i,
       cancel: stalled.cancel,
-      timeoutMs: 5,
     });
   });
 
@@ -858,7 +850,6 @@ describe("clawhub helpers", () => {
         }),
       expectedError: /ClawPack download for demo@1.2.3 body stalled after 5ms/i,
       cancel: stalled.cancel,
-      timeoutMs: 5,
     });
   });
 

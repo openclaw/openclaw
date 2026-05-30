@@ -11,8 +11,13 @@ import {
 } from "./dreaming.ts";
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
-  return {
+  const props: DreamingProps = {
     active: true,
+    selectedAgentId: "main",
+    agentOptions: [
+      { id: "main", label: "main" },
+      { id: "ceo", label: "ceo" },
+    ],
     shortTermCount: 47,
     groundedSignalCount: 9,
     totalSignalCount: 182,
@@ -184,6 +189,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
       ],
     },
     onRefresh: () => {},
+    onSelectAgent: () => {},
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshMemoryPalace: () => {},
@@ -195,8 +201,8 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
     onRepairDreamingArtifacts: () => {},
-    ...overrides,
   };
+  return { ...props, ...overrides };
 }
 
 function renderInto(props: DreamingProps): HTMLDivElement {

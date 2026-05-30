@@ -68,6 +68,7 @@ export type ResolvedPluginMessagingTarget = {
   kind: TargetResolveKindLike;
   display?: string;
   source: "normalized" | "directory";
+  resolutionSource: "plugin";
 };
 
 export function resolveNormalizedTargetInput(
@@ -152,6 +153,7 @@ export async function maybeResolvePluginMessagingTarget(params: {
     kind: resolved.kind,
     display: resolved.display,
     source: resolved.source ?? "normalized",
+    resolutionSource: "plugin",
   };
 }
 

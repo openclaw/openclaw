@@ -22,7 +22,6 @@ import { DefaultResourceLoader } from "./resource-loader.js";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
-import { time } from "./timings.js";
 import {
   createBashTool,
   createCodingTools,
@@ -110,7 +109,7 @@ export type {
   ToolDefinition,
 } from "./extensions/index.js";
 export type { PromptTemplate } from "./prompt-templates.js";
-export type { Skill } from "./skills.js";
+export type { Skill } from "../../skills/loading/session.js";
 export type { Tool } from "./tools/index.js";
 
 export {
@@ -218,7 +217,6 @@ export async function createAgentSession(
   if (!resourceLoader) {
     resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
     await resourceLoader.reload();
-    time("resourceLoader.reload");
   }
 
   // Check if session has existing data to restore

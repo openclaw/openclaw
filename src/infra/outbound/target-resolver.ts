@@ -28,6 +28,7 @@ export type ResolvedMessagingTarget = {
   kind: TargetResolveKind;
   display?: string;
   source: "normalized" | "directory";
+  resolutionSource: "plugin" | "directory" | "normalized";
 };
 
 export type ResolveMessagingTargetResult =
@@ -314,6 +315,7 @@ function buildNormalizedResolveResult(params: {
       kind: params.kind,
       display: stripTargetPrefixes(params.normalized),
       source: "normalized",
+      resolutionSource: "normalized",
     },
   };
 }
@@ -403,6 +405,7 @@ export async function resolveMessagingTarget(params: {
         kind,
         display: entry.name ?? entry.handle ?? stripTargetPrefixes(entry.id),
         source: "directory",
+        resolutionSource: "directory",
       },
     };
   }
@@ -418,6 +421,7 @@ export async function resolveMessagingTarget(params: {
             kind,
             display: best.name ?? best.handle ?? stripTargetPrefixes(best.id),
             source: "directory",
+            resolutionSource: "directory",
           },
         };
       }

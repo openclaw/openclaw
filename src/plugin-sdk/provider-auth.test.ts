@@ -156,4 +156,108 @@ describe("provider auth profile helpers", () => {
       { externalCli },
     );
   });
+
+  it("accepts plus-signed Copilot token expiry strings", async () => {
+    vi.resetModules();
+
+    const saved: unknown[] = [];
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "token;proxy-ep=proxy.individual.githubcopilot.com",
+            expires_at: "+2000000000",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    const result = await resolveCopilotApiToken({
+      githubToken: "github-token",
+      fetchImpl,
+      cachePath: "/tmp/copilot-token.json",
+      loadJsonFileImpl: () => undefined,
+      saveJsonFileImpl: (_path, value) => saved.push(value),
+    });
+
+    expect(result.expiresAt).toBe(2_000_000_000_000);
+    expect(saved).toEqual([
+      expect.objectContaining({
+        expiresAt: 2_000_000_000_000,
+        token: "token;proxy-ep=proxy.individual.githubcopilot.com",
+      }),
+    ]);
+  });
+
+  it("rejects Copilot token expiry values outside the supported date range", async () => {
+    vi.resetModules();
+
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "token;proxy-ep=proxy.individual.githubcopilot.com",
+            expires_at: Number.MAX_SAFE_INTEGER,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    await expect(
+      resolveCopilotApiToken({
+        githubToken: "github-token",
+        fetchImpl,
+        cachePath: "/tmp/copilot-token.json",
+        loadJsonFileImpl: () => undefined,
+        saveJsonFileImpl: () => {
+          throw new Error("should not save invalid token");
+        },
+      }),
+    ).rejects.toThrow("Copilot token response has invalid expires_at");
+  });
+
+  it("refreshes cached Copilot tokens with out-of-range expiry values", async () => {
+    vi.resetModules();
+
+    const saved: unknown[] = [];
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
+            expires_at: "+2000000000",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    const result = await resolveCopilotApiToken({
+      githubToken: "github-token",
+      fetchImpl,
+      cachePath: "/tmp/copilot-token.json",
+      loadJsonFileImpl: () => ({
+        token: "cached;proxy-ep=proxy.individual.githubcopilot.com",
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        updatedAt: Date.now(),
+        integrationId: COPILOT_INTEGRATION_ID,
+      }),
+      saveJsonFileImpl: (_path, value) => saved.push(value),
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.source).toBe("fetched:https://api.github.com/copilot_internal/v2/token");
+    expect(result.token).toBe("fresh;proxy-ep=proxy.individual.githubcopilot.com");
+    expect(saved).toEqual([
+      expect.objectContaining({
+        expiresAt: 2_000_000_000_000,
+        token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
+      }),
+    ]);
+  });
 });

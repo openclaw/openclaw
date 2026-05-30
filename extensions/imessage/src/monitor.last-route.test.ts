@@ -168,7 +168,7 @@ describe("iMessage monitor last-route updates", () => {
     expect(recordParams?.updateLastRoute?.sessionKey).toBe(recordParams?.sessionKey);
     expect(recordParams?.updateLastRoute?.sessionKey).not.toBe("agent:main:main");
     expect(recordParams?.updateLastRoute?.channel).toBe("imessage");
-    expect(recordParams?.updateLastRoute?.to).toBe("+15550001111");
+    expect(recordParams?.updateLastRoute?.to).toBe("imessage:+15550001111");
     expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 

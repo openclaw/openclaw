@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import {
   isSafeToCopyOAuthIdentity,
   isSameOAuthIdentity,
@@ -7,7 +8,7 @@ import {
   shouldMirrorRefreshedOAuthCredential,
 } from "./oauth-identity.js";
 import { makeSeededRandom, maybe, randomAsciiString as randomString } from "./oauth-test-utils.js";
-import type { AuthProfileCredential } from "./types.js";
+import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 // Direct unit + fuzz tests for the cross-agent credential-mirroring identity
 // gate introduced for #26322 (CWE-284). These helpers are on the hot-path of
@@ -311,6 +312,7 @@ describe("isSafeToCopyOAuthIdentity (unified copy gate, used for mirror and adop
 describe("shouldMirrorRefreshedOAuthCredential", () => {
   type MirrorCase = {
     name: string;
+    refreshed?: OAuthCredential;
     existing: AuthProfileCredential | undefined;
     shouldMirror: boolean;
     reason: string;
@@ -356,6 +358,36 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
       },
       shouldMirror: true,
       reason: "incoming-fresher",
+    },
+    {
+      name: "out-of-range existing expiry",
+      existing: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "old",
+        refresh: "old-refresh",
+        expires: MAX_DATE_TIMESTAMP_MS + 1,
+        accountId: "acct-1",
+      },
+      shouldMirror: true,
+      reason: "incoming-fresher",
+    },
+    {
+      name: "out-of-range refreshed expiry",
+      refreshed: {
+        ...refreshed,
+        expires: MAX_DATE_TIMESTAMP_MS + 1,
+      },
+      existing: {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "old",
+        refresh: "old-refresh",
+        expires: 1_000,
+        accountId: "acct-1",
+      },
+      shouldMirror: false,
+      reason: "incoming-not-fresher",
     },
     {
       name: "identity upgrade",
@@ -420,14 +452,17 @@ describe("shouldMirrorRefreshedOAuthCredential", () => {
     },
   ];
 
-  it.each(cases)("returns $reason for $name", ({ existing, shouldMirror, reason }) => {
-    expect(
-      shouldMirrorRefreshedOAuthCredential({
-        existing,
-        refreshed,
-      }),
-    ).toEqual({ shouldMirror, reason });
-  });
+  it.each(cases)(
+    "returns $reason for $name",
+    ({ existing, refreshed: caseRefreshed, shouldMirror, reason }) => {
+      expect(
+        shouldMirrorRefreshedOAuthCredential({
+          existing,
+          refreshed: caseRefreshed ?? refreshed,
+        }),
+      ).toEqual({ shouldMirror, reason });
+    },
+  );
 
   it("refuses identity regression from a known-account main credential", () => {
     expect(

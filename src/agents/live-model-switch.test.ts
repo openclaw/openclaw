@@ -497,6 +497,7 @@ describe("live model switch", () => {
 
       expect(result).toBeUndefined();
       expect(state.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/session-store.json", {
+        hydrateSkillPromptRefs: false,
         skipCache: true,
         clone: false,
       });
