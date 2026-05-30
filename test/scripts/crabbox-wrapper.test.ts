@@ -416,16 +416,14 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--target", "windows", "--", "echo ok"],
+      { env: { CRABBOX_PROVIDER: "aws" } },
     );
 
     expect(result.status).toBe(0);
-    expect(parseFakeCrabboxOutput(result).args).toEqual([
-      "run",
-      "--target",
-      "windows",
-      "--",
-      "echo ok",
-    ]);
+    expect(parseFakeCrabboxOutput(result).args).toEqual(
+      ["run", "--target", "windows", "--", "echo ok"],
+      { env: { CRABBOX_PROVIDER: "aws" } },
+    );
     expect(result.stderr).toContain("provider=aws");
   });
 
