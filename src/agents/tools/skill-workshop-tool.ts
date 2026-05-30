@@ -27,7 +27,7 @@ import {
   type AnyAgentTool,
 } from "./common.js";
 
-const SKILL_RESEARCH_ACTIONS = [
+const SKILL_WORKSHOP_ACTIONS = [
   "create",
   "update",
   "revise",
@@ -45,9 +45,9 @@ const SKILL_PROPOSAL_STATUSES = [
   "stale",
 ] as const satisfies readonly SkillProposalStatus[];
 
-const SkillResearchToolSchema = Type.Object(
+const SkillWorkshopToolSchema = Type.Object(
   {
-    action: stringEnum(SKILL_RESEARCH_ACTIONS, {
+    action: stringEnum(SKILL_WORKSHOP_ACTIONS, {
       description:
         "create for a new skill proposal, update for an existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery, apply/reject/quarantine for explicit proposal lifecycle actions.",
     }),
@@ -103,7 +103,7 @@ const SkillResearchToolSchema = Type.Object(
         { description: "Optional support files to store with the proposal." },
       ),
     ),
-    goal: Type.Optional(Type.String({ description: "Research or improvement goal." })),
+    goal: Type.Optional(Type.String({ description: "Proposal or improvement goal." })),
     evidence: Type.Optional(Type.String({ description: "Short evidence or notes." })),
     reason: Type.Optional(
       Type.String({
@@ -114,20 +114,20 @@ const SkillResearchToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type SkillResearchToolOptions = {
+export type SkillWorkshopToolOptions = {
   workspaceDir: string;
   config?: OpenClawConfig;
   agentId?: string;
 };
 
-export function createSkillResearchTool(options: SkillResearchToolOptions): AnyAgentTool {
+export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyAgentTool {
   return {
-    label: "Skill Research",
-    name: "skill_research",
+    label: "Skill Workshop",
+    name: "skill_workshop",
     displaySummary: "Propose a reusable skill",
     description:
       "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals when reusable procedures should be captured, improved, or explicitly approved.",
-    parameters: SkillResearchToolSchema,
+    parameters: SkillWorkshopToolSchema,
     execute: async (_toolCallId, args) => {
       const params = asToolParamsRecord(args);
       const action = readStringParam(params, "action", { required: true });
@@ -205,7 +205,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
           description: readStringParam(params, "description", { required: true }),
           content: proposalContent,
           supportFiles,
-          createdBy: "skill-research",
+          createdBy: "skill-workshop",
           goal,
           evidence,
         });
@@ -220,7 +220,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
           }),
           content: proposalContent,
           supportFiles,
-          createdBy: "skill-research",
+          createdBy: "skill-workshop",
           goal,
           evidence,
         });
@@ -242,7 +242,7 @@ export function createSkillResearchTool(options: SkillResearchToolOptions): AnyA
           evidence,
         });
       } else {
-        throw new ToolInputError(`action must be one of ${SKILL_RESEARCH_ACTIONS.join(", ")}`);
+        throw new ToolInputError(`action must be one of ${SKILL_WORKSHOP_ACTIONS.join(", ")}`);
       }
 
       return proposalResult(proposal);

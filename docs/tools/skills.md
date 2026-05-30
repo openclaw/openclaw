@@ -169,7 +169,7 @@ openclaw skills workshop reject <proposal-id>
 openclaw skills workshop quarantine <proposal-id>
 ```
 
-Agents can draft proposals through the `skill_research` tool when they identify
+Agents can draft proposals through the `skill_workshop` tool when they identify
 work worth reusing and can revise pending proposals during review. When the
 user explicitly asks to approve/use/apply, reject, or quarantine a specific
 proposal, the tool can perform that lifecycle action through Skill Workshop

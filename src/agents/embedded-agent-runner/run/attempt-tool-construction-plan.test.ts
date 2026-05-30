@@ -302,11 +302,11 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
       },
     );
     expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["skill_research"] }),
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["skill_workshop"] }),
       {
         constructTools: true,
         includeCoreTools: true,
-        runtimeToolAllowlist: ["skill_research"],
+        runtimeToolAllowlist: ["skill_workshop"],
         coding: {
           includeBaseCodingTools: false,
           includeShellTools: false,

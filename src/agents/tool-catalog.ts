@@ -293,8 +293,8 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
-    id: "skill_research",
-    label: "skill_research",
+    id: "skill_workshop",
+    label: "skill_workshop",
     description:
       "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     sectionId: "agents",

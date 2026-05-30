@@ -96,8 +96,8 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
 ## Propose before applying
 
-For agent-generated or research-derived procedures, use a Skill Workshop
-proposal instead of writing `SKILL.md` directly:
+For agent-generated procedures, use a Skill Workshop proposal instead of
+writing `SKILL.md` directly:
 
 ```bash
 openclaw skills workshop propose-create \

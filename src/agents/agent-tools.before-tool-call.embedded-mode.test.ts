@@ -313,15 +313,15 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
-  it("requires approval before skill_research applies a proposal", async () => {
+  it("requires approval before skill_workshop applies a proposal", async () => {
     (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
     mockCallGatewayTool.mockResolvedValueOnce({
-      id: "skill-research-approval",
+      id: "skill-workshop-approval",
       decision: PluginApprovalResolutions.ALLOW_ONCE,
     });
 
     const result = await runBeforeToolCallHook({
-      toolName: "skill_research",
+      toolName: "skill_workshop",
       params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
       toolCallId: "call-skill-apply",
       ctx: {
@@ -342,7 +342,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
       approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
     });
-    const approvalCall = requireApprovalRequestCall("skill_research approval request");
+    const approvalCall = requireApprovalRequestCall("skill_workshop approval request");
     expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Apply workspace skill proposal");
     expect(approvalCall.request.description).toBe(
@@ -350,16 +350,16 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     );
     expect(approvalCall.request.severity).toBe("warning");
     expect(approvalCall.request.allowedDecisions).toEqual(["allow-once", "deny"]);
-    expect(approvalCall.request.toolName).toBe("skill_research");
+    expect(approvalCall.request.toolName).toBe("skill_workshop");
     expect(approvalCall.request.toolCallId).toBe("call-skill-apply");
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
-  it("does not require skill_research lifecycle approval in auto mode", async () => {
+  it("does not require skill_workshop lifecycle approval in auto mode", async () => {
     (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
     const result = await runBeforeToolCallHook({
-      toolName: "skill_research",
+      toolName: "skill_workshop",
       params: { action: "reject", proposal_id: "weather-20260530-a1b2c3d4e5" },
       ctx: {
         config: {

@@ -3,19 +3,19 @@ import type { PluginHookBeforeToolCallResult } from "../../plugins/types.js";
 import { asNullableRecord } from "../../shared/record-coerce.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 
-const SKILL_RESEARCH_LIFECYCLE_ACTIONS = new Set(["apply", "reject", "quarantine"]);
+const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set(["apply", "reject", "quarantine"]);
 
-type SkillResearchLifecycleAction = "apply" | "reject" | "quarantine";
+type SkillWorkshopLifecycleAction = "apply" | "reject" | "quarantine";
 
-function readLifecycleAction(params: unknown): SkillResearchLifecycleAction | undefined {
+function readLifecycleAction(params: unknown): SkillWorkshopLifecycleAction | undefined {
   const action = asNullableRecord(params)?.action;
-  if (typeof action !== "string" || !SKILL_RESEARCH_LIFECYCLE_ACTIONS.has(action)) {
+  if (typeof action !== "string" || !SKILL_WORKSHOP_LIFECYCLE_ACTIONS.has(action)) {
     return undefined;
   }
-  return action as SkillResearchLifecycleAction;
+  return action as SkillWorkshopLifecycleAction;
 }
 
-function lifecycleApprovalText(action: SkillResearchLifecycleAction): {
+function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
   title: string;
   description: string;
   severity: "info" | "warning";
@@ -41,12 +41,12 @@ function lifecycleApprovalText(action: SkillResearchLifecycleAction): {
   };
 }
 
-export function resolveSkillResearchToolApproval(params: {
+export function resolveSkillWorkshopToolApproval(params: {
   toolName: string;
   toolParams: unknown;
   config?: OpenClawConfig;
 }): PluginHookBeforeToolCallResult | undefined {
-  if (params.toolName !== "skill_research") {
+  if (params.toolName !== "skill_workshop") {
     return undefined;
   }
   const action = readLifecycleAction(params.toolParams);

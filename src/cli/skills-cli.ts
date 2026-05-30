@@ -552,7 +552,7 @@ export function registerSkillsCli(program: Command) {
       "--proposal-dir <path>",
       "Path to proposal directory with PROPOSAL.md and UTF-8 text support files",
     )
-    .option("--goal <text>", "Research or improvement goal")
+    .option("--goal <text>", "Proposal or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
     .action(
@@ -603,7 +603,7 @@ export function registerSkillsCli(program: Command) {
       "--proposal-dir <path>",
       "Path to proposal directory with PROPOSAL.md and UTF-8 text support files",
     )
-    .option("--goal <text>", "Research or improvement goal")
+    .option("--goal <text>", "Proposal or improvement goal")
     .option("--evidence <text>", "Evidence or notes for the proposal")
     .option("--json", "Output as JSON", false)
     .action(

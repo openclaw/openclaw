@@ -185,9 +185,9 @@ scans them, verifies their hashes before apply, and writes them beside the
 active `SKILL.md` only after the proposal is applied.
 
 Agents can create, revise, list, and inspect pending proposals through the
-`skill_research` tool when they identify reusable work. If the user explicitly
+`skill_workshop` tool when they identify reusable work. If the user explicitly
 asks to approve/use/apply, reject, or quarantine a specific proposal,
-`skill_research` can also perform that proposal lifecycle action through the
+`skill_workshop` can also perform that proposal lifecycle action through the
 same Skill Workshop safeguards.
 
 ## Related

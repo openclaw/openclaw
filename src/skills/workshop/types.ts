@@ -8,7 +8,7 @@ export const SKILL_WORKSHOP_ROLLBACK_SCHEMA = "openclaw.skill-workshop.rollback.
 export type SkillProposalKind = "create" | "update";
 export type SkillProposalStatus = "pending" | "applied" | "rejected" | "quarantined" | "stale";
 export type SkillProposalScannerState = "pending" | "clean" | "failed" | "quarantined";
-export type SkillProposalSource = "skill-research" | "skill-workshop" | "cli" | "gateway";
+export type SkillProposalSource = "skill-workshop" | "cli" | "gateway";
 
 export type SkillProposalScan = {
   state: SkillProposalScannerState;

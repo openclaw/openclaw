@@ -41,7 +41,7 @@ import {
   resolveSkillTelemetrySourceValue,
 } from "../skills/loading/source.js";
 import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
-import { resolveSkillResearchToolApproval } from "../skills/workshop/policy.js";
+import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
 import { isPlainObject } from "../utils.js";
 import { adjustedParamsByToolCallId } from "./agent-tools.before-tool-call.state.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
@@ -839,7 +839,7 @@ export async function runBeforeToolCallHook(args: {
     const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies();
     const normalizedParams = isPlainObject(params) ? params : {};
-    const corePolicyResult = resolveSkillResearchToolApproval({
+    const corePolicyResult = resolveSkillWorkshopToolApproval({
       toolName,
       toolParams: normalizedParams,
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),

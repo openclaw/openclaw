@@ -38,7 +38,7 @@ const coreTools = [
   stubActionTool("sessions_spawn", ["spawn", "handoff"]),
   stubActionTool("subagents", ["list", "show"]),
   stubActionTool("session_status", ["get", "show"]),
-  stubTool("skill_research"),
+  stubTool("skill_workshop"),
   stubActionTool("browser", ["status", "snapshot"]),
   stubTool("tts"),
   stubTool("image_generate"),

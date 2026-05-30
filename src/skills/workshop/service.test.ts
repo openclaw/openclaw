@@ -60,7 +60,7 @@ describe("skill workshop proposals", () => {
           content: "export function parseWeather(value) { return value; }\n",
         },
       ],
-      createdBy: "skill-research",
+      createdBy: "skill-workshop",
       goal: "Reuse weather lookup steps",
     });
 

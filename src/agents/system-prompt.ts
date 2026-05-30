@@ -750,7 +750,7 @@ export function buildAgentSystemPrompt(params: {
       "On-demand list/status visibility for sub-agent runs in this requester session; do not use for wait loops",
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
-    skill_research:
+    skill_workshop:
       "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     image: "Analyze an image with the configured image model",
     image_generate: "Generate images with the configured image-generation model",
@@ -782,7 +782,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_yield",
     "subagents",
     "session_status",
-    "skill_research",
+    "skill_workshop",
     "image",
     "image_generate",
   ];
@@ -923,20 +923,20 @@ export function buildAgentSystemPrompt(params: {
     skillsPrompt,
     readToolName,
   });
-  const skillResearchSection = availableTools.has("skill_research")
+  const skillWorkshopSection = availableTools.has("skill_workshop")
     ? [
-        "## Skill Research",
-        "Use `skill_research` when the user wants to capture, create, draft, formalize, improve, update, or revise a reusable skill, playbook, workflow, procedure, or durable instruction.",
+        "## Skill Workshop",
+        "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
         "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
-        "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations. The final proposal artifact must go through `skill_research`.",
+        "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations. The final proposal artifact must go through `skill_workshop`.",
         "Use `action=create` for a new skill, `action=update` for an existing approved/live skill, and `action=revise` for an existing pending proposal.",
-        "For `action=revise`, pass `proposal_id` when known. If it is not known, pass the proposal or skill name in `name` so `skill_research` can resolve the pending proposal or return candidates.",
+        "For `action=revise`, pass `proposal_id` when known. If it is not known, pass the proposal or skill name in `name` so `skill_workshop` can resolve the pending proposal or return candidates.",
         "Use `action=list` or `action=inspect` only when you need to find or read pending proposals before revising. Do not use filesystem search for proposal discovery.",
         "If the user names an existing skill, proposal, or workflow, inspect it first when available.",
-        "Generated or researched skills are pending proposals by default. Do not apply, install, approve, enable, or write into live skills unless the user explicitly asks for that separate action.",
+        "Generated skills are pending proposals by default. Do not apply, install, approve, enable, or write into live skills unless the user explicitly asks for that separate action.",
         "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal. Pass `proposal_id`; if it is not known, use `action=list` or `action=inspect` first.",
-        "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands. Proposal lifecycle changes must use `skill_research`.",
-        "You may gather context first, but the durable proposal write or lifecycle change must use `skill_research`.",
+        "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands. Proposal lifecycle changes must use `skill_workshop`.",
+        "You may gather context first, but the durable proposal write or lifecycle change must use `skill_workshop`.",
         "",
       ]
     : [];
@@ -1102,7 +1102,7 @@ export function buildAgentSystemPrompt(params: {
       "`restart`, not stop+start.",
       "",
       ...skillsSection,
-      ...skillResearchSection,
+      ...skillWorkshopSection,
       ...memorySection,
       hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
       hasGateway && !isMinimal

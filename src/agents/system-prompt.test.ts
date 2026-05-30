@@ -683,24 +683,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("If several apply, choose the most specific.");
   });
 
-  it("instructs models to use skill_research only when the tool is available", () => {
+  it("instructs models to use skill_workshop only when the tool is available", () => {
     const withoutTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["read"],
     });
-    expect(withoutTool).not.toContain("## Skill Research");
-    expect(withoutTool).not.toContain("use `skill_research`");
+    expect(withoutTool).not.toContain("## Skill Workshop");
+    expect(withoutTool).not.toContain("use `skill_workshop`");
 
     const withTool = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      toolNames: ["read", "skill_research"],
+      toolNames: ["read", "skill_workshop"],
     });
     expect(withTool).toContain(
-      "- skill_research: Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
+      "- skill_workshop: Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     );
-    expect(withTool).toContain("## Skill Research");
+    expect(withTool).toContain("## Skill Workshop");
     expect(withTool).toContain(
-      "Use `skill_research` when the user wants to capture, create, draft, formalize, improve, update, or revise a reusable skill, playbook, workflow, procedure, or durable instruction.",
+      "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
     );
     expect(withTool).toContain(
       "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
@@ -716,11 +716,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain(
       "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
     );
+    expect(withTool).toContain("Generated skills are pending proposals by default.");
     expect(withTool).toContain(
       "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands.",
     );
     expect(withTool).toContain(
-      "You may gather context first, but the durable proposal write or lifecycle change must use `skill_research`.",
+      "You may gather context first, but the durable proposal write or lifecycle change must use `skill_workshop`.",
     );
   });
 

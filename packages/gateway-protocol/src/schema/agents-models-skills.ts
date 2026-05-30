@@ -496,7 +496,6 @@ const SkillProposalScanStateSchema = Type.Union([
   Type.Literal("quarantined"),
 ]);
 const SkillProposalSourceSchema = Type.Union([
-  Type.Literal("skill-research"),
   Type.Literal("skill-workshop"),
   Type.Literal("cli"),
   Type.Literal("gateway"),
