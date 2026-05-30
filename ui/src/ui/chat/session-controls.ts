@@ -19,6 +19,7 @@ import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../session-display.ts";
 import {
   buildAgentMainSessionKey,
+  isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -1118,14 +1119,6 @@ type ChatAgentFilterOption = {
 function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
-}
-
-function isSessionKeyTiedToAgent(key: string, agentId: string, defaultAgentId: string): boolean {
-  const parsed = parseAgentSessionKey(key);
-  if (parsed) {
-    return normalizeAgentId(parsed.agentId) === agentId;
-  }
-  return agentId === defaultAgentId;
 }
 
 function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {

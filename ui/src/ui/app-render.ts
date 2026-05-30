@@ -155,6 +155,7 @@ import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.t
 import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
+  isSessionKeyTiedToAgent,
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -265,11 +266,7 @@ function isSidebarSessionForSelectedAgent(
   row: GatewaySessionRow,
   selectedAgentId: string,
 ): boolean {
-  const parsed = parseAgentSessionKey(row.key);
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId) === selectedAgentId;
-  }
-  return selectedAgentId === normalizeAgentId(state.agentsList?.defaultId ?? "main");
+  return isSessionKeyTiedToAgent(row.key, selectedAgentId, state.agentsList?.defaultId ?? "main");
 }
 
 function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {

@@ -22,6 +22,7 @@ import { icons } from "./icons.ts";
 import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
+  isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -756,16 +757,12 @@ function countHiddenCronSessions(state: AppViewState, sessions: SessionsListResu
     parseAgentSessionKey(state.sessionKey)?.agentId ?? state.agentsList?.defaultId ?? "main",
   );
   const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
-  const isTiedToActiveAgent = (key: string) => {
-    const parsed = parseAgentSessionKey(key);
-    if (parsed) {
-      return normalizeAgentId(parsed.agentId) === activeAgentId;
-    }
-    return activeAgentId === defaultAgentId;
-  };
 
   return sessions.sessions.filter(
-    (s) => isCronSessionKey(s.key) && s.key !== state.sessionKey && isTiedToActiveAgent(s.key),
+    (s) =>
+      isCronSessionKey(s.key) &&
+      s.key !== state.sessionKey &&
+      isSessionKeyTiedToAgent(s.key, activeAgentId, defaultAgentId),
   ).length;
 }
 
