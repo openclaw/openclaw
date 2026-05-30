@@ -22,6 +22,8 @@ export {
   parseStrictPositiveInteger,
   positiveSecondsToSafeMilliseconds,
   nonNegativeSecondsToSafeMilliseconds,
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
   timestampMsToIsoString,
   resolveExpiresAtMsFromDurationSeconds,
   resolveExpiresAtMsFromDurationOrEpoch,

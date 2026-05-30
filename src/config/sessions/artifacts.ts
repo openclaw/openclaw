@@ -1,3 +1,4 @@
+import { timestampMsToIsoFileStamp } from "../../shared/number-coercion.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
@@ -122,7 +123,7 @@ export function parseUsageCountedSessionIdFromFileName(fileName: string): string
 }
 
 export function formatSessionArchiveTimestamp(nowMs = Date.now()): string {
-  return new Date(nowMs).toISOString().replaceAll(":", "-");
+  return timestampMsToIsoFileStamp(nowMs);
 }
 
 function restoreSessionArchiveTimestamp(raw: string): string {

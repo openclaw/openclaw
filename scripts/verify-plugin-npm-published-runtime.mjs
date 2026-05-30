@@ -233,9 +233,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export function readPositiveIntEnv(name, fallback, env = process.env) {
+  const text = String(env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
 async function packPublishedPackage(spec, destinationDir) {
-  const attempts = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS ?? "90", 10);
-  const delayMs = Number.parseInt(process.env.OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS ?? "10000", 10);
+  const attempts = readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_VERIFY_ATTEMPTS", 90);
+  const delayMs = readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_VERIFY_DELAY_MS", 10000);
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
@@ -254,14 +266,8 @@ async function packPublishedPackage(spec, destinationDir) {
 }
 
 async function verifyPublishedPackageReadme(spec) {
-  const attempts = Number.parseInt(
-    process.env.OPENCLAW_PLUGIN_NPM_README_VERIFY_ATTEMPTS ?? "6",
-    10,
-  );
-  const delayMs = Number.parseInt(
-    process.env.OPENCLAW_PLUGIN_NPM_README_VERIFY_DELAY_MS ?? "10000",
-    10,
-  );
+  const attempts = readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_README_VERIFY_ATTEMPTS", 6);
+  const delayMs = readPositiveIntEnv("OPENCLAW_PLUGIN_NPM_README_VERIFY_DELAY_MS", 10000);
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {

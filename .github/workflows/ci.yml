@@ -1420,10 +1420,12 @@ jobs:
           find src \
             -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
             -exec touch -t 200001010000 {} +
-          find packages/llm-core/src \
-            -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
-            -exec touch -t 200001010000 {} +
-          touch -t 200001010000 \
+          if [ -d packages/llm-core/src ]; then
+            find packages/llm-core/src \
+              -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
+              -exec touch -t 200001010000 {} +
+          fi
+          cache_inputs=(
             tsconfig.json \
             tsconfig.plugin-sdk.dts.json \
             packages/plugin-sdk/tsconfig.json \
@@ -1435,6 +1437,12 @@ jobs:
             scripts/lib/plugin-sdk-entries.mjs \
             package.json \
             pnpm-lock.yaml
+          )
+          for cache_input in "${cache_inputs[@]}"; do
+            if [ -e "$cache_input" ]; then
+              touch -t 200001010000 "$cache_input"
+            fi
+          done
 
       - name: Run additional check shard
         env:

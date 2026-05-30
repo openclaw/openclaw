@@ -69,12 +69,20 @@ export function buildTestLiveEnv(args, baseEnv = process.env) {
   };
 }
 
-function parsePositiveInt(value, fallback) {
-  if (!value) {
-    return fallback;
+export function resolveTestLiveHeartbeatMs(baseEnv = process.env) {
+  const value = baseEnv.OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS;
+  if (value === undefined || value === "") {
+    return 20_000;
   }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  const text = value.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: ${text}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`invalid OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS: ${text}`);
+  }
+  return parsed;
 }
 
 export function buildTestLivePnpmArgs(args) {
@@ -96,7 +104,7 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   }
 
   const env = buildTestLiveEnv(args, baseEnv);
-  const heartbeatMs = parsePositiveInt(baseEnv.OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS, 20_000);
+  const heartbeatMs = resolveTestLiveHeartbeatMs(baseEnv);
   const startedAt = Date.now();
   let lastOutputAt = startedAt;
 

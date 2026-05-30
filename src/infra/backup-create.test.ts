@@ -336,6 +336,36 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("falls back to epoch when injected nowMs and Date.now are outside Date range", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-invalid-fallback-now-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            dryRun: true,
+            includeWorkspace: false,
+            nowMs: 8_640_000_000_000_001,
+          });
+
+          expect(result.createdAt).toBe("1970-01-01T00:00:00.000Z");
+          expect(path.basename(result.archivePath)).toContain("openclaw-backup.tar.gz");
+          expect(path.basename(result.archivePath)).not.toContain("NaN");
+        } finally {
+          dateNowSpy.mockRestore();
+        }
+      },
+    );
+  });
+
   it("skips current live volatile state files while preserving workspace locks", async () => {
     await withOpenClawTestState(
       {

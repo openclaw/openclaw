@@ -20,11 +20,14 @@ import {
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
   resolvePositiveTimerTimeoutMs,
+  resolveDateTimestampMs,
   parseStrictFiniteNumber,
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
+  resolveTimestampMsToIsoString,
+  timestampMsToIsoFileStamp,
   timestampMsToIsoString,
 } from "./number-coercion.js";
 
@@ -130,6 +133,25 @@ describe("number-coercion", () => {
     expect(timestampMsToIsoString(8_640_000_000_000_001)).toBeUndefined();
     expect(timestampMsToIsoString(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(timestampMsToIsoString("0")).toBeUndefined();
+  });
+
+  test("timestamp fallback helpers resolve Date-invalid timestamps", () => {
+    expect(resolveDateTimestampMs(1_000)).toBe(1_000);
+    expect(resolveDateTimestampMs(Number.POSITIVE_INFINITY, 1_000)).toBe(1_000);
+    expect(resolveDateTimestampMs(Number.POSITIVE_INFINITY, Number.NaN)).toBe(0);
+    expect(resolveTimestampMsToIsoString(0)).toBe("1970-01-01T00:00:00.000Z");
+    expect(resolveTimestampMsToIsoString(Number.POSITIVE_INFINITY, 1_000)).toBe(
+      "1970-01-01T00:00:01.000Z",
+    );
+    expect(resolveTimestampMsToIsoString(Number.POSITIVE_INFINITY, Number.NaN)).toBe(
+      "1970-01-01T00:00:00.000Z",
+    );
+    expect(timestampMsToIsoFileStamp(Date.parse("2026-02-23T12:34:56.000Z"))).toBe(
+      "2026-02-23T12-34-56.000Z",
+    );
+    expect(timestampMsToIsoFileStamp(9_000_000_000_000_000, 1_000)).toBe(
+      "1970-01-01T00-00-01.000Z",
+    );
   });
 
   test("expiry helpers resolve safe absolute timestamps", () => {

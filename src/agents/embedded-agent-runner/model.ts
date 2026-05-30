@@ -984,11 +984,24 @@ function resolveConfiguredFallbackModel(params: {
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
   const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
+  if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
+    return undefined;
+  }
+  const staticCatalogModel = configuredModel
+    ? undefined
+    : resolveBundledStaticCatalogModel({
+        provider,
+        modelId,
+        cfg,
+        workspaceDir,
+        includeRuntimeDiscovery: true,
+      });
+  const metadataModel = configuredModel ?? staticCatalogModel;
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
   const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
-  const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
+  const modelHeaders = sanitizeModelHeaders(metadataModel?.headers, {
     stripSecretRefMarkers: true,
   });
   const resolvedParams = mergeConfiguredRuntimeModelParams({
@@ -996,18 +1009,16 @@ function resolveConfiguredFallbackModel(params: {
     provider,
     modelId,
     providerParams: providerConfig?.params,
-    configuredParams: configuredModel?.params,
+    configuredParams: metadataModel?.params,
   });
-  if (!hasConfiguredFallbackSurface({ providerConfig, configuredModel, modelId })) {
-    return undefined;
-  }
   const fallbackTransport = resolveProviderTransport({
     provider,
     api:
       normalizeResolvedTransportApi(configuredModel?.api) ??
       resolveConfiguredProviderDefaultApi(providerConfig) ??
+      normalizeResolvedTransportApi(staticCatalogModel?.api) ??
       "openai-responses",
-    baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
+    baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? staticCatalogModel?.baseUrl,
     cfg,
     workspaceDir,
     runtimeHooks,
@@ -1025,8 +1036,8 @@ function resolveConfiguredFallbackModel(params: {
   });
   const fallbackReasoning = resolveConfiguredFallbackReasoning({
     provider,
-    compat: configuredModel?.compat,
-    reasoning: configuredModel?.reasoning,
+    compat: metadataModel?.compat,
+    reasoning: metadataModel?.reasoning,
   });
   return normalizeResolvedModel({
     provider,
@@ -1037,7 +1048,7 @@ function resolveConfiguredFallbackModel(params: {
       attachModelProviderRequestTransport(
         {
           id: modelId,
-          name: modelId,
+          name: metadataModel?.name ?? modelId,
           api: requestConfig.api ?? "openai-responses",
           provider,
           baseUrl: requestConfig.baseUrl,
@@ -1045,29 +1056,32 @@ function resolveConfiguredFallbackModel(params: {
           input: resolveProviderModelInput({
             provider,
             modelId,
-            modelName: configuredModel?.name ?? modelId,
-            input: configuredModel?.input,
+            modelName: metadataModel?.name ?? modelId,
+            input: metadataModel?.input,
           }),
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          cost: metadataModel?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow:
             configuredModel?.contextWindow ??
             providerConfig?.contextWindow ??
             providerConfig?.models?.[0]?.contextWindow ??
+            staticCatalogModel?.contextWindow ??
             DEFAULT_CONTEXT_TOKENS,
           contextTokens:
             configuredModel?.contextTokens ??
             providerConfig?.contextTokens ??
-            providerConfig?.models?.[0]?.contextTokens,
+            providerConfig?.models?.[0]?.contextTokens ??
+            staticCatalogModel?.contextTokens,
           maxTokens:
             configuredModel?.maxTokens ??
             providerConfig?.maxTokens ??
             providerConfig?.models?.[0]?.maxTokens ??
+            staticCatalogModel?.maxTokens ??
             DEFAULT_CONTEXT_TOKENS,
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
-          compat: configuredModel?.compat,
-          mediaInput: configuredModel?.mediaInput,
+          compat: metadataModel?.compat,
+          mediaInput: metadataModel?.mediaInput,
         } as Model,
         providerRequest,
       ),

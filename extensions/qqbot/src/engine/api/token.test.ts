@@ -86,4 +86,25 @@ describe("QQBot token manager", () => {
       expiresAt: Date.now(),
     });
   });
+
+  it("does not throw while logging fetched tokens when the process clock is outside the Date range", async () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    mockGuardedTokenResponse('{"access_token":"token-1","expires_in":7200}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    const manager = new TokenManager({ logger });
+    try {
+      await expect(manager.getAccessToken("app-id", "secret")).resolves.toBe("token-1");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    expect(manager.getStatus("app-id").expiresAt).toBe(7_200_000);
+    expect(logger.debug).toHaveBeenCalledWith(
+      "[qqbot:token:app-id] Cached, expires at: 1970-01-01T02:00:00.000Z",
+    );
+  });
 });

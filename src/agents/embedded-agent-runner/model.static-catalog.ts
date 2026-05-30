@@ -143,6 +143,7 @@ export function resolveBundledStaticCatalogModel(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  includeRuntimeDiscovery?: boolean;
 }): Model | undefined {
   const provider = normalizeProviderId(params.provider);
   if (!provider || !params.modelId.trim()) {
@@ -157,7 +158,10 @@ export function resolveBundledStaticCatalogModel(params: {
     providerFilter: provider,
   });
   for (const entry of plan.entries) {
-    if (entry.discovery !== "static") {
+    if (
+      entry.discovery !== "static" &&
+      !(params.includeRuntimeDiscovery && entry.discovery === "runtime")
+    ) {
       continue;
     }
     const row = entry.rows.find((candidate) =>

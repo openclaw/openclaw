@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getSessionEntry } from "../../config/sessions.js";
 import {
   buildFastReplyCommandContext,
   initFastReplySessionState,
@@ -595,10 +596,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       ),
     ).resolves.toEqual({ text: "ok" });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf8")) as {
-      sessions?: Record<string, { goal?: { objective?: string } }>;
-    };
-    expect(stored.sessions?.[targetSessionKey]?.goal?.objective).toBe("/status");
+    expect(getSessionEntry({ storePath, sessionKey: targetSessionKey })?.goal?.objective).toBe(
+      "/status",
+    );
     const preparedReplyParams = requirePreparedReplyParams();
     expect(preparedReplyParams.command.commandBodyNormalized).toBe(continuationPrompt);
     expect(preparedReplyParams.sessionCtx.BodyForAgent).toBe(continuationPrompt);

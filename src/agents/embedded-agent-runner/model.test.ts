@@ -818,6 +818,84 @@ describe("resolveModel", () => {
     expect(model.api).toBe("openai-completions");
   });
 
+  it("uses bundled static metadata for configured provider fallback token limits", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "xiaomi-token-plan",
+      id: "mimo-v2.5-pro",
+      name: "Xiaomi MiMo V2.5 Pro",
+      api: "openai-completions",
+      baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 32_000,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          "xiaomi-token-plan": {
+            baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("xiaomi-token-plan", "mimo-v2.5-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.name).toBe("Xiaomi MiMo V2.5 Pro");
+    expect(model.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
+    expect(model.contextWindow).toBe(1_048_576);
+    expect(model.maxTokens).toBe(32_000);
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "xiaomi-token-plan",
+      modelId: "mimo-v2.5-pro",
+      cfg,
+      workspaceDir: expect.any(String),
+      includeRuntimeDiscovery: true,
+    });
+  });
+
+  it("keeps provider token overrides ahead of bundled static fallback metadata", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "xiaomi-token-plan",
+      id: "mimo-v2.5-pro",
+      name: "Xiaomi MiMo V2.5 Pro",
+      api: "openai-completions",
+      baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 1, output: 3, cacheRead: 0.2, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      contextTokens: 500_000,
+      maxTokens: 32_000,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          "xiaomi-token-plan": {
+            baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+            api: "openai-completions",
+            contextWindow: 100_000,
+            contextTokens: 90_000,
+            maxTokens: 512,
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("xiaomi-token-plan", "mimo-v2.5-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.contextWindow).toBe(100_000);
+    expect(model.contextTokens).toBe(90_000);
+    expect(model.maxTokens).toBe(512);
+  });
+
   it("does not synthesize unknown models from timeout-only provider overlays", () => {
     const cfg = {
       models: {

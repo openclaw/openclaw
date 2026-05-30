@@ -1941,7 +1941,6 @@
     "vitest": "4.1.7"
   },
   "optionalDependencies": {
-    "sharp": "0.34.5",
     "sqlite-vec": "0.1.9"
   },
   "overrides": {

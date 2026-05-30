@@ -1933,7 +1933,56 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("keeps new room-event CLI sessions transient when reuse fails", async () => {
+  it("keeps the first CLI session created by a room-event turn", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ambient" }],
+      meta: {
+        agentMeta: {
+          sessionId: "new-cli-session",
+          cliSessionBinding: {
+            sessionId: "new-cli-session",
+            authProfileId: "profile",
+          },
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.currentInboundEventKind = "room_event";
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const sessionEntry = {} as unknown as SessionEntry;
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () => sessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      currentInboundEventKind: "room_event",
+      cliSessionId: undefined,
+      cliSessionBinding: undefined,
+    });
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("new-cli-session");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toEqual({
+      sessionId: "new-cli-session",
+      authProfileId: "profile",
+    });
+  });
+
+  it("drops replacement room-event CLI sessions when reuse fails", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("codex-cli", "gpt-5.4"),

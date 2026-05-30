@@ -96,6 +96,7 @@ export function asPositiveSafeInteger(value: unknown): number | undefined {
 export const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 export const MAX_TIMER_TIMEOUT_SECONDS = Math.floor(MAX_TIMER_TIMEOUT_MS / 1000);
 export const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
+export const UNIX_EPOCH_ISO_STRING = "1970-01-01T00:00:00.000Z";
 
 export function asDateTimestampMs(value: unknown): number | undefined {
   return asFiniteNumberInRange(value, {
@@ -107,6 +108,29 @@ export function asDateTimestampMs(value: unknown): number | undefined {
 export function timestampMsToIsoString(value: unknown): string | undefined {
   const timestampMs = asDateTimestampMs(value);
   return timestampMs === undefined ? undefined : new Date(timestampMs).toISOString();
+}
+
+export function resolveDateTimestampMs(
+  value: unknown,
+  fallbackValue: unknown = Date.now(),
+): number {
+  return asDateTimestampMs(value) ?? asDateTimestampMs(fallbackValue) ?? 0;
+}
+
+export function resolveTimestampMsToIsoString(
+  value: unknown,
+  fallbackValue: unknown = Date.now(),
+): string {
+  return (
+    timestampMsToIsoString(value) ?? timestampMsToIsoString(fallbackValue) ?? UNIX_EPOCH_ISO_STRING
+  );
+}
+
+export function timestampMsToIsoFileStamp(
+  value: unknown,
+  fallbackValue: unknown = Date.now(),
+): string {
+  return resolveTimestampMsToIsoString(value, fallbackValue).replaceAll(":", "-");
 }
 
 export function clampTimerTimeoutMs(valueMs: unknown, minMs = 1): number | undefined {

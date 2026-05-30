@@ -517,20 +517,26 @@ describe("waitForAgentRunsToDrain", () => {
   });
 
   it("defaults non-finite drain timeouts before computing the deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-30T00:00:00Z"));
     callGatewayMock.mockResolvedValue({ status: "ok" });
     let activeRunIds = ["run-1"];
 
-    const result = await waitForAgentRunsToDrain({
-      timeoutMs: Number.NaN,
-      getPendingRunIds: () => {
-        const current = activeRunIds;
-        activeRunIds = [];
-        return current;
-      },
-    });
+    try {
+      const result = await waitForAgentRunsToDrain({
+        timeoutMs: Number.NaN,
+        getPendingRunIds: () => {
+          const current = activeRunIds;
+          activeRunIds = [];
+          return current;
+        },
+      });
 
-    expect(result.timedOut).toBe(false);
-    expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
-    expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 1);
+      expect(result.timedOut).toBe(false);
+      expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
+      expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
