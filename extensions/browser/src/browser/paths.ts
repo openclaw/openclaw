@@ -94,6 +94,8 @@ function resolveManagedInboundMediaRef(
   }
 
   if (/^media:\/\//i.test(normalizedSource)) {
+    const rawUriMatch = /^media:\/\/[^/?#]*([^?#]*)/iu.exec(normalizedSource);
+    const rawPath = rawUriMatch?.[1] ?? "";
     let parsed: URL;
     try {
       parsed = new URL(normalizedSource);
@@ -106,7 +108,10 @@ function resolveManagedInboundMediaRef(
         error: `Unsupported media reference location: ${parsed.hostname || "(missing)"}`,
       };
     }
-    const decoded = decodeInboundMediaId(parsed.pathname.replace(/^\/+/, ""), normalizedSource);
+    if (!rawPath.startsWith("/") || rawPath.slice(1).includes("/") || rawPath.includes("\\")) {
+      return { ok: false, error: `Invalid media reference: ${normalizedSource}` };
+    }
+    const decoded = decodeInboundMediaId(rawPath.slice(1), normalizedSource);
     return decoded?.ok
       ? {
           ok: true,

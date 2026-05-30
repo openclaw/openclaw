@@ -345,6 +345,24 @@ describe("resolveExistingUploadPaths", () => {
     });
   });
 
+  it("rejects traversal-shaped inbound media URI references before URL normalization", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const inboundFile = path.join(inboundMediaDir, "report.pdf");
+      await fs.writeFile(inboundFile, "pdf", "utf8");
+
+      const result = await resolveExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: ["media://inbound/nested/../report.pdf"],
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("Invalid media reference");
+      }
+    });
+  });
+
   it("rejects nested absolute inbound media paths", async () => {
     await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
       const nestedDir = path.join(inboundMediaDir, "nested");
