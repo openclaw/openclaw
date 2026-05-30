@@ -1881,6 +1881,84 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("apply the safe transient-thread fix");
   });
 
+  it("keeps thread-start developer instructions stable when post-start continuity rebuilds the turn prompt", async () => {
+    const beforePromptBuild = vi
+      .fn<
+        (event: { prompt?: string; messages?: Array<{ role?: string }> }) => Promise<{
+          systemPrompt: string;
+          prependSystemContext: string;
+          appendSystemContext: string;
+          prependContext: string;
+        }>
+      >()
+      .mockImplementation(async (event) => {
+        const projected =
+          typeof event.prompt === "string" &&
+          event.prompt.includes("OpenClaw assembled context for this turn:");
+        return {
+          systemPrompt: projected ? "continuity codex system" : "base codex system",
+          prependSystemContext: projected ? "projected pre system" : "base pre system",
+          appendSystemContext: projected ? "projected post system" : "base post system",
+          prependContext: projected ? "projected queued context" : "base queued context",
+        };
+      });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage("we already narrowed this to the transient-thread case", Date.now()),
+    );
+    sessionManager.appendMessage(
+      assistantMessage("restricted Codex runs still need bounded continuity", Date.now() + 1),
+    );
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.prompt = "apply the safe transient-thread fix";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(beforePromptBuild).toHaveBeenCalledTimes(2);
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
+    expect(threadStartParams?.developerInstructions).toContain("base codex system");
+    expect(threadStartParams?.developerInstructions).toContain("base pre system");
+    expect(threadStartParams?.developerInstructions).toContain("base post system");
+    expect(threadStartParams?.developerInstructions).not.toContain("continuity codex system");
+    expect(threadStartParams?.developerInstructions).not.toContain("projected pre system");
+    expect(threadStartParams?.developerInstructions).not.toContain("projected post system");
+
+    const inputText = getTurnStartInputText(harness.requests);
+    expect(inputText).toContain("projected queued context");
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("restricted Codex runs still need bounded continuity");
+    expect(inputText).not.toContain("base queued context");
+
+    expect(result.systemPromptReport?.systemPrompt.chars).toBe(
+      [
+        threadStartParams?.developerInstructions ?? "",
+        harness.requests.find((request) => request.method === "turn/start") &&
+          (
+            harness.requests.find((request) => request.method === "turn/start")?.params as {
+              collaborationMode?: {
+                settings?: {
+                  developer_instructions?: string | null;
+                };
+              };
+            }
+          ).collaborationMode?.settings?.developer_instructions,
+      ]
+        .filter((value): value is string => typeof value === "string" && value.length > 0)
+        .join("\n\n").length,
+    );
+  });
+
   it("does not project Codex mirrored transcript echoes that arrive after the binding on resume", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

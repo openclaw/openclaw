@@ -804,9 +804,20 @@ export async function runCodexAppServerAttempt(
       promptBuild.developerInstructions,
       buildCodexTurnCollaborationDeveloperInstructions(),
     );
-  const rebuildCodexTurnPromptFromCurrentProjection = async () => {
+  const rebuildCodexPromptBuildFromCurrentProjection = async () => {
     promptBuild = await buildPromptFromCurrentInputs();
     codexTurnPromptText = decorateCodexTurnPromptText(promptBuild.prompt);
+  };
+  const rebuildCodexTurnPromptTextFromCurrentProjection = async () => {
+    const nextPromptBuild = await buildPromptFromCurrentInputs();
+    // Once thread/start or thread/resume has been sent, native Codex thread
+    // developer instructions are fixed. Keep later continuity rebuilds scoped
+    // to turn input so prompt hooks cannot drift thread-level system context.
+    promptBuild = {
+      ...promptBuild,
+      prompt: nextPromptBuild.prompt,
+    };
+    codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild.prompt);
   };
   const selectNewerVisibleHistoryAfterBinding = (binding: CodexAppServerThreadBinding) => {
     const bindingUpdatedAt = Date.parse(binding.updatedAt);
@@ -856,6 +867,24 @@ export async function runCodexAppServerAttempt(
     prePromptMessageCount = projection.prePromptMessageCount;
     return true;
   };
+  const applyNoContextEngineContinuityProjection = (
+    action: "started" | "resumed",
+    binding?: CodexAppServerThreadBinding,
+  ) => {
+    if (activeContextEngine || !historyMessages.some((message) => message.role === "user")) {
+      return false;
+    }
+    if (action === "resumed" && binding) {
+      return applyResumeStaleBindingContinuityProjection(
+        binding as CodexAppServerThreadLifecycleBinding,
+      );
+    }
+    if (action === "started") {
+      applyFreshThreadContinuityProjection();
+      return true;
+    }
+    return false;
+  };
   const rotateStartupBindingForProjectedTurn = async () => {
     if (!startupBinding?.threadId) {
       return;
@@ -887,7 +916,7 @@ export async function runCodexAppServerAttempt(
         });
       }
     }
-    await rebuildCodexTurnPromptFromCurrentProjection();
+    await rebuildCodexPromptBuildFromCurrentProjection();
     embeddedAgentLog.info("codex app-server rebuilt turn prompt after native thread rotation", {
       sessionId: params.sessionId,
       sessionKey: contextSessionKey,
@@ -1015,20 +1044,6 @@ export async function runCodexAppServerAttempt(
     codexSandboxPolicy = startupResult.sandboxPolicy;
     releaseSharedClientLease = startupResult.releaseSharedClientLease;
     restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
-    if (
-      !activeContextEngine &&
-      thread.lifecycle.action === "started" &&
-      historyMessages.some((message) => message.role === "user")
-    ) {
-      applyFreshThreadContinuityProjection();
-      await rebuildCodexTurnPromptFromCurrentProjection();
-    } else if (
-      !activeContextEngine &&
-      thread.lifecycle.action === "resumed" &&
-      applyResumeStaleBindingContinuityProjection(thread)
-    ) {
-      await rebuildCodexTurnPromptFromCurrentProjection();
-    }
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "thread_ready", threadId: thread.threadId },
@@ -1038,6 +1053,9 @@ export async function runCodexAppServerAttempt(
     await releaseSandboxExecEnvironment();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
+  }
+  if (applyNoContextEngineContinuityProjection(thread.lifecycle.action, thread)) {
+    await rebuildCodexTurnPromptTextFromCurrentProjection();
   }
   trajectoryRecorder?.recordEvent("session.started", {
     sessionFile: params.sessionFile,
