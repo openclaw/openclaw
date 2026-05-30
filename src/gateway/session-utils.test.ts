@@ -1916,6 +1916,21 @@ describe("listSessionsFromStore selected model display", () => {
     });
   });
 
+  test("filters phantom agent store placeholder rows from session lists", () => {
+    const now = Date.now();
+    const result = listSessionsFromStore({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:main:sessions": {} as SessionEntry,
+        "agent:main:main": { sessionId: "sess-main", updatedAt: now } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
+  });
+
   test("shows the selected override model even when a fallback runtime model exists", () => {
     const cfg = createModelDefaultsConfig({
       primary: "anthropic/claude-opus-4-6",
