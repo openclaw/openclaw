@@ -4,7 +4,9 @@ import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-load
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -27,10 +29,10 @@ import {
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
 import {
+  collectDeliveredMediaUrls,
   collectMessagingToolDeliveredMediaUrls,
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
-  hasDeliveredExpectedMedia,
   hasMessagingToolDeliveryEvidence,
   hasVisibleAgentPayload,
 } from "./embedded-agent-runner/delivery-evidence.js";
@@ -402,6 +404,19 @@ function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
   );
 }
 
+function didVisibleSendFailAfterPartialDelivery(error: unknown): boolean {
+  if (isOutboundDeliveryError(error) && error.sentBeforeError) {
+    return true;
+  }
+  const maybeDeliveryError = error as {
+    sentBeforeError?: unknown;
+    visibleReplySent?: unknown;
+  };
+  return (
+    maybeDeliveryError.sentBeforeError === true || maybeDeliveryError.visibleReplySent === true
+  );
+}
+
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
   if (ms <= 0) {
     return;
@@ -697,30 +712,6 @@ function collectExpectedMediaFromInternalEvents(
   return mediaUrls;
 }
 
-function hasGatewayAgentDeliveredExpectedMedia(
-  response: unknown,
-  expectedMediaUrls: readonly string[],
-): boolean {
-  const result = getGatewayAgentResult(response);
-  return Boolean(result && hasDeliveredExpectedMedia(result, expectedMediaUrls));
-}
-
-function hasGatewayAgentMessagingToolDeliveredExpectedMedia(
-  response: unknown,
-  expectedMediaUrls: readonly string[],
-): boolean {
-  const expected = uniqueStrings(normalizeStringEntries(expectedMediaUrls));
-  if (expected.length === 0) {
-    return true;
-  }
-  const result = getGatewayAgentResult(response);
-  if (!result) {
-    return false;
-  }
-  const delivered = new Set(collectMessagingToolDeliveredMediaUrls(result));
-  return expected.every((url) => delivered.has(url));
-}
-
 function getGatewayAgentCommandDeliveryFailure(response: unknown): string | undefined {
   const result = getGatewayAgentResult(response);
   return result ? getAgentCommandDeliveryFailure(result) : undefined;
@@ -816,10 +807,12 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       path: "direct",
     };
   } catch (err) {
+    const terminal = didVisibleSendFailAfterPartialDelivery(err);
     return {
       delivered: false,
       path: "direct",
       error: `generated media direct delivery failed: ${summarizeDeliveryError(err)}`,
+      ...(terminal ? { terminal: true } : {}),
     };
   }
 }
@@ -956,14 +949,184 @@ async function deliverTextCompletionDirect(params: {
 function resolveGeneratedMediaDirectFallbackUrls(params: {
   expectedMediaUrls: readonly string[];
   announceResponse?: unknown;
+  requiresMessageToolDelivery: boolean;
+  automaticDeliveryRequested: boolean;
+  automaticDeliveryFailed?: boolean;
+  deliveryTarget: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
 }): string[] {
   const expected = uniqueStrings(normalizeStringEntries(params.expectedMediaUrls));
   const result = getGatewayAgentResult(params.announceResponse);
   if (!result) {
     return expected;
   }
-  const delivered = new Set(collectMessagingToolDeliveredMediaUrls(result));
+  const delivered = new Set(
+    params.requiresMessageToolDelivery
+      ? collectMessagingToolDeliveredMediaUrlsForTarget(result, params.deliveryTarget)
+      : collectAutomaticCompletionDeliveredMediaUrls({
+          result,
+          deliveryTarget: params.deliveryTarget,
+          automaticDeliveryRequested: params.automaticDeliveryRequested,
+          automaticDeliveryFailed: params.automaticDeliveryFailed === true,
+        }),
+  );
   return expected.filter((url) => !delivered.has(url));
+}
+
+function collectAutomaticCompletionDeliveredMediaUrls(params: {
+  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>;
+  deliveryTarget: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+  automaticDeliveryRequested: boolean;
+  automaticDeliveryFailed: boolean;
+}): string[] {
+  const urls = new Set<string>();
+  const addUrls = (values: Iterable<string>) => {
+    for (const value of values) {
+      if (value.trim()) {
+        urls.add(value);
+      }
+    }
+  };
+  if (params.automaticDeliveryRequested) {
+    if (params.automaticDeliveryFailed) {
+      addUrls(
+        collectPayloadOutcomeDeliveredMediaUrls(params.result, {
+          countAmbiguousSinglePayloadFailure: true,
+        }),
+      );
+    } else if (hasPayloadDeliveryOutcomes(params.result)) {
+      addUrls(
+        collectPayloadOutcomeDeliveredMediaUrls(params.result, {
+          countAmbiguousSinglePayloadFailure: false,
+        }),
+      );
+    } else if (!hasSuppressedPayloadDeliveryStatus(params.result)) {
+      addUrls(collectPayloadMediaUrls(params.result));
+    }
+  }
+  addUrls(collectMessagingToolDeliveredMediaUrlsForTarget(params.result, params.deliveryTarget));
+  return Array.from(urls);
+}
+
+function collectPayloadMediaUrls(
+  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
+): string[] {
+  return collectDeliveredMediaUrls({
+    payloads: Array.isArray(result.payloads) ? result.payloads : [],
+  });
+}
+
+function getPayloadDeliveryStatusRecord(
+  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
+): Record<string, unknown> | undefined {
+  return result.deliveryStatus && typeof result.deliveryStatus === "object"
+    ? (result.deliveryStatus as Record<string, unknown>)
+    : undefined;
+}
+
+function hasPayloadDeliveryOutcomes(
+  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
+): boolean {
+  return Array.isArray(getPayloadDeliveryStatusRecord(result)?.payloadOutcomes);
+}
+
+function hasSuppressedPayloadDeliveryStatus(
+  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
+): boolean {
+  return (
+    normalizeOptionalLowercaseString(getPayloadDeliveryStatusRecord(result)?.status) ===
+    "suppressed"
+  );
+}
+
+function collectPayloadOutcomeDeliveredMediaUrls(
+  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
+  options: { countAmbiguousSinglePayloadFailure: boolean },
+): string[] {
+  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  const deliveryStatus = getPayloadDeliveryStatusRecord(result);
+  const payloadOutcomes = Array.isArray(deliveryStatus?.payloadOutcomes)
+    ? deliveryStatus.payloadOutcomes
+    : [];
+  const urls = new Set<string>();
+  for (const outcome of payloadOutcomes) {
+    if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
+      continue;
+    }
+    const record = outcome as Record<string, unknown>;
+    const status = normalizeOptionalLowercaseString(record.status);
+    const ambiguousSinglePayloadFailure =
+      status === "failed" &&
+      record.sentBeforeError === true &&
+      options.countAmbiguousSinglePayloadFailure &&
+      payloadOutcomes.length === 1 &&
+      payloads.length === 1;
+    if (status !== "sent" && !ambiguousSinglePayloadFailure) {
+      continue;
+    }
+    const index =
+      typeof record.index === "number" && Number.isInteger(record.index) ? record.index : undefined;
+    const payload = index === undefined ? undefined : payloads[index];
+    if (!payload) {
+      continue;
+    }
+    for (const url of collectDeliveredMediaUrls({ payloads: [payload] })) {
+      urls.add(url);
+    }
+  }
+  return Array.from(urls);
+}
+
+function collectMessagingToolDeliveredMediaUrlsForTarget(
+  result: NonNullable<ReturnType<typeof getGatewayAgentResult>>,
+  deliveryTarget: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  },
+): string[] {
+  const targets = Array.isArray(result.messagingToolSentTargets)
+    ? result.messagingToolSentTargets
+    : [];
+  const urls = new Set<string>();
+  const targetedUrls = new Set<string>();
+  for (const target of targets) {
+    const targetMediaUrls = collectMessagingToolDeliveredMediaUrls({
+      messagingToolSentTargets: [target],
+    });
+    for (const url of targetMediaUrls) {
+      targetedUrls.add(url);
+    }
+    if (
+      !target ||
+      typeof target !== "object" ||
+      Array.isArray(target) ||
+      !sourceDeliveryTargetsMatch(target as Record<string, unknown>, deliveryTarget)
+    ) {
+      continue;
+    }
+    for (const url of targetMediaUrls) {
+      urls.add(url);
+    }
+  }
+  for (const url of collectMessagingToolDeliveredMediaUrls({
+    messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
+  })) {
+    if (!targetedUrls.has(url)) {
+      urls.add(url);
+    }
+  }
+  return Array.from(urls);
 }
 
 function stripNonDeliverableChannelForCompletionOrigin(
@@ -1066,9 +1229,14 @@ async function sendSubagentAnnounceDirectly(params: {
         directOrigin: effectiveDirectOrigin,
         requesterSessionOrigin,
       });
+    const subagentDirectMessageCompletionRequiresMessageTool =
+      params.expectsCompletionMessage &&
+      isSubagentCompletion &&
+      deliveryTarget.deliver &&
+      isDirectMessageDeliveryTarget(deliveryTarget, canonicalRequesterSessionKey);
     const requiresMessageToolDelivery =
       completionRouteRequiresMessageToolDelivery ||
-      (agentMediatedCompletion && expectedMediaUrls.length > 0);
+      subagentDirectMessageCompletionRequiresMessageTool;
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
     if (
       params.expectsCompletionMessage &&
@@ -1080,18 +1248,30 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "none",
+        reason: "requester_abandoned",
         error: "requester session abandoned after timeout",
       };
     }
     let activeRequesterWakeFailed = false;
-    const tryGeneratedMediaDirectDelivery = async (announceResponse?: unknown) => {
+    const tryGeneratedMediaDirectDelivery = async (
+      announceResponse?: unknown,
+      knownMissingMediaUrls?: readonly string[],
+    ) => {
       if (requesterActivity.isActive && !activeRequesterWakeFailed) {
         return undefined;
       }
-      const missingMediaUrls = resolveGeneratedMediaDirectFallbackUrls({
-        expectedMediaUrls,
-        announceResponse,
-      });
+      const missingMediaUrls =
+        knownMissingMediaUrls ??
+        resolveGeneratedMediaDirectFallbackUrls({
+          expectedMediaUrls,
+          announceResponse,
+          requiresMessageToolDelivery,
+          automaticDeliveryRequested: shouldDeliverAgentFinal,
+          automaticDeliveryFailed:
+            !requiresMessageToolDelivery &&
+            Boolean(getGatewayAgentCommandDeliveryFailure(announceResponse)),
+          deliveryTarget,
+        });
       return await deliverGeneratedMediaCompletionDirect({
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
@@ -1233,7 +1413,7 @@ async function sendSubagentAnnounceDirectly(params: {
       }
       if (
         params.expectsCompletionMessage &&
-        shouldDeliverAgentFinal &&
+        (shouldDeliverAgentFinal || subagentDirectMessageCompletionRequiresMessageTool) &&
         isSubagentCompletion &&
         isIncompleteAnnounceAgentResultError(err)
       ) {
@@ -1275,6 +1455,7 @@ async function sendSubagentAnnounceDirectly(params: {
         return {
           delivered: false,
           path: "direct",
+          reason: "completion_handoff_pending",
           error: "completion agent handoff is still pending",
         };
       }
@@ -1284,29 +1465,40 @@ async function sendSubagentAnnounceDirectly(params: {
       };
     }
 
+    const directDeliveryFailure =
+      shouldDeliverAgentFinal || requiresMessageToolDelivery
+        ? getGatewayAgentCommandDeliveryFailure(directAnnounceResponse)
+        : undefined;
+    const missingExpectedMediaUrls =
+      agentMediatedCompletion && expectedMediaUrls.length > 0
+        ? resolveGeneratedMediaDirectFallbackUrls({
+            expectedMediaUrls,
+            announceResponse: directAnnounceResponse,
+            requiresMessageToolDelivery,
+            automaticDeliveryRequested: shouldDeliverAgentFinal,
+            automaticDeliveryFailed: !requiresMessageToolDelivery && Boolean(directDeliveryFailure),
+            deliveryTarget,
+          })
+        : [];
     if (
       agentMediatedCompletion &&
       expectedMediaUrls.length > 0 &&
-      !(requiresMessageToolDelivery
-        ? hasGatewayAgentMessagingToolDeliveredExpectedMedia(
-            directAnnounceResponse,
-            expectedMediaUrls,
-          )
-        : hasGatewayAgentDeliveredExpectedMedia(directAnnounceResponse, expectedMediaUrls))
+      missingExpectedMediaUrls.length > 0
     ) {
-      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery(directAnnounceResponse);
+      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery(
+        directAnnounceResponse,
+        missingExpectedMediaUrls,
+      );
       if (generatedMediaDelivery) {
         return generatedMediaDelivery;
       }
       return {
         delivered: false,
         path: "direct",
+        reason: "generated_media_missing",
         error: "completion agent did not deliver generated media",
       };
     }
-    const directDeliveryFailure = shouldDeliverAgentFinal
-      ? getGatewayAgentCommandDeliveryFailure(directAnnounceResponse)
-      : undefined;
     if (directDeliveryFailure) {
       return {
         delivered: false,
@@ -1336,6 +1528,7 @@ async function sendSubagentAnnounceDirectly(params: {
         return {
           delivered: false,
           path: "direct",
+          reason: "visible_reply_missing",
           error: "completion agent did not produce a visible reply",
         };
       }
@@ -1346,9 +1539,30 @@ async function sendSubagentAnnounceDirectly(params: {
       !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse) &&
       !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
     ) {
+      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        };
+      }
+      if (subagentDirectMessageCompletionRequiresMessageTool) {
+        const textDelivery = await deliverTextCompletionDirect({
+          cfg,
+          requesterSessionKey: canonicalRequesterSessionKey,
+          directIdempotencyKey: params.directIdempotencyKey,
+          deliveryTarget,
+          internalEvents: params.internalEvents,
+        });
+        if (textDelivery) {
+          return textDelivery;
+        }
+      }
       return {
         delivered: false,
         path: "direct",
+        reason: "message_tool_delivery_missing",
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
@@ -1361,6 +1575,7 @@ async function sendSubagentAnnounceDirectly(params: {
       return {
         delivered: false,
         path: "direct",
+        reason: "visible_reply_missing",
         error: "completion agent did not produce a visible reply",
       };
     }

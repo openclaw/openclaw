@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
   buildUsageErrorSnapshot,
@@ -6,8 +7,6 @@ import {
   fetchJson,
   parseFiniteNumber,
 } from "./provider-usage.fetch.shared.js";
-
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 function requireFetchCall(
   mock: ReturnType<typeof vi.fn>,

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { probeGatewayUrl, probeLocalCommand } from "./probes.js";
-
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 describe("crestodian probes", () => {
   afterEach(() => {

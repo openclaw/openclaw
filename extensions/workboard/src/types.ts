@@ -1,6 +1,9 @@
 export const WORKBOARD_STATUSES = [
+  "triage",
   "backlog",
   "todo",
+  "scheduled",
+  "ready",
   "running",
   "review",
   "blocked",
@@ -33,6 +36,7 @@ export const WORKBOARD_EVENT_KINDS = [
   "artifact_added",
   "diagnostic",
   "notification",
+  "dispatch",
   "archived",
   "unarchived",
   "stale",
@@ -44,7 +48,13 @@ export const WORKBOARD_ATTEMPT_STATUSES = [
   "blocked",
   "stopped",
 ] as const;
-export const WORKBOARD_LINK_TYPES = ["blocks", "blocked_by", "relates_to"] as const;
+export const WORKBOARD_LINK_TYPES = [
+  "parent",
+  "child",
+  "blocks",
+  "blocked_by",
+  "relates_to",
+] as const;
 export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_KINDS = [
@@ -158,7 +168,7 @@ export type WorkboardClaim = {
 };
 
 export type WorkboardDiagnosticAction = {
-  kind: "claim" | "unblock" | "reassign" | "add_proof" | "open_session";
+  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
   label: string;
 };
 
@@ -182,12 +192,35 @@ export type WorkboardNotification = {
   runId?: string;
 };
 
+export type WorkboardWorkspace = {
+  kind: "scratch" | "dir" | "worktree";
+  path?: string;
+  branch?: string;
+};
+
+export type WorkboardAutomation = {
+  tenant?: string;
+  boardId?: string;
+  createdByCardId?: string;
+  idempotencyKey?: string;
+  skills?: string[];
+  workspace?: WorkboardWorkspace;
+  maxRuntimeSeconds?: number;
+  maxRetries?: number;
+  scheduledAt?: number;
+  summary?: string;
+  createdCardIds?: string[];
+  dispatchCount?: number;
+  lastDispatchAt?: number;
+};
+
 export type WorkboardMetadata = {
   attempts?: WorkboardRunAttempt[];
   comments?: WorkboardComment[];
   links?: WorkboardLink[];
   proof?: WorkboardProof[];
   artifacts?: WorkboardArtifact[];
+  automation?: WorkboardAutomation;
   claim?: WorkboardClaim;
   diagnostics?: WorkboardDiagnostic[];
   notifications?: WorkboardNotification[];

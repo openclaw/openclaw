@@ -2015,6 +2015,14 @@ export async function runAgentTurnWithFallback(params: {
                 originatingChannel: params.followupRun.originatingChannel,
                 provider: params.sessionCtx.Provider,
               });
+              const cliCurrentThreadId =
+                params.followupRun.originatingThreadId ?? params.sessionCtx.MessageThreadId;
+              const isRestartSentinelContinuation =
+                params.sessionCtx.InputProvenance?.kind === "internal_system" &&
+                params.sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
+              const cliCurrentMessageId = isRestartSentinelContinuation
+                ? params.sessionCtx.ReplyToId
+                : (params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid);
               const result = await agentTurnTiming.measure("cli_run", () =>
                 runCliAgentWithLifecycle({
                   runId,
@@ -2107,6 +2115,13 @@ export async function runAgentTurnWithFallback(params: {
                     skillsSnapshot: params.followupRun.run.skillsSnapshot,
                     messageChannel: params.followupRun.originatingChannel ?? undefined,
                     messageProvider: hookMessageProvider,
+                    currentChannelId:
+                      params.followupRun.originatingTo ??
+                      params.sessionCtx.OriginatingTo ??
+                      params.sessionCtx.To,
+                    currentThreadTs:
+                      cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
+                    currentMessageId: cliCurrentMessageId,
                     agentAccountId: params.followupRun.run.agentAccountId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
                     disableTools: params.opts?.disableTools,

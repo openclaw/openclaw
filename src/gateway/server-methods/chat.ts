@@ -2189,6 +2189,7 @@ function broadcastChatError(params: {
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
+  const errorText = params.errorMessage?.trim();
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
@@ -2196,6 +2197,23 @@ function broadcastChatError(params: {
     seq,
     state: "error" as const,
     errorMessage: params.errorMessage,
+    ...(errorText
+      ? {
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text:
+                  errorText.startsWith("⚠️") || errorText.startsWith("Error:")
+                    ? errorText
+                    : `Error: ${errorText}`,
+              },
+            ],
+            timestamp: Date.now(),
+          },
+        }
+      : {}),
   };
   params.context.broadcast("chat", payload);
   sendGlobalAwareNodeChatPayload({

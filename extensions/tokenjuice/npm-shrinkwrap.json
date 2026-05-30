@@ -1,17 +1,17 @@
 {
   "name": "@openclaw/tokenjuice",
-  "version": "2026.5.28",
+  "version": "2026.5.30",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/tokenjuice",
-      "version": "2026.5.28",
+      "version": "2026.5.30",
       "dependencies": {
         "tokenjuice": "0.8.0"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.28"
+        "openclaw": ">=2026.5.30"
       },
       "peerDependenciesMeta": {
         "openclaw": {

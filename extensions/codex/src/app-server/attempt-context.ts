@@ -65,6 +65,7 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   promptContext?: string;
   developerInstructions?: string;
   turnScopedDeveloperInstructions?: string;
+  memoryCollaborationInstructions?: string;
   heartbeatCollaborationInstructions?: string;
 };
 
@@ -297,6 +298,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
         turnScopedDeveloperInstructionFiles,
       ),
+      memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
+        ? renderCodexWorkspaceMemoryReference({
+            files: memoryReferenceFiles,
+            toolNames: params.memoryToolNames,
+          })
+        : undefined,
       heartbeatCollaborationInstructions:
         renderCodexWorkspaceHeartbeatReference(heartbeatReferenceFiles),
     };
@@ -547,18 +554,12 @@ function readNonEmptyString(value: unknown): string | undefined {
 
 export function buildCodexOpenClawPromptContext(params: {
   params: EmbeddedRunAttemptParams;
-  skillsPrompt?: string;
   workspacePromptContext?: string;
-  workspaceMemoryReference?: string;
 }): string | undefined {
   if (!shouldInjectCodexOpenClawPromptContext(params.params)) {
     return undefined;
   }
   const sections = [
-    params.skillsPrompt?.trim()
-      ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
-      : undefined,
-    params.workspaceMemoryReference?.trim() ? params.workspaceMemoryReference.trim() : undefined,
     params.workspacePromptContext?.trim()
       ? ["## OpenClaw Workspace Context", "", params.workspacePromptContext.trim()].join("\n")
       : undefined,
@@ -582,14 +583,27 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
   );
 }
 
+export function renderCodexSkillsCollaborationInstructions(params: {
+  attempt: EmbeddedRunAttemptParams;
+  skillsPrompt?: string;
+}): string | undefined {
+  if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
+    return undefined;
+  }
+  return params.skillsPrompt?.trim()
+    ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
+    : undefined;
+}
+
 export function prependCodexOpenClawPromptContext(
   prompt: string,
   context: string | undefined,
+  options: { preservePromptWithoutContext?: boolean } = {},
 ): string {
-  if (!context?.trim()) {
+  const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
+  if (!context?.trim() && (!deliveryHint || options.preservePromptWithoutContext)) {
     return prompt;
   }
-  const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
   const promptSection = promptWithoutDeliveryHint.startsWith(
     "OpenClaw assembled context for this turn:",
   )
@@ -602,7 +616,7 @@ export function prependCodexOpenClawPromptContext(
         deliveryHint,
       ].join("\n")
     : undefined;
-  return [context.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
+  return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
 }
 
 const CODEX_DELIVERY_HINT_LINES = [
@@ -725,6 +739,7 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     header: "## OpenClaw Agent Soul",
     preamble:
       "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
+    wrapperTag: "AGENT_SOUL",
   });
 }
 
@@ -732,14 +747,21 @@ function renderCodexWorkspaceDeveloperInstructions(params: {
   files: EmbeddedContextFile[];
   header: string;
   preamble: string;
+  wrapperTag?: string;
 }): string | undefined {
-  const { files, header, preamble } = params;
+  const { files, header, preamble, wrapperTag } = params;
   if (files.length === 0) {
     return undefined;
   }
   const lines = [header, "", preamble, ""];
+  if (wrapperTag) {
+    lines.push(`<${wrapperTag}>`, "");
+  }
   for (const file of files) {
     lines.push(`### ${file.path}`, "", file.content, "");
+  }
+  if (wrapperTag) {
+    lines.push(`</${wrapperTag}>`);
   }
   return lines.join("\n").trim();
 }
@@ -806,7 +828,7 @@ export function renderCodexWorkspaceMemoryReference(params: {
   const lines = [
     "## OpenClaw Workspace Memory",
     "",
-    `MEMORY.md exists in the active agent workspace. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
+    `MEMORY.md exists in the active agent workspace as a memory file, not an instruction file. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
     "",
   ];
   for (const file of params.files) {

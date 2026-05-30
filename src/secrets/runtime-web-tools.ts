@@ -270,6 +270,7 @@ async function resolveSecretInputWithEnvFallback(params: {
         config: params.sourceConfig,
         env: params.context.env,
         cache: params.context.cache,
+        manifestRegistry: params.context.manifestRegistry,
       });
       const resolvedValue = resolved.get(secretRefKey(ref));
       if (typeof resolvedValue !== "string") {

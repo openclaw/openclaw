@@ -1,5 +1,6 @@
 import { URL } from "node:url";
 import type { GatewayConfig } from "../config/types.gateway.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -71,10 +72,7 @@ function normalizeTimeoutMs(value: string | number | undefined): number {
     return DEFAULT_APNS_RELAY_TIMEOUT_MS;
   }
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return DEFAULT_APNS_RELAY_TIMEOUT_MS;
-  }
-  return Math.max(1000, Math.trunc(parsed));
+  return resolveTimerTimeoutMs(parsed, DEFAULT_APNS_RELAY_TIMEOUT_MS, 1000);
 }
 
 function readAllowHttp(value: string | undefined): boolean {

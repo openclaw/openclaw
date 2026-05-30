@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { once } from "node:events";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("openclaw/plugin-sdk/core", async () => {
@@ -16,8 +17,6 @@ vi.mock("openclaw/plugin-sdk/core", async () => {
 let signalCheck: typeof import("./client.js").signalCheck;
 let signalRpcRequest: typeof import("./client.js").signalRpcRequest;
 let streamSignalEvents: typeof import("./client.js").streamSignalEvents;
-
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 const servers: http.Server[] = [];
 

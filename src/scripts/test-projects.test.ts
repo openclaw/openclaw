@@ -285,6 +285,17 @@ describe("test-projects args", () => {
     ]);
   });
 
+  it("routes fake-timer unit-fast targets to the serial fake-timer config", () => {
+    expect(buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/manager.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes process targets to the process config", () => {
     expect(buildVitestRunPlans(["src/process/exec.test.ts"])).toEqual([
       {

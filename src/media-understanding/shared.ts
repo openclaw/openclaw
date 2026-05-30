@@ -88,6 +88,11 @@ type GuardedProviderRequestParams = {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
+  /**
+   * Override the guarded-fetch mode. Defaults to an auto-upgrade to
+   * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
+   * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
+   */
   mode?: GuardedFetchMode;
 };
 
@@ -521,26 +526,16 @@ type GuardedPostRequestRetryOptions = {
   retry?: TransientProviderRetryConfig;
 };
 
-export async function postTranscriptionRequest(
-  params: {
+type GuardedPostRequestParams<TBody> = GuardedProviderRequestParams &
+  GuardedPostRequestRetryOptions & {
     url: string;
     headers: Headers;
-    body: BodyInit;
+    body: TBody;
     timeoutMs?: number;
     fetchFn: typeof fetch;
-    pinDns?: boolean;
-    allowPrivateNetwork?: boolean;
-    ssrfPolicy?: SsrFPolicy;
-    dispatcherPolicy?: PinnedDispatcherPolicy;
-    auditContext?: string;
-    /**
-     * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-     * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-     * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
-     */
-    mode?: GuardedFetchMode;
-  } & GuardedPostRequestRetryOptions,
-) {
+  };
+
+export async function postTranscriptionRequest(params: GuardedPostRequestParams<BodyInit>) {
   return await postGuardedRequest({
     url: params.url,
     init: {
@@ -599,26 +594,7 @@ function isTransientProviderHttpStatus(status: number): boolean {
   return status === 500 || status === 502 || status === 503 || status === 504;
 }
 
-export async function postJsonRequest(
-  params: {
-    url: string;
-    headers: Headers;
-    body: unknown;
-    timeoutMs?: number;
-    fetchFn: typeof fetch;
-    pinDns?: boolean;
-    allowPrivateNetwork?: boolean;
-    ssrfPolicy?: SsrFPolicy;
-    dispatcherPolicy?: PinnedDispatcherPolicy;
-    auditContext?: string;
-    /**
-     * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-     * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-     * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
-     */
-    mode?: GuardedFetchMode;
-  } & GuardedPostRequestRetryOptions,
-) {
+export async function postJsonRequest(params: GuardedPostRequestParams<unknown>) {
   return await postGuardedRequest({
     url: params.url,
     init: {
@@ -634,26 +610,7 @@ export async function postJsonRequest(
   });
 }
 
-export async function postMultipartRequest(
-  params: {
-    url: string;
-    headers: Headers;
-    body: BodyInit;
-    timeoutMs?: number;
-    fetchFn: typeof fetch;
-    pinDns?: boolean;
-    allowPrivateNetwork?: boolean;
-    ssrfPolicy?: SsrFPolicy;
-    dispatcherPolicy?: PinnedDispatcherPolicy;
-    auditContext?: string;
-    /**
-     * Override the guarded-fetch mode. Defaults to an auto-upgrade to
-     * `TRUSTED_ENV_PROXY` when `HTTP_PROXY`/`HTTPS_PROXY` is configured in the
-     * environment; pass `"strict"` to force pinned-DNS even inside a proxy.
-     */
-    mode?: GuardedFetchMode;
-  } & GuardedPostRequestRetryOptions,
-) {
+export async function postMultipartRequest(params: GuardedPostRequestParams<BodyInit>) {
   return await postGuardedRequest({
     url: params.url,
     init: {

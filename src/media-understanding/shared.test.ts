@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { VERSION } from "../version.js";
-
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 const { fetchWithSsrFGuardMock, shouldUseEnvHttpProxyForUrlMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),

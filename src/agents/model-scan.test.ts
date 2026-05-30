@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
-
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 function createFetchFixture(payload: unknown): typeof fetch {
   return withFetchPreconnect(

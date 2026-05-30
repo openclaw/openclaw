@@ -129,6 +129,37 @@ describe("login-qr", () => {
     expect(logoutWebMock).not.toHaveBeenCalled();
   });
 
+  it("returns a replacement QR when status 408 happens before the first QR", async () => {
+    const accountId = "timeout-before-first-qr";
+    createWaSocketMock
+      .mockImplementationOnce(async () => ({ ws: { close: vi.fn() } }) as never)
+      .mockImplementationOnce(
+        async (
+          _printQr: boolean,
+          _verbose: boolean,
+          opts?: { authDir?: string; onQr?: (qr: string) => void },
+        ) => {
+          const sock = { ws: { close: vi.fn() } };
+          setImmediate(() => opts?.onQr?.("qr-after-timeout"));
+          return sock as never;
+        },
+      );
+    waitForWaConnectionMock
+      .mockRejectedValueOnce({ output: { statusCode: 408 } })
+      .mockImplementation(() => new Promise(() => {}));
+
+    const start = await startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId,
+    });
+
+    expect(start).toEqual({
+      qrDataUrl: "data:image/png;base64,encoded:qr-after-timeout",
+      message: "Scan this QR in WhatsApp → Linked Devices.",
+    });
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+  });
+
   it("clears auth and reports a relink message when WhatsApp is logged out", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: 401 },

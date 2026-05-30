@@ -3,6 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
 import { startQaMockOpenAiServer } from "../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shared/mock-auth.js";
@@ -148,13 +149,12 @@ export async function fetchJson(
   const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_BODY_MAX_BYTES);
   const controller = new AbortController();
   const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
-  let timeout: NodeJS.Timeout | undefined;
+  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
+    timeout = setNodeTimeout(() => {
       controller.abort(error);
       reject(error);
     }, timeoutMs);
-    timeout.unref?.();
   });
 
   let response: Response;
@@ -173,10 +173,11 @@ export async function fetchJson(
       },
       formatTooLargeMessage: bodyTooLargeErrorMessage,
       timeoutPromise,
+      signal: controller.signal,
     });
   } finally {
     if (timeout) {
-      clearTimeout(timeout);
+      clearNodeTimeout(timeout);
     }
   }
   let parsed: unknown;

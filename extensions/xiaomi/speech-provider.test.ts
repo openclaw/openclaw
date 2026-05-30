@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
@@ -7,8 +8,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
 }));
 
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
-
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 describe("buildXiaomiSpeechProvider", () => {
   const provider = buildXiaomiSpeechProvider();

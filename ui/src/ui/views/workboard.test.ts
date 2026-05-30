@@ -53,7 +53,7 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Wire dashboard tab");
     expect(container.textContent).toContain("Running");
     expect(container.textContent).toContain("Dashboard session");
-    expect(container.querySelectorAll(".workboard-column")).toHaveLength(6);
+    expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
     expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("high");
   });
 

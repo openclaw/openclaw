@@ -3,6 +3,7 @@ import {
   asFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
+  clampPositiveTimerTimeoutMs,
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,
@@ -16,6 +17,7 @@ import {
   resolveExpiresAtMsFromEpochSeconds,
   resolveNonNegativeIntegerOption,
   resolveOptionalIntegerOption,
+  resolvePositiveTimerTimeoutMs,
   parseStrictFiniteNumber,
   parseStrictInteger,
   parseStrictNonNegativeInteger,
@@ -89,6 +91,11 @@ describe("number-coercion", () => {
     expect(clampTimerTimeoutMs(0, 10)).toBe(10);
     expect(clampTimerTimeoutMs(10_000_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(clampTimerTimeoutMs(Number.NaN)).toBeUndefined();
+    expect(clampPositiveTimerTimeoutMs(0)).toBeUndefined();
+    expect(clampPositiveTimerTimeoutMs(-1)).toBeUndefined();
+    expect(clampPositiveTimerTimeoutMs(10_000_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolvePositiveTimerTimeoutMs(0, 5000)).toBe(5000);
+    expect(resolvePositiveTimerTimeoutMs(Number.MAX_SAFE_INTEGER, 5000)).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(resolveTimerTimeoutMs(Number.NaN, 5000)).toBe(5000);
     expect(resolveTimerTimeoutMs(Number.NaN, 0, 0)).toBe(0);
     expect(resolveTimerTimeoutMs(Number.NaN, Number.POSITIVE_INFINITY, 25)).toBe(25);

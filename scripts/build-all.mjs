@@ -46,11 +46,14 @@ export const BUILD_ALL_STEPS = [
         "pnpm-lock.yaml",
         "npm-shrinkwrap.json",
         "packages/plugin-sdk/package.json",
+        "packages/llm-core/package.json",
         "packages/memory-host-sdk/package.json",
         "tsconfig.json",
         "tsconfig.plugin-sdk.dts.json",
         "src/plugin-sdk",
+        "packages/llm-core/src",
         "packages/memory-host-sdk/src",
+        "packages/media-generation-core/src",
         "src/types",
         "src/video-generation/dashscope-compatible.ts",
         "src/video-generation/types.ts",
@@ -156,6 +159,14 @@ export const BUILD_ALL_PROFILES = {
   ],
 };
 
+export const BUILD_ALL_PROFILE_STEP_ENV = {
+  ciArtifacts: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
+};
+
 export function resolveBuildAllSteps(profile = "full") {
   const labels = BUILD_ALL_PROFILES[profile];
   if (!labels) {
@@ -166,19 +177,28 @@ export function resolveBuildAllSteps(profile = "full") {
     const missing = labels.filter((label) => !BUILD_ALL_STEPS.some((step) => step.label === label));
     throw new Error(`Build profile ${profile} references unknown steps: ${missing.join(", ")}`);
   }
-  return selected;
+  const envOverrides = BUILD_ALL_PROFILE_STEP_ENV[profile] ?? {};
+  return selected.map((step) => {
+    const env = envOverrides[step.label];
+    if (!env) {
+      return step;
+    }
+    const mergedEnv = Object.assign({}, step.env, env);
+    return Object.assign({}, step, { env: mergedEnv });
+  });
 }
 
 function resolveStepEnv(step, env, platform) {
+  const stepEnv = step.env ? Object.assign({}, env, step.env) : env;
   if (platform !== "win32" || !step.windowsNodeOptions) {
-    return env;
+    return stepEnv;
   }
-  const currentNodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  const currentNodeOptions = stepEnv.NODE_OPTIONS?.trim() ?? "";
   if (currentNodeOptions.includes(step.windowsNodeOptions)) {
-    return env;
+    return stepEnv;
   }
   return {
-    ...env,
+    ...stepEnv,
     NODE_OPTIONS: currentNodeOptions
       ? `${currentNodeOptions} ${step.windowsNodeOptions}`
       : step.windowsNodeOptions,

@@ -97,6 +97,14 @@ export {
 } from "../secrets/provider-env-vars.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
+  buildOpenAICodexCredentialExtra,
+  decodeOpenAICodexJwtPayload,
+  resolveOpenAICodexAccessTokenExpiry,
+  resolveOpenAICodexAuthIdentity,
+  resolveOpenAICodexImportProfileName,
+  type OpenAICodexAuthIdentity,
+} from "./provider-openai-codex-auth.js";
+export {
   generateHexPkceVerifierChallenge,
   generatePkceVerifierChallenge,
   toFormUrlEncoded,

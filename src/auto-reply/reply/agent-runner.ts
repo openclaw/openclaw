@@ -1004,7 +1004,7 @@ function refreshSessionEntryFromStore(params: {
     return fallbackEntry;
   }
   try {
-    const latestStore = loadSessionStore(storePath, { skipCache: true });
+    const latestStore = loadSessionStore(storePath, { skipCache: true, clone: false });
     const latestEntry = latestStore?.[sessionKey];
     if (!latestEntry) {
       return fallbackEntry;
@@ -1609,6 +1609,8 @@ export async function runReplyAgent(params: {
     const cliSessionBinding = usedCliProvider
       ? runResult.meta?.agentMeta?.cliSessionBinding
       : undefined;
+    const clearCliSessionBinding =
+      usedCliProvider && runResult.meta?.agentMeta?.clearCliSessionBinding === true;
     const runtimeContextTokens =
       typeof runResult.meta?.agentMeta?.contextTokens === "number" &&
       Number.isFinite(runResult.meta.agentMeta.contextTokens) &&
@@ -1644,6 +1646,7 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
+      clearCliSessionBinding,
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 

@@ -76,12 +76,14 @@ async function withLiveFetch(mockFetch: ReturnType<typeof vi.fn>, run: () => Pro
   }
 }
 
-describe("listDeepInfraImageGenCatalog", () => {
-  it("returns null when no discoveryApiKey is configured", async () => {
-    const result = await listDeepInfraImageGenCatalog(makeCtx());
-    expect(result).toBeNull();
+describe("DeepInfra generation catalogs", () => {
+  it("return null when no discoveryApiKey is configured", async () => {
+    await expect(listDeepInfraImageGenCatalog(makeCtx())).resolves.toBeNull();
+    await expect(listDeepInfraVideoGenCatalog(makeCtx())).resolves.toBeNull();
   });
+});
 
+describe("listDeepInfraImageGenCatalog", () => {
   it("returns null when live discovery succeeds but the response has zero image-gen entries", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -152,11 +154,6 @@ describe("listDeepInfraImageGenCatalog", () => {
 });
 
 describe("listDeepInfraVideoGenCatalog", () => {
-  it("returns null when no discoveryApiKey is configured", async () => {
-    const result = await listDeepInfraVideoGenCatalog(makeCtx());
-    expect(result).toBeNull();
-  });
-
   it("returns null when live discovery succeeds but the response has zero video-gen entries", async () => {
     // Current production state: TTS/STT/T2V models lack the OPENAI tag the
     // backend filter requires, so a key-authenticated discovery still

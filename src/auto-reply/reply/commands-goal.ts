@@ -18,6 +18,19 @@ import type {
 } from "./commands-types.js";
 
 const GOAL_COMMAND_PREFIX = "/goal";
+const GOAL_ACTIONS = new Set([
+  "block",
+  "blocked",
+  "clear",
+  "complete",
+  "create",
+  "done",
+  "pause",
+  "resume",
+  "set",
+  "start",
+  "status",
+]);
 
 export function parseGoalCommand(raw: string): { action: string; text: string } | null {
   const trimmed = raw.trim();
@@ -31,8 +44,12 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
     return { action: "status", text: "" };
   }
   const [actionRaw = "", ...rest] = argText.split(/\s+/);
+  const action = normalizeOptionalLowercaseString(actionRaw) ?? "status";
+  if (!GOAL_ACTIONS.has(action)) {
+    return { action: "start", text: argText };
+  }
   return {
-    action: normalizeOptionalLowercaseString(actionRaw) ?? "status",
+    action,
     text: rest.join(" ").trim(),
   };
 }
@@ -152,7 +169,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
       }
       default:
         return goalReply(
-          "Usage: /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
+          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
         );
     }
   } catch (error) {

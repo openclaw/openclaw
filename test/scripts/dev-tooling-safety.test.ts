@@ -97,12 +97,12 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("times out stalled Discord smoke response body reads", async () => {
-    const response = {
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: () => new Promise(() => {}),
-    } as Response;
+    const response = new Response(
+      new ReadableStream({
+        start() {},
+      }),
+      { status: 200, statusText: "OK" },
+    );
     const request = discordSmokeTesting.requestDiscordJson({
       method: "GET",
       path: "/channels/123/messages",
@@ -115,6 +115,51 @@ describe("script-specific dev tooling hardening", () => {
 
     await expect(request).rejects.toThrow(
       /Discord API GET \/channels\/123\/messages exceeded timeout/u,
+    );
+  });
+
+  it("bounds Discord smoke response bodies by content-length", async () => {
+    const response = new Response("{}", {
+      headers: { "content-length": "6" },
+    });
+    const request = discordSmokeTesting.requestDiscordJson({
+      method: "GET",
+      path: "/channels/123/messages",
+      headers: {},
+      retries: 0,
+      timeoutMs: 50,
+      responseBodyMaxBytes: 5,
+      errorPrefix: "Discord API",
+      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+    });
+
+    await expect(request).rejects.toThrow(
+      "Discord API GET /channels/123/messages response body exceeded 5 bytes",
+    );
+  });
+
+  it("bounds Discord smoke response bodies by streamed bytes", async () => {
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(6));
+          controller.close();
+        },
+      }),
+    );
+    const request = discordSmokeTesting.requestDiscordJson({
+      method: "GET",
+      path: "/channels/123/messages",
+      headers: {},
+      retries: 0,
+      timeoutMs: 50,
+      responseBodyMaxBytes: 5,
+      errorPrefix: "Discord API",
+      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+    });
+
+    await expect(request).rejects.toThrow(
+      "Discord API GET /channels/123/messages response body exceeded 5 bytes",
     );
   });
 

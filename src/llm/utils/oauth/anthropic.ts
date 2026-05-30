@@ -6,7 +6,10 @@
  */
 
 import type { Server } from "node:http";
-import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
+import {
+  parseOAuthAuthorizationInput,
+  resolveOAuthTokenExpiresAt,
+} from "../../../plugin-sdk/provider-oauth-runtime.js";
 import {
   buildOAuthRequestSignal,
   createOAuthLoginCancelledError,
@@ -62,38 +65,6 @@ async function getNodeApis(): Promise<NodeApis> {
   return nodeApis;
 }
 
-function parseAuthorizationInput(input: string): { code?: string; state?: string } {
-  const value = input.trim();
-  if (!value) {
-    return {};
-  }
-
-  try {
-    const url = new URL(value);
-    return {
-      code: url.searchParams.get("code") ?? undefined,
-      state: url.searchParams.get("state") ?? undefined,
-    };
-  } catch {
-    // not a URL
-  }
-
-  if (value.includes("#")) {
-    const [code, state] = value.split("#", 2);
-    return { code, state };
-  }
-
-  if (value.includes("code=")) {
-    const params = new URLSearchParams(value);
-    return {
-      code: params.get("code") ?? undefined,
-      state: params.get("state") ?? undefined,
-    };
-  }
-
-  return { code: value };
-}
-
 function formatErrorDetails(error: unknown): string {
   if (error instanceof Error) {
     const details: string[] = [`${error.name}: ${error.message}`];
@@ -123,19 +94,6 @@ function formatTokenResponseParseContext(responseBody: string): string {
   return `bodyBytes=${Buffer.byteLength(responseBody, "utf8")}`;
 }
 
-function resolveTokenExpiresAt(value: unknown): number | undefined {
-  const expiresInSeconds = parseStrictPositiveInteger(value);
-  if (expiresInSeconds === undefined) {
-    return undefined;
-  }
-
-  const lifetimeMs = expiresInSeconds * 1000;
-  const expiresAt = Date.now() + lifetimeMs - 5 * 60 * 1000;
-  return Number.isSafeInteger(lifetimeMs) && Number.isSafeInteger(expiresAt)
-    ? expiresAt
-    : undefined;
-}
-
 function parseTokenCredentials(
   responseBody: string,
   options: {
@@ -160,7 +118,7 @@ function parseTokenCredentials(
   }
 
   const record = data as Record<string, unknown>;
-  const expires = resolveTokenExpiresAt(record.expires_in);
+  const expires = resolveOAuthTokenExpiresAt(record.expires_in, { refreshSkewMs: 5 * 60 * 1000 });
   if (
     typeof record.access_token !== "string" ||
     !record.access_token ||
@@ -388,7 +346,7 @@ export async function loginAnthropic(options: {
         state = result.state;
         redirectUriForExchange = REDIRECT_URI;
       } else if (manualInput) {
-        const parsed = parseAuthorizationInput(manualInput);
+        const parsed = parseOAuthAuthorizationInput(manualInput);
         if (parsed.state && parsed.state !== expectedState) {
           throw new Error("OAuth state mismatch");
         }
@@ -402,7 +360,7 @@ export async function loginAnthropic(options: {
           throw manualError;
         }
         if (manualInput) {
-          const parsed = parseAuthorizationInput(manualInput);
+          const parsed = parseOAuthAuthorizationInput(manualInput);
           if (parsed.state && parsed.state !== expectedState) {
             throw new Error("OAuth state mismatch");
           }
@@ -432,7 +390,7 @@ export async function loginAnthropic(options: {
         options.signal,
         server.cancelWait,
       );
-      const parsed = parseAuthorizationInput(input);
+      const parsed = parseOAuthAuthorizationInput(input);
       if (parsed.state && parsed.state !== expectedState) {
         throw new Error("OAuth state mismatch");
       }

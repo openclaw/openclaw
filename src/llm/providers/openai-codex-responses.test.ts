@@ -304,4 +304,40 @@ describe("streamOpenAICodexResponses transport", () => {
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1000);
     },
   );
+
+  it("caps oversized Retry-After delays before sleeping", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response("rate limited", {
+          status: 429,
+          headers: { "retry-after": String(Number.MAX_SAFE_INTEGER) },
+        }),
+      )
+      .mockRejectedValueOnce(new Error("usage limit: stop after retry delay"));
+    vi.stubGlobal("fetch", fetchMock);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback: TimerHandler) => {
+        if (typeof callback === "function") {
+          callback();
+        }
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      });
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      transport: "sse",
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
 });
