@@ -89,6 +89,8 @@ function startAcceptedTypingFeedback(params: {
   const channelId = ctx.messageChannelId.trim();
   const existing = activeFeedback.get(dedupeKey);
   if (existing) {
+    // One pre-dispatch keepalive owns each serialized Discord queue key.
+    // Later queued jobs get fresh typing when their dispatch turn starts.
     return undefined;
   }
   const replyTypingFeedback =
@@ -103,6 +105,8 @@ function startAcceptedTypingFeedback(params: {
   const cleanup = replyTypingFeedback.onCleanup;
   replyTypingFeedback.onCleanup = () => {
     cleanup?.();
+    // Cleanup is the lease release for both normal dispatch and skipped jobs.
+    // Without this, a stale queue key would suppress future accepted typing.
     if (activeFeedback.get(dedupeKey)?.feedback === replyTypingFeedback) {
       activeFeedback.delete(dedupeKey);
     }

@@ -453,6 +453,8 @@ async function processDiscordMessageInner(
       log: logVerbose,
     });
   if (replyTypingFeedback) {
+    // A carried prestart only covers queue wait time; dispatch needs a fresh
+    // controller after retargeting so an expired TTL cannot silence the run.
     replyTypingFeedback.restartForDispatch(typingChannelId);
   } else {
     typingFeedback.updateChannelId(typingChannelId);

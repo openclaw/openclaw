@@ -80,6 +80,8 @@ function cleanupSkippedDiscordQueuedMessage(params: {
   replayGuard: ClaimableDedupe;
 }) {
   try {
+    // Skipped jobs never reach processDiscordMessage's finally block.
+    // Clean carried typing here before reopening the replay key for retry.
     params.job.runtime.replyTypingFeedback?.onCleanup?.();
   } finally {
     releaseDiscordInboundReplay({

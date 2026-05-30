@@ -57,6 +57,8 @@ export function createDiscordReplyTypingFeedback(params: {
     updateChannelId,
     restartForDispatch: (nextChannelId) => {
       updateChannelId(nextChannelId);
+      // Prequeue typing may have hit its TTL before the job starts.
+      // Rotate the inner controller so dispatch always owns a live heartbeat.
       callbacks.onCleanup?.();
       callbacks = createCallbacks();
     },
