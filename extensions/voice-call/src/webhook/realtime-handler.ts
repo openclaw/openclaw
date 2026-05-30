@@ -662,6 +662,7 @@ export class RealtimeCallHandler {
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
       instructions: sessionInstructions,
+      autoRespondToAudio: this.providerConfig.autoRespondToAudio === false ? false : undefined,
       tools: this.config.tools,
       initialGreetingInstructions,
       triggerGreetingOnReady: Boolean(initialGreetingInstructions) && !useProviderAutoGreeting,

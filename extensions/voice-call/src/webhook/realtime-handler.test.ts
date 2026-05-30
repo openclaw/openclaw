@@ -526,10 +526,12 @@ describe("RealtimeCallHandler path routing", () => {
           onReady?: () => void;
         }
       | undefined;
+    let createRequest: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
     const triggerGreeting = vi.fn();
     const createBridge = vi.fn(
       (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
         callbacks = request;
+        createRequest = request;
         return makeBridge({ triggerGreeting });
       },
     );
@@ -574,6 +576,7 @@ describe("RealtimeCallHandler path routing", () => {
 
         callbacks?.onReady?.();
 
+        expect(createRequest?.autoRespondToAudio).toBe(false);
         expect(triggerGreeting).toHaveBeenCalledWith(expect.stringContaining("Hi, this is Milly."));
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
