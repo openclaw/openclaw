@@ -407,3 +407,218 @@ describe("doctor session snapshot stale runtime metadata", () => {
     expect(message).toContain(stalePath);
   });
 });
+
+describe("doctor session snapshot repair (shouldRepair)", () => {
+  let root = "";
+  let bundledSkillsDir = "";
+
+  beforeEach(async () => {
+    note.mockClear();
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-repair-"));
+    bundledSkillsDir = path.join(root, "current", "skills");
+    await fs.mkdir(path.join(bundledSkillsDir, "doctor"), { recursive: true });
+    await fs.writeFile(path.join(bundledSkillsDir, "doctor", "SKILL.md"), "# Doctor\n");
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("repairs stale inline prompt paths", async () => {
+    const stalePath = path.join(root, "old-runtime", "node_modules", "openclaw", "skills", "doctor", "SKILL.md");
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    expect(raw).not.toContain(stalePath);
+    expect(raw).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain("Repaired");
+  });
+
+  it("repairs stale promptRef blob paths", async () => {
+    const stalePath = path.join(root, "old-runtime", "node_modules", "openclaw", "skills", "doctor", "SKILL.md");
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    const prompt = `${skillPrompt(stalePath)}\n${"padding\n".repeat(200)}`;
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main": sessionEntry({
+          skillsSnapshot: {
+            prompt,
+            skills: [{ name: "doctor" }],
+          },
+        }),
+      },
+      { skipMaintenance: true },
+    );
+
+    const rawBefore = await fs.readFile(storePath, "utf-8");
+    expect(rawBefore).toContain("promptRef");
+    expect(rawBefore).not.toContain(stalePath);
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
+
+    const rawAfter = await fs.readFile(storePath, "utf-8");
+    expect(rawAfter).toContain("promptRef");
+    expect(rawAfter).not.toContain(stalePath);
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain("Repaired");
+  });
+
+  it("repairs stale resolvedSkills filePath and baseDir", async () => {
+    const stalePath = path.join(root, "old-runtime", "node_modules", "openclaw", "skills", "doctor", "SKILL.md");
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt: "",
+          skills: [{ name: "doctor" }],
+          resolvedSkills: [
+            {
+              name: "doctor",
+              filePath: stalePath,
+              baseDir: path.dirname(stalePath),
+            },
+          ],
+        },
+      }),
+    });
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    const expectedBaseDir = path.dirname(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
+    expect(raw).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
+    expect(raw).toContain(expectedBaseDir);
+    expect(raw).not.toContain(path.join(root, "old-runtime"));
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain("Repaired");
+  });
+
+  it("preserves sessions with missing promptRef blobs", async () => {
+    const stalePath = path.join(root, "old-runtime", "node_modules", "openclaw", "skills", "doctor", "SKILL.md");
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:healthy": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
+        },
+      }),
+      "agent:missing-blob": sessionEntry({
+        skillsSnapshot: {
+          promptRef: { version: 1, algorithm: "sha256", hash: "a".repeat(64), bytes: 100 },
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    expect(parsed["agent:missing-blob"].skillsSnapshot).toBeDefined();
+    expect(parsed["agent:missing-blob"].skillsSnapshot.promptRef).toBeDefined();
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain("Repaired");
+  });
+
+  it("reports leftover findings after partial repair", async () => {
+    const stalePath = path.join(root, "old-runtime", "node_modules", "openclaw", "skills", "doctor", "SKILL.md");
+    const workspacePath = path.join(root, "workspace", "skills", "doctor", "SKILL.md");
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain("Repaired");
+  });
+
+  it("scoped replacement preserves unrelated content", async () => {
+    const stalePath = path.join(root, "old-runtime", "node_modules", "openclaw", "skills", "doctor", "SKILL.md");
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
+        },
+        transcript: `User mentioned ${stalePath} in their message.`,
+      }),
+    });
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
+
+    const raw = await fs.readFile(storePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    expect(parsed["agent:main"].transcript).toContain(stalePath);
+    expect(parsed["agent:main"].skillsSnapshot.prompt).not.toContain(stalePath);
+    expect(parsed["agent:main"].skillsSnapshot.prompt).toContain(bundledSkillsDir);
+  });
+
+  it("creates backup before repair", async () => {
+    const stalePath = path.join(root, "old-runtime", "node_modules", "openclaw", "skills", "doctor", "SKILL.md");
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
+
+    const dir = path.dirname(storePath);
+    const files = await fs.readdir(dir);
+    const backupFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
+    expect(backupFiles.length).toBe(1);
+
+    const backupContent = await fs.readFile(path.join(dir, backupFiles[0]), "utf-8");
+    expect(backupContent).toContain(stalePath);
+  });
+
+  it("is idempotent — second repair finds nothing", async () => {
+    const stalePath = path.join(root, "old-runtime", "node_modules", "openclaw", "skills", "doctor", "SKILL.md");
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
+    expect(note).toHaveBeenCalledTimes(1);
+    note.mockClear();
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir, shouldRepair: true });
+    expect(note).not.toHaveBeenCalled();
+  });
+});
