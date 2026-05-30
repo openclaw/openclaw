@@ -293,7 +293,7 @@ async function resolveProviderUsageAuthViaPlugin(params: {
   if (!resolved) {
     return { handled: false, auth: null };
   }
-  if ("handled" in resolved && resolved.handled) {
+  if ("handled" in resolved) {
     return { handled: true, auth: null };
   }
   return {
