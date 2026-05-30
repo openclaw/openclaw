@@ -410,16 +410,21 @@ async function allocateLoopbackPort() {
 }
 
 function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port) {
+  const isolatedStateDir = path.join(isolatedHomeDir, ".openclaw");
+  const isolatedConfigPath = path.join(isolatedStateDir, "openclaw.json");
   const shellSource = [
     'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
-    'mkdir -p "$OPENCLAW_HOME/.openclaw"',
-    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
+    'mkdir -p "$OPENCLAW_STATE_DIR"',
+    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_CONFIG_PATH"`,
     `exec node scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
   ].join("\n");
   const env = {
     OPENCLAW_WATCH_PID_FILE: pidFilePath,
     HOME: isolatedHomeDir,
     OPENCLAW_HOME: isolatedHomeDir,
+    OPENCLAW_CONFIG_PATH: isolatedConfigPath,
+    OPENCLAW_STATE_DIR: isolatedStateDir,
+    XDG_CONFIG_HOME: path.join(isolatedHomeDir, ".config"),
     ...WATCH_GATEWAY_SKIP_ENV,
   };
 
@@ -801,9 +806,13 @@ async function main() {
   if (watchResult.spawnError) {
     failures.push(`gateway:watch failed to start: ${watchResult.spawnError}`);
   }
-  if (watchResult.timingFileMissing) {
+  if (watchResult.timingFileMissing && !Number.isFinite(watchResult.idleCpuMs)) {
     failures.push(
       "failed to collect CPU timing from the bounded gateway:watch run; timing artifact is missing",
+    );
+  } else if (watchResult.timingFileMissing) {
+    warnings.push(
+      "bounded gateway:watch timing artifact is missing; using process-tree idle CPU sample",
     );
   }
   if (watchTriggeredBuild && watchBuildReason === "dirty_watched_tree") {
