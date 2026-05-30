@@ -111,4 +111,22 @@ describe("config hooks module paths", () => {
       "hooks.mappings.0.channel",
     );
   });
+
+  it("rejects hooks.enabled=true without hooks.token", () => {
+    expectRejectedIssuePath(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        hooks: { enabled: true },
+      },
+      "hooks.token",
+    );
+  });
+
+  it("accepts hooks.enabled=true when hooks.token is present", () => {
+    const res = validateConfigObjectWithPlugins({
+      agents: { list: [{ id: "openclaw" }] },
+      hooks: { enabled: true, token: "secret" },
+    });
+    expect(res.ok).toBe(true);
+  });
 });
