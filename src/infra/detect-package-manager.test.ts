@@ -62,4 +62,22 @@ describe("detectPackageManager", () => {
       },
     );
   });
+
+  it("returns npm for npm-shrinkwrap.json even when packageManager field says pnpm", async () => {
+    await withPackageManagerRoot(
+      [
+        { path: "package.json", content: JSON.stringify({ packageManager: "pnpm@10.8.1" }) },
+        { path: "npm-shrinkwrap.json", content: "{}" },
+      ],
+      async (root) => {
+        await expect(detectPackageManager(root)).resolves.toBe("npm");
+      },
+    );
+  });
+
+  it("returns npm for npm-shrinkwrap.json when no packageManager field is present", async () => {
+    await withPackageManagerRoot([{ path: "npm-shrinkwrap.json", content: "{}" }], async (root) => {
+      await expect(detectPackageManager(root)).resolves.toBe("npm");
+    });
+  });
 });

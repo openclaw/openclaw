@@ -231,10 +231,20 @@ export async function checkDepsStatus(params: {
   manager: PackageManager;
 }): Promise<DepsStatus> {
   const root = path.resolve(params.root);
-  const { lockfilePath, markerPath } = resolveDepsMarker({
+  let { lockfilePath, markerPath } = resolveDepsMarker({
     root,
     manager: params.manager,
   });
+
+  // For npm, also accept npm-shrinkwrap.json as the lockfile when package-lock.json
+  // is absent. npm-shrinkwrap.json is the publishable npm lockfile format and takes
+  // precedence over package-lock.json at install time.
+  if (params.manager === "npm" && lockfilePath && !(await exists(lockfilePath))) {
+    const shrinkwrapPath = path.join(root, "npm-shrinkwrap.json");
+    if (await exists(shrinkwrapPath)) {
+      lockfilePath = shrinkwrapPath;
+    }
+  }
 
   if (!lockfilePath || !markerPath) {
     return {
