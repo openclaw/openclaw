@@ -692,7 +692,10 @@ export function resolveConfiguredModelRef(
         ? findModelAliasCandidate(params.cfg, modelWithoutProfile)
         : undefined);
     const manifestPlugins = manifestPluginContext.peek();
-    if (aliasCandidate) {
+    if (
+      aliasCandidate &&
+      (!modelWithoutProfile?.includes("/") || aliasCandidate.keyRaw.includes("/"))
+    ) {
       const aliasRef = parseModelRefWithCompatAlias({
         cfg: params.cfg,
         raw: aliasCandidate.keyRaw,

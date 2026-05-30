@@ -1850,6 +1850,40 @@ describe("model-selection", () => {
       });
     });
 
+    it("preserves slash-form primary refs that match bare alias targets", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nemotron-bolt/nemotron-3-super-120b" },
+            models: {
+              nemotron: {
+                alias: "nemotron-bolt/nemotron-3-super-120b",
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            "nemotron-bolt": {
+              api: "openai-completions",
+              models: [{ id: "nemotron-3-super-120b", name: "Nemotron" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nemotron-bolt",
+        model: "nemotron-3-super-120b",
+      });
+    });
+
     it("prefers slash-form aliases for configured default models", () => {
       const cfg = {
         agents: {
