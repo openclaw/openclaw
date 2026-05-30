@@ -156,6 +156,13 @@ function parseFallbackAttempts(value: unknown): FallbackAttempt[] {
   return out;
 }
 
+function buildToolOutputImageUrl(data: string, mediaType?: string): string {
+  if (data.startsWith("data:")) {
+    return data;
+  }
+  return `data:${mediaType ?? "image/png"};base64,${data}`;
+}
+
 function extractToolOutputImages(value: unknown): string[] {
   if (!value || typeof value !== "object") {
     return [];
@@ -178,14 +185,14 @@ function extractToolOutputImages(value: unknown): string[] {
         return entry.url;
       }
       if (typeof entry.data === "string") {
-        const mime = typeof entry.mimeType === "string" ? entry.mimeType : "image/png";
-        return `data:${mime};base64,${entry.data}`;
+        const mime = typeof entry.mimeType === "string" ? entry.mimeType : undefined;
+        return buildToolOutputImageUrl(entry.data, mime);
       }
       if (entry.source && typeof entry.source === "object") {
         const s = entry.source as Record<string, unknown>;
         if (s.type === "base64" && typeof s.data === "string") {
-          const mt = typeof s.media_type === "string" ? s.media_type : "image/png";
-          return `data:${mt};base64,${s.data}`;
+          const mt = typeof s.media_type === "string" ? s.media_type : undefined;
+          return buildToolOutputImageUrl(s.data, mt);
         }
       }
       return null;
