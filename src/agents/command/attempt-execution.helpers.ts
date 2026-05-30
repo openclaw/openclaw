@@ -185,13 +185,13 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
         }
         const message = rec?.message as Record<string, unknown> | undefined;
         const role = message?.role;
-        const blocks = toToolContentBlocks(message?.content);
-        if (!blocks) {
-          continue;
-        }
         if (role === "assistant") {
           lastAssistantToolUseIds = new Set();
           answeredToolResultIds = new Set();
+          const blocks = toToolContentBlocks(message?.content);
+          if (!blocks) {
+            continue;
+          }
           for (const block of blocks) {
             if (isClaudeTranscriptToolUseBlock(block)) {
               const id = resolveToolUseId(block);
@@ -206,6 +206,10 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
             }
           }
         } else if (role === "user") {
+          const blocks = toToolContentBlocks(message?.content);
+          if (!blocks) {
+            continue;
+          }
           for (const block of blocks) {
             if (isClaudeTranscriptToolResultBlock(block)) {
               const id = resolveToolUseId(block);

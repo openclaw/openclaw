@@ -934,6 +934,29 @@ describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
     ).toBe(false);
   });
 
+  it("returns false when a later string assistant message supersedes an old orphan", async () => {
+    await writeJsonlSession("buried-string", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_old_string", name: "Bash", input: {} }],
+        },
+      },
+      {
+        type: "assistant",
+        message: { role: "assistant", content: "moving on" },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "buried-string",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
   it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
     await writeJsonlSession("safe", []);
     expect(
