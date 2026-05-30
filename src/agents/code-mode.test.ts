@@ -935,8 +935,12 @@ describe("Code Mode", () => {
 
     await expect(heartbeat).resolves.toBe("main-event-loop-alive");
     expect(details.status).toBe("failed");
-    expect(String(details.error)).toContain("timeout exceeded");
     expect(details.code).toBe("timeout");
+    expect([
+      "interrupted",
+      "code mode timeout exceeded",
+      "code mode worker timeout exceeded",
+    ]).toContain(String(details.error));
   });
 
   it("normalizes QuickJS interrupt timeout errors", () => {

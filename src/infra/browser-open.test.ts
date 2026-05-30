@@ -66,6 +66,8 @@ describe("resolveBrowserOpenCommand", () => {
 
   it("still refuses browser launch over Linux SSH without a display", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.stubEnv("DISPLAY", undefined);
+    vi.stubEnv("WAYLAND_DISPLAY", undefined);
     vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
 
     const resolved = await resolveBrowserOpenCommand();
