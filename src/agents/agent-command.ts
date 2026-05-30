@@ -12,6 +12,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadSessionStore } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
@@ -115,6 +116,10 @@ import {
 } from "./model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import {
+  claimRestartRecoveryDeliveryContext,
+  clearRestartRecoveryDeliveryContext,
+} from "./restart-recovery-delivery-state.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -382,30 +387,51 @@ function shouldPersistCurrentRunSessionCleanup(
 function shouldPersistRestartRecoveryContextClaim(
   current: SessionEntry | undefined,
   sessionId: string,
-  runId: string,
   allowCreate: boolean,
 ): boolean {
   if (!current) {
     return allowCreate;
   }
-  if (!shouldPersistCurrentRunSessionCleanup(current, sessionId)) {
-    return false;
-  }
-  return (
-    current.restartRecoveryDeliveryRunId === undefined ||
-    current.restartRecoveryDeliveryRunId === runId
-  );
+  return shouldPersistCurrentRunSessionCleanup(current, sessionId);
 }
 
-function shouldPersistRestartRecoveryCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-): boolean {
-  return (
-    shouldPersistCurrentRunSessionCleanup(current, sessionId) &&
-    current?.restartRecoveryDeliveryRunId === runId
-  );
+function readDurableRestartRecoveryCleanupEntry(
+  storePath: string,
+  sessionKey: string,
+): SessionEntry | undefined {
+  try {
+    return loadSessionStore(storePath, {
+      hydrateSkillPromptRefs: false,
+      skipCache: true,
+    })[sessionKey];
+  } catch (error) {
+    log.warn(
+      `failed to read durable restart recovery cleanup entry for ${sessionKey}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return undefined;
+  }
+}
+
+function claimRestartRecoveryDeliveryContextBestEffort(params: {
+  context: DeliveryContext;
+  runId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  updatedAtMs?: number;
+}): boolean {
+  try {
+    return claimRestartRecoveryDeliveryContext(params);
+  } catch (error) {
+    log.warn(
+      `failed to persist restart recovery delivery context for ${params.sessionKey}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return false;
+  }
 }
 
 function containsControlCharacters(value: string): boolean {
@@ -772,26 +798,33 @@ async function agentCommandInternal(
         ...entry,
         sessionId,
         updatedAt: now,
-        restartRecoveryDeliveryContext: currentRunDeliveryContext,
-        restartRecoveryDeliveryRunId: currentRunDeliveryContext ? runId : undefined,
       };
+      let shouldClaimRestartRecoveryContext = false;
       const persisted = await persistSessionEntry({
         sessionStore,
         sessionKey,
         storePath,
         entry: next,
-        shouldPersist: (current) =>
-          shouldPersistRestartRecoveryContextClaim(
+        shouldPersist: (current) => {
+          shouldClaimRestartRecoveryContext = shouldPersistRestartRecoveryContextClaim(
             current,
             sessionId,
-            runId,
             allowCreateRestartRecoveryEntry,
-          ),
+          );
+          return shouldClaimRestartRecoveryContext;
+        },
       });
       sessionEntry = persisted ?? sessionEntry;
-      trackedRestartRecoveryDeliveryContext =
-        Boolean(persisted?.restartRecoveryDeliveryContext) &&
-        persisted?.restartRecoveryDeliveryRunId === runId;
+      if (shouldClaimRestartRecoveryContext && persisted && currentRunDeliveryContext) {
+        trackedRestartRecoveryDeliveryContext = claimRestartRecoveryDeliveryContextBestEffort({
+          context: currentRunDeliveryContext,
+          runId,
+          sessionId,
+          sessionKey,
+          storePath,
+          updatedAtMs: now,
+        });
+      }
     }
 
     if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
@@ -1985,23 +2018,14 @@ async function agentCommandInternal(
   } finally {
     if (trackedRestartRecoveryDeliveryContext && sessionStore && sessionKey) {
       try {
-        const entry = sessionStore[sessionKey] ?? sessionEntry;
-        if (entry?.restartRecoveryDeliveryContext && entry.restartRecoveryDeliveryRunId === runId) {
-          const next: SessionEntry = {
-            ...entry,
-            restartRecoveryDeliveryContext: undefined,
-            restartRecoveryDeliveryRunId: undefined,
-            updatedAt: Date.now(),
-          };
-          const persisted = await persistSessionEntry({
-            sessionStore,
+        const entry = readDurableRestartRecoveryCleanupEntry(storePath, sessionKey);
+        if (shouldPersistCurrentRunSessionCleanup(entry, sessionId)) {
+          clearRestartRecoveryDeliveryContext({
+            runId,
+            sessionId,
             sessionKey,
             storePath,
-            entry: next,
-            shouldPersist: (current) =>
-              shouldPersistRestartRecoveryCleanup(current, sessionId, runId),
           });
-          sessionEntry = persisted ?? sessionEntry;
         }
       } catch (error) {
         log.warn(

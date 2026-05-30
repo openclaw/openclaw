@@ -213,6 +213,11 @@ function createLegacyStateMigrationDetectionResult(params?: {
       hasLegacy: params?.hasLegacySessions ?? false,
       legacyKeys: [],
     },
+    restartRecoveryDeliveryContexts: {
+      hasLegacy: false,
+      count: 0,
+      storePaths: [],
+    },
     agentDir: {
       legacyDir: "/tmp/state/agent",
       targetDir: "/tmp/state/agents/main/agent",

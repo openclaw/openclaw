@@ -2,6 +2,11 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { SessionEntry } from "../config/sessions.js";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./internal-events.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import {
+  claimRestartRecoveryDeliveryContext,
+  clearRestartRecoveryDeliveryContextsForTest,
+  readRestartRecoveryDeliveryContext,
+} from "./restart-recovery-delivery-state.js";
 
 const state = vi.hoisted(() => ({
   defaultRuntimeConfig: {
@@ -212,6 +217,7 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
+  loadSessionStore: () => state.sessionStoreMock ?? {},
   resolveAgentIdFromSessionKey: () => "default",
   mergeSessionEntry: (a: unknown, b: unknown) => ({ ...(a as object), ...(b as object) }),
   updateSessionStore: vi.fn(
@@ -947,6 +953,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   });
 
   afterEach(() => {
+    clearRestartRecoveryDeliveryContextsForTest();
     vi.restoreAllMocks();
   });
 
@@ -1155,7 +1162,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionEntryMock = sessionEntry;
     state.sessionStoreMock = { "agent:main:main": sessionEntry };
     state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
+    state.deliverAgentCommandResultMock.mockImplementation(async () => {
+      expect(
+        readRestartRecoveryDeliveryContext({
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/openclaw-sessions.json",
+        })?.context,
+      ).toEqual({
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        threadId: "reply-1",
+      });
+      return { deliverySucceeded: true };
+    });
 
     await agentCommand({
       message: "hello",
@@ -1166,18 +1187,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       deliver: true,
     });
 
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
-      threadId: "reply-1",
-    });
-    const stored = (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
-    expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      }),
+    ).toBeUndefined();
   });
 
   it("preserves parsed explicit target threads for restart recovery", async () => {
@@ -1190,7 +1206,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionEntryMock = sessionEntry;
     state.sessionStoreMock = { "agent:main:main": sessionEntry };
     state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
+    state.deliverAgentCommandResultMock.mockImplementation(async () => {
+      expect(
+        readRestartRecoveryDeliveryContext({
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/openclaw-sessions.json",
+        })?.context,
+      ).toEqual({
+        channel: "discord",
+        to: "discord:channel:general",
+        accountId: "main",
+        threadId: "thread-1",
+      });
+      return { deliverySucceeded: true };
+    });
     state.resolveAgentDeliveryPlanMock.mockReturnValueOnce({
       baseDelivery: {
         mode: "explicit",
@@ -1211,17 +1241,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       accountId: "main",
       deliver: true,
     });
-
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:channel:general",
-      accountId: "main",
-      threadId: "thread-1",
-    });
   });
 
   it("does not inherit a stale thread when restart recovery uses an explicit target", async () => {
@@ -1235,7 +1254,20 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionEntryMock = sessionEntry;
     state.sessionStoreMock = { "agent:main:main": sessionEntry };
     state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
+    state.deliverAgentCommandResultMock.mockImplementation(async () => {
+      expect(
+        readRestartRecoveryDeliveryContext({
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/openclaw-sessions.json",
+        })?.context,
+      ).toEqual({
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+      });
+      return { deliverySucceeded: true };
+    });
 
     await agentCommand({
       message: "hello",
@@ -1243,16 +1275,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       to: "discord:dm:123",
       accountId: "main",
       deliver: true,
-    });
-
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:dm:123",
-      accountId: "main",
     });
   });
 
@@ -1272,7 +1294,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionEntryMock = sessionEntry;
     state.sessionStoreMock = { "agent:main:main": sessionEntry };
     state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
+    state.deliverAgentCommandResultMock.mockImplementation(async () => {
+      expect(
+        readRestartRecoveryDeliveryContext({
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/openclaw-sessions.json",
+        })?.context,
+      ).toEqual({
+        channel: "discord",
+        to: "discord:channel:general",
+        accountId: "main",
+        threadId: "thread-1",
+      });
+      return { deliverySucceeded: true };
+    });
 
     await agentCommand({
       message: "hello",
@@ -1280,16 +1316,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       deliver: true,
     });
 
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:channel:general",
-      accountId: "main",
-      threadId: "thread-1",
-    });
     expect(state.resolveAgentDeliveryPlanMock).toHaveBeenCalledWith(
       expect.objectContaining({
         explicitTo: undefined,
@@ -1312,7 +1338,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionEntryMock = sessionEntry;
     state.sessionStoreMock = { "agent:main:main": sessionEntry };
     state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockResolvedValue({ deliverySucceeded: true });
+    state.deliverAgentCommandResultMock.mockImplementation(async () => {
+      expect(
+        readRestartRecoveryDeliveryContext({
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          storePath: "/tmp/openclaw-sessions.json",
+        })?.context,
+      ).toEqual({
+        channel: "discord",
+        to: "discord:channel:default",
+      });
+      return { deliverySucceeded: true };
+    });
     state.resolveMessageChannelSelectionMock.mockResolvedValue({
       channel: "discord",
       configured: ["discord"],
@@ -1330,14 +1368,22 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       deliver: true,
     });
 
-    const persistedContexts = state.persistSessionEntryMock.mock.calls.map((call) => {
-      const params = call[0] as { entry?: SessionEntry };
-      return params.entry?.restartRecoveryDeliveryContext;
-    });
-    expect(persistedContexts).toContainEqual({
-      channel: "discord",
-      to: "discord:channel:default",
-    });
+    const stored = (state.sessionStoreMock as Record<string, SessionEntry> | undefined)?.[
+      "agent:main:main"
+    ];
+    expect(
+      (stored as Record<string, unknown> | undefined)?.restartRecoveryDeliveryContext,
+    ).toBeUndefined();
+    expect(
+      (stored as Record<string, unknown> | undefined)?.restartRecoveryDeliveryRunId,
+    ).toBeUndefined();
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      }),
+    ).toBeUndefined();
   });
 
   it("does not overwrite another active run's restart recovery context", async () => {
@@ -1350,13 +1396,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const laterRunEntry: SessionEntry = {
       sessionId: "session-1",
       updatedAt: 2,
-      restartRecoveryDeliveryContext: {
+    };
+    claimRestartRecoveryDeliveryContext({
+      context: {
         channel: "discord",
         to: "discord:dm:456",
         accountId: "main",
       },
-      restartRecoveryDeliveryRunId: "later-run",
-    };
+      runId: "later-run",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+    });
     const sessionStore: Record<string, SessionEntry> = {
       "agent:main:main": laterRunEntry,
     };
@@ -1374,10 +1425,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       runId: "stale-run",
     });
 
-    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryContext).toEqual(
-      laterRunEntry.restartRecoveryDeliveryContext,
-    );
-    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("later-run");
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      }),
+    ).toMatchObject({
+      runId: "later-run",
+      context: { channel: "discord", to: "discord:dm:456", accountId: "main" },
+    });
   });
 
   it("does not clear another active run's restart recovery context", async () => {
@@ -1390,13 +1447,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const laterRunEntry: SessionEntry = {
       sessionId: "session-1",
       updatedAt: 2,
-      restartRecoveryDeliveryContext: {
+    };
+    claimRestartRecoveryDeliveryContext({
+      context: {
         channel: "discord",
         to: "discord:dm:456",
         accountId: "main",
       },
-      restartRecoveryDeliveryRunId: "later-run",
-    };
+      runId: "later-run",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+    });
     const sessionStore: Record<string, SessionEntry> = {
       "agent:main:main": laterRunEntry,
     };
@@ -1411,10 +1473,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       runId: "stale-run",
     });
 
-    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryContext).toEqual(
-      laterRunEntry.restartRecoveryDeliveryContext,
-    );
-    expect(sessionStore["agent:main:main"]?.restartRecoveryDeliveryRunId).toBe("later-run");
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      }),
+    ).toMatchObject({
+      runId: "later-run",
+      context: { channel: "discord", to: "discord:dm:456", accountId: "main" },
+    });
   });
 
   it("keeps current run delivery context when restart marker wins the cleanup race", async () => {
@@ -1428,12 +1496,37 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionEntryMock = sessionEntry;
     state.sessionStoreMock = sessionStore;
     state.storePathMock = "/tmp/openclaw-sessions.json";
-    state.deliverAgentCommandResultMock.mockImplementation(async () => {
-      const current = sessionStore["agent:main:main"];
-      if (current) {
-        current.abortedLastRun = true;
+    let restartMarkerWon = false;
+    state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as {
+        sessionStore?: Record<string, SessionEntry>;
+        sessionKey?: string;
+        entry?: SessionEntry;
+        shouldPersist?: (entry: SessionEntry | undefined) => boolean;
+      };
+      const current =
+        params.sessionStore && params.sessionKey
+          ? params.sessionStore[params.sessionKey]
+          : undefined;
+      if (params.shouldPersist && !params.shouldPersist(current)) {
+        return current;
       }
-      return { deliverySucceeded: false };
+      if (params.sessionStore && params.sessionKey && params.entry) {
+        params.sessionStore[params.sessionKey] = {
+          ...params.entry,
+          ...(restartMarkerWon ? { abortedLastRun: true } : {}),
+        };
+        return params.sessionStore[params.sessionKey];
+      }
+      return current;
+    });
+    state.deliverAgentCommandResultMock.mockImplementation(async () => {
+      restartMarkerWon = true;
+      sessionStore["agent:main:main"] = {
+        ...(sessionStore["agent:main:main"] ?? sessionEntry),
+        abortedLastRun: true,
+      };
+      return { deliverySucceeded: true };
     });
 
     await agentCommand({
@@ -1445,18 +1538,20 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
 
     expect(sessionStore["agent:main:main"]?.abortedLastRun).toBe(true);
-    expect(state.persistSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: expect.objectContaining({
-          restartRecoveryDeliveryContext: {
-            channel: "discord",
-            to: "discord:dm:123",
-            accountId: "main",
-          },
-          restartRecoveryDeliveryRunId: "session-1",
-        }),
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
       }),
-    );
+    ).toMatchObject({
+      runId: "session-1",
+      context: {
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+      },
+    });
   });
 
   it("does not recreate a deleted session entry during restart recovery cleanup", async () => {
@@ -1496,11 +1591,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const rotatedEntry: SessionEntry = {
       sessionId: "session-2",
       updatedAt: 2,
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:456",
-        accountId: "main",
-      },
     };
     const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
     state.sessionEntryMock = sessionEntry;
@@ -1532,13 +1622,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const laterRunEntry: SessionEntry = {
       sessionId: "session-1",
       updatedAt: 2,
-      restartRecoveryDeliveryContext: {
+    };
+    claimRestartRecoveryDeliveryContext({
+      context: {
         channel: "discord",
         to: "discord:dm:456",
         accountId: "main",
       },
-      restartRecoveryDeliveryRunId: "later-run",
-    };
+      runId: "later-run",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/openclaw-sessions.json",
+    });
     const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
     state.sessionEntryMock = sessionEntry;
     state.sessionStoreMock = sessionStore;

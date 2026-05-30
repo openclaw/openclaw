@@ -433,8 +433,12 @@ describe("session store writer queue", () => {
     expect(bad?.pendingFinalDeliveryLastError).toBeUndefined();
     expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
     expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
-    expect(bad?.restartRecoveryDeliveryContext).toBeUndefined();
-    expect(bad?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(
+      (bad as Record<string, unknown> | undefined)?.restartRecoveryDeliveryContext,
+    ).toBeUndefined();
+    expect(
+      (bad as Record<string, unknown> | undefined)?.restartRecoveryDeliveryRunId,
+    ).toBeUndefined();
 
     expect(good).toMatchObject({
       pendingFinalDelivery: true,
@@ -450,14 +454,13 @@ describe("session store writer queue", () => {
         threadId: 42,
       },
       pendingFinalDeliveryIntentId: "intent-1",
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "discord:dm:123",
-        accountId: "main",
-        threadId: "reply-1",
-      },
-      restartRecoveryDeliveryRunId: "run-1",
     });
+    expect(
+      (good as Record<string, unknown> | undefined)?.restartRecoveryDeliveryContext,
+    ).toBeUndefined();
+    expect(
+      (good as Record<string, unknown> | undefined)?.restartRecoveryDeliveryRunId,
+    ).toBeUndefined();
   });
 
   it("strips malformed plugin extension state on load", async () => {

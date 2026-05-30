@@ -14,6 +14,10 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import {
+  claimRestartRecoveryDeliveryContext,
+  clearRestartRecoveryDeliveryContext as clearStoredRestartRecoveryDeliveryContext,
+} from "../../agents/restart-recovery-delivery-state.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -37,6 +41,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -104,6 +109,8 @@ import {
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
+
+const log = createSubsystemLogger("auto-reply/agent-runner");
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -1404,51 +1411,73 @@ export async function runReplyAgent(params: {
       return;
     }
     const updatedAt = Date.now();
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: deliveryContext,
-      restartRecoveryDeliveryRunId,
-      updatedAt,
-    };
+    let shouldClaimRestartRecoveryContext = false;
     const persisted = await updateSessionStoreEntry({
       storePath,
       sessionKey,
-      update: async (current) =>
-        current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
-          ? patch
-          : null,
+      update: async (current) => {
+        shouldClaimRestartRecoveryContext =
+          current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true;
+        return shouldClaimRestartRecoveryContext ? { updatedAt } : null;
+      },
     });
-    if (persisted) {
+    if (persisted && shouldClaimRestartRecoveryContext) {
       activeSessionEntry = persisted;
       if (activeSessionStore) {
         activeSessionStore[sessionKey] = persisted;
       }
-      trackedRestartRecoveryDeliveryContext =
-        persisted.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId;
+      try {
+        trackedRestartRecoveryDeliveryContext = claimRestartRecoveryDeliveryContext({
+          context: deliveryContext,
+          runId: restartRecoveryDeliveryRunId,
+          sessionId: replyOperation.sessionId,
+          sessionKey,
+          storePath,
+          replaceExisting: true,
+          updatedAtMs: updatedAt,
+        });
+      } catch (error) {
+        log.warn(
+          `failed to persist restart recovery delivery context for ${sessionKey}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        trackedRestartRecoveryDeliveryContext = false;
+      }
     }
   };
   const clearRestartRecoveryDeliveryContext = async (): Promise<void> => {
     if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
       return;
     }
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: undefined,
-      restartRecoveryDeliveryRunId: undefined,
-      updatedAt: Date.now(),
-    };
-    const persisted = await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async (current) =>
-        current.sessionId === replyOperation.sessionId &&
-        current.abortedLastRun !== true &&
-        current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
-          ? patch
-          : null,
-    });
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
+    let entry: SessionEntry | undefined;
+    try {
+      entry = loadSessionStore(storePath, {
+        hydrateSkillPromptRefs: false,
+        skipCache: true,
+      })[sessionKey];
+    } catch (error) {
+      log.warn(
+        `failed to read durable restart recovery cleanup entry for ${sessionKey}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return;
+    }
+    if (entry?.sessionId === replyOperation.sessionId && entry.abortedLastRun !== true) {
+      try {
+        clearStoredRestartRecoveryDeliveryContext({
+          runId: restartRecoveryDeliveryRunId,
+          sessionId: replyOperation.sessionId,
+          sessionKey,
+          storePath,
+        });
+      } catch (error) {
+        log.warn(
+          `failed to clear restart recovery delivery context for ${sessionKey}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     }
   };

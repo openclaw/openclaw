@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { claimRestartRecoveryDeliveryContext } from "../agents/restart-recovery-delivery-state.js";
 import {
   listBundledChannelLegacySessionSurfaces,
   listBundledChannelLegacyStateMigrationDetectors,
@@ -15,7 +16,7 @@ import {
   resolveStateDir,
 } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { saveSessionStore } from "../config/sessions.js";
+import { resolveAllAgentSessionStoreTargetsSync, saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,6 +38,10 @@ import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { expandHomePrefix } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
@@ -68,6 +73,11 @@ export type LegacyStateDetection = {
     targetStorePath: string;
     hasLegacy: boolean;
     legacyKeys: string[];
+  };
+  restartRecoveryDeliveryContexts: {
+    hasLegacy: boolean;
+    count: number;
+    storePaths: string[];
   };
   agentDir: {
     legacyDir: string;
@@ -1219,6 +1229,81 @@ function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
   return normalized;
 }
 
+type LegacyRestartRecoveryDeliveryContextCandidate = {
+  context: DeliveryContext;
+  runId: string;
+  sessionId: string;
+  updatedAtMs: number;
+};
+
+function hasLegacyRestartRecoveryDeliveryFields(entry: SessionEntryLike): boolean {
+  const record = entry as Record<string, unknown>;
+  return "restartRecoveryDeliveryContext" in record || "restartRecoveryDeliveryRunId" in record;
+}
+
+function readLegacyRestartRecoveryDeliveryContextCandidate(
+  entry: SessionEntryLike,
+): LegacyRestartRecoveryDeliveryContextCandidate | undefined {
+  const record = entry as Record<string, unknown>;
+  const sessionId = typeof record.sessionId === "string" ? record.sessionId : "";
+  const rawContext = record.restartRecoveryDeliveryContext;
+  if (!sessionId || !rawContext || typeof rawContext !== "object" || Array.isArray(rawContext)) {
+    return undefined;
+  }
+  const contextRecord = rawContext as Record<string, unknown>;
+  const context = normalizeDeliveryContext({
+    channel: typeof contextRecord.channel === "string" ? contextRecord.channel : undefined,
+    to: typeof contextRecord.to === "string" ? contextRecord.to : undefined,
+    accountId: typeof contextRecord.accountId === "string" ? contextRecord.accountId : undefined,
+    threadId:
+      typeof contextRecord.threadId === "string" || typeof contextRecord.threadId === "number"
+        ? contextRecord.threadId
+        : undefined,
+  });
+  if (!context?.channel || !context.to) {
+    return undefined;
+  }
+  const rawRunId = record.restartRecoveryDeliveryRunId;
+  const updatedAt = record.updatedAt;
+  return {
+    context,
+    runId: typeof rawRunId === "string" && rawRunId.trim() ? rawRunId : sessionId,
+    sessionId,
+    updatedAtMs:
+      typeof updatedAt === "number" && Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+  };
+}
+
+function countLegacyRestartRecoveryDeliveryContexts(storePath: string): number {
+  if (!fileExists(storePath)) {
+    return 0;
+  }
+  const parsed = readSessionStoreJson5(storePath);
+  if (!parsed.ok) {
+    return 0;
+  }
+  let count = 0;
+  for (const entry of Object.values(parsed.store)) {
+    if (entry && typeof entry === "object" && hasLegacyRestartRecoveryDeliveryFields(entry)) {
+      count++;
+    }
+  }
+  return count;
+}
+
+function normalizeSessionStorePathForMigration(storePath: string): string {
+  const resolved = path.resolve(storePath);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    try {
+      return path.join(fs.realpathSync.native(path.dirname(resolved)), path.basename(resolved));
+    } catch {
+      return resolved;
+    }
+  }
+}
+
 function resolveUpdatedAt(entry: SessionEntryLike): number {
   return typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
     ? entry.updatedAt
@@ -1242,6 +1327,92 @@ function mergeSessionEntry(params: {
     return params.existing;
   }
   return params.preferIncomingOnTie ? params.incoming : params.existing;
+}
+
+type RestartRecoveryDeliveryMigrationResult = {
+  normalized: Record<string, SessionEntry>;
+  changed: boolean;
+  migrated: number;
+  dropped: number;
+  warnings: string[];
+};
+
+function migrateLegacyRestartRecoveryDeliveryContextEntries(params: {
+  stateDir: string;
+  store: Record<string, SessionEntryLike>;
+  storePath: string;
+}): RestartRecoveryDeliveryMigrationResult {
+  let changed = false;
+  let migrated = 0;
+  let dropped = 0;
+  const warnings: string[] = [];
+  const normalized: Record<string, SessionEntry> = {};
+  for (const [sessionKey, entry] of Object.entries(params.store)) {
+    const normalizedEntry = normalizeSessionEntry(entry);
+    if (!normalizedEntry) {
+      continue;
+    }
+    let shouldStripLegacyFields = false;
+    const candidate = hasLegacyRestartRecoveryDeliveryFields(entry)
+      ? readLegacyRestartRecoveryDeliveryContextCandidate(entry)
+      : undefined;
+    if (candidate) {
+      try {
+        const claimed = claimRestartRecoveryDeliveryContext({
+          context: candidate.context,
+          runId: candidate.runId,
+          sessionId: candidate.sessionId,
+          sessionKey,
+          stateDir: params.stateDir,
+          storePath: params.storePath,
+          replaceExisting: true,
+          updatedAtMs: candidate.updatedAtMs,
+        });
+        if (claimed) {
+          migrated++;
+          shouldStripLegacyFields = true;
+        } else {
+          warnings.push(
+            `Skipped migrating restart recovery delivery context for ${sessionKey}: shared SQLite row is owned by another run`,
+          );
+        }
+      } catch (err) {
+        warnings.push(
+          `Failed migrating restart recovery delivery context for ${sessionKey}: ${String(err)}`,
+        );
+      }
+    } else if (hasLegacyRestartRecoveryDeliveryFields(entry)) {
+      dropped++;
+      shouldStripLegacyFields = true;
+    }
+
+    if (shouldStripLegacyFields) {
+      const record = normalizedEntry as unknown as Record<string, unknown>;
+      delete record.restartRecoveryDeliveryContext;
+      delete record.restartRecoveryDeliveryRunId;
+      changed = true;
+    }
+    normalized[sessionKey] = normalizedEntry;
+  }
+  return { normalized, changed, migrated, dropped, warnings };
+}
+
+function appendRestartRecoveryDeliveryMigrationResult(
+  result: Pick<RestartRecoveryDeliveryMigrationResult, "migrated" | "dropped" | "warnings">,
+  changes: string[],
+  warnings: string[],
+): void {
+  if (result.migrated > 0) {
+    changes.push(
+      `Migrated ${result.migrated} restart recovery delivery ${result.migrated === 1 ? "context" : "contexts"} → shared SQLite state`,
+    );
+  }
+  if (result.dropped > 0) {
+    warnings.push(
+      `Dropped ${result.dropped} invalid restart recovery delivery ${result.dropped === 1 ? "context" : "contexts"} from sessions store`,
+    );
+  }
+  warnings.push(...result.warnings);
 }
 
 function canonicalizeSessionStore(params: {
@@ -1903,6 +2074,21 @@ export async function detectLegacyStateMigrations(params: {
         scope: targetScope,
       })
     : [];
+  const restartRecoveryDeliveryContextStorePaths = [
+    ...new Set(
+      [
+        sessionsLegacyStorePath,
+        sessionsTargetStorePath,
+        ...resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }).map(
+          (target) => target.storePath,
+        ),
+      ].map(normalizeSessionStorePathForMigration),
+    ),
+  ];
+  const restartRecoveryDeliveryContextCount = restartRecoveryDeliveryContextStorePaths.reduce(
+    (count, storePath) => count + countLegacyRestartRecoveryDeliveryContexts(storePath),
+    0,
+  );
 
   const legacyAgentDir = path.join(stateDir, "agent");
   const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
@@ -1925,6 +2111,11 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (legacyKeys.length > 0) {
     preview.push(`- Sessions: canonicalize legacy keys in ${sessionsTargetStorePath}`);
+  }
+  if (restartRecoveryDeliveryContextCount > 0) {
+    preview.push(
+      `- Restart recovery delivery contexts: migrate ${restartRecoveryDeliveryContextCount} session JSON ${restartRecoveryDeliveryContextCount === 1 ? "route" : "routes"} → shared SQLite state`,
+    );
   }
   if (hasLegacyAgentDir) {
     preview.push(`- Agent dir: ${legacyAgentDir} → ${targetAgentDir}`);
@@ -1955,6 +2146,11 @@ export async function detectLegacyStateMigrations(params: {
       targetStorePath: sessionsTargetStorePath,
       hasLegacy: hasLegacySessions || legacyKeys.length > 0,
       legacyKeys,
+    },
+    restartRecoveryDeliveryContexts: {
+      hasLegacy: restartRecoveryDeliveryContextCount > 0,
+      count: restartRecoveryDeliveryContextCount,
+      storePaths: restartRecoveryDeliveryContextStorePaths,
     },
     agentDir: {
       legacyDir: legacyAgentDir,
@@ -2043,17 +2239,23 @@ async function migrateLegacySessions(
     (legacyParsed.ok || targetParsed.ok) &&
     (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
   ) {
-    const normalized: Record<string, SessionEntry> = {};
-    for (const [key, entry] of Object.entries(merged)) {
-      const normalizedEntry = normalizeSessionEntry(entry);
-      if (!normalizedEntry) {
-        continue;
-      }
-      normalized[key] = normalizedEntry;
-    }
-    await saveSessionStore(detected.sessions.targetStorePath, normalized, {
-      skipMaintenance: true,
+    const restartRecoveryDeliveryContexts = migrateLegacyRestartRecoveryDeliveryContextEntries({
+      stateDir: detected.stateDir,
+      store: merged,
+      storePath: detected.sessions.targetStorePath,
     });
+    await saveSessionStore(
+      detected.sessions.targetStorePath,
+      restartRecoveryDeliveryContexts.normalized,
+      {
+        skipMaintenance: true,
+      },
+    );
+    appendRestartRecoveryDeliveryMigrationResult(
+      restartRecoveryDeliveryContexts,
+      changes,
+      warnings,
+    );
     changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
     if (canonicalizedTarget.legacyKeys.length > 0) {
       changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
@@ -2103,6 +2305,37 @@ async function migrateLegacySessions(
     }
   }
 
+  return { changes, warnings };
+}
+
+async function migrateLegacyRestartRecoveryDeliveryContexts(
+  detected: LegacyStateDetection,
+): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const storePath of detected.restartRecoveryDeliveryContexts.storePaths) {
+    if (!fileExists(storePath)) {
+      continue;
+    }
+    const parsed = readSessionStoreJson5(storePath);
+    if (!parsed.ok) {
+      warnings.push(
+        `Could not migrate restart recovery delivery contexts because sessions store is unreadable: ${storePath}`,
+      );
+      continue;
+    }
+    const result = migrateLegacyRestartRecoveryDeliveryContextEntries({
+      stateDir: detected.stateDir,
+      store: parsed.store,
+      storePath,
+    });
+    if (result.changed) {
+      await saveSessionStore(storePath, result.normalized, {
+        skipMaintenance: true,
+      });
+    }
+    appendRestartRecoveryDeliveryMigrationResult(result, changes, warnings);
+  }
   return { changes, warnings };
 }
 
@@ -2168,6 +2401,8 @@ export async function runLegacyStateMigrations(params: {
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
   const sessions = await migrateLegacySessions(detected, now);
+  const restartRecoveryDeliveryContexts =
+    await migrateLegacyRestartRecoveryDeliveryContexts(detected);
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
@@ -2178,6 +2413,7 @@ export async function runLegacyStateMigrations(params: {
       ...taskStateSidecars.changes,
       ...preSessionChannelPlans.changes,
       ...sessions.changes,
+      ...restartRecoveryDeliveryContexts.changes,
       ...agentDir.changes,
       ...channelPlans.changes,
     ],
@@ -2186,6 +2422,7 @@ export async function runLegacyStateMigrations(params: {
       ...taskStateSidecars.warnings,
       ...preSessionChannelPlans.warnings,
       ...sessions.warnings,
+      ...restartRecoveryDeliveryContexts.warnings,
       ...agentDir.warnings,
       ...channelPlans.warnings,
     ],
@@ -2426,12 +2663,15 @@ export async function autoMigrateLegacyState(params: {
     const preSessionChannelPlans = await runLegacyMigrationPlans(
       detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
     );
+    const restartRecoveryDeliveryContexts =
+      await migrateLegacyRestartRecoveryDeliveryContexts(detected);
     const changes = [
       ...stateDirResult.changes,
       ...orphanKeys.changes,
       ...pluginStateSidecar.changes,
       ...taskStateSidecars.changes,
       ...preSessionChannelPlans.changes,
+      ...restartRecoveryDeliveryContexts.changes,
     ];
     const warnings = [
       ...stateDirResult.warnings,
@@ -2439,6 +2679,7 @@ export async function autoMigrateLegacyState(params: {
       ...pluginStateSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...preSessionChannelPlans.warnings,
+      ...restartRecoveryDeliveryContexts.warnings,
     ];
     logMigrationResults(changes, warnings);
     return {
@@ -2447,7 +2688,8 @@ export async function autoMigrateLegacyState(params: {
         orphanKeys.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
         taskStateSidecars.changes.length > 0 ||
-        preSessionChannelPlans.changes.length > 0,
+        preSessionChannelPlans.changes.length > 0 ||
+        restartRecoveryDeliveryContexts.changes.length > 0,
       skipped: true,
       changes,
       warnings,
@@ -2458,7 +2700,8 @@ export async function autoMigrateLegacyState(params: {
     !detected.agentDir.hasLegacy &&
     !detected.channelPlans.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
-    !detected.taskStateSidecars.hasLegacy
+    !detected.taskStateSidecars.hasLegacy &&
+    !detected.restartRecoveryDeliveryContexts.hasLegacy
   ) {
     const changes = [...stateDirResult.changes, ...orphanKeys.changes];
     const warnings = [...stateDirResult.warnings, ...orphanKeys.warnings];
@@ -2482,6 +2725,8 @@ export async function autoMigrateLegacyState(params: {
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
   const sessions = await migrateLegacySessions(detected, now);
+  const restartRecoveryDeliveryContexts =
+    await migrateLegacyRestartRecoveryDeliveryContexts(detected);
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
@@ -2493,6 +2738,7 @@ export async function autoMigrateLegacyState(params: {
     ...taskStateSidecars.changes,
     ...preSessionChannelPlans.changes,
     ...sessions.changes,
+    ...restartRecoveryDeliveryContexts.changes,
     ...agentDir.changes,
     ...channelPlans.changes,
   ];
@@ -2503,6 +2749,7 @@ export async function autoMigrateLegacyState(params: {
     ...taskStateSidecars.warnings,
     ...preSessionChannelPlans.warnings,
     ...sessions.warnings,
+    ...restartRecoveryDeliveryContexts.warnings,
     ...agentDir.warnings,
     ...channelPlans.warnings,
   ];

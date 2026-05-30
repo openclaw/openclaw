@@ -2,8 +2,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readRestartRecoveryDeliveryContext } from "../agents/restart-recovery-delivery-state.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { detectLegacyStateMigrations, runLegacyStateMigrations } from "./state-migrations.js";
 
@@ -170,6 +172,7 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
 }
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
@@ -270,5 +273,219 @@ describe("state migrations", () => {
     ).resolves.toBe('["123","456"]\n');
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "default"));
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
+  });
+
+  it("migrates legacy restart recovery delivery fields into SQLite", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const storePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          "agent:worker-1:desk": {
+            sessionId: "session-1",
+            updatedAt: 123,
+            restartRecoveryDeliveryContext: {
+              channel: "Discord",
+              to: " discord:dm:123 ",
+              accountId: "Main",
+              threadId: 42.5,
+            },
+            restartRecoveryDeliveryRunId: "run-1",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+    expect(detected.restartRecoveryDeliveryContexts).toMatchObject({
+      hasLegacy: true,
+      count: 1,
+    });
+    expect(detected.preview).toEqual([
+      "- Restart recovery delivery contexts: migrate 1 session JSON route → shared SQLite state",
+    ]);
+
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated 1 restart recovery delivery context → shared SQLite state",
+    ]);
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "session-1",
+        sessionKey: "agent:worker-1:desk",
+        storePath,
+      }),
+    ).toMatchObject({
+      runId: "run-1",
+      sessionId: "session-1",
+      context: {
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        threadId: 42,
+      },
+      updatedAtMs: 123,
+    });
+    const migratedStore = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(migratedStore["agent:worker-1:desk"]?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(migratedStore["agent:worker-1:desk"]?.restartRecoveryDeliveryRunId).toBeUndefined();
+  });
+
+  it("migrates restart recovery delivery fields while merging legacy sessions", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      `${JSON.stringify(
+        {
+          legacyDirect: {
+            sessionId: "legacy-session",
+            updatedAt: 456,
+            restartRecoveryDeliveryContext: {
+              channel: "discord",
+              to: "discord:dm:456",
+            },
+            restartRecoveryDeliveryRunId: "legacy-run",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(detected.sessions.hasLegacy).toBe(true);
+    expect(detected.restartRecoveryDeliveryContexts.count).toBe(1);
+    const result = await runLegacyStateMigrations({
+      detected,
+      now: () => 1234,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated latest direct-chat session → agent:worker-1:desk",
+      "Migrated 2 restart recovery delivery contexts → shared SQLite state",
+      `Merged sessions store → ${targetStorePath}`,
+    ]);
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "legacy-session",
+        sessionKey: "agent:worker-1:desk",
+        storePath: targetStorePath,
+      }),
+    ).toMatchObject({
+      runId: "legacy-run",
+      context: {
+        channel: "discord",
+        to: "discord:dm:456",
+      },
+      updatedAtMs: 456,
+    });
+    const migratedStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(migratedStore["agent:worker-1:desk"]?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(migratedStore["agent:worker-1:desk"]?.restartRecoveryDeliveryRunId).toBeUndefined();
+    await expectMissingPath(legacyStorePath);
+  });
+
+  it("migrates restart recovery delivery fields from discovered agent stores", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const storePath = path.join(stateDir, "agents", "sidekick", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          "agent:sidekick:main": {
+            sessionId: "side-session",
+            updatedAt: 789,
+            restartRecoveryDeliveryContext: {
+              channel: "discord",
+              to: "discord:dm:789",
+            },
+            restartRecoveryDeliveryRunId: "side-run",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+    });
+
+    expect(detected.restartRecoveryDeliveryContexts).toMatchObject({
+      hasLegacy: true,
+      count: 1,
+    });
+    expect(
+      detected.restartRecoveryDeliveryContexts.storePaths.some((candidate) =>
+        candidate.endsWith(path.join("agents", "sidekick", "sessions", "sessions.json")),
+      ),
+    ).toBe(true);
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated 1 restart recovery delivery context → shared SQLite state",
+    ]);
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "side-session",
+        sessionKey: "agent:sidekick:main",
+        stateDir,
+        storePath,
+      }),
+    ).toMatchObject({
+      runId: "side-run",
+      context: {
+        channel: "discord",
+        to: "discord:dm:789",
+      },
+      updatedAtMs: 789,
+    });
+    const migratedStore = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(migratedStore["agent:sidekick:main"]?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(migratedStore["agent:sidekick:main"]?.restartRecoveryDeliveryRunId).toBeUndefined();
   });
 });

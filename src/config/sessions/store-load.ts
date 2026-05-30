@@ -72,10 +72,6 @@ function normalizeOptionalStringOrNull(value: unknown): string | null | undefine
   return undefined;
 }
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 function normalizeRecordKey(value: string): string | undefined {
   const key = value.trim();
   return key.length > 0 ? key : undefined;
@@ -156,18 +152,21 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
     "pendingFinalDeliveryIntentId",
     normalizeOptionalStringOrNull(entry.pendingFinalDeliveryIntentId),
   );
-  const restartRecoveryDeliveryContext = normalizeOptionalDeliveryContext(
-    entry.restartRecoveryDeliveryContext,
-  );
-  if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartRecoveryDeliveryContext)) {
-    assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
-  }
-  assign(
-    "restartRecoveryDeliveryRunId",
-    normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
-  );
-
   return next;
+}
+
+function stripLegacyRestartRecoveryDeliveryFields(entry: SessionEntry): SessionEntry {
+  const record = entry as unknown as Record<string, unknown>;
+  if (
+    !("restartRecoveryDeliveryContext" in record) &&
+    !("restartRecoveryDeliveryRunId" in record)
+  ) {
+    return entry;
+  }
+  const next = { ...entry } as unknown as Record<string, unknown>;
+  delete next.restartRecoveryDeliveryContext;
+  delete next.restartRecoveryDeliveryRunId;
+  return next as unknown as SessionEntry;
 }
 
 function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
@@ -353,10 +352,12 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
       continue;
     }
     const normalized = stripPersistedSkillsCache(
-      normalizePluginExtensionSlotKeys(
-        normalizePluginExtensions(
-          normalizePendingFinalDeliveryFields(
-            normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+      stripLegacyRestartRecoveryDeliveryFields(
+        normalizePluginExtensionSlotKeys(
+          normalizePluginExtensions(
+            normalizePendingFinalDeliveryFields(
+              normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+            ),
           ),
         ),
       ),

@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readRestartRecoveryDeliveryContext } from "../../agents/restart-recovery-delivery-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
@@ -514,14 +515,18 @@ describe("runReplyAgent pending final delivery capture", () => {
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
     state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      const storedDuringRun = await readStoredMainSession(storePath);
-      expect(storedDuringRun.restartRecoveryDeliveryContext).toEqual({
+      const storedDuringRun = readRestartRecoveryDeliveryContext({
+        sessionId: "session",
+        sessionKey: "main",
+        storePath,
+      });
+      expect(storedDuringRun?.context).toEqual({
         channel: "discord",
         to: "channel:24680",
         accountId: "work",
         threadId: "1503645939964055592",
       });
-      expect(typeof storedDuringRun.restartRecoveryDeliveryRunId).toBe("string");
+      expect(typeof storedDuringRun?.runId).toBe("string");
       return {
         payloads: [{ text: "visible final" }],
         meta: {},
@@ -555,8 +560,9 @@ describe("runReplyAgent pending final delivery capture", () => {
       accountId: "work",
       threadId: "1503645939964055592",
     });
-    expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
-    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(
+      readRestartRecoveryDeliveryContext({ sessionId: "session", sessionKey: "main", storePath }),
+    ).toBeUndefined();
   });
 
   it("keeps heartbeat replies with real content in pending final delivery", async () => {

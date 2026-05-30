@@ -684,6 +684,15 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface RestartRecoveryDeliveryContexts {
+  context_json: string;
+  run_id: string;
+  session_id: string;
+  session_key: string;
+  store_path: string;
+  updated_at_ms: number;
+}
+
 export interface SandboxRegistryEntries {
   backend_id: string | null;
   cdp_port: number | null;
@@ -947,6 +956,7 @@ export interface DB {
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  restart_recovery_delivery_contexts: RestartRecoveryDeliveryContexts;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   skill_uploads: SkillUploads;

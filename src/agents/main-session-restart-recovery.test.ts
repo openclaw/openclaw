@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -13,6 +14,10 @@ import {
   markRestartAbortedMainSessionsFromLocks,
   recoverRestartAbortedMainSessions,
 } from "./main-session-restart-recovery.js";
+import {
+  claimRestartRecoveryDeliveryContext,
+  readRestartRecoveryDeliveryContext,
+} from "./restart-recovery-delivery-state.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
 vi.mock("../gateway/call.js", () => ({
@@ -27,6 +32,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -428,13 +434,19 @@ describe("main-session-restart-recovery", () => {
           to: "discord:dm:stale",
           accountId: "old",
         },
-        restartRecoveryDeliveryContext: {
-          channel: "discord",
-          to: "discord:dm:123",
-          accountId: "main",
-          threadId: 123,
-        },
       },
+    });
+    claimRestartRecoveryDeliveryContext({
+      context: {
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        threadId: 123,
+      },
+      runId: "run-interrupted",
+      sessionId: "main-session",
+      sessionKey: "agent:main:discord:direct:123",
+      storePath: path.join(sessionsDir, "sessions.json"),
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "run the tool" },
@@ -483,6 +495,13 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(firstGatewayParams().deliver).toBe(false);
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "main-session",
+        sessionKey: "agent:main:discord:direct:123",
+        storePath: path.join(sessionsDir, "sessions.json"),
+      }),
+    ).toBeUndefined();
   });
 
   it("does not deliver restart recovery when session send policy denies sends", async () => {
@@ -493,12 +512,18 @@ describe("main-session-restart-recovery", () => {
         updatedAt: Date.now() - 10_000,
         status: "running",
         abortedLastRun: true,
-        restartRecoveryDeliveryContext: {
-          channel: "discord",
-          to: "discord:dm:123",
-          accountId: "main",
-        },
       },
+    });
+    claimRestartRecoveryDeliveryContext({
+      context: {
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+      },
+      runId: "run-interrupted",
+      sessionId: "main-session",
+      sessionKey: "agent:main:discord:direct:123",
+      storePath: path.join(sessionsDir, "sessions.json"),
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "run the tool" },
@@ -525,6 +550,17 @@ describe("main-session-restart-recovery", () => {
         abortedLastRun: true,
       },
     });
+    claimRestartRecoveryDeliveryContext({
+      context: {
+        channel: "discord",
+        to: "discord:dm:interrupted",
+        accountId: "main",
+      },
+      runId: "run-interrupted",
+      sessionId: "main-session",
+      sessionKey: "agent:main:main",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "run a command that needs approval" },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
@@ -540,13 +576,23 @@ describe("main-session-restart-recovery", () => {
       },
     ]);
 
-    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+    const result = await recoverRestartAbortedMainSessions({
+      cfg: { session: { sendPolicy: { default: "deny" } } },
+      stateDir: tmpDir,
+    });
 
     expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.status).toBe("failed");
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+    expect(
+      readRestartRecoveryDeliveryContext({
+        sessionId: "main-session",
+        sessionKey: "agent:main:main",
+        storePath: path.join(sessionsDir, "sessions.json"),
+      }),
+    ).toBeUndefined();
   });
 
   it("resumes marked sessions with a durable pending final delivery payload (Phase 2)", async () => {
@@ -566,11 +612,6 @@ describe("main-session-restart-recovery", () => {
           accountId: "main",
         },
         pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
-        restartRecoveryDeliveryContext: {
-          channel: "discord",
-          to: "discord:dm:stale",
-          accountId: "old",
-        },
       },
     });
     await writeTranscript(sessionsDir, "main-session", [

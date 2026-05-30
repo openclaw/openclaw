@@ -56,6 +56,22 @@ CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
 CREATE INDEX IF NOT EXISTS idx_state_leases_owner
   ON state_leases(owner, updated_at DESC);
 
+CREATE TABLE IF NOT EXISTS restart_recovery_delivery_contexts (
+  store_path TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  context_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (store_path, session_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_restart_recovery_delivery_contexts_run
+  ON restart_recovery_delivery_contexts(run_id, updated_at_ms DESC);
+
+CREATE INDEX IF NOT EXISTS idx_restart_recovery_delivery_contexts_session
+  ON restart_recovery_delivery_contexts(session_id, updated_at_ms DESC);
+
 CREATE TABLE IF NOT EXISTS exec_approvals_config (
   config_key TEXT NOT NULL PRIMARY KEY,
   raw_json TEXT NOT NULL,

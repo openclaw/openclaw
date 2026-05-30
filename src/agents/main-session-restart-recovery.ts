@@ -30,6 +30,10 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import {
+  clearRestartRecoveryDeliveryContext,
+  readRestartRecoveryDeliveryContext,
+} from "./restart-recovery-delivery-state.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -41,6 +45,46 @@ const RETRY_BACKOFF_MULTIPLIER = 2;
 const UNRESUMABLE_SESSION_NOTICE =
   "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
   "Please send that last request again and I'll pick it up cleanly.";
+
+type ResolvedRestartRecoveryDeliveryContext = {
+  context?: DeliveryContext;
+  runId?: string;
+};
+
+function readRestartRecoveryDeliveryContextBestEffort(params: {
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): { context: DeliveryContext; runId: string } | undefined {
+  try {
+    const record = readRestartRecoveryDeliveryContext(params);
+    return record ? { context: record.context, runId: record.runId } : undefined;
+  } catch (error) {
+    log.warn(
+      `failed to read restart recovery delivery context for ${params.sessionKey}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return undefined;
+  }
+}
+
+function clearRestartRecoveryDeliveryContextBestEffort(params: {
+  runId?: string;
+  sessionId?: string;
+  sessionKey: string;
+  storePath: string;
+}): void {
+  try {
+    clearRestartRecoveryDeliveryContext(params);
+  } catch (error) {
+    log.warn(
+      `failed to clear restart recovery delivery context for ${params.sessionKey}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
 
 function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
@@ -259,7 +303,10 @@ async function markSessionFailed(params: {
   storePath: string;
   sessionKey: string;
   reason: string;
+  restartRecoveryDeliveryRunId?: string;
 }): Promise<void> {
+  let failedSessionId: string | undefined;
+  let failedRestartRecoveryDeliveryRunId: string | undefined;
   await updateSessionStore(
     params.storePath,
     (store) => {
@@ -268,6 +315,8 @@ async function markSessionFailed(params: {
         return;
       }
       entry.status = "failed";
+      failedSessionId = entry.sessionId;
+      failedRestartRecoveryDeliveryRunId = params.restartRecoveryDeliveryRunId;
       entry.abortedLastRun = true;
       entry.endedAt = Date.now();
       entry.updatedAt = entry.endedAt;
@@ -278,12 +327,18 @@ async function markSessionFailed(params: {
       entry.pendingFinalDeliveryAttemptCount = undefined;
       entry.pendingFinalDeliveryLastError = undefined;
       entry.pendingFinalDeliveryContext = undefined;
-      entry.restartRecoveryDeliveryContext = undefined;
-      entry.restartRecoveryDeliveryRunId = undefined;
       store[params.sessionKey] = entry;
     },
     { skipMaintenance: true },
   );
+  if (failedSessionId && failedRestartRecoveryDeliveryRunId) {
+    clearRestartRecoveryDeliveryContextBestEffort({
+      runId: failedRestartRecoveryDeliveryRunId,
+      sessionId: failedSessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+  }
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
 }
 
@@ -292,16 +347,19 @@ async function sendUnresumableSessionNotice(params: {
   entry: SessionEntry;
   reason: string;
   sessionKey: string;
+  storePath: string;
 }): Promise<boolean> {
-  const deliveryContext = resolveRestartRecoveryDeliveryContext({
+  const resolvedDeliveryContext = resolveRestartRecoveryDeliveryContext({
     cfg: params.cfg,
     entry: params.entry,
     includeSessionDeliveryFallback: true,
     sessionKey: params.sessionKey,
+    storePath: params.storePath,
   });
-  if (!deliveryContext) {
+  if (!resolvedDeliveryContext?.context) {
     return false;
   }
+  const deliveryContext = resolvedDeliveryContext.context;
 
   const messageParams: Record<string, unknown> = {
     to: deliveryContext.to,
@@ -347,15 +405,22 @@ function resolveRestartRecoveryDeliveryContext(params: {
   entry: SessionEntry;
   includeSessionDeliveryFallback?: boolean;
   sessionKey: string;
-}): DeliveryContext | undefined {
+  storePath: string;
+}): ResolvedRestartRecoveryDeliveryContext | undefined {
+  const storedDeliveryContext = readRestartRecoveryDeliveryContextBestEffort({
+    sessionId: params.entry.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
   const deliveryContext =
     normalizeDeliveryContext(params.entry.pendingFinalDeliveryContext) ??
-    normalizeDeliveryContext(params.entry.restartRecoveryDeliveryContext) ??
+    storedDeliveryContext?.context ??
     (params.includeSessionDeliveryFallback ? deliveryContextFromSession(params.entry) : undefined);
   const channel = normalizeOptionalString(deliveryContext?.channel);
   const to = normalizeOptionalString(deliveryContext?.to);
+  const runId = storedDeliveryContext?.runId;
   if (!channel || !to || !isDeliverableMessageChannel(channel)) {
-    return undefined;
+    return runId ? { runId } : undefined;
   }
   if (
     params.cfg &&
@@ -367,12 +432,15 @@ function resolveRestartRecoveryDeliveryContext(params: {
       chatType: params.entry.chatType,
     }) === "deny"
   ) {
-    return undefined;
+    return runId ? { runId } : undefined;
   }
   return {
-    ...deliveryContext,
-    channel,
-    to,
+    context: {
+      ...deliveryContext,
+      channel,
+      to,
+    },
+    runId,
   };
 }
 
@@ -387,11 +455,13 @@ async function resumeMainSession(params: {
     typeof params.pendingFinalDeliveryText === "string"
       ? sanitizePendingFinalDeliveryText(params.pendingFinalDeliveryText)
       : "";
-  const deliveryContext = resolveRestartRecoveryDeliveryContext({
+  const resolvedDeliveryContext = resolveRestartRecoveryDeliveryContext({
     cfg: params.cfg,
     entry: params.entry,
     sessionKey: params.sessionKey,
+    storePath: params.storePath,
   });
+  const deliveryContext = resolvedDeliveryContext?.context;
   try {
     const agentParams: Record<string, unknown> = {
       message: buildResumeMessage(sanitizedPendingText),
@@ -447,6 +517,14 @@ async function resumeMainSession(params: {
       },
       { skipMaintenance: true },
     );
+    if (resolvedDeliveryContext?.runId) {
+      clearRestartRecoveryDeliveryContextBestEffort({
+        runId: resolvedDeliveryContext.runId,
+        sessionId: params.entry.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      });
+    }
     log.info(
       `resumed interrupted main session: ${params.sessionKey}${
         sanitizedPendingText ? " (with pending payload)" : ""
@@ -554,16 +632,25 @@ async function recoverStore(params: {
 
     const resumeBlockReason = resolveMainSessionResumeBlockReason(messages);
     if (resumeBlockReason) {
+      const resolvedDeliveryContext = resolveRestartRecoveryDeliveryContext({
+        cfg: params.cfg,
+        entry,
+        includeSessionDeliveryFallback: true,
+        sessionKey,
+        storePath: params.storePath,
+      });
       await sendUnresumableSessionNotice({
         cfg: params.cfg,
         entry,
         sessionKey,
+        storePath: params.storePath,
         reason: resumeBlockReason,
       });
       await markSessionFailed({
         storePath: params.storePath,
         sessionKey,
         reason: resumeBlockReason,
+        restartRecoveryDeliveryRunId: resolvedDeliveryContext?.runId,
       });
       result.failed++;
       continue;
