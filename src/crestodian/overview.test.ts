@@ -117,5 +117,6 @@ describe("loadCrestodianOverview", () => {
 
     expect(overview.gateway.reachable).toBe(true);
     expect(callCount).toBe(2);
+    expect(formatCrestodianStartupMessage(overview)).toContain("Gateway: reachable");
   });
 });
