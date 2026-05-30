@@ -27,6 +27,16 @@ vi.mock("./app-chat.ts", () => ({
       ? { agentId: host.assistantAgentId }
       : {};
   },
+  scopedAgentListParamsForRefreshTarget: (
+    _host: { assistantAgentId?: string | null },
+    target: { sessionKey: string; agentId?: string },
+  ) => {
+    if (target.agentId) {
+      return { agentId: target.agentId };
+    }
+    const [, agentId] = target.sessionKey.split(":");
+    return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
   refreshChatAvatar: vi.fn(),
@@ -148,7 +158,7 @@ function createHost() {
     sessionKey: "main",
     chatRunId: null,
     toolStreamOrder: [],
-    refreshSessionsAfterChat: new Set<string>(),
+    refreshSessionsAfterChat: new Map(),
     execApprovalQueue: [],
     execApprovalError: null,
     updateAvailable: null,
@@ -165,7 +175,7 @@ describe("handleGatewayEvent sessions.changed", () => {
     handleChatEventMock.mockReset().mockReturnValue("final");
     const host = createHost();
     host.sessionKey = "agent:ops:main";
-    host.refreshSessionsAfterChat.add("run-1");
+    host.refreshSessionsAfterChat.set("run-1", { sessionKey: "agent:ops:main" });
 
     handleGatewayEvent(host, {
       type: "event",
@@ -186,8 +196,8 @@ describe("handleGatewayEvent sessions.changed", () => {
     handleChatEventMock.mockReset().mockReturnValue("final");
     const host = createHost();
     host.sessionKey = "global";
-    host.assistantAgentId = "work";
-    host.refreshSessionsAfterChat.add("run-1");
+    host.assistantAgentId = "main";
+    host.refreshSessionsAfterChat.set("run-1", { sessionKey: "global", agentId: "work" });
 
     handleGatewayEvent(host, {
       type: "event",

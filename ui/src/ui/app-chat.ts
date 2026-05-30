@@ -45,7 +45,7 @@ import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
-import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
+import type { ChatAttachment, ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 
@@ -77,7 +77,7 @@ export type ChatHost = ChatInputHistoryState & {
   sessionsShowArchived?: boolean;
   updateComplete?: Promise<unknown>;
   requestUpdate?: () => void;
-  refreshSessionsAfterChat: Set<string>;
+  refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
   assistantAgentId?: string | null;
@@ -297,6 +297,16 @@ export function scopedAgentListParamsForSession(
 ) {
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? scopedAgentParamsForSession(host, sessionKey).agentId;
+  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
+}
+
+export function scopedAgentListParamsForRefreshTarget(
+  host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
+  target: ChatSessionRefreshTarget,
+) {
+  const agentId =
+    normalizeOptionalString(target.agentId) ??
+    scopedAgentListParamsForSession(host, target.sessionKey).agentId;
   return agentId ? { agentId: normalizeAgentId(agentId) } : {};
 }
 
@@ -602,13 +612,17 @@ async function sendQueuedChatMessage(
       }
     }
     if (prepared.refreshSessions) {
+      const refreshTarget = {
+        sessionKey,
+        agentId: prepared.agentId,
+      };
       if (ack.status === "ok") {
         void loadSessions(host as unknown as SessionsState, {
           ...createChatSessionsLoadOverrides(host),
-          ...scopedAgentListParamsForSession(host, host.sessionKey),
+          ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
         });
       } else {
-        host.refreshSessionsAfterChat.add(ack.runId);
+        host.refreshSessionsAfterChat.set(ack.runId, refreshTarget);
       }
     }
     discardChatAttachmentDataUrls(excludeComposerAttachments(host, attachments));

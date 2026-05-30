@@ -10,6 +10,7 @@ import {
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
   refreshChatAvatar,
+  scopedAgentListParamsForRefreshTarget,
   retryReconnectableQueuedChatSends,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
@@ -85,6 +86,7 @@ import type {
   StatusSummary,
   UpdateAvailable,
 } from "./types.ts";
+import type { ChatSessionRefreshTarget } from "./ui-types.ts";
 
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
@@ -123,7 +125,7 @@ type GatewayHost = {
   sessionsShowArchived: boolean;
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
-  refreshSessionsAfterChat: Set<string>;
+  refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
   sessionsLoading?: boolean;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
@@ -795,12 +797,13 @@ function handleTerminalChatEvent(
     payload?.runId,
   );
   const runId = payload?.runId;
-  if (runId && host.refreshSessionsAfterChat.has(runId)) {
+  const refreshTarget = runId ? host.refreshSessionsAfterChat.get(runId) : undefined;
+  if (runId && refreshTarget) {
     host.refreshSessionsAfterChat.delete(runId);
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         ...createChatSessionsLoadOverrides(host),
-        ...scopedAgentListParamsForSession(host, host.sessionKey),
+        ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
       });
     }
   }

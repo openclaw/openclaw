@@ -657,7 +657,7 @@ export class OpenClawApp extends LitElement {
   controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   toolStreamById = new Map<string, ToolStreamEntry>();
   toolStreamOrder: string[] = [];
-  refreshSessionsAfterChat = new Set<string>();
+  refreshSessionsAfterChat = new Map<string, import("./ui-types.js").ChatSessionRefreshTarget>();
   chatSideResultTerminalRuns = new Set<string>();
   basePath = "";
   popStateHandler = () =>

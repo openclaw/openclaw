@@ -191,7 +191,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     dreamingRestartConfirmLoading: false,
     dreamingStatusError: null,
     client: null,
-    refreshSessionsAfterChat: new Set(),
+    refreshSessionsAfterChat: new Map(),
     connect: vi.fn(),
     setTab: vi.fn(),
     setTheme: vi.fn(),

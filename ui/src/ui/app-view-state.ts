@@ -460,7 +460,7 @@ export type AppViewState = {
     overviewLogLines: string[];
     overviewLogCursor: number;
     client: GatewayBrowserClient | null;
-    refreshSessionsAfterChat: Set<string>;
+    refreshSessionsAfterChat: Map<string, import("./ui-types.js").ChatSessionRefreshTarget>;
     connect: () => void;
     setTab: (tab: Tab) => void;
     setChatMobileControlsOpen: (

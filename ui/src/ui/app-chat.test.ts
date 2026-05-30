@@ -153,7 +153,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelSwitchPromises: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
-    refreshSessionsAfterChat: new Set<string>(),
+    refreshSessionsAfterChat: new Map(),
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
