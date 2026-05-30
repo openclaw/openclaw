@@ -1840,9 +1840,29 @@ export class WorkboardStore {
           ? existing.execution
           : syncExecutionSessionKey(existing.execution, sessionKey)
         : normalizeExecution(patch.execution);
-    const metadata = normalizeMetadata(patch.metadata, existing.metadata, {
+    let metadata = normalizeMetadata(patch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
     });
+    const automationPatch: Record<string, unknown> = {};
+    for (const key of [
+      "tenant",
+      "idempotencyKey",
+      "skills",
+      "workspace",
+      "maxRuntimeSeconds",
+      "maxRetries",
+      "scheduledAt",
+    ] as const) {
+      if (Object.hasOwn(patch, key) && patch[key] !== undefined) {
+        automationPatch[key] = patch[key];
+      }
+    }
+    if (Object.keys(automationPatch).length > 0) {
+      metadata = trimMetadataToBudget({
+        ...metadata,
+        automation: normalizeAutomation(automationPatch, metadata.automation),
+      });
+    }
     const next = removeUndefinedCardFields({
       ...existing,
       title: patch.title === undefined ? existing.title : normalizeTitle(patch.title),

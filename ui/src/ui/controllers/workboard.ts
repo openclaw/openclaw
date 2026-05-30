@@ -1464,7 +1464,7 @@ export async function startWorkboardCard(params: {
   const engine = params.engine;
   const mode = params.mode ?? "autonomous";
   state.error = null;
-  if (isScheduledForLater(params.card)) {
+  if (mode === "autonomous" && isScheduledForLater(params.card)) {
     state.error = "Scheduled cards cannot start before their scheduled time.";
     params.requestUpdate?.();
     return null;
@@ -1473,7 +1473,11 @@ export async function startWorkboardCard(params: {
   params.requestUpdate?.();
   let preflightCard: WorkboardCard | null = null;
   try {
-    const nextCardStatus = mode === "autonomous" ? "running" : params.card.status;
+    const shouldClearManualSchedule =
+      mode === "manual" && params.card.metadata?.automation?.scheduledAt !== undefined;
+    const shouldUnscheduleManual = mode === "manual" && params.card.status === "scheduled";
+    const nextCardStatus =
+      mode === "autonomous" ? "running" : shouldUnscheduleManual ? "todo" : params.card.status;
     const nextExecutionStatus = mode === "autonomous" ? "running" : "idle";
     let card = params.card;
     if (mode === "autonomous") {
@@ -1535,6 +1539,7 @@ export async function startWorkboardCard(params: {
       id: params.card.id,
       patch: {
         status: nextCardStatus,
+        ...(shouldClearManualSchedule ? { scheduledAt: null } : {}),
         ...(sessionKey ? { sessionKey } : {}),
         ...(runId ? { runId } : {}),
         ...(engine

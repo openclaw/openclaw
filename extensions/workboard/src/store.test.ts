@@ -154,6 +154,47 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("updates automation metadata from top-level patch fields", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Tune automation" });
+
+    const updated = await store.update(card.id, {
+      tenant: "release",
+      idempotencyKey: "release:1",
+      skills: ["testing", "docs"],
+      workspace: { kind: "scratch" },
+      maxRuntimeSeconds: 120,
+      maxRetries: 2,
+      scheduledAt: 10_000,
+    });
+
+    expect(updated.metadata?.automation).toMatchObject({
+      tenant: "release",
+      idempotencyKey: "release:1",
+      skills: ["testing", "docs"],
+      workspace: { kind: "scratch" },
+      maxRuntimeSeconds: 120,
+      maxRetries: 2,
+      scheduledAt: 10_000,
+    });
+
+    const cleared = await store.update(card.id, { scheduledAt: null });
+    expect(cleared.metadata?.automation?.scheduledAt).toBeUndefined();
+    expect(cleared.metadata?.automation).toMatchObject({
+      tenant: "release",
+      maxRetries: 2,
+    });
+
+    const preserved = await store.update(card.id, {
+      scheduledAt: 20_000,
+      maxRuntimeSeconds: undefined,
+    });
+    expect(preserved.metadata?.automation).toMatchObject({
+      scheduledAt: 20_000,
+      maxRuntimeSeconds: 120,
+    });
+  });
+
   it("moves cards and records lifecycle timestamps", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Ship workboard" });

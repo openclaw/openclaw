@@ -653,14 +653,76 @@ describe("workboard controller", () => {
       ...sampleCard,
       id: "scheduled-2",
       status: "scheduled",
+      metadata: { automation: { scheduledAt: Date.now() + 60_000 } },
     } satisfies WorkboardCard;
+    const manualLinked = {
+      ...manualScheduled,
+      status: "todo",
+      metadata: {},
+      sessionKey: "agent:main:dashboard:manual",
+      execution: {
+        id: "exec-manual",
+        kind: "agent-session",
+        engine: "codex",
+        mode: "manual",
+        status: "idle",
+        model: "openai/gpt-5.5",
+        sessionKey: "agent:main:dashboard:manual",
+        startedAt: 1,
+        updatedAt: 1,
+      },
+    } satisfies WorkboardCard;
+    const manualClient = createClient({
+      "sessions.create": { key: "agent:main:dashboard:manual" },
+      "workboard.cards.update": { card: manualLinked },
+    });
     const manualSessionKey = await startWorkboardCard({
       host,
-      client: client as never,
+      client: manualClient as never,
       card: manualScheduled,
+      mode: "manual",
     });
-    expect(manualSessionKey).toBeNull();
-    expect(client.request).not.toHaveBeenCalled();
+    expect(manualSessionKey).toBe("agent:main:dashboard:manual");
+    expect(manualClient.request).toHaveBeenNthCalledWith(
+      1,
+      "sessions.create",
+      expect.not.objectContaining({ message: expect.any(String) }),
+    );
+    expect(manualClient.request).toHaveBeenNthCalledWith(
+      2,
+      "workboard.cards.update",
+      expect.objectContaining({
+        id: manualScheduled.id,
+        patch: expect.objectContaining({ status: "todo", scheduledAt: null }),
+      }),
+    );
+
+    const readyWithSchedule = {
+      ...sampleCard,
+      id: "scheduled-2b",
+      status: "ready",
+      metadata: { automation: { scheduledAt: Date.now() + 60_000 } },
+    } satisfies WorkboardCard;
+    const readyManualClient = createClient({
+      "sessions.create": { key: "agent:main:dashboard:ready-manual" },
+      "workboard.cards.update": {
+        card: { ...readyWithSchedule, sessionKey: "agent:main:dashboard:ready-manual" },
+      },
+    });
+    await startWorkboardCard({
+      host,
+      client: readyManualClient as never,
+      card: readyWithSchedule,
+      mode: "manual",
+    });
+    expect(readyManualClient.request).toHaveBeenNthCalledWith(
+      2,
+      "workboard.cards.update",
+      expect.objectContaining({
+        id: readyWithSchedule.id,
+        patch: expect.objectContaining({ status: "ready", scheduledAt: null }),
+      }),
+    );
 
     const dueScheduled = {
       ...scheduled,
