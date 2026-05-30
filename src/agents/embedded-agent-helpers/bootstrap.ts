@@ -87,6 +87,17 @@ export function stripThoughtSignatures<T>(
 
 export const DEFAULT_BOOTSTRAP_MAX_CHARS = 12_000;
 export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
+/**
+ * Default truncation-warning mode. Stays "always" instead of "once" because the
+ * "once" behavior makes the system prompt change between turn 1 (warning shown)
+ * and turn 2+ (warning suppressed via seenSignatures), which invalidates the
+ * provider's prompt-cache prefix on turn 2 and burns a full prefill rewrite for
+ * every fresh session. "always" keeps the warning section deterministic across
+ * turns so the system prompt digest stays stable and prompt-cache prefixes
+ * survive multi-turn conversations. See PR #81918 for the original switch and
+ * `prompt-cache-observability.ts` for the runtime drift assertion that protects
+ * this invariant.
+ */
 export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "always";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 // Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.

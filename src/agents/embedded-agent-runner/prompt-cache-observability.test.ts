@@ -3,6 +3,7 @@ import {
   beginPromptCacheObservation,
   collectPromptCacheToolNames,
   completePromptCacheObservation,
+  describeSystemPromptDigestDrift,
   resetPromptCacheObservabilityForTest,
 } from "./prompt-cache-observability.js";
 
@@ -279,5 +280,103 @@ describe("prompt cache observability", () => {
       cacheRead: 2_000,
       changes: null,
     });
+  });
+});
+
+describe("describeSystemPromptDigestDrift", () => {
+  beforeEach(() => {
+    resetPromptCacheObservabilityForTest();
+  });
+
+  it("returns null when no changes are present", () => {
+    expect(
+      describeSystemPromptDigestDrift({
+        changes: null,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        streamStrategy: "boundary-aware:openai-responses",
+      }),
+    ).toBeNull();
+  });
+
+  it("returns null when changes do not include systemPrompt", () => {
+    expect(
+      describeSystemPromptDigestDrift({
+        changes: [{ code: "tools", detail: "5 -> 6 tools" }],
+        provider: "openai",
+        modelId: "gpt-5.4",
+        streamStrategy: "boundary-aware:openai-responses",
+      }),
+    ).toBeNull();
+  });
+
+  it("returns a diagnostic string when systemPrompt change is reported", () => {
+    const message = describeSystemPromptDigestDrift({
+      changes: [{ code: "systemPrompt", detail: "system prompt digest changed" }],
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      streamStrategy: "boundary-aware:anthropic-messages",
+    });
+    expect(message).not.toBeNull();
+    expect(message).toContain("system prompt digest changed across turns");
+    expect(message).toContain("anthropic/claude-opus-4-6");
+    expect(message).toContain("OPENCLAW_CACHE_TRACE");
+  });
+
+  it("flags cross-turn system prompt drift via begin observation", () => {
+    const first = beginPromptCacheObservation({
+      sessionId: "session-drift",
+      sessionKey: "agent:main",
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      modelApi: "anthropic-messages",
+      cacheRetention: "short",
+      streamStrategy: "boundary-aware:anthropic-messages",
+      transport: "sse",
+      systemPrompt: "stable system + [Bootstrap truncation warning] AGENTS.md was truncated.",
+      toolNames: ["read", "write"],
+    });
+    expect(first.changes).toBeNull();
+    expect(
+      describeSystemPromptDigestDrift({
+        changes: first.changes,
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        streamStrategy: "boundary-aware:anthropic-messages",
+      }),
+    ).toBeNull();
+
+    completePromptCacheObservation({
+      sessionId: "session-drift",
+      sessionKey: "agent:main",
+      usage: { cacheRead: 16_000 },
+    });
+
+    // Simulate the historical "once" mode bug: turn 1 had a warning block,
+    // turn 2 silently drops it because seenSignatures gates the warning. Our
+    // observability layer must surface this on the first regression turn,
+    // not wait for a cacheRead drop.
+    const second = beginPromptCacheObservation({
+      sessionId: "session-drift",
+      sessionKey: "agent:main",
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      modelApi: "anthropic-messages",
+      cacheRetention: "short",
+      streamStrategy: "boundary-aware:anthropic-messages",
+      transport: "sse",
+      systemPrompt: "stable system",
+      toolNames: ["read", "write"],
+    });
+    expect(second.changes).not.toBeNull();
+    expect(second.changes?.some((change) => change.code === "systemPrompt")).toBe(true);
+    const diagnostic = describeSystemPromptDigestDrift({
+      changes: second.changes,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      streamStrategy: "boundary-aware:anthropic-messages",
+    });
+    expect(diagnostic).not.toBeNull();
+    expect(diagnostic).toContain("system prompt digest changed across turns");
   });
 });

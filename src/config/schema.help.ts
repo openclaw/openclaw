@@ -1129,7 +1129,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.experimental.localModelLean":
     "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
   "agents.defaults.bootstrapPromptTruncationWarning":
-    'Inject agent-visible warning text when bootstrap files are truncated: "off", "once", or "always" (default).',
+    'Inject agent-visible warning text when bootstrap files are truncated: "off", "once", or "always" (default). Keep "always" unless you have a specific reason to suppress: "once" causes the system prompt to differ between turn 1 (warning shown) and turn 2+ (warning suppressed), which invalidates the prompt-cache prefix and forces a full prefill rewrite on turn 2 of every session.',
   "agents.defaults.startupContext":
     'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
   "agents.defaults.startupContext.enabled":

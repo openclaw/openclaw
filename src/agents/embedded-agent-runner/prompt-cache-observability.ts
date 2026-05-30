@@ -224,3 +224,38 @@ export function completePromptCacheObservation(params: {
 export function resetPromptCacheObservabilityForTest(): void {
   trackers.clear();
 }
+
+/**
+ * Format a warn-level diagnostic when the system prompt digest changed between
+ * turns of the same session. A digest change predicts a complete prompt-cache
+ * miss because providers key cache entries on the exact serialized prefix
+ * bytes. Surface this as soon as `beginPromptCacheObservation` reports it,
+ * instead of waiting for `completePromptCacheObservation` (which only fires
+ * after `cacheRead` actually drops by `MIN_CACHE_BREAK_TOKEN_DROP` AND there
+ * was a prior cache read to compare against — meaning the very first
+ * regression turn never reaches that path).
+ *
+ * Returns `null` when no system-prompt drift is present so callers can do a
+ * single null-check without separately scanning `changes`.
+ */
+export function describeSystemPromptDigestDrift(params: {
+  changes: PromptCacheChange[] | null;
+  provider: string;
+  modelId: string;
+  streamStrategy: string;
+}): string | null {
+  const drift = params.changes?.find((change) => change.code === "systemPrompt");
+  if (!drift) {
+    return null;
+  }
+  return (
+    `[prompt-cache] system prompt digest changed across turns ` +
+    `for ${params.provider}/${params.modelId} via ${params.streamStrategy}. ` +
+    `This invalidates the provider prompt-cache prefix and forces a full ` +
+    `prefill rewrite for this turn. Likely causes: a non-deterministic field ` +
+    `is being injected into the system prompt (timestamps, session ids, ` +
+    `"once"-style truncation banners, etc.) or config drifted between turns. ` +
+    `Run with OPENCLAW_CACHE_TRACE=true OPENCLAW_CACHE_TRACE_SYSTEM=true to ` +
+    `diff the prompts in cache-trace.jsonl.`
+  );
+}
