@@ -40,7 +40,10 @@ import {
   SYSTEM_PROMPT_CACHE_BOUNDARY,
   splitSystemPromptCacheBoundary,
 } from "../../system-prompt-cache-boundary.js";
-import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
+import {
+  appendModelIdentitySystemPrompt,
+  buildModelIdentityPromptLine,
+} from "../../system-prompt.js";
 import {
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
@@ -55,10 +58,10 @@ const MODEL_IDENTITY_FRAGMENT = "Current model identity:";
 
 // Mirror the production composition order at attempt.ts / cli-runner/prepare.ts:
 // 1) compose base with the static hook prepend/append (above-boundary, cacheable),
-// 2) ensure a cache boundary exists whether or not media is active (covers marker-free
-//    hook systemPrompt overrides),
-// 3) route the per-turn media task hints below the cache boundary,
-// 4) append the model identity line (lands below the boundary).
+// 2) route the per-turn media task hints below the cache boundary (when a task is active),
+// 3) before appending the model identity line, ensure a cache boundary exists (covers
+//    marker-free hook systemPrompt overrides) so the identity lands below it, not in the
+//    cached prefix.
 function composeTurn(opts: { activeImageTask: boolean; base?: string; hook?: string }): string {
   imageGenerationTaskStatusMocks.buildActiveImageGenerationTaskPromptContextForSession.mockReturnValue(
     opts.activeImageTask ? MEDIA_HINT : undefined,
@@ -84,10 +87,15 @@ function composeTurn(opts: { activeImageTask: boolean; base?: string; hook?: str
         systemPrompt: ensureSystemPromptCacheBoundary(composed),
         systemPromptAddition: mediaTaskSystemPromptAddition,
       })
-    : ensureSystemPromptCacheBoundary(composed);
-  // Production appends the model identity line AFTER media routing; it must land below the
-  // boundary, never shift the cached prefix (the regression the marker-free idle case caught).
-  return appendModelIdentitySystemPrompt({ systemPrompt: routed, model: MODEL });
+    : composed;
+  // Production appends the model identity line after media routing; ensure the boundary first
+  // (when an identity line will be added) so it lands below the boundary, not in the cached
+  // prefix — the regression the marker-free idle case caught.
+  const withIdentityBoundary =
+    buildModelIdentityPromptLine(MODEL) && routed.trim().length > 0
+      ? ensureSystemPromptCacheBoundary(routed)
+      : routed;
+  return appendModelIdentitySystemPrompt({ systemPrompt: withIdentityBoundary, model: MODEL });
 }
 
 describe("#85203 media task hints stay below the system-prompt cache boundary", () => {

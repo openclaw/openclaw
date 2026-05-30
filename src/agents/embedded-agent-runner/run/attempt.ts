@@ -180,7 +180,10 @@ import {
 import { ensureSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
+import {
+  appendModelIdentitySystemPrompt,
+  buildModelIdentityPromptLine,
+} from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -3370,19 +3373,18 @@ export async function runEmbeddedAttempt(
                 systemPromptAddition: mediaTaskSystemPromptAddition,
               }),
             );
-          } else {
-            // Ensure the boundary even with no active media hint: for a marker-free hook
-            // systemPrompt override the later appendModelIdentitySystemPrompt would otherwise
-            // land above the (absent) boundary, shifting the idle cached prefix away from the
-            // active turn's prefix and breaking prompt caching across active/idle transitions.
-            const boundedSystemPrompt = ensureSystemPromptCacheBoundary(systemPromptText);
-            if (boundedSystemPrompt !== systemPromptText) {
-              setActiveSessionSystemPrompt(boundedSystemPrompt);
-            }
           }
         }
+        // The model identity line is appended below; for a marker-free hook systemPrompt
+        // override ensure the cache boundary first so the identity lands in the dynamic
+        // suffix, not the cached prefix — otherwise an idle turn's prefix (O + identity)
+        // diverges from an active media turn's prefix (O) and breaks prompt caching. Skip
+        // empty prompts (raw/gateway runs) and turns with no identity line, which need none.
         const modelAwareSystemPrompt = appendModelIdentitySystemPrompt({
-          systemPrompt: systemPromptText,
+          systemPrompt:
+            buildModelIdentityPromptLine(runtimeInfo.model) && systemPromptText.trim().length > 0
+              ? ensureSystemPromptCacheBoundary(systemPromptText)
+              : systemPromptText,
           model: runtimeInfo.model,
         });
         if (modelAwareSystemPrompt !== systemPromptText) {

@@ -63,7 +63,7 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-promp
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { ensureSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
-import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
+import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
@@ -522,11 +522,6 @@ export async function prepareCliRunContext(
         systemPrompt: ensureSystemPromptCacheBoundary(systemPrompt),
         systemPromptAddition: mediaTaskSystemPromptAddition,
       });
-    } else {
-      // Marker-free hook overrides need the boundary even with no active media hint, so the
-      // later appendModelIdentitySystemPrompt lands below it instead of shifting the idle
-      // cached prefix and breaking prompt caching across active/idle transitions.
-      systemPrompt = ensureSystemPromptCacheBoundary(systemPrompt);
     }
   } catch (error) {
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
@@ -568,8 +563,19 @@ export async function prepareCliRunContext(
         maxHistoryChars: autoReseedHistoryChars,
       })
     : undefined;
+  const systemPromptWithReplacements = applyPluginTextReplacements(
+    systemPrompt,
+    backendResolved.textTransforms?.input,
+  );
+  // Ensure the cache boundary before appending the model identity so the identity lands in the
+  // dynamic suffix, not the cached prefix, for marker-free hook overrides — otherwise an idle
+  // turn's prefix (O + identity) diverges from an active media turn's prefix (O) and breaks
+  // prompt caching. Skip empty prompts and turns with no identity line, which need no boundary.
   systemPrompt = appendModelIdentitySystemPrompt({
-    systemPrompt: applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input),
+    systemPrompt:
+      buildModelIdentityPromptLine(modelDisplay) && systemPromptWithReplacements.trim().length > 0
+        ? ensureSystemPromptCacheBoundary(systemPromptWithReplacements)
+        : systemPromptWithReplacements,
     model: modelDisplay,
   });
   const systemPromptReport = buildSystemPromptReport({
