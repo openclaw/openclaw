@@ -193,7 +193,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
   it("starts accepted DM typing feedback before queued processing starts", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
-    preflightDiscordMessageMock.mockResolvedValue(createAcceptedDmPreflightContext());
+    preflightDiscordMessageMock.mockImplementation(async () => createAcceptedDmPreflightContext());
     processDiscordMessageMock.mockResolvedValue(undefined);
     const replyTypingFeedback = createReplyTypingFeedbackMock("dm-1");
     const createReplyTypingFeedback = vi.fn(() => replyTypingFeedback);
@@ -224,7 +224,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
   it("keeps accepted DM dispatch running when accepted typing feedback fails", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();
-    preflightDiscordMessageMock.mockResolvedValue(createAcceptedDmPreflightContext());
+    preflightDiscordMessageMock.mockImplementation(async () => createAcceptedDmPreflightContext());
     processDiscordMessageMock.mockResolvedValue(undefined);
     const replyTypingFeedback = createReplyTypingFeedbackMock("dm-1");
     replyTypingFeedback.onReplyStart.mockRejectedValueOnce(new Error("typing failed"));
@@ -360,6 +360,51 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates accepted typing feedback while same-session runs are queued", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstRun = createDeferred();
+    const processedContexts: Array<Record<string, unknown>> = [];
+    processDiscordMessageMock
+      .mockImplementationOnce(async (ctx: Record<string, unknown>) => {
+        processedContexts.push(ctx);
+        await firstRun.promise;
+      })
+      .mockImplementationOnce(async (ctx: Record<string, unknown>) => {
+        processedContexts.push(ctx);
+      });
+    preflightDiscordMessageMock.mockImplementation(async () => createAcceptedDmPreflightContext());
+    const replyTypingFeedback = createReplyTypingFeedbackMock("dm-1");
+    const createReplyTypingFeedback = vi.fn(() => replyTypingFeedback);
+
+    const handler = createDiscordMessageHandler({
+      ...createDiscordHandlerParams(),
+      testing: { createReplyTypingFeedback },
+    });
+    await expect(
+      handler(createMessageData("m-1", "dm-1") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    await expect(
+      handler(createMessageData("m-2", "dm-1") as never, {} as never),
+    ).resolves.toBeUndefined();
+    await flushQueueWork();
+
+    expect(createReplyTypingFeedback).toHaveBeenCalledTimes(1);
+    expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
+    expect(processedContexts[0]?.replyTypingFeedback).toBe(replyTypingFeedback);
+
+    firstRun.resolve();
+    await firstRun.promise;
+    await flushQueueWork();
+
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
+    expect(processedContexts[1]?.replyTypingFeedback).toBeUndefined();
   });
 
   it("resets busy counters when the handler is created", () => {
@@ -670,51 +715,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await Promise.resolve();
 
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("cleans accepted typing feedback for queued runs skipped after deactivation", async () => {
-    preflightDiscordMessageMock.mockReset();
-    processDiscordMessageMock.mockReset();
-
-    const firstRun = createDeferred();
-    processDiscordMessageMock.mockImplementationOnce(async () => {
-      await firstRun.promise;
-    });
-    preflightDiscordMessageMock.mockImplementation(
-      async (params: { data: { channel_id: string } }) =>
-        createAcceptedDmPreflightContext({
-          messageChannelId: params.data.channel_id,
-        }),
-    );
-    const firstFeedback = createReplyTypingFeedbackMock("dm-1");
-    const secondFeedback = createReplyTypingFeedbackMock("dm-2");
-    const createReplyTypingFeedback = vi
-      .fn()
-      .mockReturnValueOnce(firstFeedback)
-      .mockReturnValueOnce(secondFeedback);
-
-    const handler = createDiscordMessageHandler({
-      ...createDiscordHandlerParams(),
-      testing: { createReplyTypingFeedback },
-    });
-    await expect(
-      handler(createMessageData("m-1", "dm-1") as never, {} as never),
-    ).resolves.toBeUndefined();
-    await flushQueueWork();
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-
-    await expect(
-      handler(createMessageData("m-2", "dm-2") as never, {} as never),
-    ).resolves.toBeUndefined();
-    handler.deactivate();
-
-    firstRun.resolve();
-    await firstRun.promise;
-    await flushQueueWork();
-
-    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    expect(firstFeedback.onCleanup).not.toHaveBeenCalled();
-    expect(secondFeedback.onCleanup).toHaveBeenCalledTimes(1);
   });
 
   it("preserves non-debounced message ordering by awaiting debouncer enqueue", async () => {

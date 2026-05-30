@@ -13,7 +13,7 @@ import {
   DiscordRetryableInboundError,
   releaseDiscordInboundReplay,
 } from "./inbound-dedupe.js";
-import { buildDiscordInboundJob } from "./inbound-job.js";
+import { buildDiscordInboundJob, resolveDiscordInboundJobQueueKey } from "./inbound-job.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type {
@@ -54,6 +54,11 @@ type DiscordMessageHandlerTestingHooks = DiscordMessageRunQueueTestingHooks & {
   createReplyTypingFeedback?: CreateDiscordReplyTypingFeedback;
 };
 
+type PrestartedTypingFeedbackEntry = {
+  channelId: string;
+  feedback: DiscordReplyTypingFeedback;
+};
+
 let messagePreflightRuntimePromise:
   | Promise<typeof import("./message-handler.preflight.js")>
   | undefined;
@@ -74,9 +79,16 @@ function isNonEmptyString(value: string | undefined): value is string {
 function startAcceptedTypingFeedback(params: {
   ctx: DiscordMessagePreflightContext;
   createFeedback?: CreateDiscordReplyTypingFeedback;
+  dedupeKey: string;
+  activeFeedback: Map<string, PrestartedTypingFeedbackEntry>;
 }): DiscordReplyTypingFeedback | undefined {
-  const { ctx, createFeedback } = params;
+  const { ctx, createFeedback, dedupeKey, activeFeedback } = params;
   if (!resolveDiscordAcceptedTypingPrestart(ctx).shouldPrestart) {
+    return undefined;
+  }
+  const channelId = ctx.messageChannelId.trim();
+  const existing = activeFeedback.get(dedupeKey);
+  if (existing) {
     return undefined;
   }
   const replyTypingFeedback =
@@ -88,6 +100,14 @@ function startAcceptedTypingFeedback(params: {
       channelId: ctx.messageChannelId,
       log: logVerbose,
     });
+  const cleanup = replyTypingFeedback.onCleanup;
+  replyTypingFeedback.onCleanup = () => {
+    cleanup?.();
+    if (activeFeedback.get(dedupeKey)?.feedback === replyTypingFeedback) {
+      activeFeedback.delete(dedupeKey);
+    }
+  };
+  activeFeedback.set(dedupeKey, { channelId, feedback: replyTypingFeedback });
   ctx.replyTypingFeedback = replyTypingFeedback;
   void replyTypingFeedback.onReplyStart().catch((err) => {
     logVerbose(`discord accepted typing feedback failed: ${String(err)}`);
@@ -109,6 +129,7 @@ export function createDiscordMessageHandler(
     "group-mentions";
   const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
   const replayGuard = createDiscordInboundReplayGuard();
+  const prestartedTypingFeedback = new Map<string, PrestartedTypingFeedbackEntry>();
   const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
     setStatus: params.setStatus,
@@ -186,9 +207,12 @@ export function createDiscordMessageHandler(
             await commitDiscordInboundReplay({ replayKeys, replayGuard });
             return;
           }
+          const queueKey = resolveDiscordInboundJobQueueKey(ctx);
           startAcceptedTypingFeedback({
             ctx,
             createFeedback: params.testing?.createReplyTypingFeedback,
+            dedupeKey: queueKey,
+            activeFeedback: prestartedTypingFeedback,
           });
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
           messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
@@ -239,9 +263,12 @@ export function createDiscordMessageHandler(
           await commitDiscordInboundReplay({ replayKeys, replayGuard });
           return;
         }
+        const queueKey = resolveDiscordInboundJobQueueKey(ctx);
         startAcceptedTypingFeedback({
           ctx,
           createFeedback: params.testing?.createReplyTypingFeedback,
+          dedupeKey: queueKey,
+          activeFeedback: prestartedTypingFeedback,
         });
         applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
         if (entries.length > 1) {
