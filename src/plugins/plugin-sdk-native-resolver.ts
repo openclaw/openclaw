@@ -328,6 +328,16 @@ export function installOpenClawPluginSdkNativeResolver(
   return [...pluginSdkNativeAliases.keys()].toSorted();
 }
 
+export function installOpenClawInternalCorePackageNativeResolver(
+  options: Pick<InstallOpenClawPluginSdkNativeResolverOptions, "moduleUrl"> = {},
+): string[] {
+  for (const alias of listInternalCorePackageNativeAliases(options)) {
+    registerNativeAlias(alias);
+  }
+  installResolver();
+  return [...pluginSdkNativeAliases.keys()].toSorted();
+}
+
 export function resetOpenClawPluginSdkNativeResolverForTest(): void {
   pluginSdkNativeAliases.clear();
   esmHooks?.deregister();
