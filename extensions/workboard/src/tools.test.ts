@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
-import { WorkboardStore, type WorkboardKeyedStore } from "./store.js";
+import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
 
-function createMemoryStore(): WorkboardKeyedStore {
-  const entries = new Map<string, Awaited<ReturnType<WorkboardKeyedStore["lookup"]>>>();
+function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
+  const entries = new Map<string, T>();
   return {
     async register(key, value) {
       entries.set(key, value);
@@ -329,5 +329,89 @@ describe("workboard tools", () => {
     }>;
     expect(promoted).toEqual([expect.objectContaining({ id: card.id })]);
     expect(promoted[0]?.metadata?.claim?.token).toBe("[redacted]");
+  });
+
+  it("exposes board lifecycle, decomposition, runs, and notification tools", async () => {
+    const keyed = createMemoryStore();
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => keyed),
+        },
+      },
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(keyed);
+    const tools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: { agentId: "main" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+
+    const boardPayload = readPayload(
+      await tools.get("workboard_board_create")?.execute("call-board", {
+        id: "planning",
+        name: "Planning",
+      }),
+    );
+    expect(boardPayload.board).toMatchObject({ id: "planning", name: "Planning" });
+
+    const parent = await store.create({
+      title: "Rough",
+      status: "triage",
+      boardId: "planning",
+      idempotencyKey: "planning:rough",
+    });
+    const specified = readPayload(
+      await tools.get("workboard_specify")?.execute("call-specify", {
+        id: parent.id,
+        title: "Specified",
+        summary: "Ready to split.",
+      }),
+    );
+    expect(specified.card).toMatchObject({ title: "Specified", status: "todo" });
+
+    const decomposed = readPayload(
+      await tools.get("workboard_decompose")?.execute("call-decompose", {
+        id: parent.id,
+        summary: "Split.",
+        children: [{ title: "Child A" }, { title: "Child B" }],
+      }),
+    );
+    expect(decomposed.parent).toMatchObject({ status: "done" });
+    expect(decomposed.children).toEqual([
+      expect.objectContaining({ title: "Child A" }),
+      expect.objectContaining({ title: "Child B" }),
+    ]);
+
+    const runs = readPayload(
+      await tools.get("workboard_runs")?.execute("call-runs", { id: parent.id }),
+    );
+    expect(runs.attempts).toEqual([]);
+
+    const subscription = readPayload(
+      await tools.get("workboard_notify_subscribe")?.execute("call-subscribe", {
+        boardId: "planning",
+        cardId: parent.id,
+        target: "session:operator",
+        eventKinds: ["completed"],
+      }),
+    );
+    expect(subscription.subscription).toMatchObject({
+      boardId: "planning",
+      cardId: parent.id,
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    const list = readPayload(
+      await tools.get("workboard_notify_list")?.execute("call-notify-list", {
+        boardId: "planning",
+      }),
+    );
+    expect(list.subscriptions).toEqual([
+      expect.objectContaining({ cardId: parent.id, target: "session:operator" }),
+    ]);
   });
 });

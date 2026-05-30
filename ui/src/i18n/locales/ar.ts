@@ -563,6 +563,8 @@ export const ar: TranslationMap = {
     eventMoved: "تم النقل",
     eventMovedTo: "تم النقل إلى {status}",
     eventLinked: "تم ربط الجلسة",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "تم الحجز",
     eventHeartbeat: "نبضة",
     eventExecutionUpdated: "تم تحديث الوكيل",

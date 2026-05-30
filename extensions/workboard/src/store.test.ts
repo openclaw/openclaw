@@ -1,13 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { WorkboardStore, type WorkboardKeyedStore } from "./store.js";
+import {
+  WorkboardStore,
+  type PersistedWorkboardBoard,
+  type PersistedWorkboardCard,
+  type PersistedWorkboardNotificationSubscription,
+  type WorkboardKeyedStore,
+} from "./store.js";
 
-function createMemoryStore(options?: {
-  beforeRegister?: (
-    key: string,
-    value: NonNullable<Awaited<ReturnType<WorkboardKeyedStore["lookup"]>>>,
-  ) => Promise<void> | void;
-}): WorkboardKeyedStore {
-  const entries = new Map<string, Awaited<ReturnType<WorkboardKeyedStore["lookup"]>>>();
+function createMemoryStore<T = PersistedWorkboardCard>(options?: {
+  beforeRegister?: (key: string, value: T) => Promise<void> | void;
+}): WorkboardKeyedStore<T> {
+  const entries = new Map<string, T>();
   return {
     async register(key, value) {
       await options?.beforeRegister?.(key, value);
@@ -1479,6 +1482,282 @@ describe("WorkboardStore", () => {
     await expect(store.buildWorkerContext(crossBoardChild.id)).resolves.toContain(
       "Use board-scoped queues.",
     );
+  });
+
+  it("persists board metadata and notification subscriptions in separate stores", async () => {
+    const cards = createMemoryStore();
+    const boards = createMemoryStore<PersistedWorkboardBoard>();
+    const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>();
+    const store = new WorkboardStore(cards, { boards, subscriptions });
+
+    const board = await store.upsertBoard({
+      id: "ops",
+      name: "Ops",
+      description: "Operational work",
+      defaultWorkspace: { kind: "dir", path: "/tmp/openclaw-ops" },
+    });
+    const card = await store.create({ title: "Ops card", boardId: "ops" });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      cardId: card.id,
+      target: "session:operator",
+      eventKinds: ["completed", "failed"],
+    });
+
+    await expect(boards.lookup("ops")).resolves.toMatchObject({
+      version: 1,
+      board: { id: "ops", name: "Ops", description: "Operational work" },
+    });
+    await expect(subscriptions.lookup(subscription.id)).resolves.toMatchObject({
+      version: 1,
+      subscription: {
+        id: subscription.id,
+        boardId: "ops",
+        cardId: card.id,
+        target: "session:operator",
+        eventKinds: ["completed", "failed"],
+      },
+    });
+    await expect(cards.lookup("ops")).resolves.toBeUndefined();
+    expect(board.defaultWorkspace).toEqual({ kind: "dir", path: "/tmp/openclaw-ops" });
+    expect((await store.listBoards()).boards.find((item) => item.id === "ops")).toMatchObject({
+      name: "Ops",
+      total: 1,
+      active: 1,
+      byStatus: { todo: 1 },
+    });
+    await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toMatchObject({
+      subscriptions: [expect.objectContaining({ id: subscription.id, cardId: card.id })],
+    });
+  });
+
+  it("deletes board notification subscriptions with empty board metadata", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      boards: createMemoryStore<PersistedWorkboardBoard>(),
+      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+    });
+    await store.upsertBoard({ id: "ops", name: "Ops" });
+    await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    await expect(store.deleteBoard("ops")).resolves.toEqual({ deleted: true });
+    await expect(store.listNotificationSubscriptions({ boardId: "ops" })).resolves.toEqual({
+      subscriptions: [],
+    });
+  });
+
+  it("deletes card notification subscriptions with the card", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+    });
+    const card = await store.create({ title: "Notify me" });
+    await store.subscribeNotifications({
+      cardId: card.id,
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    await expect(store.delete(card.id)).resolves.toEqual({ deleted: true });
+    await expect(store.listNotificationSubscriptions({ cardId: card.id })).resolves.toEqual({
+      subscriptions: [],
+    });
+  });
+
+  it("specifies and decomposes rough cards into linked children", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({
+      title: "Rough idea",
+      status: "triage",
+      boardId: "planning",
+      tenant: "qa",
+      idempotencyKey: "planning:rough",
+    });
+
+    const specified = await store.specify(parent.id, {
+      title: "Clarified plan",
+      notes: "Acceptance: two concrete follow-up cards.",
+      summary: "Clarified the outcome and acceptance criteria.",
+      labels: ["planning"],
+    });
+    expect(specified).toMatchObject({
+      title: "Clarified plan",
+      status: "todo",
+      notes: "Acceptance: two concrete follow-up cards.",
+      labels: ["planning"],
+      metadata: {
+        comments: [
+          expect.objectContaining({ body: "Clarified the outcome and acceptance criteria." }),
+        ],
+      },
+    });
+    expect(specified.events?.at(-1)).toMatchObject({ kind: "specified" });
+
+    const result = await store.decompose(specified.id, {
+      summary: "Split into implementation and review.",
+      children: [
+        { title: "Implement SQLite persistence", priority: "high" },
+        { title: "Review Workboard flows", agentId: "reviewer" },
+      ],
+    });
+
+    expect(result.parent.status).toBe("done");
+    expect(result.parent.events?.at(-1)).toMatchObject({ kind: "decomposed" });
+    expect(result.parent.metadata?.automation?.createdCardIds).toEqual(
+      result.children.map((child) => child.id),
+    );
+    expect(result.children).toEqual([
+      expect.objectContaining({
+        title: "Implement SQLite persistence",
+        priority: "high",
+        metadata: {
+          automation: expect.objectContaining({
+            boardId: "planning",
+            tenant: "qa",
+            createdByCardId: parent.id,
+            idempotencyKey: "planning:rough:child:1",
+          }),
+          links: expect.arrayContaining([
+            expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+          ]),
+        },
+      }),
+      expect.objectContaining({
+        title: "Review Workboard flows",
+        agentId: "reviewer",
+      }),
+    ]);
+    await expect(store.runs(parent.id)).resolves.toMatchObject({
+      card: { id: parent.id },
+      attempts: [],
+    });
+  });
+
+  it("keeps specify as a todo-only clarification step", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Rough idea", status: "triage" });
+    const blocked = await store.create({ title: "Blocked idea", status: "blocked" });
+
+    await expect(store.specify(card.id, { status: "done" })).rejects.toThrow(/must move to todo/);
+    await expect(store.specify(card.id, { status: "running" })).rejects.toThrow(
+      /must move to todo/,
+    );
+    await expect(store.specify(blocked.id, { title: "Specified" })).rejects.toThrow(
+      /only triage, backlog, or todo/,
+    );
+    await expect(store.specify(card.id, { title: "Specified" })).resolves.toMatchObject({
+      title: "Specified",
+      status: "todo",
+    });
+  });
+
+  it("rolls back newly created children when decomposition fails", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "todo" });
+
+    await expect(
+      store.decompose(parent.id, {
+        children: [{ title: "First child" }, { notes: "Missing title" }],
+      }),
+    ).rejects.toThrow(/title is required/);
+
+    await expect(store.list()).resolves.toEqual([expect.objectContaining({ id: parent.id })]);
+    expect((await store.get(parent.id))?.metadata?.links).toBeUndefined();
+  });
+
+  it("rolls back links added to reused idempotent children when decomposition fails", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent" });
+    const existingChild = await store.create({
+      title: "Existing child",
+      status: "ready",
+      idempotencyKey: "child-key",
+    });
+    await store.addLink(existingChild.id, { type: "relates_to", targetCardId: parent.id });
+
+    await expect(
+      store.decompose(parent.id, {
+        children: [
+          { title: "Existing child", idempotencyKey: "child-key" },
+          { notes: "Missing title" },
+        ],
+      }),
+    ).rejects.toThrow(/title is required/);
+
+    await expect(store.list()).resolves.toHaveLength(2);
+    expect((await store.get(parent.id))?.metadata?.links).toBeUndefined();
+    await expect(store.get(existingChild.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: {
+        links: [expect.objectContaining({ type: "relates_to", targetCardId: parent.id })],
+      },
+    });
+  });
+
+  it("preserves parent child links when decomposition leaves the parent open", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({ title: "Parent", status: "triage" });
+    await store.addLink(parent.id, { type: "relates_to", url: "https://example.com/context" });
+
+    const result = await store.decompose(parent.id, {
+      completeParent: false,
+      summary: "Split and keep parent open.",
+      children: [{ title: "Child" }],
+    });
+
+    expect(result.parent.status).toBe("todo");
+    expect(result.parent.metadata?.links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "relates_to", url: "https://example.com/context" }),
+        expect.objectContaining({ type: "child", targetCardId: result.children[0]?.id }),
+      ]),
+    );
+    await expect(
+      store.complete(parent.id, {
+        createdCardIds: result.children.map((child) => child.id),
+        summary: "Children recorded.",
+      }),
+    ).resolves.toMatchObject({ status: "done" });
+  });
+
+  it("omits derived child idempotency keys when the parent key is already at the limit", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const parent = await store.create({
+      title: "Parent",
+      idempotencyKey: "p".repeat(160),
+    });
+
+    const result = await store.decompose(parent.id, {
+      children: [{ title: "Child" }],
+    });
+
+    expect(result.children[0]?.metadata?.automation?.idempotencyKey).toBeUndefined();
+  });
+
+  it("links an idempotent existing child before completing decomposition", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const existingChild = await store.create({
+      title: "Existing child",
+      idempotencyKey: "child-key",
+    });
+    const parent = await store.create({ title: "Parent" });
+
+    const result = await store.decompose(parent.id, {
+      children: [{ title: "Ignored duplicate", idempotencyKey: "child-key" }],
+    });
+
+    expect(result.parent.status).toBe("done");
+    expect(result.children).toEqual([expect.objectContaining({ id: existingChild.id })]);
+    expect(result.parent.metadata?.automation?.createdCardIds).toEqual([existingChild.id]);
+    await expect(store.get(existingChild.id)).resolves.toMatchObject({
+      metadata: {
+        links: expect.arrayContaining([
+          expect.objectContaining({ type: "parent", targetCardId: parent.id }),
+        ]),
+      },
+    });
   });
 
   it("rejects invalid status values", async () => {

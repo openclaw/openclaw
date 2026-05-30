@@ -116,6 +116,10 @@ function formatEventLabel(event: WorkboardEvent): string {
         : t("workboard.eventMoved");
     case "linked":
       return t("workboard.eventLinked");
+    case "specified":
+      return t("workboard.eventSpecified");
+    case "decomposed":
+      return t("workboard.eventDecomposed");
     case "claimed":
       return t("workboard.eventClaimed");
     case "heartbeat":
