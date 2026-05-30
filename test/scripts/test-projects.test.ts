@@ -5,6 +5,7 @@ import path from "node:path";
 import fg from "fast-glob";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
@@ -2234,7 +2235,7 @@ describe("scripts/test-projects failed shard digest", () => {
 });
 
 describe("scripts/test-projects Vitest stall watchdog", () => {
-  it("adds a default no-output timeout to non-watch specs", () => {
+  it("adds default no-output watchdog settings to non-watch specs", () => {
     const [spec] = applyDefaultVitestNoOutputTimeout(
       [
         {
@@ -2252,6 +2253,9 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     expect(spec?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
     );
+    expect(spec?.env.OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS).toBe(
+      DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS,
+    );
   });
 
   it("keeps explicit watchdog settings and watch mode untouched", () => {
@@ -2267,7 +2271,11 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
         },
         {
           config: "test/vitest/vitest.extension-memory.config.ts",
-          env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0", PATH: "/usr/bin" },
+          env: {
+            OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "25000",
+            OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
+            PATH: "/usr/bin",
+          },
           includeFilePath: null,
           includePatterns: null,
           pnpmArgs: [],
@@ -2278,7 +2286,9 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     );
 
     expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBeUndefined();
+    expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS).toBeUndefined();
     expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("0");
+    expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS).toBe("25000");
   });
 
   it("allows changed checks to disable automatic silent-run retries", () => {

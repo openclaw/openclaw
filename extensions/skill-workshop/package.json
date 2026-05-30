@@ -9,10 +9,5 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
-  },
-  "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ]
   }
 }

@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import { compactWhitespace, extractTranscriptText } from "./text.js";
-import type { SkillProposal } from "./types.js";
 
 const CORRECTION_PATTERNS = [
   /\bnext time\b/i,
@@ -11,6 +10,14 @@ const CORRECTION_PATTERNS = [
   /\bprefer\b.{0,120}\b(when|for|instead|use)\b/i,
   /\bwhen asked\b/i,
 ];
+
+type DurableInstruction = {
+  skillName: string;
+  description: string;
+  content: string;
+  goal: string;
+  evidence: string;
+};
 
 function inferTopic(text: string): { skillName: string; title: string; label: string } {
   const lower = text.toLowerCase();
@@ -52,12 +59,9 @@ function extractInstruction(text: string): string | undefined {
   return trimmed.replace(/^ok[,. ]+/i, "");
 }
 
-export function createProposalFromMessages(params: {
+export function extractDurableInstructionProposal(params: {
   messages: unknown[];
-  workspaceDir: string;
-  agentId?: string;
-  sessionId?: string;
-}): SkillProposal | undefined {
+}): DurableInstruction | undefined {
   const transcript = extractTranscriptText(params.messages);
   const userTexts = transcript.filter((entry) => entry.role === "user").map((entry) => entry.text);
   const instruction = userTexts.map(extractInstruction).findLast(Boolean);
@@ -65,31 +69,23 @@ export function createProposalFromMessages(params: {
     return undefined;
   }
   const topic = inferTopic(instruction);
-  const now = Date.now();
+  const skillName = normalizeSkillIndexName(topic.skillName);
+  if (!skillName) {
+    return undefined;
+  }
   return {
-    id: randomUUID(),
-    createdAt: now,
-    updatedAt: now,
-    workspaceDir: params.workspaceDir,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-    skillName: topic.skillName,
-    title: topic.title,
-    reason: `User correction for ${topic.label}`,
-    source: "agent_end",
-    status: "pending",
-    change: {
-      kind: "create",
-      description: `Reusable workflow notes for ${topic.label}.`,
-      body: [
-        `# ${topic.title}`,
-        "",
-        "## Workflow",
-        "",
-        `- ${instruction}`,
-        "- Verify the result before final reply.",
-        "- Record durable pitfalls as short bullets; avoid copying transcript noise.",
-      ].join("\n"),
-    },
+    skillName,
+    description: `Reusable workflow notes for ${topic.label}.`,
+    goal: `Capture durable user correction for ${topic.label}.`,
+    evidence: instruction,
+    content: [
+      `# ${topic.title}`,
+      "",
+      "## Workflow",
+      "",
+      `- ${instruction}`,
+      "- Verify the result before final reply.",
+      "- Record durable pitfalls as short bullets; avoid copying transcript noise.",
+    ].join("\n"),
   };
 }

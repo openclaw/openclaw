@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "./provider-id.js";
 
 export function normalizeModelCatalogProviderId(provider: string): string {
   return normalizeLowercaseStringOrEmpty(provider);

@@ -9,6 +9,17 @@ export type McpServerCodexConfig = {
   default_tools_approval_mode?: McpCodexToolApprovalMode;
 };
 
+export type McpServerToolFilterConfig = {
+  /**
+   * Exact MCP tool names or simple "*" globs to expose from this server.
+   *
+   * When omitted, all server tools remain eligible unless excluded.
+   */
+  include?: string[];
+  /** Exact MCP tool names or simple "*" globs to hide from this server. */
+  exclude?: string[];
+};
+
 export type McpServerConfig = {
   /** Stdio transport: command to spawn. */
   command?: string;
@@ -28,6 +39,8 @@ export type McpServerConfig = {
   headers?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
+  /** Optional per-server OpenClaw MCP tool selection. */
+  toolFilter?: McpServerToolFilterConfig;
   /** Codex-specific projection controls for Codex app-server/runtime config. */
   codex?: McpServerCodexConfig;
   [key: string]: unknown;

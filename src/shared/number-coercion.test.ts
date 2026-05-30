@@ -203,6 +203,7 @@ describe("number-coercion", () => {
     expect(resolveExpiresAtMsFromEpochSeconds("3600", { bufferMs: 300 })).toBe(3_599_700);
     expect(resolveExpiresAtMsFromEpochSeconds("100", { maxMs: 99_999 })).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds(Number.MAX_SAFE_INTEGER)).toBeUndefined();
+    expect(resolveExpiresAtMsFromEpochSeconds(8_640_000_000_001)).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds("1e309")).toBeUndefined();
   });
 
@@ -212,6 +213,7 @@ describe("number-coercion", () => {
     );
     expect(resolveExpiresAtMsFromDurationOrEpoch(1_700_000_000)).toBe(1_700_000_000_000);
     expect(resolveExpiresAtMsFromDurationOrEpoch(1_700_000_000_000)).toBe(1_700_000_000_000);
+    expect(resolveExpiresAtMsFromDurationOrEpoch(8_640_000_000_000_001)).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationOrEpoch(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(resolveExpiresAtMsFromDurationOrEpoch(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
   });
