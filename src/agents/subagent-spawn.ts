@@ -925,6 +925,12 @@ export async function spawnSubagentDirect(
       error: plan.error,
     };
   }
+  if (plan.status === "forbidden") {
+    return {
+      status: "forbidden",
+      error: plan.error,
+    };
+  }
   const { resolvedModel, thinkingOverride } = plan;
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
