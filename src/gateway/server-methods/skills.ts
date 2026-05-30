@@ -4,6 +4,11 @@ import {
   validateSkillsBinsParams,
   validateSkillsDetailParams,
   validateSkillsInstallParams,
+  validateSkillsProposalActionParams,
+  validateSkillsProposalCreateParams,
+  validateSkillsProposalInspectParams,
+  validateSkillsProposalsListParams,
+  validateSkillsProposalUpdateParams,
   validateSkillsSearchParams,
   validateSkillsSecurityVerdictsParams,
   validateSkillsSkillCardParams,
@@ -39,6 +44,15 @@ import {
   collectClawHubVerdictTargets,
   fetchOpenClawSkillSecurityVerdicts,
 } from "../../skills/security/clawhub-verdicts.js";
+import {
+  applySkillProposal,
+  inspectSkillProposal,
+  listSkillProposals,
+  proposeCreateSkill,
+  proposeUpdateSkill,
+  quarantineSkillProposal,
+  rejectSkillProposal,
+} from "../../skills/workshop/service.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -81,6 +95,13 @@ function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace)
       }),
     },
   });
+}
+
+function respondSkillWorkshopError(
+  respond: (success: boolean, result: unknown, err: unknown) => void,
+  err: unknown,
+) {
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(err)));
 }
 
 export const skillsHandlers: GatewayRequestHandlers = {
@@ -209,6 +230,218 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond(true, detail, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+  "skills.proposals.list": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalsListParams,
+        "skills.proposals.list",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(true, await listSkillProposals(resolved.workspaceDir), undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.inspect": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalInspectParams,
+        "skills.proposals.inspect",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      const proposal = await inspectSkillProposal(resolved.workspaceDir, params.proposalId);
+      if (!proposal) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `Skill proposal not found: ${params.proposalId}`),
+        );
+        return;
+      }
+      respond(true, proposal, undefined);
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.create": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalCreateParams,
+        "skills.proposals.create",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await proposeCreateSkill({
+          workspaceDir: resolved.workspaceDir,
+          name: params.name,
+          description: params.description,
+          content: params.content,
+          createdBy: "gateway",
+          goal: params.goal,
+          evidence: params.evidence,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.update": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalUpdateParams,
+        "skills.proposals.update",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await proposeUpdateSkill({
+          workspaceDir: resolved.workspaceDir,
+          config: resolved.cfg,
+          agentId: resolved.agentId,
+          skillName: params.skillName,
+          content: params.content,
+          createdBy: "gateway",
+          goal: params.goal,
+          evidence: params.evidence,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.apply": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalActionParams,
+        "skills.proposals.apply",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await applySkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          proposalId: params.proposalId,
+          reason: params.reason,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.reject": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalActionParams,
+        "skills.proposals.reject",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await rejectSkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          proposalId: params.proposalId,
+          reason: params.reason,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
+    }
+  },
+  "skills.proposals.quarantine": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalActionParams,
+        "skills.proposals.quarantine",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const resolved = resolveSkillsAgentWorkspace(params, context);
+    if (!resolved.ok) {
+      respond(false, undefined, resolved.error);
+      return;
+    }
+    try {
+      respond(
+        true,
+        await quarantineSkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          proposalId: params.proposalId,
+          reason: params.reason,
+        }),
+        undefined,
+      );
+    } catch (err) {
+      respondSkillWorkshopError(respond, err);
     }
   },
   "skills.install": async ({ params, respond, context }) => {

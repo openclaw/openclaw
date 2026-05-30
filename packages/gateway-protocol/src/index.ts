@@ -367,6 +367,24 @@ import {
   SkillsDetailResultSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
+  type SkillsProposalActionParams,
+  SkillsProposalActionParamsSchema,
+  type SkillsProposalApplyResult,
+  SkillsProposalApplyResultSchema,
+  type SkillsProposalCreateParams,
+  SkillsProposalCreateParamsSchema,
+  type SkillsProposalInspectParams,
+  SkillsProposalInspectParamsSchema,
+  type SkillsProposalInspectResult,
+  SkillsProposalInspectResultSchema,
+  type SkillsProposalRecordResult,
+  SkillsProposalRecordResultSchema,
+  type SkillsProposalUpdateParams,
+  SkillsProposalUpdateParamsSchema,
+  type SkillsProposalsListParams,
+  SkillsProposalsListParamsSchema,
+  type SkillsProposalsListResult,
+  SkillsProposalsListResultSchema,
   type SkillsSearchParams,
   SkillsSearchParamsSchema,
   type SkillsSearchResult,
@@ -736,6 +754,21 @@ export const validateSkillsUploadCommitParams = lazyCompile<SkillsUploadCommitPa
 export const validateSkillsUpdateParams = lazyCompile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = lazyCompile<SkillsSearchParams>(SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = lazyCompile<SkillsDetailParams>(SkillsDetailParamsSchema);
+export const validateSkillsProposalsListParams = lazyCompile<SkillsProposalsListParams>(
+  SkillsProposalsListParamsSchema,
+);
+export const validateSkillsProposalInspectParams = lazyCompile<SkillsProposalInspectParams>(
+  SkillsProposalInspectParamsSchema,
+);
+export const validateSkillsProposalCreateParams = lazyCompile<SkillsProposalCreateParams>(
+  SkillsProposalCreateParamsSchema,
+);
+export const validateSkillsProposalUpdateParams = lazyCompile<SkillsProposalUpdateParams>(
+  SkillsProposalUpdateParamsSchema,
+);
+export const validateSkillsProposalActionParams = lazyCompile<SkillsProposalActionParams>(
+  SkillsProposalActionParamsSchema,
+);
 export const validateSkillsSecurityVerdictsParams = lazyCompile<SkillsSecurityVerdictsParams>(
   SkillsSecurityVerdictsParamsSchema,
 );
@@ -1038,6 +1071,15 @@ export {
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
+  SkillsProposalsListParamsSchema,
+  SkillsProposalsListResultSchema,
+  SkillsProposalInspectParamsSchema,
+  SkillsProposalInspectResultSchema,
+  SkillsProposalCreateParamsSchema,
+  SkillsProposalUpdateParamsSchema,
+  SkillsProposalActionParamsSchema,
+  SkillsProposalApplyResultSchema,
+  SkillsProposalRecordResultSchema,
   SkillsSecurityVerdictsParamsSchema,
   SkillsSecurityVerdictsResultSchema,
   SkillsSkillCardParamsSchema,
@@ -1189,6 +1231,15 @@ export type {
   SkillsSearchResult,
   SkillsDetailParams,
   SkillsDetailResult,
+  SkillsProposalsListParams,
+  SkillsProposalsListResult,
+  SkillsProposalInspectParams,
+  SkillsProposalInspectResult,
+  SkillsProposalCreateParams,
+  SkillsProposalUpdateParams,
+  SkillsProposalActionParams,
+  SkillsProposalApplyResult,
+  SkillsProposalRecordResult,
   SkillsSecurityVerdictsParams,
   SkillsSecurityVerdictsResult,
   SkillsSkillCardParams,
