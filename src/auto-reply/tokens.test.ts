@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  isInternalFormattingArtifact,
   isSilentReplyPrefixText,
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -7,6 +8,70 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "./tokens.js";
+
+describe("isInternalFormattingArtifact", () => {
+  it("matches <channel|> markers (#88128)", () => {
+    expect(isInternalFormattingArtifact("<channel|>")).toBe(true);
+    expect(isInternalFormattingArtifact("  <channel|>  ")).toBe(true);
+    expect(isInternalFormattingArtifact("\n<channel|>\n")).toBe(true);
+  });
+
+  it("matches set-thought directives with channel markers (#88128)", () => {
+    expect(isInternalFormattingArtifact("set-thought <channel|>")).toBe(true);
+    expect(isInternalFormattingArtifact("  set-thought <channel|>  ")).toBe(true);
+  });
+
+  it("matches em-dash / horizontal-rule separators (#88128)", () => {
+    expect(isInternalFormattingArtifact("───")).toBe(true);
+    expect(isInternalFormattingArtifact("---")).toBe(true);
+    expect(isInternalFormattingArtifact("___")).toBe(true);
+    expect(isInternalFormattingArtifact("***")).toBe(true);
+    expect(isInternalFormattingArtifact("****")).toBe(true);
+    expect(isInternalFormattingArtifact("  ───  ")).toBe(true);
+  });
+
+  it("matches lone XML-like tags", () => {
+    expect(isInternalFormattingArtifact("<tag>")).toBe(true);
+    expect(isInternalFormattingArtifact("</tag>")).toBe(true);
+    expect(isInternalFormattingArtifact("<br/>")).toBe(true);
+  });
+
+  it("matches <word|value> channel-style markup", () => {
+    expect(isInternalFormattingArtifact("<channel|answer>")).toBe(true);
+    expect(isInternalFormattingArtifact("<lane|reasoning>")).toBe(true);
+  });
+
+  it("returns false for undefined/empty", () => {
+    expect(isInternalFormattingArtifact(undefined)).toBe(false);
+    expect(isInternalFormattingArtifact("")).toBe(false);
+  });
+
+  it("returns false for normal user-facing text", () => {
+    expect(isInternalFormattingArtifact("Hello! How can I help?")).toBe(false);
+    expect(isInternalFormattingArtifact("The answer is 42.")).toBe(false);
+    expect(isInternalFormattingArtifact("Here's your code:")).toBe(false);
+  });
+
+  it("returns false for text that merely contains an artifact pattern", () => {
+    // Real answer text that happens to include a dash separator or tag-like content
+    // must not be suppressed.
+    expect(
+      isInternalFormattingArtifact(
+        "Here are the options:\n───\n1. Option A\n2. Option B",
+      ),
+    ).toBe(false);
+    expect(isInternalFormattingArtifact("See <https://example.com> for details.")).toBe(false);
+    expect(
+      isInternalFormattingArtifact("Use <channel|> syntax in your config."),
+    ).toBe(false);
+  });
+
+  it("returns false for code blocks and markdown with substance", () => {
+    expect(isInternalFormattingArtifact("```js\nconsole.log('hi')\n```")).toBe(false);
+    expect(isInternalFormattingArtifact("**bold** and *italic* text")).toBe(false);
+    expect(isInternalFormattingArtifact("# Heading")).toBe(false);
+  });
+});
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {

@@ -3,6 +3,33 @@ import { escapeRegExp } from "../shared/regexp.js";
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
 
+/**
+ * Detects text that consists solely of internal/runtime formatting artefacts
+ * produced by LLM providers (e.g. Codex) during streaming responses.
+ *
+ * These are NOT meaningful user-facing output and must never be sent to
+ * messaging channels as visible messages.
+ *
+ * Matched patterns:
+ * - `<channel|>`, `<word|>`, `<word|value>` — incomplete/empty angle-bracket
+ *   markup used by providers for internal channel/routing markers.
+ * - `set-thought <...>` — reasoning directive prefixes emitted by Codex-style
+ *   providers to signal thought block transitions.
+ * - `───`, `---`, `___`, `***`, `****` — markdown horizontal-rule separators
+ *   when they are the only non-whitespace content.
+ * - `<tag>` / `</tag>` — lone unclosed or empty XML-like tags that are not
+ *   valid user-facing content.
+ */
+const INTERNAL_ARTEFACT_RE =
+  /^\s*(?:(?:set-thought\s+)?<[\w]*\|[^>]*>|───+|-{3,}|_{3,}|\*{3,4}|<[\w]+\/?>|<\/[\w]+>)\s*$/;
+
+export function isInternalFormattingArtifact(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return INTERNAL_ARTEFACT_RE.test(text);
+}
+
 const silentExactRegexByToken = new Map<string, RegExp>();
 const silentTrailingRegexByToken = new Map<string, RegExp>();
 const silentLeadingAttachedRegexByToken = new Map<string, RegExp>();
