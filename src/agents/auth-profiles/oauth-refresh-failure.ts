@@ -1,5 +1,5 @@
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { normalizeProviderId } from "../provider-id.js";
 
 export type OAuthRefreshFailureReason =

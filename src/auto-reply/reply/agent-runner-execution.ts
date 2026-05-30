@@ -3,6 +3,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -66,7 +67,6 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,

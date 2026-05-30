@@ -1,3 +1,5 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   listCommitments,
@@ -10,8 +12,6 @@ import { info } from "../globals.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
-import { isRich, theme } from "../terminal/theme.js";
 
 const STATUS_VALUES = new Set<CommitmentStatus>([
   "pending",

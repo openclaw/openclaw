@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -20,7 +21,6 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {

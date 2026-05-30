@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { CommitmentRecord } from "../commitments/types.js";
 import type { OutputRuntimeEnv } from "../runtime.js";
-import { stripAnsi } from "../terminal/ansi.js";
 import { commitmentsDismissCommand, commitmentsListCommand } from "./commitments.js";
 
 const mocks = vi.hoisted(() => ({

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
@@ -59,7 +60,6 @@ import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { colorize, theme } from "../../terminal/theme.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
@@ -80,7 +80,7 @@ function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): strin
   const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
   return override ? resolveUserPath(override, env) : undefined;
 }
-type TerminalTableRuntime = typeof import("../../terminal/table.js");
+type TerminalTableRuntime = typeof import("../../../packages/terminal-core/src/table.js");
 type ListProbeRuntime = typeof import("./list.probe.js");
 
 const providerUsageRuntimeLoader = createLazyImportLoader<ProviderUsageRuntime>(
@@ -90,7 +90,7 @@ const progressRuntimeLoader = createLazyImportLoader<ProgressRuntime>(
   () => import("../../cli/progress.js"),
 );
 const terminalTableRuntimeLoader = createLazyImportLoader<TerminalTableRuntime>(
-  () => import("../../terminal/table.js"),
+  () => import("../../../packages/terminal-core/src/table.js"),
 );
 const listProbeRuntimeLoader = createLazyImportLoader<ListProbeRuntime>(
   () => import("./list.probe.js"),

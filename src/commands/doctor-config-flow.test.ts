@@ -222,7 +222,7 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
   };
 });
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: terminalNoteMock,
 }));
 
