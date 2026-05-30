@@ -112,7 +112,7 @@
     },
     "discovery": {
       "xiaomi": "static",
-      "xiaomi-token-plan": "static"
+      "xiaomi-token-plan": "runtime"
     }
   },
   "providerEndpoints": [
