@@ -604,6 +604,5 @@ schema: [Skills config](/tools/skills-config).
 - [ClawHub](/clawhub) - public skills registry
 - [Creating skills](/tools/creating-skills) - building custom skills
 - [Plugins](/tools/plugin) - plugin system overview
-- [Skill Workshop plugin](/plugins/skill-workshop) - generate skills from agent work
 - [Skills config](/tools/skills-config) - skill configuration reference
 - [Slash commands](/tools/slash-commands) - all available slash commands
