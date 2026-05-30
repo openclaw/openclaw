@@ -1,8 +1,9 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
+import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 import { resolveStartupProbeTimeoutMs } from "./monitor.startup.js";
+import { setFeishuRuntime } from "./runtime.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -55,6 +56,7 @@ async function waitForStartedAccount(started: string[], accountId: string) {
 
 afterEach(() => {
   stopFeishuMonitor();
+  vi.clearAllMocks();
 });
 
 afterAll(() => {
@@ -75,6 +77,43 @@ describe("Feishu monitor startup preflight", () => {
       expect(
         resolveStartupProbeTimeoutMs({ OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: value }),
       ).toBe(30_000);
+    }
+  });
+
+  it("initializes the Feishu plugin runtime before starting account monitors", async () => {
+    const started: string[] = [];
+    let releaseProbe: (() => void) | undefined;
+    const probeReleased = new Promise<void>((resolve) => {
+      releaseProbe = () => resolve();
+    });
+    if (!releaseProbe) {
+      throw new Error("Expected probe release callback to be initialized");
+    }
+    const releaseStartedProbe = releaseProbe;
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      started.push(account.accountId);
+      await probeReleased;
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const runtime = {
+      ...createNonExitingRuntimeEnv(),
+      channel: {},
+    } as unknown as PluginRuntime;
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha"]),
+      runtime,
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await waitForStartedAccount(started, "alpha");
+      expect(setFeishuRuntime).toHaveBeenCalledWith(runtime);
+    } finally {
+      releaseStartedProbe();
+      abortController.abort();
+      await monitorPromise;
     }
   });
 

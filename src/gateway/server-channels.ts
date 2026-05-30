@@ -4,8 +4,13 @@ import {
   type ChannelId,
   getChannelPlugin,
   getLoadedChannelPluginOrigin,
+  getLoadedChannelPluginRuntime,
   listChannelPlugins,
 } from "../channels/plugins/index.js";
+import {
+  hasBundledChannelRuntimeSetter,
+  setBundledChannelRuntime,
+} from "../channels/plugins/bundled.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-bootstrap.js";
@@ -361,6 +366,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
     return await resolveChannelRuntime?.();
   };
+  const seedLoadedBundledChannelRuntime = (channelId: ChannelId) => {
+    if (getLoadedChannelPluginOrigin(channelId) !== "bundled") {
+      return;
+    }
+    const pluginRuntime = getLoadedChannelPluginRuntime(channelId);
+    if (!pluginRuntime || !hasBundledChannelRuntimeSetter(channelId)) {
+      return;
+    }
+    setBundledChannelRuntime(channelId, pluginRuntime);
+  };
   const measureStartup = async <T>(name: string, run: () => T | Promise<T>): Promise<T> => {
     return startupTrace ? startupTrace.measure(name, run) : await run();
   };
@@ -527,6 +542,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (!preserveRestartAttempts) {
             restartAttempts.delete(rKey);
           }
+          seedLoadedBundledChannelRuntime(channelId);
           try {
             stopApprovalBootstrap = await measureStartup(
               `channels.${channelId}.approval-bootstrap`,

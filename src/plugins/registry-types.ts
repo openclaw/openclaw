@@ -120,8 +120,10 @@ export type PluginChannelRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
+  origin?: PluginOrigin;
   source: string;
   rootDir?: string;
+  runtime?: PluginRuntime;
 };
 
 export type PluginChannelSetupRegistration = {

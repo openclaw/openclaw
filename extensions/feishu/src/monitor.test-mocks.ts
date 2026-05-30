@@ -11,6 +11,7 @@ export function createFeishuClientMockModule(): {
 }
 
 export function createFeishuRuntimeMockModule(): {
+  setFeishuRuntime: ReturnType<typeof vi.fn>;
   getFeishuRuntime: () => {
     channel: {
       debounce: {
@@ -27,6 +28,7 @@ export function createFeishuRuntimeMockModule(): {
   };
 } {
   return {
+    setFeishuRuntime: vi.fn(),
     getFeishuRuntime: () => ({
       channel: {
         debounce: {

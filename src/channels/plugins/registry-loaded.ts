@@ -110,3 +110,7 @@ export function getLoadedChannelPluginEntryById(id: string): LoadedChannelPlugin
   }
   return resolveChannelPlugins().entriesById.get(resolvedId);
 }
+
+export function getLoadedChannelPluginRuntimeById(id: string): LoadedChannelPluginEntry["runtime"] {
+  return getLoadedChannelPluginEntryById(id)?.runtime;
+}

@@ -1,4 +1,4 @@
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import {
@@ -7,10 +7,11 @@ import {
   isWebhookRateLimitedForTest,
   stopFeishuMonitorState,
 } from "./monitor.state.js";
+import { setFeishuRuntime } from "./runtime.js";
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
-  runtime?: RuntimeEnv;
+  runtime?: RuntimeEnv | PluginRuntime;
   abortSignal?: AbortSignal;
   accountId?: string;
 };
@@ -20,6 +21,14 @@ let monitorAccountRuntimePromise: Promise<typeof import("./monitor.account.js")>
 async function loadMonitorAccountRuntime() {
   monitorAccountRuntimePromise ??= import("./monitor.account.js");
   return await monitorAccountRuntimePromise;
+}
+
+function isPluginRuntime(runtime: RuntimeEnv | PluginRuntime | undefined): runtime is PluginRuntime {
+  return Boolean(
+    runtime &&
+      typeof (runtime as { channel?: unknown }).channel === "object" &&
+      (runtime as { channel?: unknown }).channel,
+  );
 }
 
 export {
@@ -32,6 +41,10 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   const cfg = opts.config;
   if (!cfg) {
     throw new Error("Config is required for Feishu monitor");
+  }
+
+  if (isPluginRuntime(opts.runtime)) {
+    setFeishuRuntime(opts.runtime);
   }
 
   const log = opts.runtime?.log ?? console.log;

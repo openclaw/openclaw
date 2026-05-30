@@ -1,3 +1,6 @@
+import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginRuntime } from "./runtime/types.js";
+
 export type ActiveChannelPluginRuntimeShape = {
   id?: string | null;
   meta?: {
@@ -19,7 +22,8 @@ export type ActiveChannelPluginRuntimeShape = {
 export type ActivePluginChannelRegistration = {
   plugin: ActiveChannelPluginRuntimeShape;
   pluginId?: string | null;
-  origin?: string | null;
+  origin?: PluginOrigin | string | null;
+  runtime?: PluginRuntime;
 };
 
 export type ActivePluginChannelRegistry = {

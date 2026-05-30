@@ -2,6 +2,7 @@ export {
   getChannelPlugin,
   getLoadedChannelPlugin,
   getLoadedChannelPluginOrigin,
+  getLoadedChannelPluginRuntime,
   listChannelPlugins,
   normalizeChannelId,
 } from "./registry.js";

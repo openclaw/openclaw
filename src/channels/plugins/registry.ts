@@ -4,6 +4,7 @@ import { getBundledChannelPlugin } from "./bundled.js";
 import {
   getLoadedChannelPluginById,
   getLoadedChannelPluginEntryById,
+  getLoadedChannelPluginRuntimeById,
   listLoadedChannelPlugins,
 } from "./registry-loaded.js";
 import type { ChannelPlugin } from "./types.plugin.js";
@@ -27,6 +28,14 @@ export function getLoadedChannelPluginOrigin(id: ChannelId): string | undefined 
     return undefined;
   }
   return normalizeOptionalString(getLoadedChannelPluginEntryById(resolvedId)?.origin) ?? undefined;
+}
+
+export function getLoadedChannelPluginRuntime(id: ChannelId) {
+  const resolvedId = normalizeOptionalString(id) ?? "";
+  if (!resolvedId) {
+    return undefined;
+  }
+  return getLoadedChannelPluginRuntimeById(resolvedId);
 }
 
 export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
