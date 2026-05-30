@@ -132,8 +132,26 @@ export function resolveDiscordInboundConversation(params: {
   from?: string;
   to?: string;
   conversationId?: string;
+  threadId?: string | number;
   isGroup: boolean;
 }) {
+  const threadId = normalizeOptionalString(
+    params.threadId == null ? undefined : String(params.threadId),
+  );
+  if (threadId) {
+    const parentConversationId = resolveDiscordCurrentConversationIdentity({
+      from: params.from,
+      chatType: params.isGroup ? "group" : "direct",
+      originatingTo: params.to,
+      fallbackTo: params.conversationId,
+    });
+    return {
+      conversationId: threadId,
+      ...(parentConversationId && parentConversationId !== threadId
+        ? { parentConversationId }
+        : {}),
+    };
+  }
   const conversationId = resolveDiscordCurrentConversationIdentity({
     from: params.from,
     chatType: params.isGroup ? "group" : "direct",
