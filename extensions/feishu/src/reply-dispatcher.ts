@@ -375,6 +375,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     })();
   };
 
+  const resetStreamingState = () => {
+    streaming = null;
+    streamingStartPromise = null;
+    partialUpdateQueue = Promise.resolve();
+    streamText = "";
+    lastPartial = "";
+    reasoningText = "";
+    statusLine = "";
+    snapshotBaseText = "";
+    lastSnapshotTextLength = 0;
+  };
+
   const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
     try {
       if (streamingStartPromise) {
@@ -397,15 +409,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
       }
     } finally {
-      streaming = null;
-      streamingStartPromise = null;
-      partialUpdateQueue = Promise.resolve();
-      streamText = "";
-      lastPartial = "";
-      reasoningText = "";
-      statusLine = "";
-      snapshotBaseText = "";
-      lastSnapshotTextLength = 0;
+      resetStreamingState();
+    }
+  };
+
+  const discardStreamingPreview = async () => {
+    try {
+      if (streamingStartPromise) {
+        await streamingStartPromise;
+      }
+      await partialUpdateQueue;
+      if (streaming?.isActive()) {
+        await streaming.discard();
+      }
+    } finally {
+      resetStreamingState();
     }
   };
 
@@ -561,9 +579,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           !hasVoiceMedia &&
           !skipTextForDuplicateFinal &&
           !skipTextForClosedStreamingFinal;
+        const shouldDiscardStreamingPreview =
+          info?.kind === "final" && hasMedia && !shouldDeliverText;
 
         if (!shouldDeliverText && !hasMedia) {
           return;
+        }
+
+        if (shouldDiscardStreamingPreview) {
+          await discardStreamingPreview();
         }
 
         if (shouldDeliverText) {
