@@ -1,8 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticEmbeddedRunStarted,
+  resetDiagnosticRunActivityForTest,
+} from "../logging/diagnostic-run-activity.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -21,6 +26,10 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+
+afterEach(() => {
+  resetDiagnosticRunActivityForTest();
+});
 
 function expectResetAcpState(
   acp:
@@ -68,6 +77,10 @@ test("sessions.reset aborts active runs and clears queues", async () => {
 
   embeddedRunMock.activeIds.add("sess-main");
   embeddedRunMock.waitResults.set("sess-main", true);
+  markDiagnosticEmbeddedRunStarted({
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+  });
 
   const reset = await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
     "sessions.reset",
@@ -82,6 +95,12 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   expect(peekSystemEvents("main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
   expect(peekSystemEvents("sess-main")).toStrictEqual([]);
+  expect(
+    getDiagnosticSessionActivitySnapshot({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+    }).activeWorkKind,
+  ).toBeUndefined();
   expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-main");
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
@@ -108,6 +127,34 @@ test("sessions.reset aborts active runs and clears queues", async () => {
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
   });
+});
+
+test("sessions.reset preserves diagnostic active-run state when the old run does not stop", async () => {
+  await seedActiveMainSession();
+
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", false);
+  markDiagnosticEmbeddedRunStarted({
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+  });
+
+  const reset = await directSessionReq("sessions.reset", {
+    key: "main",
+  });
+
+  expect(reset.ok).toBe(false);
+  expect(reset.error?.code).toBe("UNAVAILABLE");
+  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
+  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+  expect(
+    getDiagnosticSessionActivitySnapshot({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+    }).activeWorkKind,
+  ).toBe("embedded_run");
+  expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).not.toHaveBeenCalled();
+  expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 });
 
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {

@@ -1,4 +1,5 @@
 import {
+  emitInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticSessionActiveWorkKind,
@@ -44,6 +45,13 @@ export type DiagnosticSessionActivitySnapshot = {
   activeToolAgeMs?: number;
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
+};
+
+export type ClearDiagnosticSessionActivityResult = {
+  activeEmbeddedRunsCleared: number;
+  activeToolsCleared: number;
+  activeModelCallsCleared: number;
+  activitiesCleared: number;
 };
 
 const activityByRef = new Map<string, SessionActivity>();
@@ -319,6 +327,76 @@ export function getDiagnosticSessionActivitySnapshot(
     lastProgressAgeMs: Math.max(0, now - activity.lastProgressAt),
     lastProgressReason: activity.lastProgressReason,
   };
+}
+
+function clearActivityReferences(activity: SessionActivity): void {
+  for (const [ref, mapped] of activityByRef) {
+    if (mapped === activity) {
+      activityByRef.delete(ref);
+    }
+  }
+  for (const [runId, mapped] of activityByRunId) {
+    if (mapped === activity) {
+      activityByRunId.delete(runId);
+    }
+  }
+}
+
+export function clearDiagnosticSessionActivity(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  reason: string;
+  emitEvent?: boolean;
+}): ClearDiagnosticSessionActivityResult {
+  const activities = new Set<SessionActivity>();
+  for (const ref of sessionRefs(params)) {
+    const activity = activityByRef.get(ref);
+    if (activity) {
+      activities.add(activity);
+    }
+  }
+
+  const result: ClearDiagnosticSessionActivityResult = {
+    activeEmbeddedRunsCleared: 0,
+    activeToolsCleared: 0,
+    activeModelCallsCleared: 0,
+    activitiesCleared: 0,
+  };
+
+  for (const activity of activities) {
+    result.activeEmbeddedRunsCleared += activity.activeEmbeddedRuns.size;
+    result.activeToolsCleared += activity.activeTools.size;
+    result.activeModelCallsCleared += activity.activeModelCalls.size;
+    activity.activeEmbeddedRuns.clear();
+    activity.activeTools.clear();
+    activity.activeModelCalls.clear();
+    clearActivityReferences(activity);
+    result.activitiesCleared += 1;
+  }
+
+  if (
+    params.emitEvent !== false &&
+    (result.activeEmbeddedRunsCleared > 0 ||
+      result.activeToolsCleared > 0 ||
+      result.activeModelCallsCleared > 0)
+  ) {
+    emitInternalDiagnosticEvent({
+      type: "log.record",
+      level: "warn",
+      message: "diagnostic session activity cleared",
+      loggerName: "diagnostic-run-activity",
+      attributes: {
+        reason: params.reason,
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        activeEmbeddedRunsCleared: result.activeEmbeddedRunsCleared,
+        activeToolsCleared: result.activeToolsCleared,
+        activeModelCallsCleared: result.activeModelCallsCleared,
+      },
+    });
+  }
+
+  return result;
 }
 
 export function markDiagnosticRunProgressForTest(params: DiagnosticRunProgressActivityEvent): void {

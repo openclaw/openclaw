@@ -16,6 +16,11 @@ import {
   resetCommandQueueStateForTest,
 } from "../process/command-queue.js";
 import {
+  getDiagnosticSessionActivitySnapshot,
+  markDiagnosticToolStartedForTest,
+  resetDiagnosticRunActivityForTest,
+} from "./diagnostic-run-activity.js";
+import {
   testing as recoveryTesting,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
@@ -30,6 +35,7 @@ describe("stuck session recovery integration", () => {
     embeddedRunTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
+    resetDiagnosticRunActivityForTest();
   });
 
   it("does not reset a blocked lane while a reply operation is still active", async () => {
@@ -48,8 +54,18 @@ describe("stuck session recovery integration", () => {
       sessionId,
       resetTriggered: false,
     });
+    markDiagnosticToolStartedForTest({
+      sessionId,
+      sessionKey,
+      runId: "active-reply-run",
+      toolName: "bash",
+      toolCallId: "tool-active",
+    });
 
     expect(getQueueSize(lane)).toBe(2);
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      "tool_call",
+    );
 
     await recoverStuckDiagnosticSession({
       sessionId,
@@ -60,6 +76,9 @@ describe("stuck session recovery integration", () => {
 
     await expect(Promise.race([queued, delay(100)])).resolves.toBe("blocked");
     expect(getQueueSize(lane)).toBe(2);
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      "tool_call",
+    );
 
     operation.complete();
     expect(resetCommandLane(lane)).toBe(1);
@@ -156,6 +175,40 @@ describe("stuck session recovery integration", () => {
     await expect(queued).resolves.toBe("drained");
     expect(outcome.status).toBe("aborted");
     expect(getQueueSize(lane)).toBe(0);
+  });
+
+  it("clears orphaned diagnostic tool activity when stale queued state is released", async () => {
+    const sessionKey = "agent:main:stale-tool";
+    const sessionId = "stale-tool-session";
+
+    markDiagnosticToolStartedForTest({
+      sessionId,
+      sessionKey,
+      runId: "stale-tool-run",
+      toolName: "bash",
+      toolCallId: "tool-1",
+    });
+
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      "tool_call",
+    );
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "released",
+      action: "release_lane",
+      sessionId,
+      sessionKey,
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).activeWorkKind).toBe(
+      undefined,
+    );
   });
 
   it("does not reset a blocked lane while unregistered lane work is still active", async () => {

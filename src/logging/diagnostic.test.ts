@@ -10,6 +10,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
+  clearDiagnosticSessionActivity,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgressForTest,
   markDiagnosticEmbeddedRunEnded,
@@ -274,6 +275,33 @@ describe("diagnostic session activity aliases", () => {
     expect(
       getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" }).activeWorkKind,
     ).toBeUndefined();
+  });
+
+  it("clears orphaned diagnostic tool activity for a retired session", () => {
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticToolStartedForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      runId: "run-1",
+      toolName: "bash",
+      toolCallId: "tool-1",
+    });
+
+    const result = clearDiagnosticSessionActivity({
+      sessionId: "s1",
+      sessionKey: "main",
+      reason: "test_retired_session",
+      emitEvent: false,
+    });
+
+    expect(result).toEqual({
+      activeEmbeddedRunsCleared: 1,
+      activeToolsCleared: 1,
+      activeModelCallsCleared: 0,
+      activitiesCleared: 1,
+    });
+    expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1" })).toEqual({});
+    expect(getDiagnosticSessionActivitySnapshot({ sessionKey: "main" })).toEqual({});
   });
 });
 
