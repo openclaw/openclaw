@@ -16,6 +16,7 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
@@ -55,7 +56,10 @@ const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-  message: Type.String(),
+  message: Type.Optional(Type.String()),
+  SendMessage: Type.Optional(Type.String()),
+  content: Type.Optional(Type.String()),
+  text: Type.Optional(Type.String()),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
@@ -166,6 +170,22 @@ function isPendingErrorAgentWaitTimeout(result: AgentWaitResult): boolean {
   return (
     result.pendingError === true && typeof result.error === "string" && result.error.trim() !== ""
   );
+}
+
+function normalizeSessionsSendMessageParam(params: Record<string, unknown>): void {
+  if (typeof params.message === "string" && params.message.trim()) {
+    params.message = stripFormattedReasoningMessage(params.message);
+    return;
+  }
+
+  for (const alias of ["SendMessage", "content", "text"] as const) {
+    const value = params[alias];
+    if (typeof value === "string" && value.trim()) {
+      params.message = stripFormattedReasoningMessage(value);
+      console.warn(`[sessions_send] normalized alias "${alias}" to "message"`);
+      return;
+    }
+  }
 }
 
 async function startAgentRun(params: {
@@ -283,6 +303,7 @@ export function createSessionsSendTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callGateway;
+      normalizeSessionsSendMessageParam(params);
       const message = readStringParam(params, "message", { required: true });
       const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =

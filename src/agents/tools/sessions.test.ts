@@ -799,6 +799,40 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("accepts SendMessage as a message body alias before dispatch", async () => {
+    const tool = createMainSessionsSendTool();
+    const schema = tool.parameters as {
+      required?: string[];
+      properties?: Record<string, unknown>;
+    };
+    expect(schema.required ?? []).not.toContain("message");
+    expect(schema.properties).toHaveProperty("SendMessage");
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        return { key: MAIN_AGENT_SESSION_KEY };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-send-message-alias" };
+      }
+      return {};
+    });
+
+    const result = await tool.execute("call-send-message-alias", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      SendMessage: "hello from alias",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("accepted");
+    const agentCall = callGatewayMock.mock.calls.find(
+      ([call]) => requireRecord(call, "gateway call").method === "agent",
+    )?.[0] as { params?: Record<string, unknown> } | undefined;
+    expect(String(agentCall?.params?.message ?? "")).toContain("hello from alias");
+  });
+
   it("returns an error when label resolution fails", async () => {
     callGatewayMock.mockRejectedValueOnce(new Error("No session found with label: nope"));
     const tool = createMainSessionsSendTool();
