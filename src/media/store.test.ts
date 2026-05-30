@@ -162,6 +162,98 @@ describe("media store", () => {
     }
   }
 
+  async function expectNestedNoSpaceWriteCase() {
+    const mockKey = `./store.js?scope=nested-nospace-write-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const nestedNoSpace = new Error("no space left on device") as NodeJS.ErrnoException;
+    nestedNoSpace.code = "ENOSPC";
+    const wrapped = new Error("wrapped write failure") as Error & { cause?: unknown };
+    wrapped.cause = nestedNoSpace;
+
+    vi.doMock("../infra/file-store.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/file-store.js")>();
+      return {
+        ...actual,
+        fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
+          const actualStore = actual.fileStore(options);
+          return {
+            ...actualStore,
+            write: async (...args: Parameters<typeof actualStore.write>) => {
+              const [relativePath] = args;
+              if (relativePath.includes(`nested-nospace${path.sep}`)) {
+                throw wrapped;
+              }
+              return await actualStore.write(...args);
+            },
+          };
+        },
+      };
+    });
+
+    try {
+      const storeWithMock = await importFreshModule<typeof import("./store.js")>(
+        import.meta.url,
+        mockKey,
+      );
+      await withTempStore(async () => {
+        let saveError: unknown;
+        try {
+          await storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "nested-nospace");
+        } catch (error) {
+          saveError = error;
+        }
+        expect(saveError).toBe(nestedNoSpace);
+      });
+    } finally {
+      vi.doUnmock("../infra/file-store.js");
+    }
+  }
+
+  async function expectCyclicErrorCauseWriteCase() {
+    const mockKey = `./store.js?scope=cyclic-cause-write-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const cyclicRoot = new Error("cyclic write failure") as Error & { cause?: unknown };
+    const cyclicCause = new Error("cyclic nested failure") as Error & { cause?: unknown };
+    cyclicRoot.cause = cyclicCause;
+    cyclicCause.cause = cyclicRoot;
+
+    vi.doMock("../infra/file-store.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../infra/file-store.js")>();
+      return {
+        ...actual,
+        fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
+          const actualStore = actual.fileStore(options);
+          return {
+            ...actualStore,
+            write: async (...args: Parameters<typeof actualStore.write>) => {
+              const [relativePath] = args;
+              if (relativePath.includes(`cyclic-cause${path.sep}`)) {
+                throw cyclicRoot;
+              }
+              return await actualStore.write(...args);
+            },
+          };
+        },
+      };
+    });
+
+    try {
+      const storeWithMock = await importFreshModule<typeof import("./store.js")>(
+        import.meta.url,
+        mockKey,
+      );
+      await withTempStore(async () => {
+        let saveError: unknown;
+        try {
+          await storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "cyclic-cause");
+        } catch (error) {
+          saveError = error;
+        }
+        expect(saveError).toBe(cyclicRoot);
+      });
+    } finally {
+      vi.doUnmock("../infra/file-store.js");
+    }
+  }
+
   async function expectSavedOriginalFilenameCase(params: {
     originalFilename?: string;
     expectedIdPattern: RegExp;
@@ -404,6 +496,18 @@ describe("media store", () => {
       name: "does not leave final media artifacts when buffer writes fail",
       run: async () => {
         await expectFailedBufferWriteCase();
+      },
+    },
+    {
+      name: "preserves nested ENOSPC write errors",
+      run: async () => {
+        await expectNestedNoSpaceWriteCase();
+      },
+    },
+    {
+      name: "does not overflow the stack on cyclic write error causes",
+      run: async () => {
+        await expectCyclicErrorCauseWriteCase();
       },
     },
     {

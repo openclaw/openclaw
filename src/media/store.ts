@@ -154,13 +154,27 @@ export async function ensureMediaDir() {
 }
 
 function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | undefined {
-  if (!(err instanceof Error)) {
-    return undefined;
+  const seen = new Set<Error>();
+  let current = err;
+
+  for (let depth = 0; current instanceof Error && depth < 64; depth += 1) {
+    if (seen.has(current)) {
+      return undefined;
+    }
+    seen.add(current);
+
+    if ("code" in current && current.code === code) {
+      return current as NodeJS.ErrnoException;
+    }
+
+    try {
+      current = current.cause;
+    } catch {
+      return undefined;
+    }
   }
-  if ("code" in err && err.code === code) {
-    return err as NodeJS.ErrnoException;
-  }
-  return findErrorWithCode(err.cause, code);
+
+  return undefined;
 }
 
 function isMissingPathError(err: unknown): boolean {
