@@ -305,4 +305,57 @@ describe("renderApp assistant avatar routing", () => {
 
     expect(container.querySelector(".shell")).toBeInstanceOf(HTMLElement);
   });
+
+  it("filters sidebar recent sessions to the active chat agent", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "agent:work:main",
+          assistantAgentId: "work",
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "work", name: "Work" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:work:dashboard:new",
+                kind: "direct",
+                label: "Work new",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:work:dashboard:older",
+                kind: "direct",
+                label: "Work older",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Work new", "Work older"]);
+  });
 });

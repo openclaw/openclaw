@@ -156,6 +156,7 @@ import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
   isSubagentSessionKey,
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
@@ -252,7 +253,27 @@ function isSidebarSessionBusy(state: AppViewState) {
   );
 }
 
+function resolveSidebarSelectedAgentId(state: AppViewState): string {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  return normalizeAgentId(
+    parsed?.agentId ?? state.assistantAgentId ?? state.agentsList?.defaultId ?? "main",
+  );
+}
+
+function isSidebarSessionForSelectedAgent(
+  state: AppViewState,
+  row: GatewaySessionRow,
+  selectedAgentId: string,
+): boolean {
+  const parsed = parseAgentSessionKey(row.key);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId) === selectedAgentId;
+  }
+  return selectedAgentId === normalizeAgentId(state.agentsList?.defaultId ?? "main");
+}
+
 function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
+  const selectedAgentId = resolveSidebarSelectedAgentId(state);
   return (state.sessionsResult?.sessions ?? [])
     .filter(
       (row) =>
@@ -262,7 +283,8 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
         row.kind !== "cron" &&
         !isCronSessionKey(row.key) &&
         !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy,
+        !row.spawnedBy &&
+        isSidebarSessionForSelectedAgent(state, row, selectedAgentId),
     )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 5);
