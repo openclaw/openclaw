@@ -1,3 +1,4 @@
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -20,7 +21,6 @@ import {
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";

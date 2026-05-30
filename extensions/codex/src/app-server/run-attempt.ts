@@ -1340,9 +1340,8 @@ export async function runCodexAppServerAttempt(
       (!isNativeResponseStreamDelta && correlation.matchesActiveTurn !== false) ||
       nativeResponseStreamDeltaMatchesActiveTurn;
     if (notificationMatchesActiveTurn) {
-      // If a future Codex app-server exposes raw response deltas, treat them as
-      // activity only when scoped to this turn or attributable to a single lease.
-      // Today the durable app-server raw-event surface is rawResponseItem/completed.
+      // If Codex app-server exposes raw response deltas, treat them as activity
+      // only when scoped to this turn or attributable to a single lease.
       turnWatches.noteNotificationReceived(
         notification.method,
         isNativeResponseStreamDelta

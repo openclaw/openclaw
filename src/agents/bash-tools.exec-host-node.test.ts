@@ -1909,6 +1909,27 @@ describe("executeNodeHostCommand", () => {
       invokeTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
       runTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
     });
+
+    callGatewayToolMock.mockClear();
+
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      timeoutSec: Number.MAX_VALUE,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expectSystemRunInvoke({
+      invokeTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+      runTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+    });
   });
 
   it("forwards timeout zero to node system.run and keeps the invoke wait bounded", async () => {

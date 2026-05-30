@@ -232,7 +232,10 @@ export function resolveExpiresAtMsFromEpochSeconds(
   value: unknown,
   opts: { bufferMs?: number } = {},
 ): number | undefined {
-  const epochMs = positiveSecondsToSafeMilliseconds(value);
+  const epochMs =
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.trunc(value) * 1000
+      : positiveSecondsToSafeMilliseconds(value);
   if (epochMs === undefined) {
     return undefined;
   }

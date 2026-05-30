@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
+import { normalizeLowercaseStringOrEmpty } from "./string.js";
 
 const MIN_NOTE_COLUMNS = 80;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;

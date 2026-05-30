@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -40,7 +41,6 @@ import {
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
-import { isRich, theme } from "../terminal/theme.js";
 import {
   buildTaskSystemAuditFindings,
   type TaskSystemAuditCode,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { addTimerTimeoutGraceMs, MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -58,9 +58,9 @@ function expectAgentWaitRequest(
 
   const paramTimeoutMs = expectNumber(request.params?.timeoutMs, `${runId} param timeoutMs`);
   const requestTimeoutMs = expectNumber(request.timeoutMs, `${runId} request timeoutMs`);
-  expect(requestTimeoutMs).toBe(Math.min(paramTimeoutMs + 2_000, MAX_TIMER_TIMEOUT_MS));
+  expect(requestTimeoutMs).toBe(addTimerTimeoutGraceMs(paramTimeoutMs, 2_000));
   expect(requestTimeoutMs).toBeLessThanOrEqual(
-    Math.min(maxParamTimeoutMs + 2_000, MAX_TIMER_TIMEOUT_MS),
+    addTimerTimeoutGraceMs(maxParamTimeoutMs, 2_000) ?? MAX_TIMER_TIMEOUT_MS,
   );
   expect(paramTimeoutMs).toBeGreaterThanOrEqual(1);
   expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
@@ -276,7 +276,7 @@ describe("waitForAgentRun", () => {
 
     const result = await waitForAgentRun({
       runId: "run-huge",
-      timeoutMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_VALUE,
     });
 
     expect(result).toEqual({ status: "ok" });

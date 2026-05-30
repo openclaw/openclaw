@@ -1,4 +1,3 @@
-import { resolveIntegerOption } from "../shared/number-coercion.js";
 import {
   chunkMarkdownIR,
   sliceMarkdownIR,
@@ -23,6 +22,13 @@ type RenderResolver<TRendered> = Pick<
   RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
   "measureRendered" | "renderChunk"
 >;
+
+function resolveIntegerOption(value: number, fallback: number, opts: { min: number }): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(opts.min, Math.trunc(value));
+}
 
 export function renderMarkdownIRChunksWithinLimit<TRendered>(
   options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,

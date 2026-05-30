@@ -1,6 +1,6 @@
 import MarkdownIt from "markdown-it";
-import { chunkText } from "../auto-reply/chunk.js";
-import type { MarkdownTableMode } from "../config/types.base.js";
+import { chunkText } from "./chunk-text.js";
+import type { MarkdownTableMode } from "./types.js";
 
 type ListState = {
   type: "bullet" | "ordered";

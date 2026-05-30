@@ -1,10 +1,10 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatGatewayCommandFailure } from "./error-format.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";

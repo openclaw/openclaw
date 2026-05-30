@@ -15,7 +15,12 @@ import {
   listGoogleMeetCalendarEvents,
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
-import type { GoogleMeetConfig, GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
+import {
+  resolveGoogleMeetGatewayOperationTimeoutMs,
+  type GoogleMeetConfig,
+  type GoogleMeetModeInput,
+  type GoogleMeetTransport,
+} from "./config.js";
 import { hasCreateSpaceConfigInput, resolveCreateSpaceConfig } from "./create.js";
 import {
   buildGoogleMeetPreflightReport,
@@ -59,6 +64,7 @@ type OAuthLoginOptions = {
 
 export const testing = {
   parsePositiveNumber,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
   resolveGoogleMeetGatewayTimeoutMs,
   resolveGoogleMeetOAuthCallbackTimeoutMs,
 };
@@ -329,14 +335,6 @@ async function callGoogleMeetGateway(params: {
     }
     throw err;
   }
-}
-
-function resolveGoogleMeetGatewayOperationTimeoutMs(config: GoogleMeetConfig): number {
-  return Math.max(
-    60_000,
-    config.chrome.joinTimeoutMs + 30_000,
-    config.voiceCall.requestTimeoutMs + 10_000,
-  );
 }
 
 function formatDuration(value: number | undefined): string {

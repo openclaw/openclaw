@@ -1,8 +1,8 @@
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
 import { formatPluginLine } from "./plugins-list-format.js";
