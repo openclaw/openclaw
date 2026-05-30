@@ -4927,6 +4927,55 @@ describe("runAgentTurnWithFallback", () => {
     expect(failMock).not.toHaveBeenCalled();
   });
 
+  it("clears auto fallback selection when the reply operation was aborted for restart", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    Object.defineProperty(replyOperation, "result", {
+      value: { kind: "aborted", code: "aborted_for_restart" } as const,
+      configurable: true,
+    });
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error("Reply operation aborted for restart"), { name: "AbortError" }),
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.5";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+      providerOverride: "deepseek",
+      modelOverride: "deepseek-v4-flash",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.5",
+      fallbackNoticeSelectedModel: "openai/gpt-5.5",
+      fallbackNoticeActiveModel: "deepseek/deepseek-v4-flash",
+      fallbackNoticeReason: "unknown",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      replyOperation,
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+    });
+
+    expect(result.kind).toBe("final");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(sessionEntry.modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+    expect(sessionStore.main.providerOverride).toBeUndefined();
+  });
+
   it("uses compact generic copy for raw external chat errors when verbose is off", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
@@ -6378,6 +6427,112 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     // The user's /models selection must survive the fallback.
+    expect(sessionEntry.providerOverride).toBe("anthropic");
+    expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");
+    expect(sessionEntry.modelOverrideSource).toBe("user");
+  });
+
+  it("clears auto fallback selection after an ephemeral client-closed fallback succeeds", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("deepseek", "deepseek-v4-flash"),
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "codex app-server client closed before turn completed",
+            reason: "unknown",
+          },
+        ],
+      }),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "fallback ok" }],
+      meta: {},
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.5";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+      providerOverride: "deepseek",
+      modelOverride: "deepseek-v4-flash",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "gpt-5.5",
+      fallbackNoticeSelectedModel: "openai/gpt-5.5",
+      fallbackNoticeActiveModel: "deepseek/deepseek-v4-flash",
+      fallbackNoticeReason: "unknown",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.modelOverrideFallbackOriginProvider).toBeUndefined();
+    expect(sessionEntry.modelOverrideFallbackOriginModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(sessionEntry.fallbackNoticeReason).toBeUndefined();
+  });
+
+  it("keeps user-selected model pins after an ephemeral client-closed fallback succeeds", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("deepseek", "deepseek-v4-flash"),
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "codex app-server client closed before turn completed",
+            reason: "unknown",
+          },
+        ],
+      }),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "fallback ok" }],
+      meta: {},
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.5";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      modelOverrideSource: "user",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+    });
+
+    expect(result.kind).toBe("success");
     expect(sessionEntry.providerOverride).toBe("anthropic");
     expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");
     expect(sessionEntry.modelOverrideSource).toBe("user");
