@@ -157,6 +157,38 @@ type AssertAllPluginHookNamesListed = MissingPluginHookNames extends never ? tru
 const assertAllPluginHookNamesListed: AssertAllPluginHookNamesListed = true;
 void assertAllPluginHookNamesListed;
 
+export type DeprecatedPluginHookName = "subagent_spawning" | "deactivate";
+
+export type PluginHookDeprecation = {
+  replacement: string;
+  reason: string;
+  removeAfter?: string;
+};
+
+export const DEPRECATED_PLUGIN_HOOKS = {
+  subagent_spawning: {
+    replacement: "`subagent_spawned` for observation; core session bindings for routing",
+    reason:
+      "Core prepares thread-bound subagent bindings through channel session-binding adapters before `subagent_spawned` fires.",
+    removeAfter: "2026-08-30",
+  },
+  deactivate: {
+    replacement: "`gateway_stop`",
+    reason: "`deactivate` is a legacy cleanup hook alias for `gateway_stop`.",
+    removeAfter: "2026-08-16",
+  },
+} as const satisfies Record<DeprecatedPluginHookName, PluginHookDeprecation>;
+
+export const DEPRECATED_PLUGIN_HOOK_NAMES = Object.keys(
+  DEPRECATED_PLUGIN_HOOKS,
+) as DeprecatedPluginHookName[];
+
+const deprecatedPluginHookNameSet = new Set<PluginHookName>(DEPRECATED_PLUGIN_HOOK_NAMES);
+
+export const isDeprecatedPluginHookName = (
+  hookName: PluginHookName,
+): hookName is DeprecatedPluginHookName => deprecatedPluginHookNameSet.has(hookName);
+
 const pluginHookNameSet = new Set<PluginHookName>(PLUGIN_HOOK_NAMES);
 
 export const isPluginHookName = (hookName: unknown): hookName is PluginHookName =>
@@ -624,6 +656,11 @@ type PluginHookSubagentSpawnBase = {
  */
 export type PluginHookSubagentSpawningEvent = PluginHookSubagentSpawnBase;
 
+/**
+ * @deprecated Core prepares thread-bound subagent bindings through channel
+ * session-binding adapters before `subagent_spawned` fires. Returning routing
+ * data from `subagent_spawning` is retained only for older runtimes.
+ */
 export type PluginHookSubagentSpawningResult =
   | {
       status: "ok";
