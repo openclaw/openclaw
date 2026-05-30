@@ -1295,6 +1295,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
+      reason: "visible_reply_missing",
       error: "completion agent did not produce a visible reply",
     });
     expect(sendMessage).not.toHaveBeenCalled();
@@ -2075,6 +2076,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "none",
+      reason: "requester_abandoned",
       error: "requester session abandoned after timeout",
     });
     expect(result.phases).toEqual([
@@ -2082,6 +2084,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         phase: "direct-primary",
         delivered: false,
         path: "none",
+        reason: "requester_abandoned",
         error: "requester session abandoned after timeout",
       }),
       expect.objectContaining({
@@ -3267,6 +3270,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
+      reason: "generated_media_missing",
       error: "completion agent did not deliver generated media",
     });
     expectGatewayAgentParams(callGateway, {
@@ -4175,6 +4179,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
+      reason: "message_tool_delivery_missing",
       error: "completion agent did not use the message tool for message-tool-only delivery",
     });
   });

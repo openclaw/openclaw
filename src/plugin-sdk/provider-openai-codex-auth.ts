@@ -1,4 +1,4 @@
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { resolveExpiresAtMsFromEpochSeconds } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const OPENAI_CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
@@ -69,14 +69,7 @@ export function resolveOpenAICodexAuthIdentity(params: {
 export function resolveOpenAICodexAccessTokenExpiry(access: string): number | undefined {
   const payload = decodeOpenAICodexJwtPayload(access);
   const exp = payload?.exp;
-  if (typeof exp === "number" && Number.isFinite(exp) && exp > 0) {
-    return Math.trunc(exp) * 1000;
-  }
-  if (typeof exp === "string") {
-    const seconds = parseStrictPositiveInteger(exp);
-    return seconds === undefined ? undefined : seconds * 1000;
-  }
-  return undefined;
+  return resolveExpiresAtMsFromEpochSeconds(exp);
 }
 
 export function buildOpenAICodexCredentialExtra(

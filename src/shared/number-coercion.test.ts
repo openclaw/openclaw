@@ -3,6 +3,7 @@ import {
   asFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
+  addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
   clampTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,
@@ -100,6 +101,12 @@ describe("number-coercion", () => {
     expect(resolveTimerTimeoutMs(Number.NaN, 0, 0)).toBe(0);
     expect(resolveTimerTimeoutMs(Number.NaN, Number.POSITIVE_INFINITY, 25)).toBe(25);
     expect(resolveTimerTimeoutMs(Number.MAX_SAFE_INTEGER, 5000)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(addTimerTimeoutGraceMs(10_000)).toBe(15_000);
+    expect(addTimerTimeoutGraceMs(10_000, 500)).toBe(10_500);
+    expect(addTimerTimeoutGraceMs(MAX_TIMER_TIMEOUT_MS - 100, 500)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(addTimerTimeoutGraceMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(addTimerTimeoutGraceMs(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(addTimerTimeoutGraceMs(Number.NaN)).toBeUndefined();
   });
 
   test("seconds helpers reject unsafe millisecond values", () => {
@@ -125,7 +132,9 @@ describe("number-coercion", () => {
       }),
     ).toBe(31_000);
     expect(resolveExpiresAtMsFromDurationSeconds("1e309", { nowMs: 1_000 })).toBeUndefined();
+    expect(resolveExpiresAtMsFromEpochSeconds(1234.9)).toBe(1_234_000);
     expect(resolveExpiresAtMsFromEpochSeconds("3600", { bufferMs: 300 })).toBe(3_599_700);
+    expect(resolveExpiresAtMsFromEpochSeconds(Number.MAX_SAFE_INTEGER)).toBeUndefined();
     expect(resolveExpiresAtMsFromEpochSeconds("1e309")).toBeUndefined();
   });
 

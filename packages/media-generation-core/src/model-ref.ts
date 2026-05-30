@@ -1,6 +1,6 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "./string.js";
 
-type ParsedGenerationModelRef = {
+export type ParsedGenerationModelRef = {
   provider: string;
   model: string;
 };
@@ -16,8 +16,5 @@ export function parseGenerationModelRef(raw: string | undefined): ParsedGenerati
   }
   const provider = normalizeOptionalString(trimmed.slice(0, slashIndex));
   const model = normalizeOptionalString(trimmed.slice(slashIndex + 1));
-  if (!provider || !model) {
-    return null;
-  }
-  return { provider, model };
+  return provider && model ? { provider, model } : null;
 }

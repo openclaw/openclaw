@@ -6,6 +6,7 @@ export {
   parseFiniteNumber,
   clampTimerTimeoutMs,
   clampPositiveTimerTimeoutMs,
+  addTimerTimeoutGraceMs,
   resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
   finiteSecondsToTimerSafeMilliseconds,

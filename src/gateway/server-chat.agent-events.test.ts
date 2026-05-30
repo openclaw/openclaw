@@ -2666,15 +2666,20 @@ describe("agent event handler", () => {
       state?: string;
       errorKind?: string;
       errorMessage?: string;
+      message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
     };
     expect(payload.state).toBe("error");
     expect(payload.errorKind).toBe("rate_limit");
     expect(payload.errorMessage).toContain("Too many requests");
+    expect(payload.message?.role).toBe("assistant");
+    expect(payload.message?.content?.[0]?.text).toContain("Too many requests");
 
     const nodePayload = sessionChatCalls(nodeSendToSession).at(-1)?.[2] as {
       errorKind?: string;
+      message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
     };
     expect(nodePayload.errorKind).toBe("rate_limit");
+    expect(nodePayload.message?.content?.[0]?.text).toContain("Too many requests");
   });
 
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {

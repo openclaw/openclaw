@@ -1,23 +1,27 @@
-import type {
-  UnifiedModelCatalogEntry,
-  UnifiedModelCatalogKind,
-  UnifiedModelCatalogSource,
-} from "../model-catalog/types.js";
-import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
+import { uniqueTrimmedStrings } from "./string.js";
 
-export type MediaGenerationCatalogKind = Extract<
-  UnifiedModelCatalogKind,
-  "image_generation" | "video_generation" | "music_generation"
->;
+export type MediaGenerationCatalogKind =
+  | "image_generation"
+  | "video_generation"
+  | "music_generation";
 
-export type MediaGenerationCatalogSource = Extract<
-  UnifiedModelCatalogSource,
-  "static" | "live" | "cache" | "configured"
->;
+export type MediaGenerationCatalogSource = "static" | "live" | "cache" | "configured";
 
-export type MediaGenerationCatalogEntry<TCapabilities> = UnifiedModelCatalogEntry<TCapabilities> & {
+export type MediaGenerationCatalogEntry<TCapabilities = unknown> = {
   kind: MediaGenerationCatalogKind;
+  provider: string;
+  model: string;
+  label?: string;
   source: MediaGenerationCatalogSource;
+  default?: boolean;
+  configured?: boolean;
+  capabilities?: TCapabilities;
+  modes?: readonly string[];
+  authEnvVars?: readonly string[];
+  docsPath?: string;
+  fetchedAt?: number;
+  expiresAt?: number;
+  warnings?: readonly string[];
 };
 
 export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
@@ -30,10 +34,7 @@ export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
 };
 
 function uniqueModels(provider: { defaultModel?: string; models?: readonly string[] }): string[] {
-  return normalizeUniqueSingleOrTrimmedStringList([
-    provider.defaultModel,
-    ...(provider.models ?? []),
-  ]);
+  return uniqueTrimmedStrings([provider.defaultModel, ...(provider.models ?? [])]);
 }
 
 export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
@@ -41,8 +42,7 @@ export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
   provider: MediaGenerationCatalogProvider<TCapabilities>;
   modes?: readonly string[];
 }): Array<MediaGenerationCatalogEntry<TCapabilities>> {
-  const models = uniqueModels(params.provider);
-  return models.map((model) => {
+  return uniqueModels(params.provider).map((model) => {
     const entry: MediaGenerationCatalogEntry<TCapabilities> = {
       kind: params.kind,
       provider: params.provider.id,

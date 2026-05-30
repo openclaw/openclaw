@@ -30,6 +30,8 @@ import type { AgentMessage } from "../runtime/index.js";
 import { SessionManager } from "../sessions/index.js";
 import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
 
+const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON = "codex app-server owns automatic compaction";
+
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SettingsManagerLike = {
   getCompactionReserveTokens: () => number;
@@ -173,6 +175,16 @@ function isUnsupportedNativeHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
   return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
+}
+
+function isIntentionalNativeAutoCompactionSkip(
+  result: EmbeddedAgentCompactResult | undefined,
+): boolean {
+  return (
+    result?.ok === true &&
+    !result.compacted &&
+    result.reason === CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON
+  );
 }
 
 function readAgentIdFromSessionKey(sessionKey: string): string | undefined {
@@ -400,6 +412,13 @@ async function compactNativeHarnessCliTranscript(params: {
   }
 
   if (!result?.compacted) {
+    if (isIntentionalNativeAutoCompactionSkip(result)) {
+      return {
+        compacted: false,
+        fallbackToContextEngine: true,
+        failureReason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
+      };
+    }
     const fallbackToContextEngine =
       isUnsupportedNativeHarnessCompaction(result) ||
       isRecoverableNativeHarnessBindingFailure(result);

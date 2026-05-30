@@ -168,7 +168,7 @@ export type WorkboardClaim = {
 };
 
 export type WorkboardDiagnosticAction = {
-  kind: "claim" | "unblock" | "reassign" | "add_proof" | "open_session";
+  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
   label: string;
 };
 
@@ -200,6 +200,8 @@ export type WorkboardWorkspace = {
 
 export type WorkboardAutomation = {
   tenant?: string;
+  boardId?: string;
+  createdByCardId?: string;
   idempotencyKey?: string;
   skills?: string[];
   workspace?: WorkboardWorkspace;

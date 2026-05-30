@@ -149,9 +149,6 @@ importers:
       linkedom:
         specifier: 0.18.12
         version: 0.18.12
-      markdown-it:
-        specifier: 14.2.0
-        version: 14.2.0
       minimatch:
         specifier: 10.2.5
         version: 10.2.5
@@ -798,6 +795,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/gmi:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/google:
     dependencies:
       '@google/genai':
@@ -1176,6 +1179,12 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/novita:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
 
   extensions/nvidia:
     devDependencies:
@@ -1811,6 +1820,17 @@ importers:
       '@openclaw/llm-core':
         specifier: workspace:*
         version: link:../llm-core
+
+  packages/markdown-core:
+    dependencies:
+      markdown-it:
+        specifier: 14.2.0
+        version: 14.2.0
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
+
+  packages/media-generation-core: {}
 
   packages/memory-host-sdk: {}
 

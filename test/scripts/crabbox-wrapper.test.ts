@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -412,7 +419,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("provider=aws");
   });
 
-  it("keeps the configured provider for Windows runs when Azure is unavailable", () => {
+  it("keeps the AWS provider env for Windows runs when Azure is unavailable", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
       ["run", "--target", "windows", "--", "echo ok"],

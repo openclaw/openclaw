@@ -1004,7 +1004,7 @@ function refreshSessionEntryFromStore(params: {
     return fallbackEntry;
   }
   try {
-    const latestStore = loadSessionStore(storePath, { skipCache: true });
+    const latestStore = loadSessionStore(storePath, { skipCache: true, clone: false });
     const latestEntry = latestStore?.[sessionKey];
     if (!latestEntry) {
       return fallbackEntry;

@@ -7,6 +7,7 @@ import {
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
+  resolveCodexGatewayTimeoutWithGraceMs,
   resolveCodexStartupTimeoutMs,
   resolveCodexTurnAssistantCompletionIdleTimeoutMs,
   resolveCodexTurnCompletionIdleTimeoutMs,
@@ -106,6 +107,17 @@ describe("Codex app-server attempt timeouts", () => {
     expect(resolveCodexTurnTerminalIdleTimeoutMs(3.7)).toBe(3);
     expect(resolveCodexTurnTerminalIdleTimeoutMs(-1)).toBe(1);
     expect(resolveCodexTurnTerminalIdleTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+  });
+
+  it("caps gateway timeout grace", () => {
+    expect(resolveCodexGatewayTimeoutWithGraceMs(120_000)).toBe(130_000);
+    expect(resolveCodexGatewayTimeoutWithGraceMs(120_000, 500)).toBe(120_500);
+    expect(resolveCodexGatewayTimeoutWithGraceMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    expect(resolveCodexGatewayTimeoutWithGraceMs(MAX_TIMER_TIMEOUT_MS - 100, 500)).toBe(
       MAX_TIMER_TIMEOUT_MS,
     );
   });

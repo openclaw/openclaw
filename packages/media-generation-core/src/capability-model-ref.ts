@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "./string.js";
 
 export type CapabilityModelProviderCandidate = {
   id: string;
@@ -19,10 +19,7 @@ function normalizeProviderForMatch(
   normalizeProviderId: ProviderIdNormalizer | undefined,
 ): string | undefined {
   const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalizeProviderId ? normalizeProviderId(normalized) : normalized;
+  return normalized && normalizeProviderId ? normalizeProviderId(normalized) : normalized;
 }
 
 export function findCapabilityProviderById<T extends CapabilityModelProviderCandidate>(params: {
@@ -36,11 +33,12 @@ export function findCapabilityProviderById<T extends CapabilityModelProviderCand
   }
   return params.providers.find((provider) => {
     const providerId = normalizeProviderForMatch(provider.id, params.normalizeProviderId);
-    if (providerId === selectedProvider) {
-      return true;
-    }
-    return (provider.aliases ?? []).some(
-      (alias) => normalizeProviderForMatch(alias, params.normalizeProviderId) === selectedProvider,
+    return (
+      providerId === selectedProvider ||
+      (provider.aliases ?? []).some(
+        (alias) =>
+          normalizeProviderForMatch(alias, params.normalizeProviderId) === selectedProvider,
+      )
     );
   });
 }

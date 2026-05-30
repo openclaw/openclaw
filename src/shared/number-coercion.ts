@@ -126,6 +126,16 @@ export function resolveTimerTimeoutMs(valueMs: unknown, fallbackMs: number, minM
   return Math.min(Math.max(Math.floor(value), min), MAX_TIMER_TIMEOUT_MS);
 }
 
+export function addTimerTimeoutGraceMs(timeoutMs: unknown, graceMs = 5_000): number | undefined {
+  const timeout = asFiniteNumber(timeoutMs);
+  const grace = asFiniteNumber(graceMs);
+  if (timeout === undefined || grace === undefined) {
+    return undefined;
+  }
+  const withGrace = timeout + grace;
+  return Number.isFinite(withGrace) ? clampTimerTimeoutMs(withGrace) : MAX_TIMER_TIMEOUT_MS;
+}
+
 export function finiteSecondsToTimerSafeMilliseconds(
   value: unknown,
   opts: { floorSeconds?: boolean } = {},
@@ -222,7 +232,10 @@ export function resolveExpiresAtMsFromEpochSeconds(
   value: unknown,
   opts: { bufferMs?: number } = {},
 ): number | undefined {
-  const epochMs = positiveSecondsToSafeMilliseconds(value);
+  const epochMs =
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.trunc(value) * 1000
+      : positiveSecondsToSafeMilliseconds(value);
   if (epochMs === undefined) {
     return undefined;
   }

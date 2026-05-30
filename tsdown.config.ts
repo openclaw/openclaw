@@ -384,6 +384,30 @@ function buildNetPolicyDistEntries(): Record<string, string> {
   };
 }
 
+function buildMediaGenerationCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-generation-core/src/index.ts",
+    "capability-model-ref": "packages/media-generation-core/src/capability-model-ref.ts",
+    catalog: "packages/media-generation-core/src/catalog.ts",
+    "model-ref": "packages/media-generation-core/src/model-ref.ts",
+    normalization: "packages/media-generation-core/src/normalization.ts",
+  };
+}
+
+function buildMarkdownCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/markdown-core/src/index.ts",
+    "code-spans": "packages/markdown-core/src/code-spans.ts",
+    fences: "packages/markdown-core/src/fences.ts",
+    frontmatter: "packages/markdown-core/src/frontmatter.ts",
+    ir: "packages/markdown-core/src/ir.ts",
+    render: "packages/markdown-core/src/render.ts",
+    "render-aware-chunking": "packages/markdown-core/src/render-aware-chunking.ts",
+    tables: "packages/markdown-core/src/tables.ts",
+    types: "packages/markdown-core/src/types.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -454,6 +478,12 @@ function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
   return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
 }
 
+function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
+  return (
+    id === "markdown-it" || id.startsWith("markdown-it/") || id === "yaml" || id.startsWith("yaml/")
+  );
+}
+
 const coreDistEntries = buildCoreDistEntries();
 const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
 const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
@@ -521,6 +551,21 @@ export default defineConfig([
     outDir: "packages/net-policy/dist",
     deps: {
       neverBundle: shouldExternalizeNetPolicyDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaGenerationCoreDistEntries(),
+    outDir: "packages/media-generation-core/dist",
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMarkdownCoreDistEntries(),
+    outDir: "packages/markdown-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeMarkdownCoreDependency,
     },
   }),
   nodeWorkspacePackageBuildConfig({
