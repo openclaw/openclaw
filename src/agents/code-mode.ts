@@ -553,7 +553,7 @@ async function runBridgeRequest(params: {
                 `namespace tool is not visible in the run catalog: ${request.toolName}`,
               );
             }
-            const called = await params.runtime.call(entry.id, request.input, {
+            const called = await params.runtime.callExactId(entry.id, request.input, {
               parentToolCallId: params.parentToolCallId,
               signal: params.signal,
               onUpdate: params.onUpdate,
