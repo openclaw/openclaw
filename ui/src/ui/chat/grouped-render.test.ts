@@ -2222,7 +2222,7 @@ describe("grouped chat rendering", () => {
         __openclaw: { id: "msg-truncated-1", seq: 1 },
       },
       {
-        sessionKey: "main",
+        sessionKey: "global",
         agentId: "work",
         onOpenSidebar,
       },
@@ -2235,7 +2235,7 @@ describe("grouped chat rendering", () => {
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
     expect(sidebar.kind).toBe("markdown");
     expect(sidebar.fullMessageRequest).toEqual({
-      sessionKey: "main",
+      sessionKey: "global",
       agentId: "work",
       messageId: "msg-truncated-1",
       kind: "assistant_message",
