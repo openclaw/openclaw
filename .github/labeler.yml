@@ -313,6 +313,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
+"extensions: capability-manifest-verifier":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/capability-manifest-verifier/**"
 "extensions: tokenjuice":
   - changed-files:
       - any-glob-to-any-file:
