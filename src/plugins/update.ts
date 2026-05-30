@@ -150,6 +150,18 @@ type InstallIntegrityDrift = {
   };
 };
 
+function wouldDowngradeInstalledVersion(params: {
+  currentVersion: string;
+  targetVersion: string;
+}): boolean {
+  const current = parseComparableSemver(params.currentVersion);
+  const target = parseComparableSemver(params.targetVersion);
+  if (!current || !target) {
+    return false;
+  }
+  return compareComparableSemver(target, current) < 0;
+}
+
 function shouldSkipUnchangedNpmInstall(params: {
   currentVersion?: string;
   record: {
@@ -1251,6 +1263,22 @@ export async function updateNpmInstalledPlugins(params: {
             currentVersion,
             nextVersion: metadataResult.metadata.version,
             message: `${pluginId} is up to date (${currentVersion}).`,
+          });
+          continue;
+        }
+        if (
+          metadataResult.metadata.version &&
+          wouldDowngradeInstalledVersion({
+            currentVersion,
+            targetVersion: metadataResult.metadata.version,
+          })
+        ) {
+          outcomes.push({
+            pluginId,
+            status: "unchanged",
+            currentVersion,
+            nextVersion: metadataResult.metadata.version,
+            message: `${pluginId}: installed version ${currentVersion} is newer than update target ${metadataResult.metadata.version}; skipping (use an explicit spec to downgrade).`,
           });
           continue;
         }
