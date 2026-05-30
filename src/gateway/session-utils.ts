@@ -83,8 +83,12 @@ import {
 } from "../shared/string-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
-import type { ModelCostConfig } from "../utils/usage-format.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import type { ExplicitZeroCostSource, ModelCostConfig } from "../utils/usage-format.js";
+import {
+  resolveExplicitZeroCostSource,
+  resolveModelCostConfig,
+  resolveUsageCostUsd,
+} from "../utils/usage-format.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -259,6 +263,19 @@ function resolveNonNegativeNumber(value: number | null | undefined): number | un
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function resolveSessionExplicitZeroCostSource(params: {
+  provider?: string;
+  entryEstimatedCostUsd?: number | null;
+  explicitCostUsd?: number;
+}): ExplicitZeroCostSource | undefined {
+  // The stale zero bug came from persisted session rows. Transcript/runtime
+  // costs are explicit observations, and configured free pricing should stay 0.
+  if (params.explicitCostUsd !== undefined || params.entryEstimatedCostUsd !== 0) {
+    return undefined;
+  }
+  return resolveExplicitZeroCostSource({ provider: params.provider });
+}
+
 type SessionCompactionCheckpointEntry = NonNullable<SessionEntry["compactionCheckpoints"]>[number];
 
 function isProjectableCompactionCheckpoint(
@@ -362,9 +379,6 @@ function resolveEstimatedSessionCostUsd(params: {
   const explicitCostUsd = resolveNonNegativeNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );
-  if (explicitCostUsd !== undefined) {
-    return explicitCostUsd;
-  }
   const input = resolvePositiveNumber(params.entry?.inputTokens);
   const output = resolvePositiveNumber(params.entry?.outputTokens);
   const cacheRead = resolvePositiveNumber(params.entry?.cacheRead);
@@ -375,7 +389,7 @@ function resolveEstimatedSessionCostUsd(params: {
     cacheRead === undefined &&
     cacheWrite === undefined
   ) {
-    return undefined;
+    return explicitCostUsd;
   }
   const cost = resolveModelCostConfigCached(
     params.provider,
@@ -384,18 +398,25 @@ function resolveEstimatedSessionCostUsd(params: {
     params.rowContext,
   );
   if (!cost) {
-    return undefined;
+    return explicitCostUsd;
   }
-  const estimated = estimateUsageCost({
-    usage: {
-      ...(input !== undefined ? { input } : {}),
-      ...(output !== undefined ? { output } : {}),
-      ...(cacheRead !== undefined ? { cacheRead } : {}),
-      ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-    },
-    cost,
-  });
-  return resolveNonNegativeNumber(estimated);
+  return resolveNonNegativeNumber(
+    resolveUsageCostUsd({
+      explicitCostUsd,
+      usage: {
+        ...(input !== undefined ? { input } : {}),
+        ...(output !== undefined ? { output } : {}),
+        ...(cacheRead !== undefined ? { cacheRead } : {}),
+        ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+      },
+      cost,
+      explicitZeroCostSource: resolveSessionExplicitZeroCostSource({
+        provider: params.provider,
+        explicitCostUsd: params.explicitCostUsd,
+        entryEstimatedCostUsd: params.entry?.estimatedCostUsd,
+      }),
+    }),
+  );
 }
 
 const STALE_STORE_ONLY_CHILD_LINK_MS = 60 * 60 * 1_000;

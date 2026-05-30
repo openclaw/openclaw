@@ -18,7 +18,22 @@ afterEach(() => {
 function expectStaticFallbackCatalog(
   result: Awaited<ReturnType<typeof buildCodexProviderCatalog>>,
 ) {
-  expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
+  const modelIds = result.provider.models.map((model) => model.id);
+  expect(modelIds).toEqual(["gpt-5.5", "gpt-5.4-mini", "gpt-5.2"]);
+  expect(result.provider.models[0]?.cost).toEqual({
+    input: 5,
+    output: 30,
+    cacheRead: 0.5,
+    cacheWrite: 0,
+  });
+  for (const model of result.provider.models) {
+    expect(model.cost).not.toEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  }
 }
 
 function createFakeCodexClient(): CodexAppServerClient {
@@ -26,6 +41,7 @@ function createFakeCodexClient(): CodexAppServerClient {
     initialize: vi.fn(async () => undefined),
     request: vi.fn(async () => ({ data: [] })),
     addCloseHandler: vi.fn(() => () => undefined),
+    setActiveSharedLeaseCountProviderForUnscopedNotifications: vi.fn(),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
 }
@@ -119,6 +135,7 @@ describe("codex provider", () => {
       name: "gpt-5.4",
       reasoning: true,
       input: ["text", "image"],
+      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
       compat: { supportsReasoningEffort: true, supportsUsageInStreaming: true },
     });
   });
@@ -396,7 +413,7 @@ describe("codex provider", () => {
 
     expect(
       result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
-    ).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
+    ).toEqual(["gpt-5.5", "gpt-5.4-mini", "gpt-5.2"]);
   });
 
   it("adds the GPT-5 prompt overlay to Codex provider runs", () => {

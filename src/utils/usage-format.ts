@@ -54,6 +54,8 @@ export type UsageTotals = {
   total?: number;
 };
 
+export type ExplicitZeroCostSource = "generated-codex-pricing";
+
 type ModelsJsonCostCache = {
   path: string;
   providers: Record<string, ModelProviderConfig> | undefined;
@@ -736,6 +738,74 @@ export function estimateUsageCost(params: {
     return undefined;
   }
   return total / 1_000_000;
+}
+
+function hasUsageTokens(usage?: NormalizedUsage | UsageTotals | null): boolean {
+  if (!usage) {
+    return false;
+  }
+  return (
+    toNumber(usage.input) > 0 ||
+    toNumber(usage.output) > 0 ||
+    toNumber(usage.cacheRead) > 0 ||
+    toNumber(usage.cacheWrite) > 0 ||
+    toNumber(usage.total) > 0
+  );
+}
+
+function hasPositiveConfiguredPricing(cost?: ModelCostConfig): boolean {
+  if (!cost) {
+    return false;
+  }
+  if (cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0) {
+    return true;
+  }
+  return (
+    cost.tieredPricing?.some(
+      (tier) => tier.input > 0 || tier.output > 0 || tier.cacheRead > 0 || tier.cacheWrite > 0,
+    ) ?? false
+  );
+}
+
+export function resolveExplicitZeroCostSource(params: {
+  provider?: string;
+}): ExplicitZeroCostSource | undefined {
+  const provider = normalizeProviderId(normalizeOptionalString(params.provider) ?? "");
+  return provider === "codex" || provider === "openai-codex" || provider === "codex-cli"
+    ? "generated-codex-pricing"
+    : undefined;
+}
+
+export function resolveUsageCostUsd(params: {
+  explicitCostUsd?: number;
+  usage?: NormalizedUsage | UsageTotals | null;
+  cost?: ModelCostConfig;
+  explicitZeroCostSource?: ExplicitZeroCostSource;
+}): number | undefined {
+  const estimated = estimateUsageCost({ usage: params.usage, cost: params.cost });
+  const hasTokens = hasUsageTokens(params.usage);
+  const hasPositivePricing = hasPositiveConfiguredPricing(params.cost);
+  const generatedCodexZero = params.explicitZeroCostSource === "generated-codex-pricing";
+  if (params.explicitCostUsd === undefined) {
+    if (generatedCodexZero && hasTokens && estimated === 0 && !hasPositivePricing) {
+      return undefined;
+    }
+    return estimated;
+  }
+  if (
+    generatedCodexZero &&
+    params.explicitCostUsd === 0 &&
+    estimated !== undefined &&
+    estimated > 0 &&
+    hasTokens &&
+    hasPositivePricing
+  ) {
+    return estimated;
+  }
+  if (generatedCodexZero && params.explicitCostUsd === 0 && hasTokens && !hasPositivePricing) {
+    return undefined;
+  }
+  return params.explicitCostUsd;
 }
 
 export function resetUsageFormatCachesForTest(): void {

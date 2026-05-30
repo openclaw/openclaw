@@ -440,6 +440,169 @@ describe("session cost usage", () => {
     });
   });
 
+  it("recomputes persisted zero transcript cost when pricing is configured", async () => {
+    const root = await makeSessionCostRoot("cost-zero-recompute");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    const agentDir = path.join(root, "agents", "main", "agent");
+    const now = new Date();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify(
+        {
+          providers: {
+            "openai-codex": {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const entry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        usage: {
+          input: 1000,
+          output: 500,
+          cacheRead: 2000,
+          totalTokens: 3500,
+          cost: { total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-zero-recompute.jsonl"),
+      transcriptText("sess-zero-recompute", entry),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      expect(summary.totals.totalTokens).toBe(3500);
+      expect(summary.totals.totalCost).toBeCloseTo(0.0105, 8);
+    });
+  });
+
+  it("preserves non-Codex explicit zero transcript cost when pricing is configured", async () => {
+    const root = await makeSessionCostRoot("cost-zero-trusted");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    const now = new Date();
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-zero-trusted.jsonl"),
+      transcriptText("sess-zero-trusted", {
+        type: "message",
+        timestamp: now.toISOString(),
+        message: {
+          role: "assistant",
+          provider: "free-provider",
+          model: "free-model",
+          usage: {
+            input: 1000,
+            output: 500,
+            totalTokens: 1500,
+            cost: { total: 0 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const config = {
+      models: {
+        providers: {
+          "free-provider": {
+            models: [
+              {
+                id: "free-model",
+                cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(1500);
+      expect(summary.totals.totalCost).toBe(0);
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
+  it("treats Codex generated all-zero pricing as missing cost for token usage", async () => {
+    const root = await makeSessionCostRoot("cost-zero-codex-missing");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    const agentDir = path.join(root, "agents", "main", "agent");
+    const now = new Date();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "models.json"),
+      JSON.stringify(
+        {
+          providers: {
+            "openai-codex": {
+              models: [
+                {
+                  id: "gpt-unknown-codex",
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-zero-codex-missing.jsonl"),
+      transcriptText("sess-zero-codex-missing", {
+        type: "message",
+        timestamp: now.toISOString(),
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          model: "gpt-unknown-codex",
+          usage: {
+            input: 1000,
+            output: 500,
+            totalTokens: 1500,
+            cost: { total: 0 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      expect(summary.totals.totalTokens).toBe(1500);
+      expect(summary.totals.totalCost).toBe(0);
+      expect(summary.totals.missingCostEntries).toBe(1);
+    });
+  });
+
   it("refreshes append-only durable aggregate cache by scanning only appended bytes", async () => {
     const root = await makeSessionCostRoot("cost-cache-append");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
