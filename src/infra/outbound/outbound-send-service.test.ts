@@ -93,11 +93,13 @@ vi.mock("../../config/sessions.js", () => ({
 }));
 
 type OutboundSendServiceModule = typeof import("./outbound-send-service.js");
+type GeneratedMediaDedupeModule = typeof import("./generated-media-dedupe.js");
 type ExecuteSendInput = Parameters<OutboundSendServiceModule["executeSendAction"]>[0];
 type ExecuteSendContext = ExecuteSendInput["ctx"];
 
 let executePollAction: OutboundSendServiceModule["executePollAction"];
 let executeSendAction: OutboundSendServiceModule["executeSendAction"];
+let resetGeneratedMediaDeliveryDedupeForTest: GeneratedMediaDedupeModule["resetGeneratedMediaDeliveryDedupeForTest"];
 
 type MockCalls = {
   mock: { calls: unknown[][] };
@@ -220,9 +222,11 @@ describe("executeSendAction", () => {
 
   beforeAll(async () => {
     ({ executePollAction, executeSendAction } = await import("./outbound-send-service.js"));
+    ({ resetGeneratedMediaDeliveryDedupeForTest } = await import("./generated-media-dedupe.js"));
   });
 
   beforeEach(() => {
+    resetGeneratedMediaDeliveryDedupeForTest();
     setActivePluginRegistry(createTestRegistry([]));
     mocks.dispatchChannelMessageAction.mockClear();
     mocks.sendMessage.mockClear();
@@ -571,6 +575,123 @@ describe("executeSendAction", () => {
       text: "hello",
       mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
     });
+  });
+
+  it("suppresses replayed generated media sends for the same artifact", async () => {
+    const mediaUrl = "/home/dicky/.openclaw/media/tool-image-generation/replayed.png";
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl,
+    });
+
+    const first = await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "first", media: mediaUrl },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "first",
+      mediaUrl,
+      mediaUrls: [mediaUrl],
+    });
+    const second = await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "changed caption", media: mediaUrl },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "changed caption",
+      mediaUrl,
+      mediaUrls: [mediaUrl],
+    });
+
+    expect(first.handledBy).toBe("core");
+    expect(second.handledBy).toBe("core");
+    expect(requireRecord(second.payload, "suppressed payload")).toMatchObject({
+      status: "suppressed",
+      deliveryStatus: "suppressed_duplicate_generated_media",
+    });
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps generated media sends for distinct artifacts", async () => {
+    const firstMediaUrl = "/home/dicky/.openclaw/media/tool-image-generation/first.png";
+    const secondMediaUrl = "/home/dicky/.openclaw/media/tool-image-generation/second.png";
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl: firstMediaUrl,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "first", media: firstMediaUrl },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "first",
+      mediaUrl: firstMediaUrl,
+    });
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "new media", media: secondMediaUrl },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "new media",
+      mediaUrl: secondMediaUrl,
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not suppress replayed non-generated media sends", async () => {
+    const mediaUrl = "https://example.com/reused.png";
+    mocks.dispatchChannelMessageAction.mockResolvedValue(null);
+    mocks.sendMessage.mockResolvedValue({
+      channel: "discord",
+      to: "channel:123",
+      via: "direct",
+      mediaUrl,
+    });
+
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "first", media: mediaUrl },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "first",
+      mediaUrl,
+    });
+    await executeSendAction({
+      ctx: {
+        cfg: {},
+        channel: "discord",
+        params: { to: "channel:123", message: "second", media: mediaUrl },
+        dryRun: false,
+      },
+      to: "channel:123",
+      message: "second",
+      mediaUrl,
+    });
+
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
   });
 
   it("skips plugin dispatch during dry-run sends and forwards gateway + silent to sendMessage", async () => {

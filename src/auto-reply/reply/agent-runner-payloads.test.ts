@@ -142,6 +142,36 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0].mediaUrl).toBe("file:///tmp/photo.jpg");
   });
 
+  it("drops duplicate generated media final payloads within one reply run", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [
+        { text: "generated image", mediaUrl: "file:///tmp/generated.jpg" },
+        { text: "generated image", mediaUrl: "file:///tmp/generated.jpg" },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "generated image",
+      mediaUrl: "file:///tmp/generated.jpg",
+    });
+  });
+
+  it("keeps distinct generated media final payloads in one reply run", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [
+        { text: "generated image", mediaUrl: "file:///tmp/first.jpg" },
+        { text: "generated image", mediaUrl: "file:///tmp/second.jpg" },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(2);
+    expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/first.jpg");
+    expect(replyPayloads[1]?.mediaUrl).toBe("file:///tmp/second.jpg");
+  });
+
   it("normalizes sent media URLs before deduping normalized reply media", async () => {
     const normalizeMediaPaths = async (payload: { mediaUrl?: string; mediaUrls?: string[] }) => {
       const normalizeMedia = (value?: string) =>

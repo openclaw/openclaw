@@ -1,5 +1,9 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  markGeneratedMediaDelivered,
+  shouldSuppressGeneratedMediaDelivery,
+} from "../../infra/outbound/generated-media-dedupe.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import {
   isOutboundDeliveryError,
@@ -15,6 +19,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLiveMessageState, markLiveMessagePreviewUpdated } from "./live.js";
 import { createMessageReceiptFromOutboundResults } from "./receipt.js";
 import { createRenderedMessageBatch } from "./rendered-batch.js";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type {
   DurableMessageSendIntent,
   LiveMessageState,
@@ -336,8 +341,40 @@ export async function sendDurableMessageBatch(
 ): Promise<DurableMessageBatchSendResult> {
   return await withDurableMessageSendContext(params, async (ctx) => {
     const rendered = await ctx.render();
+    const generatedMediaUrls = rendered.payloads.flatMap(
+      (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
+    );
+    const generatedMediaRoute = {
+      accountId: params.accountId ?? null,
+      channel: params.channel,
+      to: params.to,
+      threadId: params.threadId ?? null,
+    };
+    if (
+      shouldSuppressGeneratedMediaDelivery({
+        route: generatedMediaRoute,
+        mediaUrls: generatedMediaUrls,
+      })
+    ) {
+      return {
+        status: "suppressed",
+        results: [],
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [],
+          threadId: params.threadId == null ? undefined : String(params.threadId),
+          replyToId: params.replyToId ?? undefined,
+        }),
+        reason: "no_visible_result",
+      };
+    }
     const result = await ctx.send(rendered);
     if (result.status === "sent" || result.status === "suppressed") {
+      if (result.status === "sent") {
+        markGeneratedMediaDelivered({
+          route: generatedMediaRoute,
+          mediaUrls: generatedMediaUrls,
+        });
+      }
       await ctx.commit(result.receipt);
     } else {
       await ctx.fail(result.error);

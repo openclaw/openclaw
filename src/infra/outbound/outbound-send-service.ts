@@ -13,6 +13,10 @@ import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/loa
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
+import {
+  markGeneratedMediaDelivered,
+  shouldSuppressGeneratedMediaDelivery,
+} from "./generated-media-dedupe.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
@@ -63,6 +67,63 @@ type PluginHandledResult = {
 };
 
 type SendMessageParams = Parameters<typeof sendMessage>[0];
+
+function resolveGeneratedMediaSendUrls(params: {
+  mediaUrl?: string;
+  mediaUrls?: readonly string[];
+}): string[] {
+  const mediaUrls = new Set<string>();
+  if (params.mediaUrl?.trim()) {
+    mediaUrls.add(params.mediaUrl.trim());
+  }
+  for (const mediaUrl of params.mediaUrls ?? []) {
+    if (mediaUrl.trim()) {
+      mediaUrls.add(mediaUrl.trim());
+    }
+  }
+  return Array.from(mediaUrls);
+}
+
+function createSuppressedGeneratedMediaSendResult(params: {
+  ctx: OutboundSendContext;
+  to: string;
+  mediaUrls: readonly string[];
+}): {
+  handledBy: "core";
+  payload: unknown;
+  toolResult: AgentToolResult<unknown>;
+  sendResult: MessageSendResult;
+} {
+  const payload = {
+    ok: true,
+    status: "suppressed",
+    deliveryStatus: "suppressed_duplicate_generated_media",
+    channel: params.ctx.channel,
+    target: params.to,
+    mediaUrls: Array.from(params.mediaUrls),
+  };
+  return {
+    handledBy: "core",
+    payload,
+    toolResult: {
+      content: [
+        {
+          type: "text",
+          text: "Suppressed duplicate generated media delivery for the same artifact.",
+        },
+      ],
+      details: payload,
+    },
+    sendResult: {
+      channel: params.ctx.channel,
+      to: params.to,
+      via: "direct",
+      mediaUrl: params.mediaUrls[0] ?? null,
+      mediaUrls: Array.from(params.mediaUrls),
+      result: { messageId: "suppressed_duplicate_generated_media" },
+    },
+  };
+}
 
 async function sendCoreMessage(params: {
   ctx: OutboundSendContext;
@@ -254,6 +315,29 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+  const generatedMediaSendUrls = resolveGeneratedMediaSendUrls({
+    mediaUrl: params.mediaUrl,
+    mediaUrls: params.mediaUrls,
+  });
+  const generatedMediaDeliveryRoute = {
+    accountId: params.ctx.accountId ?? null,
+    channel: params.ctx.channel,
+    to: params.to,
+    threadId: params.threadId ?? null,
+  };
+  if (
+    !params.ctx.dryRun &&
+    shouldSuppressGeneratedMediaDelivery({
+      route: generatedMediaDeliveryRoute,
+      mediaUrls: generatedMediaSendUrls,
+    })
+  ) {
+    return createSuppressedGeneratedMediaSendResult({
+      ctx: params.ctx,
+      to: params.to,
+      mediaUrls: generatedMediaSendUrls,
+    });
+  }
   const defaultPayload: ReplyPayload = params.payload ?? {
     text: params.message,
     mediaUrl: params.mediaUrl,
@@ -274,6 +358,10 @@ export async function executeSendAction(params: {
       ...params,
       queuePolicy,
       payloads: [preparedPayload],
+    });
+    markGeneratedMediaDelivered({
+      route: generatedMediaDeliveryRoute,
+      mediaUrls: generatedMediaSendUrls,
     });
 
     return {
@@ -306,6 +394,10 @@ export async function executeSendAction(params: {
     },
   });
   if (pluginHandled) {
+    markGeneratedMediaDelivered({
+      route: generatedMediaDeliveryRoute,
+      mediaUrls: generatedMediaSendUrls,
+    });
     return pluginHandled;
   }
 
@@ -313,6 +405,10 @@ export async function executeSendAction(params: {
   const result = await sendCoreMessage({
     ...params,
     queuePolicy,
+  });
+  markGeneratedMediaDelivered({
+    route: generatedMediaDeliveryRoute,
+    mediaUrls: generatedMediaSendUrls,
   });
 
   return {
