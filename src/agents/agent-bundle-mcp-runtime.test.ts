@@ -1137,8 +1137,10 @@ process.on("SIGINT", shutdown);`,
         toolCount: 0,
         resources: { listChanged: true },
       });
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain(
+      await waitForFileText(
+        logPath,
         "reject tools/list method not found",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
       );
     } finally {
       await runtime.dispose();
