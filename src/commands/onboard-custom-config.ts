@@ -184,6 +184,7 @@ export type ApplyCustomApiConfigParams = {
   providerId?: string;
   alias?: string;
   supportsImageInput?: boolean;
+  contextWindow?: number;
 };
 
 export type ParseNonInteractiveCustomApiFlagsParams = {
@@ -193,6 +194,7 @@ export type ParseNonInteractiveCustomApiFlagsParams = {
   apiKey?: string;
   providerId?: string;
   supportsImageInput?: boolean;
+  contextWindow?: number;
 };
 
 export type ParsedNonInteractiveCustomApiFlags = {
@@ -202,6 +204,7 @@ export type ParsedNonInteractiveCustomApiFlags = {
   apiKey?: string;
   providerId?: string;
   supportsImageInput?: boolean;
+  contextWindow?: number;
 };
 
 export type CustomApiErrorCode =
@@ -210,7 +213,8 @@ export type CustomApiErrorCode =
   | "invalid_base_url"
   | "invalid_model_id"
   | "invalid_provider_id"
-  | "invalid_alias";
+  | "invalid_alias"
+  | "invalid_context_window";
 
 export class CustomApiError extends Error {
   readonly code: CustomApiErrorCode;
@@ -455,6 +459,25 @@ function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
   return compatibilityRaw;
 }
 
+function parseCustomApiContextWindow(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new CustomApiError(
+      "invalid_context_window",
+      "Invalid --custom-context-window (expected a positive integer token count).",
+    );
+  }
+  if (value < CONTEXT_WINDOW_HARD_MIN_TOKENS) {
+    throw new CustomApiError(
+      "invalid_context_window",
+      `Invalid --custom-context-window (must be at least ${CONTEXT_WINDOW_HARD_MIN_TOKENS} tokens).`,
+    );
+  }
+  return value;
+}
+
 export function resolveCustomProviderId(
   params: ResolveCustomProviderIdParams,
 ): ResolvedCustomProviderId {
@@ -507,6 +530,7 @@ export function parseNonInteractiveCustomApiFlags(
       "Custom provider ID must include letters, numbers, or hyphens.",
     );
   }
+  const contextWindow = parseCustomApiContextWindow(params.contextWindow);
   return {
     baseUrl,
     modelId,
@@ -516,6 +540,7 @@ export function parseNonInteractiveCustomApiFlags(
     ...(params.supportsImageInput === undefined
       ? {}
       : { supportsImageInput: params.supportsImageInput }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
   };
 }
 
@@ -536,6 +561,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
   if (!modelId) {
     throw new CustomApiError("invalid_model_id", "Custom provider model ID is required.");
   }
+
+  const explicitContextWindow = params.contextWindow;
 
   const isAzure = isAzureUrl(baseUrl);
   const isAzureOpenAi = isAzureOpenAiUrl(baseUrl);
@@ -580,7 +607,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     ? {
         id: modelId,
         name: `${modelId} (Custom Provider)`,
-        contextWindow: AZURE_DEFAULT_CONTEXT_WINDOW,
+        contextWindow: explicitContextWindow ?? AZURE_DEFAULT_CONTEXT_WINDOW,
         maxTokens: AZURE_DEFAULT_MAX_TOKENS,
         input: generatedInput,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -590,7 +617,7 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     : {
         id: modelId,
         name: `${modelId} (Custom Provider)`,
-        contextWindow: DEFAULT_CONTEXT_WINDOW,
+        contextWindow: explicitContextWindow ?? DEFAULT_CONTEXT_WINDOW,
         maxTokens: DEFAULT_MAX_TOKENS,
         input: generatedInput,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -605,7 +632,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
               ...(explicitInput ? { input: explicitInput } : {}),
               name: model.name ?? nextModel.name,
               cost: model.cost ?? nextModel.cost,
-              contextWindow: normalizeContextWindowForCustomModel(model.contextWindow),
+              contextWindow:
+                explicitContextWindow ?? normalizeContextWindowForCustomModel(model.contextWindow),
               maxTokens: model.maxTokens ?? nextModel.maxTokens,
             }
           : model,

@@ -221,6 +221,7 @@ What you set:
     - `--custom-provider-id` (optional)
     - `--custom-compatibility <openai|anthropic>` (optional; default `openai`)
     - `--custom-image-input` / `--custom-text-input` (optional; override inferred model input capability)
+    - `--custom-context-window <tokens>` (optional; override the default 128k non-Azure / 400k Azure context window; re-running onboard replaces the stored value)
 
   </Accordion>
   <Accordion title="Skip">

@@ -167,12 +167,14 @@ openclaw onboard --non-interactive \
       --custom-provider-id "my-custom" \
       --custom-compatibility anthropic \
       --custom-image-input \
+      --custom-context-window 200000 \
       --gateway-port 18789 \
       --gateway-bind loopback
     ```
 
     `--custom-api-key` is optional. If omitted, onboarding checks `CUSTOM_API_KEY`.
     OpenClaw marks common vision model IDs as image-capable automatically. Add `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata.
+    Pass `--custom-context-window <tokens>` when wrapping a model whose real context window is larger than the conservative default (128k non-Azure, 400k Azure); re-running onboard with this flag replaces the stored value.
 
     Ref-mode variant:
 

@@ -139,6 +139,36 @@ describe("applyCustomApiConfig", () => {
     expect(model?.contextWindow).toBe(expectedContextWindow);
   });
 
+  it("uses explicit contextWindow override for newly added custom models", () => {
+    const result = applyCustomApiConfig({
+      config: buildCustomProviderConfig(),
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      providerId: "custom",
+      contextWindow: 200_000,
+    });
+    const model = result.config.models?.providers?.custom?.models?.find(
+      (entry) => entry.id === "foo-large",
+    );
+    expect(model?.contextWindow).toBe(200_000);
+  });
+
+  it("uses explicit contextWindow override to replace existing custom model values", () => {
+    const result = applyCustomApiConfig({
+      config: buildCustomProviderConfig(CONTEXT_WINDOW_HARD_MIN_TOKENS),
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      providerId: "custom",
+      contextWindow: 200_000,
+    });
+    const model = result.config.models?.providers?.custom?.models?.find(
+      (entry) => entry.id === "foo-large",
+    );
+    expect(model?.contextWindow).toBe(200_000);
+  });
+
   it.each([
     {
       name: "invalid compatibility values at runtime",
@@ -473,6 +503,25 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     expect(result.supportsImageInput).toBe(true);
   });
 
+  it("parses an explicit context window override", () => {
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      contextWindow: 200_000,
+    });
+
+    expect(result.contextWindow).toBe(200_000);
+  });
+
+  it("omits context window when not provided", () => {
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+    });
+
+    expect(result.contextWindow).toBeUndefined();
+  });
+
   it.each([
     {
       name: "missing required flags",
@@ -496,6 +545,24 @@ describe("parseNonInteractiveCustomApiFlags", () => {
         providerId: "!!!",
       },
       expectedMessage: "Custom provider ID must include letters, numbers, or hyphens.",
+    },
+    {
+      name: "non-integer context window",
+      flags: {
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        contextWindow: Number.NaN,
+      },
+      expectedMessage: "Invalid --custom-context-window (expected a positive integer token count).",
+    },
+    {
+      name: "context window below hard minimum",
+      flags: {
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        contextWindow: 1024,
+      },
+      expectedMessage: `Invalid --custom-context-window (must be at least ${CONTEXT_WINDOW_HARD_MIN_TOKENS} tokens).`,
     },
   ])("rejects $name", ({ flags, expectedMessage }) => {
     expect(() => parseNonInteractiveCustomApiFlags(flags)).toThrow(expectedMessage);
