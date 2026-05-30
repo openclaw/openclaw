@@ -112,6 +112,14 @@ const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
 const BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_CODE_RE =
   /\b(ECONNREFUSED|ENETDOWN|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|EAI_AGAIN|ENOTFOUND|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|ERR_HTTP2_INVALID_SESSION)\b/i;
 
+/**
+ * WebSocket and other network-related message snippets that indicate recoverable
+ * transient failures and should not crash the gateway process.
+ */
+const BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_SNIPPETS = [
+  "WebSocket was closed before the connection was established",
+];
+
 const TRANSIENT_SQLITE_MESSAGE_CODE_RE =
   /\b(SQLITE_BUSY|SQLITE_CANTOPEN|SQLITE_IOERR|SQLITE_LOCKED)\b/i;
 
@@ -438,6 +446,14 @@ function isBenignUncaughtNetworkException(err: unknown): boolean {
     }
     const message = normalizeLowercaseStringOrEmpty((candidate as { message?: unknown }).message);
     if (message && BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_CODE_RE.test(message)) {
+      return true;
+    }
+    if (
+      message &&
+      BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_SNIPPETS.some((snippet) =>
+        message.includes(snippet.toLowerCase()),
+      )
+    ) {
       return true;
     }
   }

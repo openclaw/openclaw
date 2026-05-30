@@ -400,6 +400,12 @@ describe("isTransientUnhandledRejectionError", () => {
     const wrappedDestroyedHttp2Session = Object.assign(new Error("model call failed"), {
       cause: destroyedHttp2Session,
     });
+    const wsClosedBeforeEstablished = new Error(
+      "WebSocket was closed before the connection was established",
+    );
+    const wrappedWsClosed = Object.assign(new Error("channel transport failed"), {
+      cause: wsClosedBeforeEstablished,
+    });
     const generic = new Error("boom");
 
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
@@ -414,6 +420,8 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(destroyedHttp2Session)).toBe(true);
     expect(isBenignUncaughtExceptionError(wrappedDestroyedHttp2Session)).toBe(true);
     expect(isBenignUncaughtExceptionError(new Error("ERR_HTTP2_INVALID_SESSION"))).toBe(true);
+    expect(isBenignUncaughtExceptionError(wsClosedBeforeEstablished)).toBe(true);
+    expect(isBenignUncaughtExceptionError(wrappedWsClosed)).toBe(true);
     expect(isBenignUncaughtExceptionError(generic)).toBe(false);
   });
   it("returns true for transient SQLite errors", () => {
