@@ -12,7 +12,7 @@ Coding Plan endpoints, keeps legacy `modelstudio` ids working as a compatibility
 alias, and also exposes the Qwen Portal token flow as provider `qwen-oauth`.
 
 - Provider: `qwen`
-- Portal provider: `qwen-oauth`
+- Portal provider: [`qwen-oauth`](/providers/qwen-oauth)
 - Preferred env var: `QWEN_API_KEY`
 - Also accepted for compatibility: `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY`
 - API style: OpenAI-compatible
@@ -127,6 +127,9 @@ Choose your plan type and follow the setup steps.
 
   <Tab title="Qwen OAuth / Portal">
     **Best for:** a Qwen Portal token against `https://portal.qwen.ai/v1`.
+
+    See [Qwen OAuth / Portal](/providers/qwen-oauth) for the dedicated provider
+    page and migration notes.
 
     <Steps>
       <Step title="Provide your portal token">
