@@ -94,6 +94,7 @@ apps/ios/*.mobileprovision
 .local/
 docs/.local/
 docs/internal/
+backups/
 tmp/
 IDENTITY.md
 USER.md
