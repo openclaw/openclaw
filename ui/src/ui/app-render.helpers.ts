@@ -4,6 +4,7 @@ import {
   createChatSessionsLoadOverrides,
   refreshChat,
   refreshChatAvatar,
+  scopedAgentParamsForSession,
   scopedAgentListParamsForSession,
 } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
@@ -716,7 +717,9 @@ export async function createChatSession(state: AppViewState): Promise<boolean> {
   const nextSessionKey = await createSessionAndRefresh(
     state as unknown as Parameters<typeof createSessionAndRefresh>[0],
     {
-      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
+      agentId:
+        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+        resolveAgentIdFromSessionKey(previousSessionKey),
       parentSessionKey,
       emitCommandHooks: parentSessionKey !== undefined ? true : undefined,
     },

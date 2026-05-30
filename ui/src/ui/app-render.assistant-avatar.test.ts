@@ -459,4 +459,57 @@ describe("renderApp assistant avatar routing", () => {
     );
     expect(labels).toEqual(["Ops new"]);
   });
+
+  it("keeps unknown sidebar sessions unscoped", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "unknown",
+          assistantAgentId: "work",
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "work", name: "Work" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:work:dashboard:new",
+                kind: "direct",
+                label: "Work new",
+                updatedAt: 20,
+              },
+              {
+                key: "unknown",
+                kind: "unknown",
+                label: "Unknown sentinel",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Main old", "Work new"]);
+  });
 });
