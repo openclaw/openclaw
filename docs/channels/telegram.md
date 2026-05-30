@@ -411,9 +411,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Preview streaming is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
 
-    Telegram reasoning stream surface:
+    Reasoning stream behavior:
 
-    - `/reasoning stream` sends reasoning to the live preview while generating
+    - `/reasoning stream` uses a supported channel's reasoning-preview path; on Telegram, it streams reasoning into the live preview while generating
     - the reasoning preview is deleted after final delivery; use `/reasoning on` when reasoning should remain visible
     - final answer is sent without reasoning text
     - `/reasoning stream` is no longer Telegram-only at the runtime level: when the directive is active, OpenClaw also broadcasts `agent.stream === "thinking"` events on the agent event bus so gateway/WebSocket/webchat/ACP clients can render live thinking too. Telegram's own preview behavior described above is unchanged. See [Reasoning visibility (/reasoning)](/tools/thinking#reasoning-visibility-reasoning).

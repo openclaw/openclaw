@@ -1143,6 +1143,8 @@ export async function runReplyAgent(params: {
       await applySessionStoreEntryPatch({
         storePath,
         sessionKey,
+        skipMaintenance: true,
+        takeCacheOwnership: true,
         patch: { updatedAt },
       });
     }
@@ -1526,6 +1528,8 @@ export async function runReplyAgent(params: {
         await applySessionStoreEntryPatch({
           storePath,
           sessionKey,
+          skipMaintenance: true,
+          takeCacheOwnership: true,
           patch: {
             groupActivationNeedsSystemIntro: false,
             updatedAt,
@@ -1588,6 +1592,8 @@ export async function runReplyAgent(params: {
         await applySessionStoreEntryPatch({
           storePath,
           sessionKey,
+          skipMaintenance: true,
+          takeCacheOwnership: true,
           patch: {
             fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
             fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
@@ -1627,6 +1633,7 @@ export async function runReplyAgent(params: {
       cfg,
       usage,
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+      compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
       promptTokens,
       usageIsContextSnapshot: usedCliProvider ? true : undefined,
       isHeartbeat,

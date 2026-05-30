@@ -50,6 +50,17 @@ interface RuntimeBuffer {
 
 const runtimeBuffer = (globalThis as { Buffer?: RuntimeBuffer }).Buffer;
 
+function splitLinesForCounting(content: string): string[] {
+  if (content.length === 0) {
+    return [];
+  }
+  const lines = content.split("\n");
+  if (content.endsWith("\n")) {
+    lines.pop();
+  }
+  return lines;
+}
+
 function findFirstNonAscii(content: string): number {
   for (let index = 0; index < content.length; index++) {
     if (content.charCodeAt(index) > 0x7f) {
@@ -138,7 +149,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 
   const totalBytes = utf8ByteLength(content);
-  const lines = content.split("\n");
+  const lines = splitLinesForCounting(content);
   const totalLines = lines.length;
 
   // Check if no truncation needed
@@ -179,7 +190,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
   // Collect complete lines that fit
   const outputLinesArr: string[] = [];
   let outputBytesCount = 0;
-  let truncatedBy: "lines" | "bytes" = "lines";
+  let truncatedBy: "lines" | "bytes" = totalLines > maxLines ? "lines" : "bytes";
 
   for (let i = 0; i < lines.length && i < maxLines; i++) {
     const line = lines[i];
@@ -195,7 +206,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
   }
 
   // If we exited due to line limit
-  if (outputLinesArr.length >= maxLines && outputBytesCount <= maxBytes) {
+  if (totalLines > maxLines && outputLinesArr.length >= maxLines && outputBytesCount <= maxBytes) {
     truncatedBy = "lines";
   }
 
@@ -228,10 +239,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 
   const totalBytes = utf8ByteLength(content);
-  const lines = content.split("\n");
-  if (lines.length > 1 && lines[lines.length - 1] === "") {
-    lines.pop();
-  }
+  const lines = splitLinesForCounting(content);
   const totalLines = lines.length;
 
   // Check if no truncation needed
@@ -254,7 +262,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
   // Work backwards from the end
   const outputLinesArr: string[] = [];
   let outputBytesCount = 0;
-  let truncatedBy: "lines" | "bytes" = "lines";
+  let truncatedBy: "lines" | "bytes" = totalLines > maxLines ? "lines" : "bytes";
   let lastLinePartial = false;
 
   for (let i = lines.length - 1; i >= 0 && outputLinesArr.length < maxLines; i--) {
@@ -279,7 +287,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
   }
 
   // If we exited due to line limit
-  if (outputLinesArr.length >= maxLines && outputBytesCount <= maxBytes) {
+  if (totalLines > maxLines && outputLinesArr.length >= maxLines && outputBytesCount <= maxBytes) {
     truncatedBy = "lines";
   }
 

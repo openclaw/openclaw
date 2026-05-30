@@ -3,17 +3,20 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
 import { startQaMockOpenAiServer } from "../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shared/mock-auth.js";
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
+import { readBoundedResponseText } from "./lib/bounded-response.ts";
 
 type Lane = "normal" | "code";
 
 type FetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  maxBodyBytes?: number;
   timeoutMs?: number;
 };
 
@@ -35,6 +38,10 @@ const DEFAULT_FETCH_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS,
   180_000,
 );
+const DEFAULT_FETCH_BODY_MAX_BYTES = readPositiveInt(
+  process.env.OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_BODY_MAX_BYTES,
+  1024 * 1024,
+);
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -49,6 +56,10 @@ function readPositiveInt(raw: string | undefined, fallback: number) {
 
 function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
+}
+
+function bodyTooLargeErrorMessage(url: string, byteLimit: number) {
+  return `HTTP response from ${url} exceeded ${byteLimit} bytes`;
 }
 
 async function freePort(): Promise<number> {
@@ -135,15 +146,15 @@ export async function fetchJson(
   options: FetchJsonOptions = {},
 ): Promise<unknown> {
   const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_BODY_MAX_BYTES);
   const controller = new AbortController();
   const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
-  let timeout: NodeJS.Timeout | undefined;
+  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
+    timeout = setNodeTimeout(() => {
       controller.abort(error);
       reject(error);
     }, timeoutMs);
-    timeout.unref?.();
   });
 
   let response: Response;
@@ -156,10 +167,17 @@ export async function fetchJson(
       }),
       timeoutPromise,
     ]);
-    text = await Promise.race([response.text(), timeoutPromise]);
+    text = await readBoundedResponseText(response, url, maxBodyBytes, {
+      createTooLargeError(message) {
+        return Object.assign(new Error(message), { code: "ETOOBIG" });
+      },
+      formatTooLargeMessage: bodyTooLargeErrorMessage,
+      timeoutPromise,
+      signal: controller.signal,
+    });
   } finally {
     if (timeout) {
-      clearTimeout(timeout);
+      clearNodeTimeout(timeout);
     }
   }
   let parsed: unknown;

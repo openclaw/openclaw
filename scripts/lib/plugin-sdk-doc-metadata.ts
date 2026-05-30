@@ -95,11 +95,17 @@ export const pluginSdkDocMetadata = {
   "provider-onboard": {
     category: "provider",
   },
+  "provider-oauth-runtime": {
+    category: "provider",
+  },
   "provider-selection-runtime": {
     category: "provider",
   },
   "runtime-store": {
     category: "runtime",
+  },
+  "qa-live-transport-scenarios": {
+    category: "utilities",
   },
   "agent-runtime": {
     category: "runtime",

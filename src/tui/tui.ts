@@ -12,10 +12,10 @@ import {
   Text,
   TUI,
 } from "@earendil-works/pi-tui";
+import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
-import type { CommandEntry } from "../gateway/protocol/index.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
@@ -35,7 +35,7 @@ import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatTokens } from "./tui-formatters.js";
+import { formatGoalFooter, formatTokens } from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
   readTuiLastSessionKey,
@@ -1164,6 +1164,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,
+      formatGoalFooter(sessionInfo.goal),
       think !== "off" ? `think ${think}` : null,
       fast ? "fast" : null,
       verbose !== "off" ? `verbose ${verbose}` : null,

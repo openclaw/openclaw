@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BUILD_ALL_PROFILES,
+  BUILD_ALL_PROFILE_STEP_ENV,
   BUILD_ALL_STEPS,
   formatBuildAllDuration,
   formatBuildAllTimingSummary,
@@ -64,24 +65,31 @@ function withBuildCacheFixture(
 describe("resolveBuildAllStep", () => {
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
     const step = getBuildAllStep("plugins:assets:build");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
 
-    const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
-      env: {},
-    });
-
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "plugins:assets:build"],
-      options: {
-        stdio: "inherit",
+    try {
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
         env: {},
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
+      });
+
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "plugins:assets:build"],
+        options: {
+          stdio: "inherit",
+          env: {},
+          shell: false,
+          windowsVerbatimArguments: undefined,
+        },
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps node steps on the current node binary", () => {
@@ -122,33 +130,41 @@ describe("resolveBuildAllStep", () => {
 
   it("adds heap headroom for plugin-sdk dts on Windows", () => {
     const step = getBuildAllStep("build:plugin-sdk:dts");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
 
-    const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
-      env: { FOO: "bar" },
-    });
+    try {
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
+        env: { FOO: "bar" },
+      });
 
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "build:plugin-sdk:dts"],
-      options: {
-        stdio: "inherit",
-        env: {
-          FOO: "bar",
-          NODE_OPTIONS: "--max-old-space-size=4096",
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "build:plugin-sdk:dts"],
+        options: {
+          stdio: "inherit",
+          env: {
+            FOO: "bar",
+            NODE_OPTIONS: "--max-old-space-size=8192",
+          },
+          shell: false,
+          windowsVerbatimArguments: undefined,
         },
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps plugin-sdk dts cache metadata aligned with declaration inputs", () => {
     const step = getBuildAllStep("build:plugin-sdk:dts");
 
     expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
+    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
     expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
   });
 });
@@ -178,6 +194,22 @@ describe("resolveBuildAllSteps", () => {
       "write-cli-startup-metadata",
       "write-cli-compat",
     ]);
+  });
+
+  it("skips bundled tsdown declarations for CI artifacts", () => {
+    const tsdown = resolveBuildAllSteps("ciArtifacts").find((step) => step.label === "tsdown");
+    if (!tsdown) {
+      throw new Error("Missing ciArtifacts tsdown step");
+    }
+
+    expect(BUILD_ALL_PROFILE_STEP_ENV.ciArtifacts.tsdown).toEqual({
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    });
+    expect(
+      resolveBuildAllStep(tsdown, { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" } }).options.env,
+    ).toMatchObject({
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    });
   });
 
   it("uses a minimal built runtime profile for gateway watch regression", () => {

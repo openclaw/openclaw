@@ -207,6 +207,20 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes control UI i18n script changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/control-ui-i18n.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/control-ui-i18n.test.ts"],
+    });
+  });
+
+  it("routes Z.AI fallback repro script changes through its regression test", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/zai-fallback-repro.ts"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/zai-fallback-repro.test.ts"],
+    });
+  });
+
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -945,6 +959,19 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes fake-timer unit-fast tests to the serial fake-timer lane", () => {
+    const plans = buildVitestRunPlans(["src/acp/control-plane/manager.test.ts"], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/acp/control-plane/manager.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes changed commands source allowlist files to sibling light tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "src/commands/status-overview-values.ts",
@@ -1430,6 +1457,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     }
     expect(leafShardPlans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.unit-fast-fake-timers.config.ts",
       "test/vitest/vitest.unit-src.config.ts",
       "test/vitest/vitest.unit-security.config.ts",
       "test/vitest/vitest.unit-ui.config.ts",

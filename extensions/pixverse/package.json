@@ -24,6 +24,7 @@
       "./index.ts"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/pixverse-provider",
       "npmSpec": "@openclaw/pixverse-provider",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.5.26"
@@ -32,7 +33,8 @@
       "pluginApi": ">=2026.5.28"
     },
     "build": {
-      "openclawVersion": "2026.5.28"
+      "openclawVersion": "2026.5.28",
+      "bundledDist": false
     },
     "release": {
       "publishToClawHub": true,

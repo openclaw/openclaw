@@ -179,6 +179,12 @@ export function isNativeToolProgressNotification(notification: CodexServerNotifi
   }
 }
 
+export function isNativeResponseStreamDeltaNotification(
+  notification: CodexServerNotification,
+): boolean {
+  return notification.method.startsWith("response.") && notification.method.endsWith(".delta");
+}
+
 export function isRawAssistantCompletionNotification(
   notification: CodexServerNotification,
 ): boolean {

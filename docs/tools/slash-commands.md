@@ -136,7 +136,7 @@ Current source-of-truth:
   </Accordion>
   <Accordion title="Model and run controls">
     - `/think <level|default>` sets the thinking level or clears the session override. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
-    - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
+    - `/verbose on|off|full` toggles verbose output. Authorized external channel senders may persist the session override; internal gateway/webchat clients need `operator.admin`. Alias: `/v`.
     - `/trace on|off` toggles plugin trace output for the current session.
     - `/fast [status|on|off|default]` shows, sets, or clears fast mode.
     - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
@@ -153,6 +153,7 @@ Current source-of-truth:
     - `/commands` shows the generated command catalog.
     - `/tools [compact|verbose]` shows what the current agent can use right now.
     - `/status` shows execution/runtime status, Gateway and system uptime, plus provider usage/quota when available.
+    - `/goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear` manages the current session's durable [goal](/tools/goal).
     - `/diagnostics [note]` is the owner-only support-report flow for Gateway bugs and Codex harness runs. It asks for explicit exec approval every time before running `openclaw gateway diagnostics export --json`; do not approve diagnostics with an allow-all rule. After approval, it sends a pasteable report with the local bundle path, manifest summary, privacy notes, and relevant session ids. In group chats, the approval prompt and report go to the owner privately. When the active session uses the OpenAI Codex harness, the same approval also sends relevant Codex feedback to OpenAI servers and the completed reply lists the OpenClaw session ids, Codex thread ids, and `codex resume <thread-id>` commands. See [Diagnostics Export](/gateway/diagnostics).
     - `/crestodian <request>` runs the Crestodian setup and repair helper from an owner DM.
     - `/tasks` lists active/recent background tasks for the current session.
