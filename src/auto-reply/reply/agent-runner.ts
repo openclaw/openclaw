@@ -23,6 +23,7 @@ import {
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
+  updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
