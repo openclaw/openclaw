@@ -71,6 +71,18 @@ describe("provider failover hook structured signals", () => {
     expect(providerRuntimeMocks.classifyProviderPluginError).not.toHaveBeenCalled();
   });
 
+  it("does not treat message-parsed HTTP prefixes as structured provider descriptors", () => {
+    providerRuntimeMocks.classifyProviderPluginError.mockReturnValue("billing");
+
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        message: "403 concurrency limit breached",
+      }),
+    ).toEqual({ kind: "reason", reason: "auth" });
+    expect(providerRuntimeMocks.classifyProviderPluginError).not.toHaveBeenCalled();
+  });
+
   it("passes nested provider error types through failover error normalization", () => {
     providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
       return context.provider === "demo-provider" &&

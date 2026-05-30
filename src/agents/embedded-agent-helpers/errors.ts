@@ -993,6 +993,8 @@ function classifyFailoverClassificationFromMessage(
 
 export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassification | null {
   const inferredStatus = inferSignalStatus(signal);
+  const explicitStatus =
+    typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
   if (
     signal.message &&
     isTransportHtmlErrorStatus(inferredStatus) &&
@@ -1002,9 +1004,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   }
   const hasStructuredProviderSignal = Boolean(
     signal.provider &&
-    (typeof inferredStatus === "number" ||
-      signal.code !== undefined ||
-      signal.errorType !== undefined),
+    (explicitStatus !== undefined || signal.code !== undefined || signal.errorType !== undefined),
   );
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider, {
@@ -1018,7 +1018,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
       ? classifyProviderPluginError({
           errorMessage: signal.message ?? "",
           provider: signal.provider,
-          status: inferredStatus,
+          status: explicitStatus,
           code: signal.code,
           errorType: signal.errorType,
         })
