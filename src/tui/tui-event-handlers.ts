@@ -76,6 +76,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const sessionRuns = new Map<string, number>();
   const finalizedRuns = new Map<string, number>();
   const finalizedRunsWithDisplay = new Map<string, number>();
+  const completedRuns = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
@@ -202,6 +203,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     finalizedRuns.clear();
     finalizedRunsWithDisplay.clear();
+    completedRuns.clear();
     sessionRuns.clear();
     postFinalizingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
@@ -270,6 +272,7 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const noteFinalizedRun = (runId: string, opts?: { displayedFinal?: boolean }) => {
     finalizedRuns.set(runId, Date.now());
+    completedRuns.set(runId, Date.now());
     if (opts?.displayedFinal === true) {
       finalizedRunsWithDisplay.set(runId, Date.now());
     }
@@ -277,6 +280,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
     pruneRunMap(finalizedRunsWithDisplay);
+    pruneRunMap(completedRuns);
   };
 
   const notePostFinalizingRun = (runId: string) => {
@@ -351,6 +355,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     wasActiveRun: boolean;
     status: "aborted" | "error";
   }) => {
+    completedRuns.set(params.runId, Date.now());
+    pruneRunMap(completedRuns);
     streamAssembler.drop(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
@@ -834,12 +840,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearPendingTerminalLifecycleErrors();
   };
 
+  const consumeCompletedRunForPendingSend = (runId: string) => {
+    if (!completedRuns.has(runId)) {
+      return false;
+    }
+    completedRuns.delete(runId);
+    return true;
+  };
+
   return {
     handleChatEvent,
     handleAgentEvent,
     handleBtwEvent,
     pauseStreamingWatchdog,
     reconnectStreamingWatchdog,
+    consumeCompletedRunForPendingSend,
+    flushPendingHistoryRefreshIfIdle,
     dispose,
   };
 }

@@ -59,6 +59,8 @@ type CommandHandlerContext = {
   noteLocalBtwRunId?: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
   forgetLocalBtwRunId?: (runId: string) => void;
+  consumeCompletedRunForPendingSend?: (runId: string) => boolean;
+  flushPendingHistoryRefreshIfIdle?: () => void;
   runAuthFlow?: (params: {
     provider?: string;
   }) => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>;
@@ -111,6 +113,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId,
+    consumeCompletedRunForPendingSend,
+    flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
   } = context;
@@ -750,13 +754,24 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       });
       if (!isBtw) {
         const acceptedRunId = sendResult.runId || runId;
+        const acceptedRunAlreadyCompleted =
+          acceptedRunId !== runId && (consumeCompletedRunForPendingSend?.(acceptedRunId) ?? false);
         if (acceptedRunId !== runId) {
           forgetLocalRunId?.(runId);
-          noteLocalRunId?.(acceptedRunId);
+          if (!acceptedRunAlreadyCompleted) {
+            noteLocalRunId?.(acceptedRunId);
+          }
         }
         if (state.pendingOptimisticUserMessage) {
-          state.pendingChatRunId = acceptedRunId;
-          setActivityStatus("waiting");
+          if (acceptedRunAlreadyCompleted) {
+            state.pendingOptimisticUserMessage = false;
+            state.pendingChatRunId = null;
+            setActivityStatus("idle");
+            flushPendingHistoryRefreshIfIdle?.();
+          } else {
+            state.pendingChatRunId = acceptedRunId;
+            setActivityStatus("waiting");
+          }
           tui.requestRender();
         }
       }

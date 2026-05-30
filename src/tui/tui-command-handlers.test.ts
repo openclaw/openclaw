@@ -15,6 +15,8 @@ type SelectableOverlay = {
 };
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
 type SetSessionMock = ReturnType<typeof vi.fn> & ((key: string) => Promise<void>);
+type ConsumeCompletedRunMock = ReturnType<typeof vi.fn> & ((runId: string) => boolean);
+type FlushPendingHistoryRefreshMock = ReturnType<typeof vi.fn> & (() => void);
 
 async function flushAsyncSelect() {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -81,6 +83,8 @@ function createHarness(params?: {
   currentAgentId?: string;
   currentSessionKey?: string;
   abortActive?: AbortActiveMock;
+  consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
+  flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
@@ -153,6 +157,8 @@ function createHarness(params?: {
     noteLocalBtwRunId,
     forgetLocalRunId,
     forgetLocalBtwRunId: vi.fn(),
+    consumeCompletedRunForPendingSend: params?.consumeCompletedRunForPendingSend,
+    flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
   });
@@ -560,6 +566,29 @@ describe("tui command handlers", () => {
     expect(state.pendingChatRunId).toBe("run-accepted");
     expect(forgetLocalRunId).toHaveBeenCalledWith(sentRunId);
     expect(noteLocalRunId).toHaveBeenCalledWith("run-accepted");
+  });
+
+  it("does not reintroduce a backend-accepted runId after an early terminal event", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "run-accepted" });
+    const consumeCompletedRunForPendingSend = vi.fn((runId: string) => runId === "run-accepted");
+    const flushPendingHistoryRefreshIfIdle = vi.fn();
+    const { handleCommand, state, noteLocalRunId, forgetLocalRunId, setActivityStatus } =
+      createHarness({
+        sendChat,
+        consumeCompletedRunForPendingSend,
+        flushPendingHistoryRefreshIfIdle,
+      });
+
+    await handleCommand("hello");
+
+    const sentRunId = (firstMockArg(sendChat, "sendChat") as { runId: string }).runId;
+    expect(consumeCompletedRunForPendingSend).toHaveBeenCalledWith("run-accepted");
+    expect(forgetLocalRunId).toHaveBeenCalledWith(sentRunId);
+    expect(noteLocalRunId).not.toHaveBeenCalledWith("run-accepted");
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(flushPendingHistoryRefreshIfIdle).toHaveBeenCalledTimes(1);
   });
 
   it("clears the pending runId if sendChat fails", async () => {
