@@ -1235,18 +1235,33 @@ function escapeXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
+const COMPACT_DESCRIPTION_MAX_CHARS = 220;
+const COMPACT_DESCRIPTION_MIN_CHARS = 64;
+
+function truncateSkillDescription(description: string, maxChars: number): string {
+  const normalized = description.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) return normalized;
+  if (maxChars <= 3) return normalized.slice(0, Math.max(0, maxChars));
+  return normalized.slice(0, maxChars - 3).trimEnd() + "...";
+}
+
 /**
- * Compact skill catalog: name + location only (no description).
+ * Compact skill catalog: shortened description + location.
  * Used as a fallback when the full format exceeds the char budget,
- * preserving awareness of all skills before resorting to dropping.
+ * preserving trigger guidance before resorting to dropping skills.
  */
-export function formatSkillsCompact(skills: Skill[]): string {
-  if (skills.length === 0) {
-    return "";
-  }
+export function formatSkillsCompact(
+  skills: Skill[],
+  opts?: { descriptionMaxChars?: number },
+): string {
+  if (skills.length === 0) return "";
+  const descriptionMaxChars = Math.max(
+    0,
+    opts?.descriptionMaxChars ?? COMPACT_DESCRIPTION_MAX_CHARS,
+  );
   const lines = [
     "\n\nThe following skills provide specialized instructions for specific tasks.",
-    "Use the read tool to load a skill's file when the task matches its name.",
+    "Use the read tool to load a skill's file when the task matches its name or description.",
     "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
     "",
     "<available_skills>",
@@ -1254,6 +1269,9 @@ export function formatSkillsCompact(skills: Skill[]): string {
   for (const skill of skills) {
     lines.push("  <skill>");
     lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+    lines.push(
+      `    <description>${escapeXml(truncateSkillDescription(skill.description, descriptionMaxChars))}</description>`,
+    );
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
     lines.push("  </skill>");
   }
@@ -1272,6 +1290,7 @@ function applySkillsPromptLimits(params: {
   skillsForPrompt: Skill[];
   truncated: boolean;
   compact: boolean;
+  compactDescriptionMaxChars?: number;
 } {
   const limits = resolveSkillsLimits(params.config, params.agentId);
   const total = params.skills.length;
@@ -1280,29 +1299,45 @@ function applySkillsPromptLimits(params: {
   let skillsForPrompt = byCount;
   let truncated = total > byCount.length;
   let compact = false;
+  let compactDescriptionMaxChars: number | undefined;
 
   const fitsFull = (skills: Skill[]): boolean =>
     formatSkillsForPrompt(skills).length <= limits.maxSkillsPromptChars;
 
   // Reserve space for the warning line the caller prepends in compact mode.
   const compactBudget = limits.maxSkillsPromptChars - COMPACT_WARNING_OVERHEAD;
-  const fitsCompact = (skills: Skill[]): boolean =>
-    formatSkillsCompact(skills).length <= compactBudget;
+  const fitsCompact = (skills: Skill[], descriptionMaxChars: number): boolean =>
+    formatSkillsCompact(skills, { descriptionMaxChars }).length <= compactBudget;
 
   if (!fitsFull(skillsForPrompt)) {
-    // Full format exceeds budget. Try compact (name + location, no description)
-    // to preserve awareness of all skills before dropping any.
-    if (fitsCompact(skillsForPrompt)) {
+    // Full format exceeds budget. Try compact (name + short description + location)
+    // to preserve invocation signals before dropping any skills.
+    if (fitsCompact(skillsForPrompt, COMPACT_DESCRIPTION_MAX_CHARS)) {
       compact = true;
+      compactDescriptionMaxChars = COMPACT_DESCRIPTION_MAX_CHARS;
       // No skills dropped — only format downgraded. Preserve existing truncated state.
+    } else if (fitsCompact(skillsForPrompt, COMPACT_DESCRIPTION_MIN_CHARS)) {
+      compact = true;
+      let lo = COMPACT_DESCRIPTION_MIN_CHARS;
+      let hi = COMPACT_DESCRIPTION_MAX_CHARS;
+      while (lo < hi) {
+        const mid = Math.ceil((lo + hi) / 2);
+        if (fitsCompact(skillsForPrompt, mid)) {
+          lo = mid;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      compactDescriptionMaxChars = lo;
     } else {
       // Compact still too large — binary search the largest prefix that fits.
       compact = true;
+      compactDescriptionMaxChars = COMPACT_DESCRIPTION_MIN_CHARS;
       let lo = 0;
       let hi = skillsForPrompt.length;
       while (lo < hi) {
         const mid = Math.ceil((lo + hi) / 2);
-        if (fitsCompact(skillsForPrompt.slice(0, mid))) {
+        if (fitsCompact(skillsForPrompt.slice(0, mid), COMPACT_DESCRIPTION_MIN_CHARS)) {
           lo = mid;
         } else {
           hi = mid - 1;
@@ -1313,7 +1348,7 @@ function applySkillsPromptLimits(params: {
     }
   }
 
-  return { skillsForPrompt, truncated, compact };
+  return { skillsForPrompt, truncated, compact, compactDescriptionMaxChars };
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -1398,20 +1433,23 @@ function resolveWorkspaceSkillPromptState(
   const promptSkills = compactSkillPaths(resolvedSkills).toSorted((a, b) =>
     a.name.localeCompare(b.name, "en"),
   );
-  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
-    skills: promptSkills,
-    config: opts?.config,
-    agentId: opts?.agentId,
-  });
+  const { skillsForPrompt, truncated, compact, compactDescriptionMaxChars } =
+    applySkillsPromptLimits({
+      skills: promptSkills,
+      config: opts?.config,
+      agentId: opts?.agentId,
+    });
   const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
+    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions shortened)" : ""}. Run \`openclaw skills check\` to audit.`
     : compact
-      ? `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
+      ? `⚠️ Skills catalog using compact format (descriptions shortened). Run \`openclaw skills check\` to audit.`
       : "";
   const prompt = [
     remoteNote,
     truncationNote,
-    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
+    compact
+      ? formatSkillsCompact(skillsForPrompt, { descriptionMaxChars: compactDescriptionMaxChars })
+      : formatSkillsForPrompt(skillsForPrompt),
   ]
     .filter(Boolean)
     .join("\n");
