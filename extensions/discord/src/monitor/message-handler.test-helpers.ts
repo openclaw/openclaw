@@ -53,6 +53,10 @@ export function createDiscordHandlerParams(overrides?: {
 
 export function createDiscordPreflightContext(channelId = "ch-1") {
   return {
+    runtime: {
+      log: vi.fn(),
+      error: vi.fn(),
+    },
     data: {
       channel_id: channelId,
       message: {

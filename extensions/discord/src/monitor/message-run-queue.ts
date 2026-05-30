@@ -1,3 +1,4 @@
+import { resolveAgentTimeoutMs } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
 import type { ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -14,6 +15,13 @@ import { mergeAbortSignals } from "./timeouts.js";
 
 type ProcessDiscordMessage = typeof import("./message-handler.process.js").processDiscordMessage;
 
+class DiscordMessageRunTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Discord message run timed out after ${timeoutMs}ms`);
+    this.name = "DiscordMessageRunTimeoutError";
+  }
+}
+
 type DiscordMessageRunQueueParams = {
   runtime: RuntimeEnv;
   setStatus?: DiscordMonitorStatusSink;
@@ -29,6 +37,7 @@ type DiscordMessageRunQueue = {
 
 export type DiscordMessageRunQueueTestingHooks = {
   processDiscordMessage?: ProcessDiscordMessage;
+  runTimeoutMs?: number;
 };
 
 let messageProcessRuntimePromise:
@@ -40,6 +49,16 @@ async function loadMessageProcessRuntime() {
   return await messageProcessRuntimePromise;
 }
 
+function normalizeDiscordMessageRunTimeoutMs(params: {
+  value: unknown;
+  job: DiscordInboundJob;
+}): number {
+  if (typeof params.value === "number" && Number.isFinite(params.value)) {
+    return Math.max(0, Math.floor(params.value));
+  }
+  return resolveAgentTimeoutMs({ cfg: params.job.payload.cfg });
+}
+
 async function processDiscordQueuedMessage(params: {
   job: DiscordInboundJob;
   lifecycleSignal?: AbortSignal;
@@ -49,27 +68,76 @@ async function processDiscordQueuedMessage(params: {
   const processDiscordMessageImpl =
     params.testing?.processDiscordMessage ??
     (await loadMessageProcessRuntime()).processDiscordMessage;
-  const abortSignal = mergeAbortSignals([params.job.runtime.abortSignal, params.lifecycleSignal]);
-  try {
-    await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
-    await commitDiscordInboundReplay({
-      replayKeys: params.job.replayKeys,
-      replayGuard: params.replayGuard,
-    });
-  } catch (error) {
-    if (error instanceof DiscordRetryableInboundError) {
-      releaseDiscordInboundReplay({
+  const runTimeoutMs = normalizeDiscordMessageRunTimeoutMs({
+    value: params.testing?.runTimeoutMs,
+    job: params.job,
+  });
+  const timeoutController = runTimeoutMs > 0 ? new AbortController() : undefined;
+  const abortSignal = mergeAbortSignals([
+    params.job.runtime.abortSignal,
+    params.lifecycleSignal,
+    timeoutController?.signal,
+  ]);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const processPromise = (async () => {
+    try {
+      await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
+      if (timedOut) {
+        return;
+      }
+      await commitDiscordInboundReplay({
         replayKeys: params.job.replayKeys,
-        error,
         replayGuard: params.replayGuard,
       });
-    } else {
+    } catch (error) {
+      if (timedOut) {
+        return;
+      }
+      if (error instanceof DiscordRetryableInboundError) {
+        releaseDiscordInboundReplay({
+          replayKeys: params.job.replayKeys,
+          error,
+          replayGuard: params.replayGuard,
+        });
+      } else {
+        await commitDiscordInboundReplay({
+          replayKeys: params.job.replayKeys,
+          replayGuard: params.replayGuard,
+        });
+      }
+      throw error;
+    }
+  })();
+  try {
+    if (runTimeoutMs <= 0) {
+      await processPromise;
+      return;
+    }
+    await Promise.race([
+      processPromise,
+      new Promise<never>((_resolve, reject) => {
+        timeoutId = setTimeout(() => {
+          timedOut = true;
+          const error = new DiscordMessageRunTimeoutError(runTimeoutMs);
+          timeoutController?.abort(error);
+          reject(error);
+        }, runTimeoutMs);
+        timeoutId.unref?.();
+      }),
+    ]);
+  } catch (error) {
+    if (error instanceof DiscordMessageRunTimeoutError) {
       await commitDiscordInboundReplay({
         replayKeys: params.job.replayKeys,
         replayGuard: params.replayGuard,
       });
     }
     throw error;
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 

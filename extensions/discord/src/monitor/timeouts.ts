@@ -1,8 +1,14 @@
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
-// Compatibility constants for existing imports. Discord no longer enforces
-// channel-owned listener or inbound run timeouts.
+// Compatibility constant for existing imports. Discord no longer uses this
+// listener timeout to cover full agent/message processing.
 export const DISCORD_DEFAULT_LISTENER_TIMEOUT_MS = 120_000;
+
+/**
+ * @deprecated Compatibility export for callers that imported the previous
+ * Discord inbound worker default. Discord message-run watchdogs now use the
+ * configured agent timeout resolver instead of this constant.
+ */
 export const DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS = 30 * 60_000;
 
 export const DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS = 60_000;
