@@ -870,11 +870,16 @@ export function buildCodexRuntimeThreadConfig(
     "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
   };
   if (options.nativeCodeModeEnabled === false) {
-    return (
-      mergeCodexThreadConfigs(codeModeConfig, config, CODEX_CODE_MODE_DISABLED_THREAD_CONFIG) ?? {
-        ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-      }
-    );
+    const disabledConfig = mergeCodexThreadConfigs(
+      config,
+      CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+    ) ?? {
+      ...CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
+    };
+    // Native patch streaming is part of native code mode, so do not send it
+    // when runtime policy disables that tool surface.
+    delete disabledConfig["features.apply_patch_streaming_events"];
+    return disabledConfig;
   }
   if (options.nativeCodeModeOnlyEnabled === true) {
     return (

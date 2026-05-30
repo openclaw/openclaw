@@ -262,6 +262,7 @@ describe("Codex app-server native code mode config", () => {
       config: {
         "features.code_mode": true,
         "features.code_mode_only": true,
+        "features.apply_patch_streaming_events": true,
       },
     });
 
@@ -277,6 +278,9 @@ describe("Codex app-server native code mode config", () => {
       appServer: createAppServerOptions() as never,
       developerInstructions: "test instructions",
       nativeCodeModeEnabled: false,
+      config: {
+        "features.apply_patch_streaming_events": true,
+      },
     });
 
     expect(request.config).toEqual({
