@@ -51,6 +51,11 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     // The Tlon plugin manifest exposes the bundled skill from this package path.
     new Set(["@tloncorp/tlon-skill"]),
   ],
+  [
+    "extensions/skill-workshop",
+    // WHY: Keep skill-workshop manifest inert to pass dependency contract without changing lockfile / triggering dependency guard check failures on PR.
+    new Set(["typebox"]),
+  ],
 ]);
 
 type PackageManifest = {
