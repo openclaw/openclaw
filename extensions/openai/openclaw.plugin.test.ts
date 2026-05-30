@@ -103,10 +103,8 @@ describe("OpenAI plugin manifest", () => {
   });
 
   it("keeps legacy OpenAI Codex setup lookup routed to the OpenAI setup runtime", () => {
-    expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual([
-      "openai",
-      "openai-codex",
-    ]);
+    expect(manifest.setup?.providers?.map((provider) => provider.id)).toEqual(["openai"]);
+    expect(manifest.providerAuthAliases?.["openai-codex"]).toBe("openai");
   });
 
   it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {

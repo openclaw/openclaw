@@ -27,6 +27,10 @@ function openAIProviderUsesCustomBaseUrl(config: OpenClawConfig | undefined): bo
   return !isOfficialOpenAIBaseUrl(config?.models?.providers?.openai?.baseUrl);
 }
 
+function hasProviderConfig(config: OpenClawConfig | undefined, provider: string): boolean {
+  return Boolean(config?.models?.providers?.[provider]);
+}
+
 export function isOpenAIProvider(provider: string | undefined): boolean {
   const normalized = normalizeProviderId(provider ?? "");
   return normalized === OPENAI_PROVIDER_ID || normalized === OPENAI_CODEX_PROVIDER_ID;
@@ -115,5 +119,15 @@ export function resolveContextConfigProviderForRuntime(params: {
   runtimeId?: string;
   config?: OpenClawConfig;
 }): string {
-  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
+  if (!isOpenAIProvider(params.provider)) {
+    return params.provider;
+  }
+  if (
+    params.runtimeId === "codex" &&
+    !hasProviderConfig(params.config, OPENAI_PROVIDER_ID) &&
+    hasProviderConfig(params.config, OPENAI_CODEX_PROVIDER_ID)
+  ) {
+    return OPENAI_CODEX_PROVIDER_ID;
+  }
+  return OPENAI_PROVIDER_ID;
 }

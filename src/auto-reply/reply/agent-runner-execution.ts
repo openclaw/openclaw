@@ -1676,10 +1676,15 @@ export async function runAgentTurnWithFallback(params: {
             model: effectiveRun.model,
           }
         : candidateRun;
+    const persistedProvider = resolveOpenAIRuntimeProvider({
+      provider,
+      config: runtimeConfig,
+      workspaceDir: params.followupRun.run.workspaceDir,
+    });
     const applied = applyFallbackCandidateSelectionToEntry({
       entry: activeSessionEntry,
       run: selectionRun,
-      provider,
+      provider: persistedProvider,
       model,
       force: candidateRun !== effectiveRun && Boolean(effectiveRun.autoFallbackPrimaryProbe),
       ...(effectiveRun.autoFallbackPrimaryProbe

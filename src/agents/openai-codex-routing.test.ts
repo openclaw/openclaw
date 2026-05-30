@@ -52,6 +52,27 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe("openai");
   });
 
+  it("uses legacy Codex context config when canonical OpenAI config is absent", () => {
+    const config = {
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveContextConfigProviderForRuntime({
+        provider: "openai",
+        runtimeId: "codex",
+        config,
+      }),
+    ).toBe("openai-codex");
+  });
+
   it("keeps explicit OpenClaw plus Codex auth profile under the unified OpenAI provider", () => {
     expect(
       listOpenAIAuthProfileProvidersForAgentRuntime({

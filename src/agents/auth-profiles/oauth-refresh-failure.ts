@@ -34,6 +34,10 @@ function sanitizeOAuthRefreshFailureProvider(provider: string | null | undefined
   return normalized && SAFE_PROVIDER_ID_RE.test(normalized) ? normalized : null;
 }
 
+function canonicalizeOAuthRefreshFailureProvider(provider: string | null): string | null {
+  return provider === LEGACY_OPENAI_CODEX_PROVIDER_ID ? OPENAI_PROVIDER_ID : provider;
+}
+
 export function classifyOAuthRefreshFailureReason(
   message: string,
 ): OAuthRefreshFailureReason | null {
@@ -64,16 +68,18 @@ export function classifyOAuthRefreshFailure(message: string): {
     return null;
   }
   return {
-    provider: sanitizeOAuthRefreshFailureProvider(extractOAuthRefreshFailureProvider(message)),
+    provider: canonicalizeOAuthRefreshFailureProvider(
+      sanitizeOAuthRefreshFailureProvider(extractOAuthRefreshFailureProvider(message)),
+    ),
     reason: classifyOAuthRefreshFailureReason(message),
   };
 }
 
 export function buildOAuthRefreshFailureLoginCommand(provider: string | null | undefined): string {
-  const safeProvider = sanitizeOAuthRefreshFailureProvider(provider);
-  const canonicalProvider =
-    safeProvider === LEGACY_OPENAI_CODEX_PROVIDER_ID ? OPENAI_PROVIDER_ID : safeProvider;
-  return safeProvider
+  const canonicalProvider = canonicalizeOAuthRefreshFailureProvider(
+    sanitizeOAuthRefreshFailureProvider(provider),
+  );
+  return canonicalProvider
     ? formatCliCommand(`openclaw models auth login --provider ${canonicalProvider}`)
     : formatCliCommand("openclaw models auth login");
 }

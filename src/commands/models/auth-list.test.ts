@@ -147,7 +147,7 @@ describe("modelsAuthListCommand", () => {
 
     expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
       cfg: {},
-      provider: "openai-codex",
+      provider: "openai",
     });
     expect(runtime.jsonPayloads).toStrictEqual([
       {

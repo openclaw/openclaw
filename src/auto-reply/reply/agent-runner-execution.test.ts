@@ -3158,7 +3158,7 @@ describe("runAgentTurnWithFallback", () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const failedResult = await params.run("openai-codex", "gpt-5.4");
-      expect(sessionEntry.providerOverride).toBe("openai-codex");
+      expect(sessionEntry.providerOverride).toBe("openai");
       expect(sessionEntry.modelOverride).toBe("gpt-5.4");
       const classification = await params.classifyResult?.({
         result: failedResult as { payloads?: [] },
@@ -6125,12 +6125,12 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       authProfileId: undefined,
       authProfileIdSource: undefined,
     });
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-5.4");
     expect(sessionEntry.modelOverrideSource).toBe("auto");
     expect(sessionEntry.authProfileOverride).toBeUndefined();
@@ -6262,7 +6262,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.providerOverride).toBe("openai");
     expect(sessionEntry.modelOverride).toBe("gpt-5.4");
     expect(sessionEntry.modelOverrideSource).toBe("auto");
     expect(sessionEntry.modelOverrideFallbackOriginProvider).toBe("minimax");

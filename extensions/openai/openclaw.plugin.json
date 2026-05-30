@@ -231,10 +231,6 @@
       {
         "id": "openai",
         "envVars": ["OPENAI_API_KEY"]
-      },
-      {
-        "id": "openai-codex",
-        "envVars": ["OPENAI_API_KEY"]
       }
     ]
   },
