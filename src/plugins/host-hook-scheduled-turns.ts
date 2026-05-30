@@ -200,12 +200,13 @@ export async function schedulePluginSessionTurn(params: {
   pluginId: string;
   pluginName?: string;
   origin?: PluginOrigin;
+  trustedOfficialInstall?: boolean;
   schedule: PluginSessionTurnScheduleParams;
   shouldCommit?: () => boolean;
   cron?: CronServiceContract;
   ownerRegistry?: PluginRegistry;
 }): Promise<PluginSessionSchedulerJobHandle | undefined> {
-  if (params.origin !== "bundled") {
+  if (params.origin !== "bundled" && params.trustedOfficialInstall !== true) {
     return undefined;
   }
   const sessionKey = normalizeOptionalString(params.schedule.sessionKey);
@@ -354,10 +355,11 @@ export async function schedulePluginSessionTurn(params: {
 export async function unschedulePluginSessionTurnsByTag(params: {
   pluginId: string;
   origin?: PluginOrigin;
+  trustedOfficialInstall?: boolean;
   cron?: CronServiceContract;
   request: PluginSessionTurnUnscheduleByTagParams;
 }): Promise<PluginSessionTurnUnscheduleByTagResult> {
-  if (params.origin !== "bundled") {
+  if (params.origin !== "bundled" && params.trustedOfficialInstall !== true) {
     return { removed: 0, failed: 0 };
   }
   const sessionKey = normalizeOptionalString(params.request.sessionKey);

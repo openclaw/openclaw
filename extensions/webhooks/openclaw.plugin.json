@@ -4,7 +4,7 @@
     "onStartup": true
   },
   "name": "Webhooks",
-  "description": "Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.",
+  "description": "Authenticated inbound webhooks that trigger OpenClaw agents, TaskFlows, or channel delivery.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -25,6 +25,164 @@
       "secretInput": {
         "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
       },
+      "auth": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["bearer", "header", "hmac-sha256"]
+          },
+          "secret": { "$ref": "#/$defs/secretInput" },
+          "header": { "type": "string", "minLength": 1 },
+          "prefix": { "type": "string" }
+        },
+        "required": ["mode", "secret"]
+      },
+      "agentDispatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "messageTemplate": { "type": "string", "minLength": 1 },
+          "deliveryMode": { "type": "string", "enum": ["announce", "none"] },
+          "delayMs": { "type": "integer", "minimum": 0 },
+          "nameTemplate": { "type": "string", "minLength": 1 },
+          "tagTemplate": { "type": "string", "minLength": 1 },
+          "agentId": { "type": "string", "minLength": 1 },
+          "onCompletion": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "deliver": { "$ref": "#/$defs/deliverTarget" }
+            },
+            "required": ["deliver"]
+          }
+        }
+      },
+      "taskflowRunTask": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "runtime": { "type": "string", "enum": ["acp"] },
+          "taskTemplate": { "type": "string", "minLength": 1 },
+          "sourceId": { "type": "string", "minLength": 1 },
+          "childSessionKey": { "type": "string", "minLength": 1 },
+          "parentTaskId": { "type": "string", "minLength": 1 },
+          "agentId": { "type": "string", "minLength": 1 },
+          "runIdTemplate": { "type": "string", "minLength": 1 },
+          "labelTemplate": { "type": "string", "minLength": 1 },
+          "notifyPolicy": {
+            "type": "string",
+            "enum": ["done_only", "state_changes", "silent"]
+          },
+          "status": { "type": "string", "enum": ["queued", "running"] },
+          "preferMetadata": { "type": "boolean" }
+        }
+      },
+      "taskflowDispatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "goalTemplate": { "type": "string", "minLength": 1 },
+          "currentStep": {
+            "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+          },
+          "status": {
+            "type": "string",
+            "enum": ["queued", "running", "waiting", "blocked"]
+          },
+          "notifyPolicy": {
+            "type": "string",
+            "enum": ["done_only", "state_changes", "silent"]
+          },
+          "runTask": { "$ref": "#/$defs/taskflowRunTask" }
+        }
+      },
+      "dispatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["ack", "taskflow", "agent", "deliver"]
+          },
+          "agent": { "$ref": "#/$defs/agentDispatch" },
+          "taskflow": { "$ref": "#/$defs/taskflowDispatch" }
+        }
+      },
+      "event": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "header": { "type": "string", "minLength": 1 },
+          "payloadPath": { "type": "string", "minLength": 1 }
+        }
+      },
+      "idempotency": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "header": { "type": "string", "minLength": 1 },
+          "payloadPath": { "type": "string", "minLength": 1 },
+          "ttlHours": { "type": "number", "exclusiveMinimum": 0 }
+        }
+      },
+      "verification": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event": { "type": "string", "minLength": 1 },
+          "challengePath": { "type": "string", "minLength": 1 },
+          "responsePath": { "type": "string", "minLength": 1 }
+        }
+      },
+      "deliverTarget": {
+        "anyOf": [
+          { "type": "string", "minLength": 1 },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "type": "string", "enum": ["log", "channel"] },
+              "channel": { "type": "string", "minLength": 1 },
+              "to": { "type": "string", "minLength": 1 },
+              "textTemplate": { "type": "string", "minLength": 1 },
+              "accountId": { "type": "string", "minLength": 1 },
+              "threadId": {
+                "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "number" }]
+              },
+              "silent": { "type": "boolean" }
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "type": "string", "enum": ["exec"] },
+              "command": { "type": "string", "minLength": 1 },
+              "args": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "cwd": { "type": "string", "minLength": 1 },
+              "textTemplate": { "type": "string", "minLength": 1 },
+              "timeoutMs": { "type": "integer", "exclusiveMinimum": 0 }
+            },
+            "required": ["mode", "command"]
+          }
+        ]
+      },
+      "deliverExtra": {
+        "type": "object",
+        "additionalProperties": {
+          "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }]
+        }
+      },
       "route": {
         "type": "object",
         "additionalProperties": false,
@@ -33,13 +191,37 @@
           "path": { "type": "string", "minLength": 1 },
           "sessionKey": { "type": "string", "minLength": 1 },
           "secret": { "$ref": "#/$defs/secretInput" },
+          "auth": { "$ref": "#/$defs/auth" },
+          "dispatch": { "$ref": "#/$defs/dispatch" },
+          "events": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "event": { "$ref": "#/$defs/event" },
+          "idempotency": { "$ref": "#/$defs/idempotency" },
+          "verification": { "$ref": "#/$defs/verification" },
           "controllerId": { "type": "string", "minLength": 1 },
+          "prompt": { "type": "string", "minLength": 1 },
+          "skills": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "deliver": { "$ref": "#/$defs/deliverTarget" },
+          "deliverExtra": { "$ref": "#/$defs/deliverExtra" },
+          "deliver_extra": { "$ref": "#/$defs/deliverExtra" },
+          "deliverOnly": { "type": "boolean" },
+          "deliver_only": { "type": "boolean" },
           "description": { "type": "string" }
-        },
-        "required": ["sessionKey", "secret"]
+        }
       }
     },
     "properties": {
+      "publicUrl": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^https?://",
+        "description": "Reachable HTTP(S) base URL used when printing dynamic webhook subscription URLs."
+      },
       "routes": {
         "type": "object",
         "additionalProperties": {

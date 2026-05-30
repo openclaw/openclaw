@@ -2948,6 +2948,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   pluginId: record.id,
                   pluginName: record.name,
                   origin: record.origin,
+                  trustedOfficialInstall: record.trustedOfficialInstall,
                   schedule,
                   cron: getHostCronService(),
                   shouldCommit: isLoadedRecordInActiveRegistry,
@@ -2965,6 +2966,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 return unschedulePluginSessionTurnsByTag({
                   pluginId: record.id,
                   origin: record.origin,
+                  trustedOfficialInstall: record.trustedOfficialInstall,
                   cron: getHostCronService(),
                   request,
                 });

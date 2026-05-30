@@ -154,13 +154,15 @@ function expectSessionTurnHandle(
 async function scheduleWorkflowTurn(
   params: Omit<ScheduleSessionTurnRequest, "pluginId" | "origin" | "schedule"> & {
     origin?: ScheduleSessionTurnRequest["origin"];
+    trustedOfficialInstall?: ScheduleSessionTurnRequest["trustedOfficialInstall"];
     schedule?: Partial<SessionTurnSchedule>;
   } = {},
 ) {
-  const { origin = "bundled", schedule, ...rest } = params;
+  const { origin = "bundled", trustedOfficialInstall, schedule, ...rest } = params;
   return await schedulePluginSessionTurn({
     pluginId: WORKFLOW_PLUGIN_ID,
     origin,
+    trustedOfficialInstall,
     schedule: { ...DEFAULT_TURN_SCHEDULE, ...schedule } as SessionTurnSchedule,
     cron: params.cron ?? cron,
     ...rest,
@@ -173,10 +175,14 @@ async function unscheduleWorkflowTurnsByTag(
     tag: "nudge",
   },
   origin: Parameters<typeof unschedulePluginSessionTurnsByTag>[0]["origin"] = "bundled",
+  trustedOfficialInstall?: Parameters<
+    typeof unschedulePluginSessionTurnsByTag
+  >[0]["trustedOfficialInstall"],
 ) {
   return await unschedulePluginSessionTurnsByTag({
     pluginId: WORKFLOW_PLUGIN_ID,
     origin,
+    trustedOfficialInstall,
     cron,
     request,
   });
@@ -469,6 +475,48 @@ describe("plugin scheduled turns", () => {
     expectSessionTurnHandle(handle, "delay-job");
 
     expect((getCronAddBody() as { schedule?: { kind?: string } }).schedule?.kind).toBe("at");
+  });
+
+  it("allows trusted official installed plugins to schedule and unschedule session turns", async () => {
+    const taggedJob = makeCronJob({
+      id: "trusted-job",
+      name: buildPluginSchedulerCronName({
+        pluginId: WORKFLOW_PLUGIN_ID,
+        sessionKey: MAIN_SESSION_KEY,
+        tag: "nudge",
+        uniqueId: "trusted-job",
+      }),
+    });
+    workflowMocks.cronAdd.mockResolvedValue(taggedJob);
+    workflowMocks.cronListPage.mockResolvedValue({
+      jobs: [taggedJob],
+      total: 1,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+    workflowMocks.cronRemove.mockResolvedValue({ ok: true, removed: true });
+
+    const handle = await scheduleWorkflowTurn({
+      origin: "config",
+      trustedOfficialInstall: true,
+      schedule: { tag: "nudge" },
+    });
+
+    expectSessionTurnHandle(handle, "trusted-job");
+    await expect(
+      unscheduleWorkflowTurnsByTag({ sessionKey: MAIN_SESSION_KEY, tag: "nudge" }, "config", true),
+    ).resolves.toEqual({ removed: 1, failed: 0 });
+  });
+
+  it("rejects untrusted installed plugins from scheduling session turns", async () => {
+    await expect(scheduleWorkflowTurn({ origin: "config" })).resolves.toBeUndefined();
+    await expect(
+      unscheduleWorkflowTurnsByTag({ sessionKey: MAIN_SESSION_KEY, tag: "nudge" }, "config"),
+    ).resolves.toEqual({ removed: 0, failed: 0 });
+    expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
+    expect(workflowMocks.cronListPage).not.toHaveBeenCalled();
   });
 
   it("removes a stale cron job when the plugin unloads after cron.add", async () => {

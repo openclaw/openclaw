@@ -1230,6 +1230,8 @@
                   "plugins/google-meet",
                   "plugins/workboard",
                   "plugins/webhooks",
+                  "plugins/webhooks-enterprise-integrations",
+                  "plugins/webhooks-enterprise-validation",
                   "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/memory-wiki",

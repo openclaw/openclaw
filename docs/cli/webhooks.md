@@ -1,117 +1,167 @@
 ---
-summary: "CLI reference for `openclaw webhooks` (Gmail Pub/Sub setup and runner)"
+summary: "CLI reference for `openclaw webhooks` dynamic subscriptions"
 read_when:
-  - You want to wire Gmail Pub/Sub events into OpenClaw
-  - You need the full flag list and default values
+  - You want to create or manage Gateway-hosted webhook routes from the CLI
+  - You need to test a webhook route through the Gateway control plane
+  - You need the full flag list for `openclaw webhooks subscribe`
 title: "Webhooks"
 ---
 
 # `openclaw webhooks`
 
-Webhook helpers and integrations. Today this surface is scoped to Gmail Pub/Sub flows that integrate with the bundled `gog` watcher.
+`openclaw webhooks` manages dynamic routes for the bundled Webhooks plugin.
+The CLI talks to the OpenClaw Gateway over the normal Gateway WebSocket/RPC
+control plane. External systems still deliver real webhook events with HTTP
+`POST` requests to `/plugins/webhooks/<route>`.
+
+Use this command when you want a Hermes-style workflow:
+
+1. Create a named webhook subscription.
+2. Copy the returned URL and HMAC secret into the source system.
+3. Send a signed test delivery.
+4. List or remove the subscription later without editing static config.
 
 ## Subcommands
 
 ```bash
-openclaw webhooks gmail setup --account <email> [...]
-openclaw webhooks gmail run   [--account <email>] [...]
+openclaw webhooks subscribe <name> [flags]
+openclaw webhooks list
+openclaw webhooks remove <name>
+openclaw webhooks test <name> [flags]
 ```
 
-| Subcommand    | Description                                                                                  |
-| ------------- | -------------------------------------------------------------------------------------------- |
-| `gmail setup` | Configure Gmail watch, Pub/Sub topic/subscription, and the OpenClaw webhook delivery target. |
-| `gmail run`   | Run `gog watch serve` plus the watch auto-renew loop.                                        |
+| Subcommand  | Description                                                                  |
+| ----------- | ---------------------------------------------------------------------------- |
+| `subscribe` | Create or update a Gateway-managed webhook subscription.                     |
+| `list`      | List dynamic webhook subscriptions.                                          |
+| `remove`    | Remove a dynamic webhook subscription. Static config routes are not removed. |
+| `test`      | Send a signed test delivery through the Gateway method.                      |
 
-## `webhooks gmail setup`
+## `webhooks subscribe`
 
-Configure Gmail watch, Pub/Sub, and OpenClaw webhook delivery.
+Create or update a dynamic subscription. The route is persisted under the
+Gateway state directory and hot-loaded by the Webhooks plugin.
 
 ```bash
-openclaw webhooks gmail setup --account you@example.com
-openclaw webhooks gmail setup --account you@example.com --project my-gcp-project --json
-openclaw webhooks gmail setup --account you@example.com --hook-url https://gateway.example.com/hooks/gmail
+openclaw webhooks subscribe github-pr-review \
+  --agent-id webhook-reviewer \
+  --session-key github/pr-review \
+  --event-header x-github-event \
+  --events pull_request,pull_request_review \
+  --idempotency-header x-github-delivery \
+  --prompt 'Review GitHub PR {{body.pull_request.html_url}}. Payload: {{__raw__}}'
 ```
 
-### Required
+By default the command prints a Hermes-style setup summary with the URL, secret,
+events, dispatch mode, and provider configuration hint. Pass `--json` when a
+script needs the raw Gateway RPC response. The response includes the route path,
+a generated HMAC secret, and `webhookUrl` when
+`plugins.entries.webhooks.config.publicUrl` is configured:
 
-| Flag                | Description             |
-| ------------------- | ----------------------- |
-| `--account <email>` | Gmail account to watch. |
+```json
+{
+  "subscription": {
+    "name": "github-pr-review",
+    "path": "/plugins/webhooks/github-pr-review"
+  },
+  "secret": "<generated-hmac-secret>",
+  "webhookUrl": "https://gateway.example.com/plugins/webhooks/github-pr-review"
+}
+```
 
-### Pub/Sub options
+### Flags
 
-| Flag                    | Default                | Description                                          |
-| ----------------------- | ---------------------- | ---------------------------------------------------- |
-| `--project <id>`        | (none)                 | GCP project id (the OAuth client owner).             |
-| `--topic <name>`        | `gog-gmail-watch`      | Pub/Sub topic name.                                  |
-| `--subscription <name>` | `gog-gmail-watch-push` | Pub/Sub subscription name.                           |
-| `--label <label>`       | `INBOX`                | Gmail label to watch.                                |
-| `--push-endpoint <url>` | (none)                 | Explicit Pub/Sub push endpoint. Overrides Tailscale. |
+| Flag                                | Description                                                         |
+| ----------------------------------- | ------------------------------------------------------------------- |
+| `--path <path>`                     | Explicit webhook HTTP path. Defaults to `/plugins/webhooks/<name>`. |
+| `--session-key <key>`               | OpenClaw session key used for agent dispatch.                       |
+| `--agent-id <id>`                   | Agent id for agent dispatch.                                        |
+| `--dispatch-mode <mode>`            | `agent` or `ack`. Defaults to `agent`.                              |
+| `--delivery-mode <mode>`            | Agent delivery mode, `none` or `announce`. Defaults to `none`.      |
+| `--prompt <template>`               | Prompt/message template.                                            |
+| `--message-template <template>`     | Alias for the agent message template.                               |
+| `--events <csv>`                    | Event allowlist.                                                    |
+| `--event-header <header>`           | Header that contains the event type.                                |
+| `--event-payload-path <path>`       | Payload path that contains the event type.                          |
+| `--idempotency-header <header>`     | Header that contains the delivery id.                               |
+| `--idempotency-payload-path <path>` | Payload path that contains the delivery id.                         |
+| `--idempotency-ttl-hours <hours>`   | Duplicate delivery retention window.                                |
+| `--skills <csv>`                    | Skills to include in dispatch context.                              |
+| `--description <text>`              | Human-readable route description.                                   |
+| `--secret <secret>`                 | Explicit HMAC secret. If omitted, OpenClaw generates one.           |
+| `--json`                            | Print the raw Gateway RPC response.                                 |
 
-### OpenClaw delivery options
+Dynamic subscriptions use HMAC-SHA256 by default:
 
-| Flag                   | Default | Description                                |
-| ---------------------- | ------- | ------------------------------------------ |
-| `--hook-url <url>`     | (none)  | OpenClaw webhook URL.                      |
-| `--hook-token <token>` | (none)  | OpenClaw webhook token.                    |
-| `--push-token <token>` | (none)  | Push token forwarded to `gog watch serve`. |
+```text
+Header: x-openclaw-webhook-signature-256
+Value:  sha256=<hex HMAC of raw request body>
+```
 
-### `gog watch serve` options
-
-| Flag                  | Default         | Description                                                       |
-| --------------------- | --------------- | ----------------------------------------------------------------- |
-| `--bind <host>`       | `127.0.0.1`     | `gog watch serve` bind host.                                      |
-| `--port <port>`       | `8788`          | `gog watch serve` port.                                           |
-| `--path <path>`       | `/gmail-pubsub` | `gog watch serve` path.                                           |
-| `--include-body`      | `true`          | Include email body snippets. Pass `--no-include-body` to disable. |
-| `--max-bytes <n>`     | `20000`         | Max bytes per body snippet.                                       |
-| `--renew-minutes <n>` | `720` (12h)     | Renew Gmail watch every N minutes.                                |
-
-### Tailscale exposure
-
-| Flag                      | Default  | Description                                                      |
-| ------------------------- | -------- | ---------------------------------------------------------------- |
-| `--tailscale <mode>`      | `funnel` | Expose push endpoint via tailscale: `funnel`, `serve`, or `off`. |
-| `--tailscale-path <path>` | (none)   | Path for tailscale serve/funnel.                                 |
-| `--tailscale-target <t>`  | (none)   | Tailscale serve/funnel target (port, `host:port`, or URL).       |
-
-### Output
-
-| Flag     | Description                                       |
-| -------- | ------------------------------------------------- |
-| `--json` | Print a machine-readable summary instead of text. |
-
-## `webhooks gmail run`
-
-Run `gog watch serve` plus the watch auto-renew loop in the foreground.
+## `webhooks list`
 
 ```bash
-openclaw webhooks gmail run --account you@example.com
+openclaw webhooks list
 ```
 
-`run` accepts the same `gog watch serve`, OpenClaw delivery, Pub/Sub, and Tailscale flags as `setup`, except:
+Prints dynamic subscriptions in a readable list. Pass `--json` for the raw
+response. Secrets are not printed; the output only shows whether a secret is
+configured.
 
-- `--account` is **optional** on `run` (it falls back to the configured account).
-- `run` does **not** accept `--project`, `--push-endpoint`, or `--json`.
-- `run` flags have no built-in defaults; missing values fall back to the values written by `setup`.
+## `webhooks remove`
 
-| Category          | Flags                                                                            |
-| ----------------- | -------------------------------------------------------------------------------- |
-| Pub/Sub           | `--account`, `--topic`, `--subscription`, `--label`                              |
-| OpenClaw delivery | `--hook-url`, `--hook-token`, `--push-token`                                     |
-| `gog watch serve` | `--bind`, `--port`, `--path`, `--include-body`, `--max-bytes`, `--renew-minutes` |
-| Tailscale         | `--tailscale`, `--tailscale-path`, `--tailscale-target`                          |
+```bash
+openclaw webhooks remove github-pr-review
+```
 
-<Note>
-For `run`, the `--topic` value is the full Pub/Sub topic path (`projects/.../topics/...`), not just the short topic name.
-</Note>
+Removes a dynamic subscription by name. Static routes declared in
+`openclaw.json` or plugin config remain managed by config. Pass `--json` for
+the raw response.
 
-## End-to-end flow
+## `webhooks test`
 
-See [Gmail Pub/Sub integration](/automation/cron-jobs#gmail-pubsub-integration) for the GCP project, OAuth, and gateway-side setup that pairs with these CLI commands.
+```bash
+openclaw webhooks test github-pr-review \
+  --event-type pull_request \
+  --idempotency-key delivery-test-1 \
+  --payload '{"pull_request":{"html_url":"https://github.com/acme/repo/pull/1"}}'
+```
+
+`test` signs the payload with the subscription secret and executes the same
+handler path that real HTTP deliveries use. It is a control-plane test for route
+configuration; it does not prove that GitHub, Codebase, Meego, or another
+external system can reach the route. For production proof, create a real object
+in the source system and confirm its delivery id, OpenClaw dispatch/run id, and
+writeback result. Pass `--json` for the raw response.
+
+## Public URL
+
+Set `plugins.entries.webhooks.config.publicUrl` when the CLI should print full
+URLs for new subscriptions:
+
+```json5
+{
+  plugins: {
+    entries: {
+      webhooks: {
+        enabled: true,
+        config: {
+          publicUrl: "https://gateway.example.com",
+          routes: {},
+        },
+      },
+    },
+  },
+}
+```
+
+`publicUrl` is only used for CLI output. It does not expose the Gateway by
+itself. The configured URL must already be reachable by the source system
+through public HTTPS, private ingress, an enterprise API gateway, or a temporary
+development tunnel.
 
 ## Related
 
-- [CLI reference](/cli)
-- [Webhook automation](/automation/webhook)
-- [Gmail Pub/Sub](/automation/cron-jobs#gmail-pubsub-integration)
+- [Webhooks plugin](/plugins/webhooks)
+- [Enterprise webhook validation](/plugins/webhooks-enterprise-validation)
+- [Enterprise webhook integrations](/plugins/webhooks-enterprise-integrations)

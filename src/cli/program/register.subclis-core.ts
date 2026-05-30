@@ -194,11 +194,6 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerHooksCli",
     },
     {
-      commandNames: ["webhooks"],
-      loadModule: () => import("../webhooks-cli.js"),
-      exportName: "registerWebhooksCli",
-    },
-    {
       commandNames: ["qr"],
       loadModule: () => import("../qr-cli.js"),
       exportName: "registerQrCli",
@@ -209,6 +204,18 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerClawbotCli",
     },
   ]),
+  {
+    commandNames: ["webhooks"],
+    register: async (program, argv) => {
+      const mod = await import("../webhooks-cli.js");
+      mod.registerWebhooksCli(program);
+      const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+      await registerPluginCliCommandsFromValidatedConfig(program, undefined, undefined, {
+        mode: "lazy",
+        primary: "webhooks",
+      });
+    },
+  },
   {
     commandNames: ["pairing"],
     register: async (program, argv) => {

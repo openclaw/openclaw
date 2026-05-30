@@ -1,307 +1,137 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { z } from "zod";
 import type { PluginRuntime } from "../api.js";
 import {
   createFixedWindowRateLimiter,
   createWebhookInFlightLimiter,
-  readJsonWebhookBodyOrReject,
+  readWebhookBodyOrReject,
   resolveRequestClientIp,
   resolveConfiguredSecretInputString,
-  resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
   WEBHOOK_IN_FLIGHT_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   type OpenClawConfig,
   type WebhookInFlightLimiter,
 } from "../runtime-api.js";
-import type { WebhookSecretInput } from "./config.js";
+import {
+  collectRequestHeaders,
+  extractPresentedSecretFromHeaders,
+  hmacMatches,
+  timingSafeEquals,
+  type WebhookHeaderMap,
+} from "./auth.js";
+import type {
+  ConfiguredWebhookAuth,
+  ConfiguredWebhookAgentDispatchConfig,
+  ConfiguredWebhookDeliveryConfig,
+  ConfiguredWebhookEventConfig,
+  ConfiguredWebhookIdempotencyConfig,
+  ConfiguredWebhookVerificationConfig,
+  ConfiguredWebhookTaskFlowTemplateConfig,
+  WebhookSecretInput,
+} from "./config.js";
+import { executeDeliveryDispatch } from "./delivery.js";
+import { executeAgentDispatch, type WebhookAgentCompletionDispatch } from "./dispatch.js";
+import { extractEventType, extractIdempotencyKey } from "./events.js";
+import {
+  checkAndStoreDurableIdempotencyKey,
+  createInMemoryIdempotencyRecords,
+  type WebhookIdempotencyStore,
+} from "./idempotency.js";
+import { executeTaskFlowActionDispatch, executeTaskFlowTemplateDispatch } from "./taskflow.js";
+import type { WebhookDispatchContext } from "./template.js";
+import { normalizePathString, readTemplatePath } from "./template.js";
 
 type BoundTaskFlowRuntime = ReturnType<PluginRuntime["tasks"]["managedFlows"]["bindSession"]>;
+type LoadChannelOutboundAdapter = PluginRuntime["channel"]["outbound"]["loadAdapter"];
 
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+export type ScheduleSessionTurn = (params: {
+  sessionKey: string;
+  message: string;
+  agentId?: string;
+  deliveryMode?: "none" | "announce";
+  name?: string;
+  tag?: string;
+  delayMs: number;
+  deleteAfterRun?: boolean;
+}) => Promise<{ id: string; pluginId: string; sessionKey: string; kind: string } | undefined>;
 
-const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([
-    z.null(),
-    z.boolean(),
-    z.number().finite(),
-    z.string(),
-    z.array(jsonValueSchema),
-    z.record(z.string(), jsonValueSchema),
-  ]),
-);
+export type WebhookLogger = {
+  info?: (message: string, details?: unknown) => void;
+  warn?: (message: string, details?: unknown) => void;
+};
 
-const nullableStringSchema = z.string().trim().min(1).nullable().optional();
-
-const createFlowRequestSchema = z
-  .object({
-    action: z.literal("create_flow"),
-    controllerId: z.string().trim().min(1).optional(),
-    goal: z.string().trim().min(1),
-    status: z.enum(["queued", "running", "waiting", "blocked"]).optional(),
-    notifyPolicy: z.enum(["done_only", "state_changes", "silent"]).optional(),
-    currentStep: nullableStringSchema,
-    stateJson: jsonValueSchema.nullable().optional(),
-    waitJson: jsonValueSchema.nullable().optional(),
-  })
-  .strict();
-
-const getFlowRequestSchema = z
-  .object({ action: z.literal("get_flow"), flowId: z.string().trim().min(1) })
-  .strict();
-const listFlowsRequestSchema = z.object({ action: z.literal("list_flows") }).strict();
-const findLatestFlowRequestSchema = z.object({ action: z.literal("find_latest_flow") }).strict();
-const resolveFlowRequestSchema = z
-  .object({ action: z.literal("resolve_flow"), token: z.string().trim().min(1) })
-  .strict();
-const getTaskSummaryRequestSchema = z
-  .object({ action: z.literal("get_task_summary"), flowId: z.string().trim().min(1) })
-  .strict();
-
-const setWaitingRequestSchema = z
-  .object({
-    action: z.literal("set_waiting"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-    currentStep: nullableStringSchema,
-    stateJson: jsonValueSchema.nullable().optional(),
-    waitJson: jsonValueSchema.nullable().optional(),
-    blockedTaskId: nullableStringSchema,
-    blockedSummary: nullableStringSchema,
-  })
-  .strict();
-
-const resumeFlowRequestSchema = z
-  .object({
-    action: z.literal("resume_flow"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-    status: z.enum(["queued", "running"]).optional(),
-    currentStep: nullableStringSchema,
-    stateJson: jsonValueSchema.nullable().optional(),
-  })
-  .strict();
-
-const finishFlowRequestSchema = z
-  .object({
-    action: z.literal("finish_flow"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-    stateJson: jsonValueSchema.nullable().optional(),
-  })
-  .strict();
-
-const failFlowRequestSchema = z
-  .object({
-    action: z.literal("fail_flow"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-    stateJson: jsonValueSchema.nullable().optional(),
-    blockedTaskId: nullableStringSchema,
-    blockedSummary: nullableStringSchema,
-  })
-  .strict();
-
-const requestCancelRequestSchema = z
-  .object({
-    action: z.literal("request_cancel"),
-    flowId: z.string().trim().min(1),
-    expectedRevision: z.number().int().nonnegative(),
-  })
-  .strict();
-
-const cancelFlowRequestSchema = z
-  .object({
-    action: z.literal("cancel_flow"),
-    flowId: z.string().trim().min(1),
-  })
-  .strict();
-
-const runTaskRequestSchema = z
-  .object({
-    action: z.literal("run_task"),
-    flowId: z.string().trim().min(1),
-    runtime: z.enum(["subagent", "acp"]),
-    sourceId: z.string().trim().min(1).optional(),
-    childSessionKey: z.string().trim().min(1).optional(),
-    parentTaskId: z.string().trim().min(1).optional(),
-    agentId: z.string().trim().min(1).optional(),
-    runId: z.string().trim().min(1).optional(),
-    label: z.string().trim().min(1).optional(),
-    task: z.string().trim().min(1),
-    preferMetadata: z.boolean().optional(),
-    notifyPolicy: z.enum(["done_only", "state_changes", "silent"]).optional(),
-    status: z.enum(["queued", "running"]).optional(),
-    startedAt: z.number().int().nonnegative().optional(),
-    lastEventAt: z.number().int().nonnegative().optional(),
-    progressSummary: nullableStringSchema,
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    if (
-      value.status !== "running" &&
-      (value.startedAt !== undefined ||
-        value.lastEventAt !== undefined ||
-        value.progressSummary !== undefined)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "status must be running when startedAt, lastEventAt, or progressSummary is provided",
-        path: ["status"],
-      });
-    }
-  });
-
-const webhookActionSchema = z.discriminatedUnion("action", [
-  createFlowRequestSchema,
-  getFlowRequestSchema,
-  listFlowsRequestSchema,
-  findLatestFlowRequestSchema,
-  resolveFlowRequestSchema,
-  getTaskSummaryRequestSchema,
-  setWaitingRequestSchema,
-  resumeFlowRequestSchema,
-  finishFlowRequestSchema,
-  failFlowRequestSchema,
-  requestCancelRequestSchema,
-  cancelFlowRequestSchema,
-  runTaskRequestSchema,
-]);
-
-type WebhookAction = z.infer<typeof webhookActionSchema>;
+export type { WebhookAgentCompletionDispatch } from "./dispatch.js";
+export type { WebhookDispatchContext } from "./template.js";
+export { deliverWebhookCompletion } from "./delivery.js";
 
 export type TaskFlowWebhookTarget = {
   routeId: string;
   path: string;
+  dispatchMode?: "taskflow";
+  auth?: ConfiguredWebhookAuth;
   secretInput: WebhookSecretInput;
   secretConfigPath: string;
   defaultControllerId: string;
+  event?: ConfiguredWebhookEventConfig;
+  events?: string[];
+  idempotency?: ConfiguredWebhookIdempotencyConfig;
+  verification?: ConfiguredWebhookVerificationConfig;
+  prompt?: string;
+  skills?: string[];
+  taskflow?: ConfiguredWebhookTaskFlowTemplateConfig;
   taskFlow: BoundTaskFlowRuntime;
 };
 
-type FlowView = {
-  flowId: string;
-  syncMode: "task_mirrored" | "managed";
-  controllerId?: string;
-  revision: number;
-  status: string;
-  notifyPolicy: string;
-  goal: string;
-  currentStep?: string;
-  blockedTaskId?: string;
-  blockedSummary?: string;
-  stateJson?: JsonValue;
-  waitJson?: JsonValue;
-  cancelRequestedAt?: number;
-  createdAt: number;
-  updatedAt: number;
-  endedAt?: number;
+export type AckWebhookTarget = {
+  routeId: string;
+  path: string;
+  dispatchMode: "ack";
+  auth: ConfiguredWebhookAuth;
+  secretConfigPath?: string;
+  event?: ConfiguredWebhookEventConfig;
+  events?: string[];
+  idempotency?: ConfiguredWebhookIdempotencyConfig;
+  verification?: ConfiguredWebhookVerificationConfig;
+  prompt?: string;
+  skills?: string[];
 };
 
-type TaskView = {
-  taskId: string;
-  runtime: string;
-  sourceId?: string;
-  scopeKind: string;
-  childSessionKey?: string;
-  parentFlowId?: string;
-  parentTaskId?: string;
-  agentId?: string;
-  runId?: string;
-  label?: string;
-  task: string;
-  status: string;
-  deliveryStatus: string;
-  notifyPolicy: string;
-  createdAt: number;
-  startedAt?: number;
-  endedAt?: number;
-  lastEventAt?: number;
-  cleanupAfter?: number;
-  error?: string;
-  progressSummary?: string;
-  terminalSummary?: string;
-  terminalOutcome?: string;
+export type AgentWebhookTarget = {
+  routeId: string;
+  path: string;
+  dispatchMode: "agent";
+  auth: ConfiguredWebhookAuth;
+  secretConfigPath?: string;
+  event?: ConfiguredWebhookEventConfig;
+  events?: string[];
+  idempotency?: ConfiguredWebhookIdempotencyConfig;
+  verification?: ConfiguredWebhookVerificationConfig;
+  prompt?: string;
+  skills?: string[];
+  sessionKey: string;
+  agent: ConfiguredWebhookAgentDispatchConfig;
 };
 
-function pickOptionalFields<T extends object, TKey extends keyof T & string>(
-  source: T,
-  keys: readonly TKey[],
-): Partial<Pick<T, TKey>> {
-  const result: Partial<Pick<T, TKey>> = {};
-  for (const key of keys) {
-    const value = source[key];
-    if (value !== undefined) {
-      result[key] = value;
-    }
-  }
-  return result;
-}
+export type DeliverWebhookTarget = {
+  routeId: string;
+  path: string;
+  dispatchMode: "deliver";
+  auth: ConfiguredWebhookAuth;
+  secretConfigPath?: string;
+  event?: ConfiguredWebhookEventConfig;
+  events?: string[];
+  idempotency?: ConfiguredWebhookIdempotencyConfig;
+  verification?: ConfiguredWebhookVerificationConfig;
+  prompt?: string;
+  skills?: string[];
+  delivery: ConfiguredWebhookDeliveryConfig;
+};
 
-function pickOptionalTruthyStringFields<T extends object, TKey extends keyof T & string>(
-  source: T,
-  keys: readonly TKey[],
-): Partial<Pick<T, TKey>> {
-  const result: Partial<Pick<T, TKey>> = {};
-  for (const key of keys) {
-    const value = source[key];
-    if (typeof value === "string" && value) {
-      result[key] = value as T[TKey];
-    }
-  }
-  return result;
-}
-
-function toFlowView(flow: FlowView): FlowView {
-  return {
-    flowId: flow.flowId,
-    syncMode: flow.syncMode,
-    ...pickOptionalTruthyStringFields(flow, [
-      "controllerId",
-      "currentStep",
-      "blockedTaskId",
-      "blockedSummary",
-    ]),
-    revision: flow.revision,
-    status: flow.status,
-    notifyPolicy: flow.notifyPolicy,
-    goal: flow.goal,
-    ...pickOptionalFields(flow, ["stateJson", "waitJson", "cancelRequestedAt"]),
-    createdAt: flow.createdAt,
-    updatedAt: flow.updatedAt,
-    ...pickOptionalFields(flow, ["endedAt"]),
-  };
-}
-
-function toTaskView(task: TaskView): TaskView {
-  return {
-    taskId: task.taskId,
-    runtime: task.runtime,
-    ...pickOptionalTruthyStringFields(task, [
-      "sourceId",
-      "childSessionKey",
-      "parentFlowId",
-      "parentTaskId",
-      "agentId",
-      "runId",
-      "label",
-      "error",
-      "progressSummary",
-      "terminalSummary",
-      "terminalOutcome",
-    ]),
-    scopeKind: task.scopeKind,
-    task: task.task,
-    status: task.status,
-    deliveryStatus: task.deliveryStatus,
-    notifyPolicy: task.notifyPolicy,
-    createdAt: task.createdAt,
-    ...pickOptionalFields(task, ["startedAt", "endedAt", "lastEventAt", "cleanupAfter"]),
-  };
-}
+export type WebhookTarget =
+  | TaskFlowWebhookTarget
+  | AckWebhookTarget
+  | AgentWebhookTarget
+  | DeliverWebhookTarget;
 
 function writeJson(res: ServerResponse, statusCode: number, body: unknown): void {
   res.statusCode = statusCode;
@@ -309,363 +139,294 @@ function writeJson(res: ServerResponse, statusCode: number, body: unknown): void
   res.end(JSON.stringify(body));
 }
 
-function extractSharedSecret(req: IncomingMessage): string {
-  const authHeader = Array.isArray(req.headers.authorization)
-    ? (req.headers.authorization[0] ?? "")
-    : (req.headers.authorization ?? "");
-  if (normalizeLowercaseStringOrEmpty(authHeader).startsWith("bearer ")) {
-    return authHeader.slice("bearer ".length).trim();
-  }
-  const sharedHeader = req.headers["x-openclaw-webhook-secret"];
-  return Array.isArray(sharedHeader) ? (sharedHeader[0] ?? "").trim() : (sharedHeader ?? "").trim();
+function isTaskFlowTarget(target: WebhookTarget): target is TaskFlowWebhookTarget {
+  return target.dispatchMode === undefined || target.dispatchMode === "taskflow";
 }
 
-function timingSafeEquals(left: string, right: string): boolean {
-  // Reuse the shared helper so webhook auth semantics stay aligned across plugins.
-  return safeEqualSecret(left, right);
+export function isAgentTarget(target: WebhookTarget): target is AgentWebhookTarget {
+  return target.dispatchMode === "agent";
 }
 
-function formatZodError(error: z.ZodError): string {
-  const firstIssue = error.issues[0];
-  if (!firstIssue) {
-    return "invalid request";
-  }
-  const path = firstIssue.path.length > 0 ? `${firstIssue.path.join(".")}: ` : "";
-  return `${path}${firstIssue.message}`;
+export function isDeliverTarget(target: WebhookTarget): target is DeliverWebhookTarget {
+  return target.dispatchMode === "deliver";
 }
 
-function mapMutationResult(
-  result:
-    | {
-        applied: true;
-        flow: FlowView;
-      }
-    | {
-        applied: false;
-        code: string;
-        current?: FlowView;
-      },
-): unknown {
-  return result;
-}
-
-function mapFlowMutationResult(
-  result:
-    | {
-        applied: true;
-        flow: Parameters<typeof toFlowView>[0];
-      }
-    | {
-        applied: false;
-        code: string;
-        current?: Parameters<typeof toFlowView>[0];
-      },
-): unknown {
-  return mapMutationResult(
-    result.applied
-      ? { applied: true, flow: toFlowView(result.flow) }
-      : {
-          applied: false,
-          code: result.code,
-          ...(result.current ? { current: toFlowView(result.current) } : {}),
-        },
-  );
-}
-
-function mapMutationStatus(result: {
-  applied: boolean;
-  code?: "not_found" | "not_managed" | "revision_conflict";
-}): { statusCode: number; code?: string; error?: string } {
-  if (result.applied) {
-    return { statusCode: 200 };
+function targetAuth(target: WebhookTarget): ConfiguredWebhookAuth {
+  if (target.auth) {
+    return target.auth;
   }
-  switch (result.code) {
-    case "not_found":
-      return {
-        statusCode: 404,
-        code: "not_found",
-        error: "TaskFlow not found.",
-      };
-    case "not_managed":
-      return {
-        statusCode: 409,
-        code: "not_managed",
-        error: "TaskFlow is not managed by this webhook surface.",
-      };
-    case "revision_conflict":
-      return {
-        statusCode: 409,
-        code: "revision_conflict",
-        error: "TaskFlow changed since the caller's expected revision.",
-      };
-    default:
-      return {
-        statusCode: 409,
-        code: "mutation_rejected",
-        error: "TaskFlow mutation was rejected.",
-      };
-  }
-}
-
-function mapRunTaskStatus(result: { created: boolean; found: boolean; reason?: string }): {
-  statusCode: number;
-  code?: string;
-  error?: string;
-} {
-  if (result.created) {
-    return { statusCode: 200 };
-  }
-  if (!result.found) {
-    return {
-      statusCode: 404,
-      code: "not_found",
-      error: "TaskFlow not found.",
-    };
-  }
-  if (result.reason === "Flow cancellation has already been requested.") {
-    return {
-      statusCode: 409,
-      code: "cancel_requested",
-      error: result.reason,
-    };
-  }
-  if (result.reason === "Flow does not accept managed child tasks.") {
-    return {
-      statusCode: 409,
-      code: "not_managed",
-      error: result.reason,
-    };
-  }
-  if (result.reason?.startsWith("Flow is already ")) {
-    return {
-      statusCode: 409,
-      code: "terminal",
-      error: result.reason,
-    };
+  if (!isTaskFlowTarget(target)) {
+    throw new Error("Ack webhook target is missing auth config.");
   }
   return {
-    statusCode: 409,
-    code: "task_not_created",
-    error: result.reason ?? "TaskFlow task was not created.",
+    mode: "bearer",
+    secret: target.secretInput,
+    prefix: "Bearer",
+    legacySharedHeader: true,
   };
 }
 
-function mapCancelStatus(result: { found: boolean; cancelled: boolean; reason?: string }): {
-  statusCode: number;
-  code?: string;
-  error?: string;
-} {
-  if (result.cancelled) {
-    return { statusCode: 200 };
-  }
-  if (!result.found) {
-    return {
-      statusCode: 404,
-      code: "not_found",
-      error: "TaskFlow not found.",
-    };
-  }
-  if (result.reason === "One or more child tasks are still active.") {
-    return {
-      statusCode: 202,
-      code: "cancel_pending",
-      error: result.reason,
-    };
-  }
-  if (result.reason === "Flow changed while cancellation was in progress.") {
-    return {
-      statusCode: 409,
-      code: "revision_conflict",
-      error: result.reason,
-    };
-  }
-  if (result.reason?.startsWith("Flow is already ")) {
-    return {
-      statusCode: 409,
-      code: "terminal",
-      error: result.reason,
-    };
-  }
-  return {
-    statusCode: 409,
-    code: "cancel_rejected",
-    error: result.reason ?? "TaskFlow cancellation was rejected.",
-  };
+function targetSecretConfigPath(target: WebhookTarget): string {
+  return target.secretConfigPath ?? `plugins.entries.webhooks.routes.${target.routeId}.auth.secret`;
 }
 
-function describeWebhookOutcome(params: { action: WebhookAction; result: unknown }): {
-  statusCode: number;
-  code?: string;
-  error?: string;
-} {
-  switch (params.action.action) {
-    case "set_waiting":
-    case "resume_flow":
-    case "finish_flow":
-    case "fail_flow":
-    case "request_cancel":
-      return mapMutationStatus(
-        params.result as {
-          applied: boolean;
-          code?: "not_found" | "not_managed" | "revision_conflict";
-        },
-      );
-    case "cancel_flow":
-      return mapCancelStatus(
-        params.result as {
-          found: boolean;
-          cancelled: boolean;
-          reason?: string;
-        },
-      );
-    case "run_task":
-      return mapRunTaskStatus(
-        params.result as {
-          created: boolean;
-          found: boolean;
-          reason?: string;
-        },
-      );
-    default:
-      return { statusCode: 200 };
+function parseJsonBody(rawBody: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(rawBody) };
+  } catch {
+    return { ok: false };
   }
 }
 
-async function executeWebhookAction(params: {
-  action: WebhookAction;
-  target: TaskFlowWebhookTarget;
+export type WebhookEnvelope = {
+  path: string;
+  headers: WebhookHeaderMap;
+  rawBody: string;
+  remoteAddress?: string;
+};
+
+export type WebhookEnvelopeResult = {
+  statusCode: number;
+  body: unknown;
+  contentType: "json" | "text";
+};
+
+function jsonResult(statusCode: number, body: unknown): WebhookEnvelopeResult {
+  return { statusCode, body, contentType: "json" };
+}
+
+function textResult(statusCode: number, body: string): WebhookEnvelopeResult {
+  return { statusCode, body, contentType: "text" };
+}
+
+function maybeCreateVerificationResult(params: {
+  target: WebhookTarget;
+  eventType?: string;
+  body: unknown;
+}): WebhookEnvelopeResult | undefined {
+  const verification = params.target.verification;
+  if (!verification) {
+    return undefined;
+  }
+  if (verification.event && params.eventType !== verification.event) {
+    return undefined;
+  }
+  const challenge = normalizePathString(readTemplatePath(params.body, verification.challengePath));
+  if (!challenge) {
+    return undefined;
+  }
+  return jsonResult(200, {
+    [verification.responsePath]: challenge,
+  });
+}
+
+async function resolveTargetSecret(params: {
+  target: WebhookTarget;
   cfg: OpenClawConfig;
-}): Promise<unknown> {
-  const { action, target } = params;
-  switch (action.action) {
-    case "create_flow": {
-      const flow = target.taskFlow.createManaged({
-        controllerId: action.controllerId ?? target.defaultControllerId,
-        goal: action.goal,
-        status: action.status,
-        notifyPolicy: action.notifyPolicy,
-        currentStep: action.currentStep ?? undefined,
-        stateJson: action.stateJson,
-        waitJson: action.waitJson,
+}): Promise<string | undefined> {
+  const secretInput = targetAuth(params.target).secret;
+  if (typeof secretInput === "string") {
+    return secretInput;
+  }
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.cfg,
+    env: process.env,
+    value: secretInput,
+    path: targetSecretConfigPath(params.target),
+  });
+  return resolved.value;
+}
+
+async function isTargetAuthMatch(params: {
+  target: WebhookTarget;
+  headers: WebhookHeaderMap;
+  rawBody: string;
+  cfg: OpenClawConfig;
+}): Promise<boolean> {
+  const auth = targetAuth(params.target);
+  const presentedSecret = extractPresentedSecretFromHeaders({ headers: params.headers, auth });
+  if (presentedSecret.length === 0) {
+    return false;
+  }
+  const resolvedSecret = await resolveTargetSecret({
+    target: params.target,
+    cfg: params.cfg,
+  });
+  if (!resolvedSecret) {
+    return false;
+  }
+  if (auth.mode === "hmac-sha256") {
+    return hmacMatches({
+      rawBody: params.rawBody,
+      secret: resolvedSecret,
+      presentedSignature: presentedSecret,
+    });
+  }
+  return timingSafeEquals(resolvedSecret, presentedSecret);
+}
+
+export async function handleWebhookEnvelope(params: {
+  cfg: OpenClawConfig;
+  targets: WebhookTarget[];
+  envelope: WebhookEnvelope;
+  idempotencyRecords: ReturnType<typeof createInMemoryIdempotencyRecords>;
+  idempotencyStore?: WebhookIdempotencyStore;
+  scheduleSessionTurn?: ScheduleSessionTurn;
+  onAgentCompletionDispatch?: (dispatch: WebhookAgentCompletionDispatch) => void | Promise<void>;
+  loadChannelOutboundAdapter?: LoadChannelOutboundAdapter;
+  logger?: WebhookLogger;
+}): Promise<WebhookEnvelopeResult> {
+  let target: WebhookTarget | undefined;
+  for (const candidate of params.targets) {
+    if (
+      await isTargetAuthMatch({
+        target: candidate,
+        headers: params.envelope.headers,
+        rawBody: params.envelope.rawBody,
+        cfg: params.cfg,
+      })
+    ) {
+      target = candidate;
+      break;
+    }
+  }
+  if (!target) {
+    return textResult(401, "unauthorized");
+  }
+
+  const parsedBody = parseJsonBody(params.envelope.rawBody);
+  if (!parsedBody.ok) {
+    return textResult(400, "invalid request body");
+  }
+
+  const eventType = extractEventType({
+    headers: params.envelope.headers,
+    body: parsedBody.value,
+    config: target.event,
+  });
+  const verificationResult = maybeCreateVerificationResult({
+    target,
+    eventType,
+    body: parsedBody.value,
+  });
+  if (verificationResult) {
+    return verificationResult;
+  }
+
+  if (target.events?.length && (!eventType || !target.events.includes(eventType))) {
+    return jsonResult(200, {
+      ok: true,
+      routeId: target.routeId,
+      skipped: true,
+      reason: "event_not_allowed",
+      ...(eventType ? { eventType } : {}),
+    });
+  }
+
+  const idempotencyKey = extractIdempotencyKey({
+    headers: params.envelope.headers,
+    body: parsedBody.value,
+    config: target.idempotency,
+  });
+  if (target.idempotency) {
+    const dedupe = await checkAndStoreDurableIdempotencyKey({
+      store: params.idempotencyStore,
+      records: params.idempotencyRecords,
+      routeId: target.routeId,
+      key: idempotencyKey,
+      ttlMs: target.idempotency.ttlMs,
+      nowMs: Date.now(),
+    });
+    if (dedupe.duplicate) {
+      return jsonResult(200, {
+        ok: true,
+        routeId: target.routeId,
+        duplicate: true,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
       });
-      return { flow: toFlowView(flow) };
     }
-    case "get_flow": {
-      const flow = target.taskFlow.get(action.flowId);
-      return { flow: flow ? toFlowView(flow) : null };
-    }
-    case "list_flows":
-      return { flows: target.taskFlow.list().map(toFlowView) };
-    case "find_latest_flow": {
-      const flow = target.taskFlow.findLatest();
-      return { flow: flow ? toFlowView(flow) : null };
-    }
-    case "resolve_flow": {
-      const flow = target.taskFlow.resolve(action.token);
-      return { flow: flow ? toFlowView(flow) : null };
-    }
-    case "get_task_summary":
-      return { summary: target.taskFlow.getTaskSummary(action.flowId) ?? null };
-    case "set_waiting": {
-      const result = target.taskFlow.setWaiting({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-        currentStep: action.currentStep,
-        stateJson: action.stateJson,
-        waitJson: action.waitJson,
-        blockedTaskId: action.blockedTaskId,
-        blockedSummary: action.blockedSummary,
+  }
+
+  const dispatchContext: WebhookDispatchContext = {
+    routeId: target.routeId,
+    ...(eventType ? { eventType } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+    body: parsedBody.value,
+    rawBody: params.envelope.rawBody,
+    headers: params.envelope.headers,
+  };
+
+  if (!isTaskFlowTarget(target)) {
+    if (isAgentTarget(target)) {
+      const outcome = await executeAgentDispatch({
+        target,
+        context: dispatchContext,
+        scheduleSessionTurn: params.scheduleSessionTurn,
+        onAgentCompletionDispatch: params.onAgentCompletionDispatch,
+        logger: params.logger,
       });
-      return mapFlowMutationResult(result);
+      return jsonResult(outcome.statusCode, outcome.body);
     }
-    case "resume_flow": {
-      const result = target.taskFlow.resume({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-        status: action.status,
-        currentStep: action.currentStep,
-        stateJson: action.stateJson,
-      });
-      return mapFlowMutationResult(result);
-    }
-    case "finish_flow": {
-      const result = target.taskFlow.finish({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-        stateJson: action.stateJson,
-      });
-      return mapFlowMutationResult(result);
-    }
-    case "fail_flow": {
-      const result = target.taskFlow.fail({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-        stateJson: action.stateJson,
-        blockedTaskId: action.blockedTaskId,
-        blockedSummary: action.blockedSummary,
-      });
-      return mapFlowMutationResult(result);
-    }
-    case "request_cancel": {
-      const result = target.taskFlow.requestCancel({
-        flowId: action.flowId,
-        expectedRevision: action.expectedRevision,
-      });
-      return mapFlowMutationResult(result);
-    }
-    case "cancel_flow": {
-      const result = await target.taskFlow.cancel({
-        flowId: action.flowId,
+    if (isDeliverTarget(target)) {
+      const outcome = await executeDeliveryDispatch({
+        target,
+        context: dispatchContext,
+        loadChannelOutboundAdapter: params.loadChannelOutboundAdapter,
+        logger: params.logger,
         cfg: params.cfg,
       });
-      return {
-        found: result.found,
-        cancelled: result.cancelled,
-        ...(result.reason ? { reason: result.reason } : {}),
-        ...(result.flow ? { flow: toFlowView(result.flow) } : {}),
-        ...(result.tasks ? { tasks: result.tasks.map(toTaskView) } : {}),
-      };
+      return jsonResult(outcome.statusCode, outcome.body);
     }
-    case "run_task": {
-      const result = target.taskFlow.runTask({
-        flowId: action.flowId,
-        runtime: action.runtime,
-        sourceId: action.sourceId,
-        childSessionKey: action.childSessionKey,
-        parentTaskId: action.parentTaskId,
-        agentId: action.agentId,
-        runId: action.runId,
-        label: action.label,
-        task: action.task,
-        preferMetadata: action.preferMetadata,
-        notifyPolicy: action.notifyPolicy,
-        status: action.status,
-        startedAt: action.startedAt,
-        lastEventAt: action.lastEventAt,
-        progressSummary: action.progressSummary,
-      });
-      if (result.created) {
-        return {
-          created: true,
-          flow: toFlowView(result.flow),
-          task: toTaskView(result.task),
-        };
-      }
-      return {
-        found: result.found,
-        created: false,
-        reason: result.reason,
-        ...(result.flow ? { flow: toFlowView(result.flow) } : {}),
-      };
-    }
+    return jsonResult(200, {
+      ok: true,
+      routeId: target.routeId,
+      result: {
+        action: "ack",
+        ...(eventType ? { eventType } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      },
+    });
   }
-  throw new Error("Unsupported webhook action");
+
+  if (target.taskflow || target.prompt) {
+    const result = await executeTaskFlowTemplateDispatch({
+      target,
+      context: dispatchContext,
+    });
+    return jsonResult(202, {
+      ok: true,
+      routeId: target.routeId,
+      result,
+    });
+  }
+
+  const outcome = await executeTaskFlowActionDispatch({
+    body: parsedBody.value,
+    target,
+    cfg: params.cfg,
+  });
+  return jsonResult(outcome.statusCode, outcome.body);
+}
+
+function writeEnvelopeResult(res: ServerResponse, result: WebhookEnvelopeResult): void {
+  if (result.contentType === "json") {
+    writeJson(res, result.statusCode, result.body);
+    return;
+  }
+  res.statusCode = result.statusCode;
+  res.end(String(result.body));
 }
 
 export function createTaskFlowWebhookRequestHandler(params: {
   cfg: OpenClawConfig;
-  targetsByPath: Map<string, TaskFlowWebhookTarget[]>;
+  targetsByPath: Map<string, WebhookTarget[]>;
+  resolveTargetsByPath?: () => Promise<Map<string, WebhookTarget[]>>;
   inFlightLimiter?: WebhookInFlightLimiter;
+  idempotencyStore?: WebhookIdempotencyStore;
+  scheduleSessionTurn?: ScheduleSessionTurn;
+  onAgentCompletionDispatch?: (dispatch: WebhookAgentCompletionDispatch) => void | Promise<void>;
+  loadChannelOutboundAdapter?: LoadChannelOutboundAdapter;
+  logger?: WebhookLogger;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
@@ -678,26 +439,16 @@ export function createTaskFlowWebhookRequestHandler(params: {
       maxInFlightPerKey: WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
       maxTrackedKeys: WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
     });
-  const resolveTargetSecret = async (
-    target: TaskFlowWebhookTarget,
-  ): Promise<string | undefined> => {
-    if (typeof target.secretInput === "string") {
-      return target.secretInput;
-    }
-    const resolved = await resolveConfiguredSecretInputString({
-      config: params.cfg,
-      env: process.env,
-      value: target.secretInput,
-      path: target.secretConfigPath,
-    });
-    return resolved.value;
-  };
+  const idempotencyRecords = createInMemoryIdempotencyRecords();
 
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
+    const targetsByPath = params.resolveTargetsByPath
+      ? await params.resolveTargetsByPath()
+      : params.targetsByPath;
     return await withResolvedWebhookRequestPipeline({
       req,
       res,
-      targetsByPath: params.targetsByPath,
+      targetsByPath,
       allowMethods: ["POST"],
       requireJsonContentType: true,
       rateLimiter,
@@ -713,72 +464,35 @@ export function createTaskFlowWebhookRequestHandler(params: {
         return `${new URL(req.url ?? "/", "http://localhost").pathname}:${clientIp}`;
       })(),
       inFlightLimiter,
-      handle: async ({ targets }) => {
-        const presentedSecret = extractSharedSecret(req);
-        const target = await resolveWebhookTargetWithAuthOrReject({
-          targets,
-          res,
-          isMatch: async (candidate) => {
-            if (presentedSecret.length === 0) {
-              return false;
-            }
-            const resolvedSecret = await resolveTargetSecret(candidate);
-            return Boolean(resolvedSecret && timingSafeEquals(resolvedSecret, presentedSecret));
-          },
-        });
-        if (!target) {
-          return true;
-        }
-
-        const body = await readJsonWebhookBodyOrReject({
+      handle: async ({ path, targets }: { path: string; targets: WebhookTarget[] }) => {
+        const body = await readWebhookBodyOrReject({
           req,
           res,
           maxBytes: 256 * 1024,
           timeoutMs: 15_000,
-          emptyObjectOnEmpty: false,
-          invalidJsonMessage: "invalid request body",
+          invalidBodyMessage: "invalid request body",
         });
         if (!body.ok) {
           return true;
         }
 
-        const parsed = webhookActionSchema.safeParse(body.value);
-        if (!parsed.success) {
-          writeJson(res, 400, {
-            ok: false,
-            code: "invalid_request",
-            error: formatZodError(parsed.error),
-          });
-          return true;
-        }
-
-        const result = await executeWebhookAction({
-          action: parsed.data,
-          target,
+        const result = await handleWebhookEnvelope({
           cfg: params.cfg,
+          targets,
+          envelope: {
+            path,
+            headers: collectRequestHeaders(req),
+            rawBody: body.value,
+            remoteAddress: req.socket.remoteAddress,
+          },
+          idempotencyRecords,
+          idempotencyStore: params.idempotencyStore,
+          scheduleSessionTurn: params.scheduleSessionTurn,
+          onAgentCompletionDispatch: params.onAgentCompletionDispatch,
+          loadChannelOutboundAdapter: params.loadChannelOutboundAdapter,
+          logger: params.logger,
         });
-        const outcome = describeWebhookOutcome({
-          action: parsed.data,
-          result,
-        });
-        writeJson(
-          res,
-          outcome.statusCode,
-          outcome.statusCode < 400
-            ? {
-                ok: true,
-                routeId: target.routeId,
-                ...(outcome.code ? { code: outcome.code } : {}),
-                result,
-              }
-            : {
-                ok: false,
-                routeId: target.routeId,
-                code: outcome.code ?? "request_rejected",
-                error: outcome.error ?? "request rejected",
-                result,
-              },
-        );
+        writeEnvelopeResult(res, result);
         return true;
       },
     });

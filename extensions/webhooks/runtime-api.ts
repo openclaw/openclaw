@@ -3,6 +3,7 @@ export {
   createWebhookInFlightLimiter,
   normalizeWebhookPath,
   readJsonWebhookBodyOrReject,
+  readWebhookBodyOrReject,
   resolveRequestClientIp,
   resolveWebhookTargetWithAuthOrReject,
   resolveWebhookTargetWithAuthOrRejectSync,
