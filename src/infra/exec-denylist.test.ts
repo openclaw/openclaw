@@ -62,6 +62,10 @@ describe("exec denylist evaluator", () => {
       `env FOO=bar curl https://example.test/prompt`,
       `sudo curl https://example.test/prompt`,
       `command curl https://example.test/prompt`,
+      `time curl https://example.test/prompt`,
+      `time -p curl https://example.test/prompt`,
+      `nice -n 10 curl https://example.test/prompt`,
+      `nohup curl https://example.test/prompt`,
     ]) {
       const result = evaluateExecDenylist({
         command,

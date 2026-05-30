@@ -436,8 +436,59 @@ enum ExecDenylistEvaluator {
         if self.isShellNetworkFetchExecutable(effectiveArgv.first) {
             return true
         }
+        if let precommand = self.shellPrecommandArgv(effectiveArgv) {
+            return self.isShellNetworkFetchArgv(precommand, depth: depth + 1)
+        }
         guard let carried = self.carriedCommandArgv(effectiveArgv) else { return false }
         return self.isShellNetworkFetchArgv(carried, depth: depth + 1)
+    }
+
+    private static func shellPrecommandArgv(_ argv: [String]) -> [String]? {
+        let executable = self.normalizedExecutableName(argv.first)
+        switch executable {
+        case "nohup":
+            return argv.count > 1 ? Array(argv.dropFirst()) : nil
+        case "time":
+            var index = 1
+            while index < argv.count {
+                let token = argv[index]
+                if token == "--" {
+                    index += 1
+                    break
+                }
+                if !token.hasPrefix("-") {
+                    break
+                }
+                index += 1
+            }
+            return index < argv.count ? Array(argv.suffix(from: index)) : nil
+        case "nice":
+            var index = 1
+            while index < argv.count {
+                let token = argv[index]
+                if token == "--" {
+                    index += 1
+                    break
+                }
+                if token.range(of: #"^-\d+$"#, options: .regularExpression) != nil ||
+                    token.range(of: #"^--adjustment=.+"#, options: .regularExpression) != nil
+                {
+                    index += 1
+                    continue
+                }
+                if token == "-n" || token == "--adjustment" {
+                    index += 2
+                    continue
+                }
+                if !token.hasPrefix("-") {
+                    break
+                }
+                index += 1
+            }
+            return index < argv.count ? Array(argv.suffix(from: index)) : nil
+        default:
+            return nil
+        }
     }
 
     private static func stripLeadingEnvAssignments(_ argv: [String]) -> [String] {

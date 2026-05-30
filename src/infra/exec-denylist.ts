@@ -428,8 +428,58 @@ function isShellNetworkFetchArgv(argv: readonly string[], depth = 0): boolean {
   if (isShellNetworkFetchExecutable(argv[0])) {
     return true;
   }
+  const precommand = resolveShellPrecommandArgv(argv);
+  if (precommand) {
+    return isShellNetworkFetchArgv(precommand, depth + 1);
+  }
   const carried = resolveCarrierCommandArgv([...argv], depth, { includeExec: true });
   return carried ? isShellNetworkFetchArgv(carried, depth + 1) : false;
+}
+
+function resolveShellPrecommandArgv(argv: readonly string[]): readonly string[] | null {
+  const executable = normalizeExecutableName(argv[0]);
+  if (executable === "nohup") {
+    return argv.length > 1 ? argv.slice(1) : null;
+  }
+  if (executable === "time") {
+    let index = 1;
+    while (index < argv.length) {
+      const token = argv[index] ?? "";
+      if (token === "--") {
+        index += 1;
+        break;
+      }
+      if (!token.startsWith("-")) {
+        break;
+      }
+      index += 1;
+    }
+    return index < argv.length ? argv.slice(index) : null;
+  }
+  if (executable === "nice") {
+    let index = 1;
+    while (index < argv.length) {
+      const token = argv[index] ?? "";
+      if (token === "--") {
+        index += 1;
+        break;
+      }
+      if (/^-\d+$/u.test(token) || /^--adjustment=.+/u.test(token)) {
+        index += 1;
+        continue;
+      }
+      if (token === "-n" || token === "--adjustment") {
+        index += 2;
+        continue;
+      }
+      if (!token.startsWith("-")) {
+        break;
+      }
+      index += 1;
+    }
+    return index < argv.length ? argv.slice(index) : null;
+  }
+  return null;
 }
 
 function readShellCommandWord(value: string, start: number): { word: string; end: number } {
