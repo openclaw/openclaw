@@ -48,7 +48,10 @@ const surfaceEntry = (id: string, surfaceTag: string, extra: Record<string, unkn
   },
 });
 
-async function withLiveFetch(mockFetch: ReturnType<typeof vi.fn>, run: () => Promise<void>) {
+async function withLiveFetch(
+  mockFetch: ReturnType<typeof vi.fn>,
+  run: () => Promise<void>,
+) {
   const env = { ...process.env };
   delete process.env.NODE_ENV;
   delete process.env.VITEST;
@@ -76,14 +79,12 @@ async function withLiveFetch(mockFetch: ReturnType<typeof vi.fn>, run: () => Pro
   }
 }
 
-describe("DeepInfra generation catalogs", () => {
-  it("return null when no discoveryApiKey is configured", async () => {
-    await expect(listDeepInfraImageGenCatalog(makeCtx())).resolves.toBeNull();
-    await expect(listDeepInfraVideoGenCatalog(makeCtx())).resolves.toBeNull();
-  });
-});
-
 describe("listDeepInfraImageGenCatalog", () => {
+  it("returns null when no discoveryApiKey is configured", async () => {
+    const result = await listDeepInfraImageGenCatalog(makeCtx());
+    expect(result).toBeNull();
+  });
+
   it("returns null when live discovery succeeds but the response has zero image-gen entries", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -154,6 +155,11 @@ describe("listDeepInfraImageGenCatalog", () => {
 });
 
 describe("listDeepInfraVideoGenCatalog", () => {
+  it("returns null when no discoveryApiKey is configured", async () => {
+    const result = await listDeepInfraVideoGenCatalog(makeCtx());
+    expect(result).toBeNull();
+  });
+
   it("returns null when live discovery succeeds but the response has zero video-gen entries", async () => {
     // Current production state: TTS/STT/T2V models lack the OPENAI tag the
     // backend filter requires, so a key-authenticated discovery still
@@ -202,7 +208,10 @@ describe("listDeepInfraVideoGenCatalog", () => {
     await withLiveFetch(mockFetch, async () => {
       const result = await listDeepInfraVideoGenCatalog(withKeyCtx());
       expect(result).not.toBeNull();
-      expect(result?.map((e) => e.model)).toEqual(["Wan-AI/Wan2.6-T2V", "ByteDance/Seedance-2.0"]);
+      expect(result?.map((e) => e.model)).toEqual([
+        "Wan-AI/Wan2.6-T2V",
+        "ByteDance/Seedance-2.0",
+      ]);
       const first = result?.[0];
       expect(first?.kind).toBe("video_generation");
       expect(first?.capabilities?.generate?.supportsAspectRatio).toBe(true);

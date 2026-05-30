@@ -105,12 +105,7 @@ export function buildThreadingToolContext(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
-  const isRestartSentinelContinuation =
-    sessionCtx.InputProvenance?.kind === "internal_system" &&
-    sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
-  const currentMessageId = isRestartSentinelContinuation
-    ? sessionCtx.ReplyToId
-    : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
+  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,

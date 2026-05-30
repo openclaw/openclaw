@@ -107,7 +107,7 @@ const SecretsFileProviderSchema = z
   })
   .strict();
 
-const SecretsManualExecProviderSchema = z
+const SecretsExecProviderSchema = z
   .object({
     source: z.literal("exec"),
     command: z
@@ -144,24 +144,7 @@ const SecretsManualExecProviderSchema = z
   })
   .strict();
 
-const SecretsPluginIntegrationExecProviderSchema = z
-  .object({
-    source: z.literal("exec"),
-    pluginIntegration: z
-      .object({
-        pluginId: z.string().min(1).max(128),
-        integrationId: z.string().min(1).max(128),
-      })
-      .strict(),
-  })
-  .strict();
-
-const SecretsExecProviderSchema = z.union([
-  SecretsManualExecProviderSchema,
-  SecretsPluginIntegrationExecProviderSchema,
-]);
-
-export const SecretProviderSchema = z.union([
+export const SecretProviderSchema = z.discriminatedUnion("source", [
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
@@ -460,7 +443,6 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "vydra",
   "xai",
   "xiaomi",
-  "xiaomi-token-plan",
   "zai",
 ]);
 

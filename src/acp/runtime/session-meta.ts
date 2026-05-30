@@ -99,7 +99,6 @@ export function readAcpSessionEntry(params: {
 export async function listAcpSessionEntries(params: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  clone?: boolean;
 }): Promise<AcpSessionStoreEntry[]> {
   const cfg = params.cfg ?? getRuntimeConfig();
   const storeTargets = await resolveAllAgentSessionStoreTargets(
@@ -112,7 +111,7 @@ export async function listAcpSessionEntries(params: {
     const storePath = target.storePath;
     let store: Record<string, SessionEntry>;
     try {
-      store = loadSessionStore(storePath, params.clone === false ? { clone: false } : undefined);
+      store = loadSessionStore(storePath);
     } catch {
       continue;
     }

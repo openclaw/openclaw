@@ -19,8 +19,6 @@ const MUTATING_TOOL_NAMES = new Set([
   "canvas",
   "nodes",
   "session_status",
-  "create_goal",
-  "update_goal",
 ]);
 
 // File-mutation tools that operate on the same `path` target identity.
@@ -151,8 +149,6 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "exec":
     case "bash":
     case "sessions_send":
-    case "create_goal":
-    case "update_goal":
       return true;
     case "process":
       return action != null && PROCESS_MUTATING_ACTIONS.has(action);

@@ -94,6 +94,8 @@ describe("runAuthProbes", () => {
       expect(result.results[0]?.status).toBe("ok");
       expect(runEmbeddedAgent).toHaveBeenCalledWith(
         expect.objectContaining({
+          agentHarnessId: "openclaw",
+          agentHarnessRuntimeOverride: "openclaw",
           modelRun: true,
           disableTools: true,
           authProfileId: "openai-codex:profile",

@@ -1,6 +1,7 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
 import { asFiniteNumber } from "../shared/number-coercion.js";
-import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
+import { isAbortedAgentStopReason } from "./run-termination.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
   captureSubagentCompletionReplyUsing,
@@ -59,9 +60,6 @@ type AgentWaitResult = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
-  pendingError?: boolean;
-  timeoutPhase?: string;
-  providerStarted?: boolean;
 };
 
 export type SubagentRunOutcome = {
@@ -276,17 +274,17 @@ export function applySubagentWaitOutcome(params: {
     next.endedAt = params.wait.endedAt;
   }
   const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
-  const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(params.wait);
   let outcome = next.outcome;
-  // Capture/announcement callers can pass raw wait snapshots that bypass the
-  // primary normalizers, so preserve the shared timeout/cancel precedence here.
-  if (terminalOutcome?.status === "timeout") {
-    outcome = { status: "timeout" };
-  } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
+  // Capture/announcement callers can pass raw wait snapshots that bypass the primary normalizers.
+  if (isBlockedLivenessState(params.wait?.livenessState)) {
+    outcome = { status: "error", error: formatBlockedLivenessError(waitError) };
+  } else if (isAbortedAgentStopReason(params.wait?.stopReason)) {
     outcome = { status: "error", error: "subagent run terminated" };
-  } else if (terminalOutcome?.reason === "blocked" || terminalOutcome?.reason === "failed") {
-    outcome = { status: "error", error: terminalOutcome.error ?? waitError };
-  } else if (terminalOutcome?.reason === "completed") {
+  } else if (params.wait?.status === "timeout") {
+    outcome = { status: "timeout" };
+  } else if (params.wait?.status === "error") {
+    outcome = { status: "error", error: waitError };
+  } else if (params.wait?.status === "ok") {
     outcome = { status: "ok" };
   }
   next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;

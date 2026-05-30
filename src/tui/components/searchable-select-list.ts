@@ -7,9 +7,9 @@ import {
   type SelectListTheme,
   truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
+import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
 import { findWordBoundaryIndex, fuzzyFilterLower } from "./fuzzy-filter.js";
 
 const ANSI_ESCAPE = String.fromCharCode(27);

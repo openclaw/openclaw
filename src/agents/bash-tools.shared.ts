@@ -2,7 +2,6 @@ import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { parseStrictInteger } from "../shared/number-coercion.js";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxBackendExecSpec } from "./sandbox/backend-handle.types.js";
@@ -210,7 +209,12 @@ export function clampWithDefault(
 
 export function readEnvInt(key: string, legacyKey?: string) {
   const raw = process.env[key] || (legacyKey ? process.env[legacyKey] : undefined);
-  return parseStrictInteger(raw);
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^[+-]?\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 export function chunkString(input: string, limit = CHUNK_LIMIT) {

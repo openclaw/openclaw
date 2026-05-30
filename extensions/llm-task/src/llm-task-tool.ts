@@ -126,7 +126,7 @@ export const llmTaskToolDefinition = {
       Type.Unknown({ description: "Optional JSON Schema to validate the returned JSON." }),
     ),
     provider: Type.Optional(
-      Type.String({ description: "Provider override (e.g. openai, anthropic)." }),
+      Type.String({ description: "Provider override (e.g. openai-codex, anthropic)." }),
     ),
     model: Type.Optional(Type.String({ description: "Model id override." })),
     thinking: Type.Optional(Type.String({ description: "Thinking level override." })),

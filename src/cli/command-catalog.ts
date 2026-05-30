@@ -124,6 +124,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: {
       loadPlugins: "never",
       pluginRegistry: { scope: "channels" },
+      routeConfigGuard: "when-suppressed",
       ensureCliPath: false,
       networkProxy: "bypass",
     },
@@ -179,6 +180,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["commitments"],
     policy: {
       ensureCliPath: false,
+      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -223,6 +225,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       ensureCliPath: false,
+      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -233,6 +236,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: {
       ensureCliPath: false,
+      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },
@@ -242,6 +246,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["tasks"],
     policy: {
       ensureCliPath: false,
+      routeConfigGuard: "when-suppressed",
       loadPlugins: "never",
       networkProxy: "bypass",
     },

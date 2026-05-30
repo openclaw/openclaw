@@ -9,7 +9,6 @@ import {
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   type SsrFPolicy,
 } from "../../infra/net/ssrf.js";
-import { finiteSecondsToTimerSafeMilliseconds } from "../../shared/number-coercion.js";
 import { readPositiveIntegerParam } from "./common.js";
 
 const WEB_TOOLS_SELF_HOSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
@@ -40,7 +39,7 @@ function resolveTimeoutMs(params: {
     "timeoutSeconds",
   );
   if (timeoutSeconds !== undefined) {
-    return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
+    return timeoutSeconds * 1000;
   }
   return undefined;
 }

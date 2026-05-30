@@ -48,12 +48,10 @@ type RawTranscriptReseedReason =
   | "cwd"
   | "mcp"
   | "missing-transcript"
-  | "orphaned-tool-use"
   | "session-expired";
 
 const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
   "missing-transcript",
-  "orphaned-tool-use",
   "system-prompt",
   "cwd",
   "mcp",

@@ -1,22 +1,16 @@
 import net from "node:net";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 /**
  * Sends one JSONL request line, half-closes the write side, and waits for an accepted response line.
  */
-function resolveJsonlSocketTimeoutMs(timeoutMs: number): number {
-  return resolveTimerTimeoutMs(timeoutMs, 1);
-}
-
 export async function requestJsonlSocket<T>(params: {
   socketPath: string;
   requestLine: string;
   timeoutMs: number;
   accept: (msg: unknown) => T | null | undefined;
 }): Promise<T | null> {
-  const { socketPath, requestLine, accept } = params;
-  const timeoutMs = resolveJsonlSocketTimeoutMs(params.timeoutMs);
+  const { socketPath, requestLine, timeoutMs, accept } = params;
   return await new Promise((resolve) => {
     const client = new net.Socket();
     let settled = false;
@@ -69,6 +63,3 @@ export async function requestJsonlSocket<T>(params: {
     });
   });
 }
-
-export const testApi = { resolveJsonlSocketTimeoutMs };
-export { testApi as __test__ };

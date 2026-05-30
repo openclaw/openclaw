@@ -106,7 +106,6 @@ export type AgentEventPayload = {
   ts: number;
   data: Record<string, unknown>;
   sessionKey?: string;
-  agentId?: string;
 };
 
 export type AgentRunContext = {

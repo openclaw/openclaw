@@ -2,13 +2,6 @@
  * GitHub Copilot OAuth flow
  */
 
-import {
-  nonNegativeSecondsToSafeMilliseconds,
-  positiveSecondsToSafeMilliseconds,
-  resolveExpiresAtMsFromDurationSeconds,
-  resolveExpiresAtMsFromEpochSeconds,
-} from "../../../infra/parse-finite-number.js";
-import { resolveTimerTimeoutMs } from "../../../shared/number-coercion.js";
 import type { Model } from "../../types.js";
 import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "./types.js";
 
@@ -35,8 +28,8 @@ type DeviceCodeResponse = {
   device_code: string;
   user_code: string;
   verification_uri: string;
-  intervalMs: number;
-  expiresAt: number;
+  interval: number;
+  expires_in: number;
 };
 
 type DeviceTokenSuccessResponse = {
@@ -62,14 +55,6 @@ type CopilotRequestOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
 };
-
-function resolveExpiresAtFromDurationSeconds(value: unknown): number | undefined {
-  return resolveExpiresAtMsFromDurationSeconds(value);
-}
-
-function resolveExpiresAtFromEpochSeconds(value: unknown): number | undefined {
-  return resolveExpiresAtMsFromEpochSeconds(value, { bufferMs: 5 * 60 * 1000 });
-}
 
 export function normalizeDomain(input: string): string | null {
   const trimmed = input.trim();
@@ -146,9 +131,7 @@ function formatCopilotRequestError(
 }
 
 function buildCopilotRequestSignal(options: CopilotRequestOptions): AbortSignal {
-  const timeoutSignal = AbortSignal.timeout(
-    resolveTimerTimeoutMs(options.timeoutMs, COPILOT_REQUEST_TIMEOUT_MS),
-  );
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? COPILOT_REQUEST_TIMEOUT_MS);
   if (!options.signal) {
     return timeoutSignal;
   }
@@ -161,7 +144,7 @@ async function fetchResponse(
   operation: string,
   options: CopilotRequestOptions = {},
 ): Promise<Response> {
-  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, COPILOT_REQUEST_TIMEOUT_MS);
+  const timeoutMs = options.timeoutMs ?? COPILOT_REQUEST_TIMEOUT_MS;
   try {
     return await fetch(url, {
       ...init,
@@ -220,17 +203,14 @@ async function startDeviceFlow(
   const userCode = (data as Record<string, unknown>).user_code;
   const verificationUri = (data as Record<string, unknown>).verification_uri;
   const interval = (data as Record<string, unknown>).interval;
-  const intervalMs = nonNegativeSecondsToSafeMilliseconds(interval);
-  const expiresAt = resolveExpiresAtFromDurationSeconds(
-    (data as Record<string, unknown>).expires_in,
-  );
+  const expiresIn = (data as Record<string, unknown>).expires_in;
 
   if (
     typeof deviceCode !== "string" ||
     typeof userCode !== "string" ||
     typeof verificationUri !== "string" ||
-    intervalMs === undefined ||
-    expiresAt === undefined
+    typeof interval !== "number" ||
+    typeof expiresIn !== "number"
   ) {
     throw new Error("Invalid device code response fields");
   }
@@ -239,8 +219,8 @@ async function startDeviceFlow(
     device_code: deviceCode,
     user_code: userCode,
     verification_uri: verificationUri,
-    intervalMs,
-    expiresAt,
+    interval,
+    expires_in: expiresIn,
   };
 }
 
@@ -270,12 +250,13 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
 async function pollForGitHubAccessToken(
   domain: string,
   deviceCode: string,
-  intervalMs: number,
-  deadline: number,
+  intervalSeconds: number,
+  expiresIn: number,
   signal?: AbortSignal,
 ) {
   const urls = getUrls(domain);
-  let pollingIntervalMs = Math.max(1000, intervalMs);
+  const deadline = Date.now() + expiresIn * 1000;
+  let intervalMs = Math.max(1000, Math.floor(intervalSeconds * 1000));
   let intervalMultiplier = INITIAL_POLL_INTERVAL_MULTIPLIER;
   let slowDownResponses = 0;
 
@@ -285,7 +266,7 @@ async function pollForGitHubAccessToken(
     }
 
     const remainingMs = deadline - Date.now();
-    const waitMs = Math.min(Math.ceil(pollingIntervalMs * intervalMultiplier), remainingMs);
+    const waitMs = Math.min(Math.ceil(intervalMs * intervalMultiplier), remainingMs);
     await abortableSleep(waitMs, signal);
 
     const raw = await fetchJson(
@@ -327,11 +308,10 @@ async function pollForGitHubAccessToken(
 
       if (error === "slow_down") {
         slowDownResponses += 1;
-        const slowDownIntervalMs = positiveSecondsToSafeMilliseconds(interval);
-        pollingIntervalMs =
-          slowDownIntervalMs === undefined
-            ? Math.max(1000, pollingIntervalMs + 5000)
-            : Math.max(1000, slowDownIntervalMs);
+        intervalMs =
+          typeof interval === "number" && interval > 0
+            ? interval * 1000
+            : Math.max(1000, intervalMs + 5000);
         intervalMultiplier = SLOW_DOWN_POLL_INTERVAL_MULTIPLIER;
         continue;
       }
@@ -379,16 +359,16 @@ export async function refreshGitHubCopilotToken(
   }
 
   const token = (raw as Record<string, unknown>).token;
-  const expires = resolveExpiresAtFromEpochSeconds((raw as Record<string, unknown>).expires_at);
+  const expiresAt = (raw as Record<string, unknown>).expires_at;
 
-  if (typeof token !== "string" || expires === undefined) {
+  if (typeof token !== "string" || typeof expiresAt !== "number") {
     throw new Error("Invalid Copilot token response fields");
   }
 
   return {
     refresh: refreshToken,
     access: token,
-    expires,
+    expires: expiresAt * 1000 - 5 * 60 * 1000,
     enterpriseUrl: enterpriseDomain,
   };
 }
@@ -534,8 +514,8 @@ export async function loginGitHubCopilot(options: {
   const githubAccessToken = await pollForGitHubAccessToken(
     domain,
     device.device_code,
-    device.intervalMs,
-    device.expiresAt,
+    device.interval,
+    device.expires_in,
     options.signal,
   );
   const credentials = await refreshGitHubCopilotToken(

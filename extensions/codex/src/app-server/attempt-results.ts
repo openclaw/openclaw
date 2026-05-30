@@ -27,12 +27,10 @@ export function buildCodexAppServerPromptTimeoutOutcome(params: {
   const completionIdleTimeoutHadPotentialSideEffects = hasCodexAppServerPotentialSideEffectEvidence(
     params.result,
   );
-  const replayBlockedReason = resolveCodexAppServerReplayBlockedReason(params.result);
   if (
     !params.turnCompletionIdleTimedOut ||
     (params.result.itemLifecycle.completedCount === 0 &&
-      !completionIdleTimeoutHadPotentialSideEffects &&
-      replayBlockedReason === undefined)
+      !completionIdleTimeoutHadPotentialSideEffects)
   ) {
     return undefined;
   }

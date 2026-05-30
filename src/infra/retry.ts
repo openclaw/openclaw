@@ -1,6 +1,5 @@
 import { asFiniteNumber } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
-import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { generateSecureFraction } from "./secure-random.js";
 
 export type RetryConfig = {
@@ -42,32 +41,18 @@ const clampNumber = (value: unknown, fallback: number, min?: number, max?: numbe
   return Math.min(Math.max(next, floor), ceiling);
 };
 
-function resolveAttemptCount(value: unknown, fallback: number): number {
-  const candidate = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.max(1, Math.round(candidate));
-}
-
-function resolveRetryDelayMs(value: number): number {
-  if (value === Number.POSITIVE_INFINITY) {
-    return MAX_SAFE_TIMEOUT_DELAY_MS;
-  }
-  return resolveSafeTimeoutDelayMs(value, { minMs: 0 });
-}
-
 export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
-  const attempts = resolveAttemptCount(
-    clampNumber(overrides?.attempts, defaults.attempts, 1),
-    defaults.attempts,
-  );
-  const minDelayMs = resolveRetryDelayMs(
+  const attempts = Math.max(1, Math.round(clampNumber(overrides?.attempts, defaults.attempts, 1)));
+  const minDelayMs = Math.max(
+    0,
     Math.round(clampNumber(overrides?.minDelayMs, defaults.minDelayMs, 0)),
   );
   const maxDelayMs = Math.max(
     minDelayMs,
-    resolveRetryDelayMs(Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0))),
+    Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
   );
   const jitter = clampNumber(overrides?.jitter, defaults.jitter, 0, 1);
   return { attempts, minDelayMs, maxDelayMs, jitter };
@@ -103,7 +88,7 @@ export async function retryAsync<T>(
   initialDelayMs = 300,
 ): Promise<T> {
   if (typeof attemptsOrOptions === "number") {
-    const attempts = resolveAttemptCount(attemptsOrOptions, DEFAULT_RETRY_CONFIG.attempts);
+    const attempts = Math.max(1, Math.round(attemptsOrOptions));
     let lastErr: unknown;
     for (let i = 0; i < attempts; i += 1) {
       try {
@@ -113,7 +98,7 @@ export async function retryAsync<T>(
         if (i === attempts - 1) {
           break;
         }
-        const delay = resolveRetryDelayMs(initialDelayMs * 2 ** i);
+        const delay = initialDelayMs * 2 ** i;
         await sleep(delay);
       }
     }

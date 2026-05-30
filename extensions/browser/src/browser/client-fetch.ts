@@ -1,5 +1,5 @@
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -159,7 +159,8 @@ function appendBrowserToolModelHint(message: string): string {
 type BrowserFetchFailureKind = "timeout" | "aborted" | "persistent";
 
 function resolveBrowserFetchTimeoutMs(timeoutMs: number | undefined): number {
-  return resolveTimerTimeoutMs(timeoutMs, 5000);
+  const parsed = parseFiniteNumber(timeoutMs);
+  return Math.max(1, Math.floor(parsed ?? 5000));
 }
 
 function classifyBrowserFetchFailure(err: unknown): BrowserFetchFailureKind {

@@ -1,3 +1,1 @@
 Maintenance update for the current OpenClaw release.
-
-- Added hosted push relay defaults, realtime Talk playback, and safer WebSocket ping handling for mobile sessions.

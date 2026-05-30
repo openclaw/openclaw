@@ -62,8 +62,6 @@ export type RealtimeVoiceBridgeEvent = {
   direction: "client" | "server";
   type: string;
   detail?: string;
-  itemId?: string;
-  responseId?: string;
 };
 
 export type RealtimeVoiceBridgeCallbacks = {

@@ -1,12 +1,6 @@
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import {
-  assertOkOrThrowHttpError,
-  createProviderOperationDeadline,
-  type ProviderOperationDeadline,
-} from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { assertOkOrThrowHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   type SsrFPolicy,
@@ -57,7 +51,6 @@ const SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL = Object.fromEntries(
 );
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const POLL_INTERVAL_MS = 5_000;
 const FAL_VIDEO_MALFORMED_RESPONSE = "fal video generation response malformed";
 const FAL_VIDEO_PENDING_STATUSES = new Set([
@@ -180,18 +173,9 @@ function extractFalVideoEntry(payload: FalVideoResponse) {
   return payload.videos?.find((entry) => normalizeOptionalString(entry.url));
 }
 
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
-}
-
 async function downloadFalVideo(
   url: string,
   policy: SsrFPolicy | undefined,
-  maxBytes: number,
 ): Promise<GeneratedVideoAsset> {
   const { response, release } = await falFetchGuard({
     url,
@@ -202,31 +186,12 @@ async function downloadFalVideo(
   try {
     await assertOkOrThrowHttpError(response, "fal generated video download failed");
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const fileName = `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`;
-    let exceededMaxBytes = false;
-    let buffer: Buffer;
-    try {
-      buffer = await readResponseWithLimit(response, maxBytes, {
-        onOverflow: ({ maxBytes }) => {
-          exceededMaxBytes = true;
-          return new Error(`fal generated video download exceeds ${maxBytes} bytes`);
-        },
-      });
-    } catch (error) {
-      if (exceededMaxBytes) {
-        return {
-          url,
-          mimeType,
-          fileName,
-        };
-      }
-      throw error;
-    }
+    const arrayBuffer = await response.arrayBuffer();
     return {
       url,
-      buffer,
+      buffer: Buffer.from(arrayBuffer),
       mimeType,
-      fileName,
+      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
     };
   } finally {
     await release();
@@ -477,17 +442,13 @@ async function waitForFalQueueResult(params: {
   statusUrl: string;
   responseUrl: string;
   headers: Headers;
-  deadline: ProviderOperationDeadline;
+  timeoutMs: number;
   policy: SsrFPolicy | undefined;
   dispatcherPolicy: Parameters<typeof fetchWithSsrFGuard>[0]["dispatcherPolicy"];
 }): Promise<FalQueueResponse> {
+  const deadline = Date.now() + params.timeoutMs;
   let lastStatus = "unknown";
-  for (;;) {
-    const requestTimeoutMs = resolveFalQueueRemainingMs(
-      params.deadline,
-      lastStatus,
-      DEFAULT_HTTP_TIMEOUT_MS,
-    );
+  while (Date.now() < deadline) {
     const payload = readFalQueueResponse(
       await fetchFalJson({
         url: params.statusUrl,
@@ -495,7 +456,7 @@ async function waitForFalQueueResult(params: {
           method: "GET",
           headers: params.headers,
         },
-        timeoutMs: requestTimeoutMs,
+        timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
         policy: params.policy,
         dispatcherPolicy: params.dispatcherPolicy,
         auditContext: "fal-video-status",
@@ -515,11 +476,7 @@ async function waitForFalQueueResult(params: {
             method: "GET",
             headers: params.headers,
           },
-          timeoutMs: resolveFalQueueRemainingMs(
-            params.deadline,
-            lastStatus,
-            DEFAULT_HTTP_TIMEOUT_MS,
-          ),
+          timeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
           policy: params.policy,
           dispatcherPolicy: params.dispatcherPolicy,
           auditContext: "fal-video-result",
@@ -537,25 +494,9 @@ async function waitForFalQueueResult(params: {
     if (!FAL_VIDEO_PENDING_STATUSES.has(status)) {
       throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
     }
-    const pollDelayMs = resolveFalQueueRemainingMs(params.deadline, lastStatus, POLL_INTERVAL_MS);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
-}
-
-function resolveFalQueueRemainingMs(
-  deadline: ProviderOperationDeadline,
-  lastStatus: string,
-  defaultTimeoutMs: number,
-): number {
-  const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
-  if (typeof deadline.deadlineAtMs !== "number") {
-    return defaultMs;
-  }
-  const remainingMs = deadline.deadlineAtMs - Date.now();
-  if (remainingMs <= 0) {
-    throw new Error(`fal video generation did not finish in time (last status: ${lastStatus})`);
-  }
-  return Math.max(1, Math.min(defaultMs, remainingMs));
+  throw new Error(`fal video generation did not finish in time (last status: ${lastStatus})`);
 }
 
 function extractFalVideoPayload(payload: FalQueueResponse): FalVideoResponse {
@@ -653,19 +594,11 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       if (!statusUrl || !responseUrl) {
         throw new Error("fal video generation response missing queue URLs");
       }
-      const operationTimeoutMs = resolvePositiveTimerTimeoutMs(
-        req.timeoutMs,
-        DEFAULT_OPERATION_TIMEOUT_MS,
-      );
-      const operationDeadline = createProviderOperationDeadline({
-        timeoutMs: operationTimeoutMs,
-        label: "fal video generation",
-      });
       const payload = await waitForFalQueueResult({
         statusUrl,
         responseUrl,
         headers,
-        deadline: operationDeadline,
+        timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
         policy,
         dispatcherPolicy,
       });
@@ -675,7 +608,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       if (!url) {
         throw new Error("fal video generation response missing output URL");
       }
-      const video = await downloadFalVideo(url, policy, resolveGeneratedVideoMaxBytes(req));
+      const video = await downloadFalVideo(url, policy);
       return {
         videos: [video],
         model,

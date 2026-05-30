@@ -12,7 +12,6 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { transcodeAudioBuffer } from "openclaw/plugin-sdk/media-runtime";
-import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   markReplyPayloadAsTtsSupplement,
   resolveSendableOutboundReplyParts,
@@ -79,7 +78,7 @@ const DEFAULT_MAX_TEXT_LENGTH = 4096;
 
 function resolvePositiveTimeoutMs(timeoutMs: number | undefined): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? clampTimerTimeoutMs(timeoutMs)
+    ? Math.floor(timeoutMs)
     : undefined;
 }
 
@@ -89,10 +88,10 @@ function resolveSpeechProviderTimeoutMs(params: {
   provider: Pick<SpeechProviderPlugin, "defaultTimeoutMs">;
 }): number {
   if (params.timeoutMs !== undefined) {
-    return resolvePositiveTimeoutMs(params.timeoutMs) ?? params.config.timeoutMs;
+    return params.timeoutMs;
   }
   if (params.config.timeoutMsSource !== "default") {
-    return resolvePositiveTimeoutMs(params.config.timeoutMs) ?? DEFAULT_TIMEOUT_MS;
+    return params.config.timeoutMs;
   }
   return resolvePositiveTimeoutMs(params.provider.defaultTimeoutMs) ?? params.config.timeoutMs;
 }

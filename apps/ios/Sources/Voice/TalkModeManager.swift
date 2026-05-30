@@ -1141,7 +1141,7 @@ final class TalkModeManager: NSObject {
             })
         self.realtimeRelaySession = relaySession
         do {
-            try Self.configureRealtimeAudioSession()
+            try Self.configureAudioSession()
             try await relaySession.start()
             guard self.realtimeRelaySession === relaySession, self.isEnabled else {
                 relaySession.stop()

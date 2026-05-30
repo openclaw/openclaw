@@ -1,4 +1,3 @@
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -234,9 +233,7 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
 
   log?.(`feishu: merge_forward contains ${subMessages.length} sub-messages`);
   subMessages.sort(
-    (a, b) =>
-      (parseStrictNonNegativeInteger(a.create_time) ?? 0) -
-      (parseStrictNonNegativeInteger(b.create_time) ?? 0),
+    (a, b) => Number.parseInt(a.create_time || "0", 10) - Number.parseInt(b.create_time || "0", 10),
   );
 
   const lines = ["[Merged and Forwarded Messages]"];

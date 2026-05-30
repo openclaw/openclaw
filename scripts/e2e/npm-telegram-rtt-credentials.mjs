@@ -350,20 +350,12 @@ async function acquireWithRetry(config) {
   let attempt = 0;
   while (true) {
     attempt += 1;
-    const attemptElapsedMs = Date.now() - startedAt;
-    const attemptRemainingMs = config.acquireTimeoutMs - attemptElapsedMs;
-    if (attemptRemainingMs <= 0) {
-      throw taggedError(
-        `credential broker acquire timed out after ${config.acquireTimeoutMs}ms before retry`,
-        "ETIMEDOUT",
-      );
-    }
     try {
       return await postBroker({
         authToken: config.authToken,
         bodyMaxBytes: config.httpBodyMaxBytes,
         label: "credential broker acquire",
-        timeoutMs: Math.min(config.httpTimeoutMs, attemptRemainingMs),
+        timeoutMs: config.httpTimeoutMs,
         url: config.acquireUrl,
         body: {
           kind: "telegram",
@@ -383,14 +375,9 @@ async function acquireWithRetry(config) {
       const fallbackDelay = RETRY_BACKOFF_MS[Math.min(attempt - 1, RETRY_BACKOFF_MS.length - 1)];
       const retryAfterMs = error instanceof BrokerError ? error.retryAfterMs : undefined;
       const delayMs = retryAfterMs ?? fallbackDelay;
-      const remainingMs = config.acquireTimeoutMs - elapsedMs;
-      if (delayMs >= remainingMs) {
-        throw taggedError(
-          `credential broker acquire timed out after ${config.acquireTimeoutMs}ms before retry`,
-          "ETIMEDOUT",
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(delayMs, Math.max(config.acquireTimeoutMs - elapsedMs, 0))),
+      );
     }
   }
 }

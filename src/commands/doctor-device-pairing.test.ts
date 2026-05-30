@@ -22,7 +22,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../terminal/note.js", () => ({
   note: (...args: unknown[]) => noteMock(...args),
 }));
 

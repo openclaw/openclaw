@@ -16,8 +16,10 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type ResolvedGoogleChatAccount,
   chunkTextForOutbound,
@@ -61,7 +63,14 @@ function createGoogleChatSendReceipt(params: {
   });
 }
 
-export const formatAllowFromEntry = formatGoogleChatAllowFromEntry;
+export const formatAllowFromEntry = (entry: string) =>
+  normalizeLowercaseStringOrEmpty(
+    entry
+      .trim()
+      .replace(/^(googlechat|google-chat|gchat):/i, "")
+      .replace(/^user:/i, "")
+      .replace(/^users\//i, ""),
+  );
 
 const collectGoogleChatGroupPolicyWarnings =
   createAllowlistProviderOpenWarningCollector<ResolvedGoogleChatAccount>({

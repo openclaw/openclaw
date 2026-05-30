@@ -342,17 +342,12 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
           emitSessionTranscriptUpdate({
             sessionFile,
             sessionKey,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
             message: appendedMessage,
             messageId,
           });
           break;
         case "file-only":
-          emitSessionTranscriptUpdate({
-            sessionFile,
-            sessionKey,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-          });
+          emitSessionTranscriptUpdate({ sessionFile, sessionKey });
           break;
         case "none":
           break;

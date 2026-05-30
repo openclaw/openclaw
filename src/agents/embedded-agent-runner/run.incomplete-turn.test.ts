@@ -397,7 +397,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       "strict-agentic execution contract triggered: runId=run-strict-agentic-auto-activated",
     );
     expect(warnMessages().join("\n")).toContain(
-      "provider=openai/gpt-5.4 harness=codex contract=strict-agentic configured=unspecified",
+      "provider=openai-codex/gpt-5.4 harness=codex contract=strict-agentic configured=unspecified",
     );
     expect(mockedLog.info.mock.calls.map(([message]) => String(message)).join("\n")).not.toContain(
       "strict-agentic execution contract active",

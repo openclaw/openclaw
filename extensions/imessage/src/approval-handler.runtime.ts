@@ -79,18 +79,6 @@ function buildConversationKeyForTarget(to: string): IMessageApprovalConversation
   }
 }
 
-function shouldThreadApprovalUpdate(to: string): boolean {
-  try {
-    const parsed = parseIMessageTarget(to);
-    if (parsed.kind === "handle" && parsed.service === "sms") {
-      return false;
-    }
-  } catch {
-    return true;
-  }
-  return true;
-}
-
 export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   IMessagePendingDelivery,
   PreparedIMessageApprovalTarget,
@@ -163,7 +151,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       await sendMessageIMessage(entry.to, payload.text, {
         config: cfg,
         ...(entry.accountId ? { accountId: entry.accountId } : {}),
-        ...(shouldThreadApprovalUpdate(entry.to) ? { replyToId: entry.messageId } : {}),
+        replyToId: entry.messageId,
       });
     },
   },

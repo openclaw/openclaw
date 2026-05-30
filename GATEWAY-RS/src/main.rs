@@ -5,6 +5,7 @@ pub mod http;
 pub mod handlers;
 pub mod registry;
 pub mod sessions;
+pub mod tasks;
 
 use std::net::SocketAddr;
 use crate::models::config::OpenClawConfig;

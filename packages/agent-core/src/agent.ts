@@ -1,3 +1,4 @@
+import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import {
   type ImageContent,
   type Message,
@@ -6,8 +7,7 @@ import {
   type TextContent,
   type ThinkingBudgets,
   type Transport,
-} from "../../llm-core/src/index.js";
-import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+} from "./llm.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
   AfterToolCallContext,

@@ -413,11 +413,11 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors.join("\n")).toContain("Invalid --timeout");
   });
 
-  it("validates gateway ports before starting", async () => {
+  it("validates gateway ports and handles force/start errors", async () => {
+    // Invalid port
     await expectGatewayExit(["gateway", "--port", "0", "--token", "test-token"]);
-  });
 
-  it("reports force-free port failures", async () => {
+    // Force free failure
     forceFreePortAndWait.mockImplementationOnce(async () => {
       throw new Error("boom");
     });
@@ -430,9 +430,8 @@ describe("gateway-cli coverage", () => {
       "--force",
       "--allow-unconfigured",
     ]);
-  });
 
-  it("reports gateway start failures without leaking signal listeners", async () => {
+    // Start failure (generic)
     startGatewayServer.mockRejectedValueOnce(new Error("nope"));
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const beforeSigint = new Set(process.listeners("SIGINT"));

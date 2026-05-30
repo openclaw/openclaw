@@ -2,7 +2,6 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type {
   GeneratedMusicAsset,
   MusicGenerationProvider,
-  MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -15,16 +14,12 @@ import {
   resolveProviderHttpRequestConfig,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_MINIMAX_MUSIC_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_MUSIC_MODEL = "music-2.6";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_OPERATION_TIMEOUT_MS = 300_000;
-const DEFAULT_GENERATED_MUSIC_MAX_BYTES = 16 * 1024 * 1024;
-const STREAM_ENVELOPE_MAX_BYTES_MULTIPLIER = 5;
-const STREAM_ENVELOPE_OVERHEAD_BYTES = 64 * 1024;
 
 type MinimaxBaseResp = {
   status_code?: number;
@@ -76,16 +71,10 @@ function assertMinimaxBaseResp(baseResp: MinimaxBaseResp | undefined, context: s
   );
 }
 
-function decodePossibleBinaryWithLimit(data: string, maxBytes: number): Buffer {
+function decodePossibleBinary(data: string): Buffer {
   const trimmed = data.trim();
   if (/^[0-9a-f]+$/iu.test(trimmed) && trimmed.length % 2 === 0) {
-    if (trimmed.length / 2 > maxBytes) {
-      throw createGeneratedMusicTooLargeError(maxBytes);
-    }
     return Buffer.from(trimmed, "hex");
-  }
-  if (Buffer.byteLength(trimmed, "base64") > maxBytes) {
-    throw createGeneratedMusicTooLargeError(maxBytes);
   }
   return Buffer.from(trimmed, "base64");
 }
@@ -106,19 +95,10 @@ function isLikelyRemoteUrl(value: string | undefined): boolean {
   return Boolean(trimmed && /^https?:\/\//iu.test(trimmed));
 }
 
-function resolveGeneratedMusicMaxBytes(req: MusicGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_MUSIC_MAX_BYTES;
-}
-
 async function downloadTrackFromUrl(params: {
   url: string;
   timeoutMs?: number;
   fetchFn: typeof fetch;
-  maxBytes: number;
 }): Promise<GeneratedMusicAsset> {
   const response = await fetchProviderDownloadResponse({
     url: params.url,
@@ -131,10 +111,7 @@ async function downloadTrackFromUrl(params: {
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "audio/mpeg";
   const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
   return {
-    buffer: await readResponseWithLimit(response, params.maxBytes, {
-      onOverflow: ({ maxBytes }) =>
-        new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
-    }),
+    buffer: Buffer.from(await response.arrayBuffer()),
     mimeType,
     fileName: `track-1.${ext}`,
   };
@@ -153,21 +130,9 @@ function resolveBodyReadTimeoutMs(deadline: ProviderOperationDeadline): number {
   });
 }
 
-function createGeneratedMusicTooLargeError(maxBytes: number): Error {
-  return new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`);
-}
-
-function resolveStreamEnvelopeMaxBytes(maxBytes: number): number {
-  return Math.max(
-    STREAM_ENVELOPE_OVERHEAD_BYTES,
-    maxBytes * STREAM_ENVELOPE_MAX_BYTES_MULTIPLIER + STREAM_ENVELOPE_OVERHEAD_BYTES,
-  );
-}
-
 async function readResponseBufferWithDeadline(
   response: Response,
   deadline: ProviderOperationDeadline,
-  maxBytes: number,
 ): Promise<Buffer> {
   const body = response.body;
   if (!body) {
@@ -192,18 +157,8 @@ async function readResponseBufferWithDeadline(
         if (!result.value || result.value.length === 0) {
           continue;
         }
-        const nextTotalBytes = totalBytes + result.value.byteLength;
-        if (nextTotalBytes > maxBytes) {
-          const error = createGeneratedMusicTooLargeError(maxBytes);
-          try {
-            await reader.cancel(error);
-          } catch {
-            // Preserve the size-limit failure that caused cancellation.
-          }
-          throw error;
-        }
         chunks.push(result.value);
-        totalBytes = nextTotalBytes;
+        totalBytes += result.value.byteLength;
       } catch (error) {
         try {
           await reader.cancel(error);
@@ -233,26 +188,18 @@ async function readResponseBufferWithDeadline(
 async function readStreamingTrack(
   response: Response,
   deadline: ProviderOperationDeadline,
-  maxBytes: number,
 ): Promise<GeneratedMusicAsset> {
   const contentType = normalizeOptionalString(response.headers.get("content-type")) ?? "";
   if (contentType.toLowerCase().startsWith("audio/")) {
     const ext = extensionForMime(contentType)?.replace(/^\./u, "") || "mp3";
     return {
-      buffer: await readResponseBufferWithDeadline(response, deadline, maxBytes),
+      buffer: await readResponseBufferWithDeadline(response, deadline),
       mimeType: contentType,
       fileName: `track-1.${ext}`,
     };
   }
   const chunks: Buffer[] = [];
-  let decodedBytes = 0;
-  const text = new TextDecoder().decode(
-    await readResponseBufferWithDeadline(
-      response,
-      deadline,
-      resolveStreamEnvelopeMaxBytes(maxBytes),
-    ),
-  );
+  const text = new TextDecoder().decode(await readResponseBufferWithDeadline(response, deadline));
   for (const rawLine of text.split(/\r?\n/u)) {
     const line = rawLine.trim();
     if (!line.startsWith("data:")) {
@@ -269,13 +216,7 @@ async function readStreamingTrack(
       if (String(frame.data?.status ?? "") === "2" && chunks.length > 0) {
         continue;
       }
-      const chunk = decodePossibleBinaryWithLimit(audio, maxBytes - decodedBytes);
-      const nextDecodedBytes = decodedBytes + chunk.byteLength;
-      if (nextDecodedBytes > maxBytes) {
-        throw createGeneratedMusicTooLargeError(maxBytes);
-      }
-      chunks.push(chunk);
-      decodedBytes = nextDecodedBytes;
+      chunks.push(decodePossibleBinary(audio));
     }
   }
   const buffer = Buffer.concat(chunks);
@@ -400,19 +341,10 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         await assertOkOrThrowHttpError(res, "MiniMax music generation failed");
         const contentType = normalizeOptionalString(res.headers.get("content-type")) ?? "";
         const lowerContentType = contentType.toLowerCase();
-        const maxGeneratedMusicBytes = resolveGeneratedMusicMaxBytes(req);
         const payload =
           lowerContentType.includes("text/event-stream") || lowerContentType.startsWith("audio/")
             ? null
-            : (JSON.parse(
-                new TextDecoder().decode(
-                  await readResponseBufferWithDeadline(
-                    res.clone(),
-                    deadline,
-                    resolveStreamEnvelopeMaxBytes(maxGeneratedMusicBytes),
-                  ),
-                ),
-              ) as MinimaxMusicCreateResponse);
+            : ((await res.clone().json()) as MinimaxMusicCreateResponse);
         if (payload) {
           assertMinimaxBaseResp(payload.base_resp, "MiniMax music generation failed");
         }
@@ -434,18 +366,14 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
                 defaultTimeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
               }),
               fetchFn,
-              maxBytes: resolveGeneratedMusicMaxBytes(req),
             })
           : inlineAudio
-            ? (() => {
-                const buffer = decodePossibleBinaryWithLimit(inlineAudio, maxGeneratedMusicBytes);
-                return {
-                  buffer,
-                  mimeType: "audio/mpeg",
-                  fileName: "track-1.mp3",
-                };
-              })()
-            : await readStreamingTrack(res, deadline, maxGeneratedMusicBytes);
+            ? {
+                buffer: decodePossibleBinary(inlineAudio),
+                mimeType: "audio/mpeg",
+                fileName: "track-1.mp3",
+              }
+            : await readStreamingTrack(res, deadline);
         if (!track) {
           throw new Error("MiniMax music generation response missing audio output");
         }

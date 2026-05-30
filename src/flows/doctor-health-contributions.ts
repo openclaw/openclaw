@@ -108,7 +108,7 @@ function createDoctorHealthContribution(params: {
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { formatCliCommand } = await import("../cli/command-format.js");
   const { hasAmbiguousGatewayAuthModeConfig } = await import("../gateway/auth-mode-policy.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   if (!ctx.cfg.gateway?.mode) {
     const lines = [
       "gateway.mode is unset; gateway start will be blocked.",
@@ -143,7 +143,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { noteAuthProfileHealth, noteLegacyCodexProviderOverride } =
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   await maybeRepairLegacyFlatAuthProfileStores({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
@@ -175,7 +175,7 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("./doctor-core-checks.js");
   const { resolveGatewayAuth } = await import("../gateway/auth.js");
   const { resolveGatewayAuthToken } = await import("../gateway/auth-token-resolution.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   const { randomToken } = await import("../commands/onboard-helpers.js");
   if (resolveDoctorMode(ctx.cfg) !== "local" || !ctx.sourceConfigValid) {
     return;
@@ -296,7 +296,7 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await import("../agents/agent-scope.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
 
   registerCoreHealthChecks();
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
@@ -331,7 +331,7 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   const legacyState = await detectLegacyStateMigrations({ cfg: ctx.cfg });
   if (legacyState.preview.length === 0) {
     return;
@@ -389,7 +389,7 @@ async function runReleaseConfiguredPluginInstallsHealth(
   }
   const { maybeRunConfiguredPluginInstallReleaseStep } =
     await import("../commands/doctor/shared/release-configured-plugin-installs.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   const { VERSION } = await import("../version.js");
   const result = await maybeRunConfiguredPluginInstallReleaseStep({
     cfg: ctx.cfg,
@@ -428,7 +428,7 @@ async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<vo
 async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairCodexSessionRoutes } =
     await import("../commands/doctor/shared/codex-route-warnings.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   const result = await maybeRepairCodexSessionRoutes({
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
@@ -543,7 +543,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   const { loadModelCatalog } = await import("../agents/model-catalog.js");
   const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
     await import("../agents/model-selection.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   const hooksModelRef = resolveHooksGmailModel({
     cfg: ctx.cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -621,7 +621,7 @@ async function runToolResultCapHealth(ctx: DoctorHealthFlowContext): Promise<voi
   const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
   const { resolveDefaultModelForAgent, modelKey } = await import("../agents/model-selection.js");
   const { buildToolResultCapDoctorAdvice } = await import("./doctor-tool-result-cap-advice.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
 
   const catalog = await loadModelCatalog({ config: ctx.cfg });
   const lines = targets.flatMap((target) => {
@@ -664,7 +664,7 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { resolveGatewayService } = await import("../daemon/service.js");
   const { ensureSystemdUserLingerInteractive } = await import("../commands/systemd-linger.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   const service = resolveGatewayService();
   let loaded = false;
   try {
@@ -725,7 +725,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   const { resolveSecretInputRef } = await import("../config/types.secrets.js");
   const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
   const { readGatewaySecretInputValue } = await import("../gateway/secret-input-paths.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   const credentialPaths = [
     "gateway.auth.token",
     "gateway.auth.password",
@@ -887,7 +887,7 @@ async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Prom
   const { noteWorkspaceBackupTip } = await import("../commands/doctor-state-integrity.js");
   const { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } =
     await import("../commands/doctor-workspace.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
   noteWorkspaceBackupTip(workspaceDir);
   if (await shouldSuggestMemorySystem(workspaceDir)) {
@@ -933,7 +933,7 @@ async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promis
   const { getHealthCheck } = await import("./health-check-registry.js");
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await import("../agents/agent-scope.js");
-  const { note } = await import("../../packages/terminal-core/src/note.js");
+  const { note } = await import("../terminal/note.js");
 
   registerCoreHealthChecks();
   const check = getHealthCheck("core/doctor/runtime-tool-schemas");

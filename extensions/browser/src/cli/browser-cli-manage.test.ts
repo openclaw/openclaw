@@ -285,21 +285,6 @@ describe("browser manage output", () => {
     );
   });
 
-  it("accepts signed decimal tab indexes", async () => {
-    const program = createBrowserManageProgram();
-
-    await program.parseAsync(["browser", "tab", "select", "+2"], { from: "user" });
-
-    expect(getBrowserManageCallBrowserRequestMock()).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        path: "/tabs/action",
-        body: { action: "select", index: 1 },
-      }),
-      expect.anything(),
-    );
-  });
-
   it("prints a readable browser doctor report", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) => {
       if (req.path === "/") {

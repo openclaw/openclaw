@@ -1,7 +1,3 @@
-import {
-  MAX_DATE_TIMESTAMP_MS,
-  resolveExpiresAtMsFromEpochSeconds,
-} from "openclaw/plugin-sdk/number-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
@@ -329,10 +325,10 @@ function readRateLimitWindow(
     return undefined;
   }
   const resetsAt = readNumber(window, "resetsAt") ?? readNumber(window, "resets_at");
-  const resetsAtMs =
-    resolveExpiresAtMsFromEpochSeconds(resetsAt, { maxMs: MAX_DATE_TIMESTAMP_MS }) ?? 0;
   return {
-    resetsAtMs,
+    ...(typeof resetsAt === "number" && Number.isFinite(resetsAt) && resetsAt > 0
+      ? { resetsAtMs: resetsAt * 1000 }
+      : { resetsAtMs: 0 }),
     ...readOptionalNumberField(window, "usedPercent", "used_percent"),
     ...readOptionalNumberField(
       window,

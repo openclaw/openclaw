@@ -8,7 +8,8 @@ import {
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
-  parseWebSearchTimeFilters,
+  normalizeFreshness,
+  parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readPositiveIntegerParam,
@@ -113,24 +114,39 @@ function resolveGeminiTimeRangeFilter(
       docs: string;
     } {
   const rawFreshness = readStringParam(args, "freshness");
+  const freshness = rawFreshness
+    ? (normalizeFreshness(rawFreshness, "perplexity") as GeminiFreshness | undefined)
+    : undefined;
+  if (rawFreshness && !freshness) {
+    return {
+      error: "invalid_freshness",
+      message: "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
+
   const rawDateAfter = readStringParam(args, "date_after");
   const rawDateBefore = readStringParam(args, "date_before");
-  const parsedTimeFilters = parseWebSearchTimeFilters({
+  if (rawFreshness && (rawDateAfter || rawDateBefore)) {
+    return {
+      error: "conflicting_time_filters",
+      message:
+        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
+
+  const parsedDateRange = parseIsoDateRange({
     rawDateAfter,
     rawDateBefore,
-    rawFreshness,
-    freshnessProvider: "perplexity",
-    invalidFreshnessMessage:
-      "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
     invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
     invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
     invalidDateRangeMessage: "date_after must be before date_before.",
   });
-  if ("error" in parsedTimeFilters) {
-    return parsedTimeFilters;
+  if ("error" in parsedDateRange) {
+    return parsedDateRange;
   }
 
-  const { freshness, dateAfter, dateBefore } = parsedTimeFilters;
   if (freshness) {
     return {
       timeRangeFilter: {
@@ -140,6 +156,7 @@ function resolveGeminiTimeRangeFilter(
     };
   }
 
+  const { dateAfter, dateBefore } = parsedDateRange;
   if (!dateAfter && !dateBefore) {
     return {};
   }

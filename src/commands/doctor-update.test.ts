@@ -18,7 +18,7 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: mocks.runGatewayUpdate,
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../terminal/note.js", () => ({
   note: mocks.note,
 }));
 

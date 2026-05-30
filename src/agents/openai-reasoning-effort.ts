@@ -65,6 +65,9 @@ export function resolveOpenAISupportedReasoningEfforts(
     return compatEfforts;
   }
 
+  const provider = normalizeLowercaseStringOrEmpty(
+    typeof model.provider === "string" ? model.provider : "",
+  );
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
   if (id === "gpt-5.1-codex-mini") {
     return GPT_51_CODEX_MINI_REASONING_EFFORTS;
@@ -72,7 +75,7 @@ export function resolveOpenAISupportedReasoningEfforts(
   if (id === "gpt-5.1-codex-max") {
     return GPT_51_CODEX_MAX_REASONING_EFFORTS;
   }
-  if (/^gpt-5(?:\.\d+)?-codex(?:-|$)/u.test(id)) {
+  if (/^gpt-5(?:\.\d+)?-codex(?:-|$)/u.test(id) || provider === "openai-codex") {
     return GPT_CODEX_REASONING_EFFORTS;
   }
   if (id === "gpt-5-pro") {

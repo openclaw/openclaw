@@ -15,7 +15,6 @@ import {
   getFileSystemResultOrThrow,
   toSession,
 } from "./repo-utils.js";
-import { parseSessionTimestampMs } from "./timestamps.js";
 
 type JsonlSessionRepoFileSystem = Pick<
   FileSystem,
@@ -136,11 +135,7 @@ export class JsonlSessionRepo implements JsonlSessionRepoApi {
         }
       }
     }
-    sessions.sort(
-      (a, b) =>
-        (parseSessionTimestampMs(b.createdAt) ?? Number.NEGATIVE_INFINITY) -
-        (parseSessionTimestampMs(a.createdAt) ?? Number.NEGATIVE_INFINITY),
-    );
+    sessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     return sessions;
   }
 

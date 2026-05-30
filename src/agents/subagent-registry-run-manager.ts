@@ -3,11 +3,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
+import { isAbortedAgentStopReason } from "./run-termination.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
@@ -276,12 +277,9 @@ export function createSubagentRunManager(params: {
       if (wait.status === "pending") {
         return;
       }
-      const waitTerminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(wait);
-      const waitBlocked = waitTerminalOutcome?.reason === "blocked";
-      const waitAborted =
-        waitTerminalOutcome?.reason === "aborted" || waitTerminalOutcome?.reason === "cancelled";
-      const waitStatus = waitTerminalOutcome?.status ?? wait.status;
-      if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
+      const waitBlocked = isBlockedLivenessState(wait.livenessState);
+      const waitAborted = isAbortedAgentStopReason(wait.stopReason);
+      if (wait.yielded === true && !waitBlocked) {
         if (
           markSubagentRunPausedAfterYield({
             entry,
@@ -293,6 +291,7 @@ export function createSubagentRunManager(params: {
         }
         return;
       }
+      const waitStatus = waitBlocked || waitAborted ? "error" : wait.status;
       if (waitStatus === "error" && !waitAborted && isRecoverableAgentWaitError(wait.error)) {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
@@ -426,7 +425,9 @@ export function createSubagentRunManager(params: {
       const rawWaitError = typeof wait.error === "string" ? wait.error : undefined;
       const waitError = waitAborted
         ? "subagent run terminated"
-        : (waitTerminalOutcome?.error ?? rawWaitError);
+        : waitBlocked
+          ? formatBlockedLivenessError(rawWaitError)
+          : rawWaitError;
       const baseOutcome: SubagentRunOutcome =
         waitStatus === "error" ? { status: "error", error: waitError } : { status: "ok" };
       const outcome = withSubagentOutcomeTiming(baseOutcome, {

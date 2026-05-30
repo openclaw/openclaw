@@ -1,4 +1,3 @@
-import { note } from "../../packages/terminal-core/src/note.js";
 import {
   resolveAgentModelFallbacksOverride,
   resolveDefaultAgentId,
@@ -19,6 +18,7 @@ import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-rou
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalString as normalizeString } from "../shared/string-coerce.js";
 import { normalizeStringEntriesLower } from "../shared/string-normalization.js";
+import { note } from "../terminal/note.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {

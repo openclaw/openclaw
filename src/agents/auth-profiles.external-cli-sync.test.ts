@@ -320,7 +320,7 @@ describe("external cli oauth resolution", () => {
     expectCredentialFields(
       expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
       {
-        provider: "openai",
+        provider: "openai-codex",
         access: "codex-cli-access",
         refresh: "codex-cli-refresh",
         accountId: "acct-codex",
@@ -510,7 +510,7 @@ describe("external cli oauth resolution", () => {
       expectSingleProfileCredential(profiles, OPENAI_CODEX_DEFAULT_PROFILE_ID),
       {
         type: "oauth",
-        provider: "openai",
+        provider: "openai-codex",
       },
     );
     expectReaderPolicyCall(mocks.readCodexCliCredentialsCached);

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { note } from "../../packages/terminal-core/src/note.js";
+import { note } from "../terminal/note.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../terminal/note.js", () => ({
   note: vi.fn(),
 }));
 

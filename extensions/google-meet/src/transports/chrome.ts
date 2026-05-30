@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -51,7 +50,6 @@ export const testing = {
   },
   meetStatusScriptForTest: meetStatusScript,
   parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
-  resolveBrowserGatewayTimeoutMsForTest: resolveBrowserGatewayTimeoutMs,
 };
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
@@ -293,7 +291,7 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
     "browser.request",
     {
       json: true,
-      timeout: String(resolveBrowserGatewayTimeoutMs(params.timeoutMs)),
+      timeout: String(params.timeoutMs + 5_000),
     },
     {
       method: params.method,
@@ -303,10 +301,6 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
     },
     { progress: false },
   );
-}
-
-function resolveBrowserGatewayTimeoutMs(timeoutMs: number): number {
-  return addTimerTimeoutGraceMs(timeoutMs) ?? 1;
 }
 
 function mergeBrowserNotes(
@@ -1021,7 +1015,7 @@ export async function launchChromeMeetOnNode(params: {
       audioBridgeCommand: params.config.chrome.audioBridgeCommand,
       audioBridgeHealthCommand: params.config.chrome.audioBridgeHealthCommand,
     },
-    timeoutMs: addTimerTimeoutGraceMs(params.config.chrome.joinTimeoutMs) ?? 1,
+    timeoutMs: params.config.chrome.joinTimeoutMs + 5_000,
   });
   const result = parseNodeStartResult(raw);
   if (result.audioBridge?.type === "node-command-pair") {

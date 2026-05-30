@@ -1,6 +1,5 @@
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
@@ -91,7 +90,7 @@ async function runOpenAIOAuthTlsPreflight(options?: {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }): Promise<OpenAIOAuthTlsPreflightResult> {
-  const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
+  const timeoutMs = options?.timeoutMs ?? 5000;
   const fetchImpl = options?.fetchImpl ?? fetch;
   try {
     await fetchImpl(openAIAuthProbeUrl, {
@@ -110,9 +109,6 @@ async function runOpenAIOAuthTlsPreflight(options?: {
     };
   }
 }
-
-export const testing = { runOpenAIOAuthTlsPreflight };
-export { testing as __testing };
 
 function formatOpenAIOAuthTlsPreflightFix(
   result: Exclude<OpenAIOAuthTlsPreflightResult, { ok: true }>,
@@ -183,7 +179,7 @@ function rewriteOpenAICodexOAuthError(error: unknown): Error {
       "unsupported_region",
       [
         "OpenAI rejected the token exchange for this country, region, or network route.",
-        "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry `openclaw models auth login --provider openai`.",
+        "If you normally use a proxy, verify HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY is set for the OpenClaw process and then retry `openclaw models auth login --provider openai-codex`.",
       ].join(" "),
       error,
     );

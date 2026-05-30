@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
@@ -38,7 +37,10 @@ function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function resolveTimeoutMs(timeoutMs: number | undefined): number {
-  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS, 0);
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+    return DEFAULT_TIMEOUT_MS;
+  }
+  return Math.max(0, timeoutMs);
 }
 
 function readEtcShells(): Set<string> | null {
@@ -283,7 +285,7 @@ export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number
   if (parsed === undefined) {
     return DEFAULT_TIMEOUT_MS;
   }
-  return resolveTimeoutMs(parsed);
+  return parsed;
 }
 
 export function getShellPathFromLoginShell(opts: {

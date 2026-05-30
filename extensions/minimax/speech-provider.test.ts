@@ -245,13 +245,6 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(result.overrides).toBeUndefined();
     });
 
-    it("warns on non-decimal speed values", () => {
-      const result = parseDirectiveToken({ key: "speed", value: "0x1", policy });
-      expect(result.handled).toBe(true);
-      expect(result.warnings).toHaveLength(1);
-      expect(result.overrides).toBeUndefined();
-    });
-
     it("handles vol key", () => {
       const result = parseDirectiveToken({ key: "vol", value: "3", policy });
       expect(result.handled).toBe(true);
@@ -262,13 +255,6 @@ describe("buildMinimaxSpeechProvider", () => {
       const result = parseDirectiveToken({ key: "vol", value: "0", policy });
       expect(result.handled).toBe(true);
       expect(result.warnings).toHaveLength(1);
-    });
-
-    it("warns on non-decimal volume values", () => {
-      const result = parseDirectiveToken({ key: "vol", value: "0x3", policy });
-      expect(result.handled).toBe(true);
-      expect(result.warnings).toHaveLength(1);
-      expect(result.overrides).toBeUndefined();
     });
 
     it("handles volume alias", () => {
@@ -287,13 +273,6 @@ describe("buildMinimaxSpeechProvider", () => {
       const result = parseDirectiveToken({ key: "pitch", value: "20", policy });
       expect(result.handled).toBe(true);
       expect(result.warnings).toHaveLength(1);
-    });
-
-    it("warns on non-decimal pitch values", () => {
-      const result = parseDirectiveToken({ key: "pitch", value: "0x3", policy });
-      expect(result.handled).toBe(true);
-      expect(result.warnings).toHaveLength(1);
-      expect(result.overrides).toBeUndefined();
     });
 
     it("returns handled=false for unknown keys", () => {

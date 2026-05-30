@@ -46,7 +46,7 @@ vi.mock("node:child_process", () => ({
   },
 }));
 
-vi.mock("../skills/loading/workspace.js", () => ({
+vi.mock("./skills.js", () => ({
   syncSkillsToWorkspace: vi.fn(async () => undefined),
 }));
 

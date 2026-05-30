@@ -1,10 +1,5 @@
-import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
-import {
-  collectOpenAICodexAuthProfileStoreIdMap,
-  maybeRepairOpenAICodexAuthConfig,
-  maybeRepairOpenAICodexAuthProfileStores,
-} from "../doctor-auth-flat-profiles.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
 import {
   maybeRepairManagedNpmOpenClawPeerLinks,
@@ -98,14 +93,6 @@ export async function runDoctorRepairSequence(params: {
     warnings: codexRouteRepair.warnings,
   });
   applyMutation(
-    maybeRepairOpenAICodexAuthConfig(state.candidate, {
-      profileIdMap: collectOpenAICodexAuthProfileStoreIdMap({
-        cfg: state.candidate,
-        env,
-      }),
-    }),
-  );
-  applyMutation(
     await maybeRepairContextEngineHostCompatibility({
       cfg: state.candidate,
       doctorFixCommand: params.doctorFixCommand,
@@ -167,16 +154,6 @@ export async function runDoctorRepairSequence(params: {
   }
   if (legacyOAuthSidecarRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(legacyOAuthSidecarRepair.warnings));
-  }
-  const openAIAuthProviderRepair = await maybeRepairOpenAICodexAuthProfileStores({
-    cfg: state.candidate,
-    env,
-  });
-  if (openAIAuthProviderRepair.changes.length > 0) {
-    changeNotes.push(sanitizeLines(openAIAuthProviderRepair.changes));
-  }
-  if (openAIAuthProviderRepair.warnings.length > 0) {
-    warningNotes.push(sanitizeLines(openAIAuthProviderRepair.warnings));
   }
   const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
     cfg: state.candidate,

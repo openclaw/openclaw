@@ -20,7 +20,6 @@ function resolvePostCompactionIndexSyncMode(config?: OpenClawConfig): "off" | "a
 async function runPostCompactionSessionMemorySync(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
-  agentId?: string;
   sessionFile: string;
 }): Promise<void> {
   if (!params.config) {
@@ -34,7 +33,6 @@ async function runPostCompactionSessionMemorySync(params: {
     const agentId = resolveSessionAgentId({
       sessionKey: params.sessionKey,
       config: params.config,
-      agentId: params.agentId,
     });
     const resolvedMemory = resolveMemorySearchConfig(params.config, agentId);
     if (!resolvedMemory || !resolvedMemory.sources.includes("sessions")) {
@@ -62,7 +60,6 @@ async function runPostCompactionSessionMemorySync(params: {
 function syncPostCompactionSessionMemory(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
-  agentId?: string;
   sessionFile: string;
   mode: "off" | "async" | "await";
 }): Promise<void> {
@@ -73,7 +70,6 @@ function syncPostCompactionSessionMemory(params: {
   const syncTask = runPostCompactionSessionMemorySync({
     config: params.config,
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
     sessionFile: params.sessionFile,
   });
   if (params.mode === "await") {
@@ -86,22 +82,16 @@ function syncPostCompactionSessionMemory(params: {
 export async function runPostCompactionSideEffects(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
-  agentId?: string;
   sessionFile: string;
 }): Promise<void> {
   const sessionFile = params.sessionFile.trim();
   if (!sessionFile) {
     return;
   }
-  emitSessionTranscriptUpdate({
-    sessionFile,
-    sessionKey: params.sessionKey,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
+  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
   await syncPostCompactionSessionMemory({
     config: params.config,
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
     sessionFile,
     mode: resolvePostCompactionIndexSyncMode(params.config),
   });

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   isProviderApiKeyConfigured,
   type AuthProfileStore,
@@ -13,7 +12,6 @@ import {
   normalizeBaseUrl,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeSecretInputString,
   resolveSecretInputString,
@@ -41,8 +39,6 @@ const DEFAULT_PROMPT_INPUT_NAME = "text";
 const DEFAULT_INPUT_IMAGE_INPUT_NAME = "image";
 const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
-const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
-const DEFAULT_GENERATED_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
 
@@ -115,19 +111,6 @@ let comfyFetchGuard = fetchWithSsrFGuard;
 
 export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   comfyFetchGuard = impl ?? fetchWithSsrFGuard;
-}
-
-function resolveComfyGeneratedOutputMaxBytes(params: {
-  cfg: OpenClawConfig;
-  capability: ComfyCapability;
-}): number {
-  const configured = params.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return params.capability === "image"
-    ? DEFAULT_GENERATED_IMAGE_MAX_BYTES
-    : DEFAULT_GENERATED_MEDIA_MAX_BYTES;
 }
 
 function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
@@ -419,15 +402,14 @@ async function waitForLocalHistory(params: {
   dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<ComfyHistoryEntry> {
   const deadline = Date.now() + params.timeoutMs;
-  for (;;) {
-    const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
+  while (Date.now() <= deadline) {
     const history = await readJsonResponse<unknown>({
       url: `${params.baseUrl}/history/${params.promptId}`,
       init: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: requestTimeoutMs,
+      timeoutMs: params.timeoutMs,
       policy: params.policy,
       dispatcherPolicy: params.dispatcherPolicy,
       auditContext: "comfy-history",
@@ -439,9 +421,10 @@ async function waitForLocalHistory(params: {
       return entry;
     }
 
-    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
   }
+
+  throw new Error(`Comfy workflow did not finish within ${Math.ceil(params.timeoutMs / 1000)}s`);
 }
 
 async function waitForCloudCompletion(params: {
@@ -454,15 +437,14 @@ async function waitForCloudCompletion(params: {
   dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<void> {
   const deadline = Date.now() + params.timeoutMs;
-  for (;;) {
-    const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
+  while (Date.now() <= deadline) {
     const status = await readJsonResponse<ComfyStatusResponse>({
       url: `${params.baseUrl}/api/job/${params.promptId}/status`,
       init: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: requestTimeoutMs,
+      timeoutMs: params.timeoutMs,
       policy: params.policy,
       dispatcherPolicy: params.dispatcherPolicy,
       auditContext: "comfy-status",
@@ -478,22 +460,10 @@ async function waitForCloudCompletion(params: {
       );
     }
 
-    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
-    await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
   }
-}
 
-function resolveComfyRemainingMs(
-  deadline: number,
-  timeoutMs: number,
-  defaultTimeoutMs = timeoutMs,
-) {
-  const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
-  const remainingMs = deadline - Date.now();
-  if (remainingMs <= 0) {
-    throw new Error(`Comfy workflow did not finish within ${Math.ceil(timeoutMs / 1000)}s`);
-  }
-  return Math.max(1, Math.min(defaultMs, remainingMs));
+  throw new Error(`Comfy workflow did not finish within ${Math.ceil(params.timeoutMs / 1000)}s`);
 }
 
 function collectOutputFiles(params: {
@@ -535,7 +505,6 @@ async function downloadOutputFile(params: {
   file: ComfyOutputFile;
   mode: ComfyMode;
   capability: ComfyCapability;
-  maxBytes: number;
 }): Promise<{ buffer: Buffer; mimeType: string }> {
   const fileName =
     normalizeOptionalString(params.file.filename) || normalizeOptionalString(params.file.name);
@@ -588,15 +557,7 @@ async function downloadOutputFile(params: {
           normalizeOptionalString(redirected.response.headers.get("content-type")) ||
           "application/octet-stream";
         return {
-          buffer: await readResponseWithLimit(redirected.response, params.maxBytes, {
-            chunkTimeoutMs: params.timeoutMs,
-            onOverflow: ({ maxBytes }) =>
-              new Error(`Comfy ${params.capability} output download exceeds ${maxBytes} bytes`),
-            onIdleTimeout: ({ chunkTimeoutMs }) =>
-              new Error(
-                `Comfy ${params.capability} output download stalled after ${chunkTimeoutMs}ms`,
-              ),
-          }),
+          buffer: Buffer.from(await redirected.response.arrayBuffer()),
           mimeType,
         };
       } finally {
@@ -609,13 +570,7 @@ async function downloadOutputFile(params: {
       normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
       "application/octet-stream";
     return {
-      buffer: await readResponseWithLimit(firstResponse.response, params.maxBytes, {
-        chunkTimeoutMs: params.timeoutMs,
-        onOverflow: ({ maxBytes }) =>
-          new Error(`Comfy ${params.capability} output download exceeds ${maxBytes} bytes`),
-        onIdleTimeout: ({ chunkTimeoutMs }) =>
-          new Error(`Comfy ${params.capability} output download stalled after ${chunkTimeoutMs}ms`),
-      }),
+      buffer: Buffer.from(await firstResponse.response.arrayBuffer()),
       mimeType,
     };
   } finally {
@@ -676,14 +631,10 @@ export async function runComfyWorkflow(params: {
   const inputImageInputName =
     normalizeOptionalString(capabilityConfig.inputImageInputName) ?? DEFAULT_INPUT_IMAGE_INPUT_NAME;
   const outputNodeId = normalizeOptionalString(capabilityConfig.outputNodeId);
-  const pollIntervalMs = resolvePositiveTimerTimeoutMs(
-    readConfigInteger(capabilityConfig, "pollIntervalMs"),
-    DEFAULT_POLL_INTERVAL_MS,
-  );
-  const timeoutMs = resolvePositiveTimerTimeoutMs(
-    readConfigInteger(capabilityConfig, "timeoutMs") ?? params.timeoutMs,
-    DEFAULT_TIMEOUT_MS,
-  );
+  const pollIntervalMs =
+    readConfigInteger(capabilityConfig, "pollIntervalMs") ?? DEFAULT_POLL_INTERVAL_MS;
+  const timeoutMs =
+    readConfigInteger(capabilityConfig, "timeoutMs") ?? params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const providerModel = normalizeOptionalString(params.model) || DEFAULT_COMFY_MODEL;
 
   setWorkflowInput({
@@ -843,10 +794,6 @@ export async function runComfyWorkflow(params: {
   }
 
   const assets: ComfyGeneratedAsset[] = [];
-  const maxOutputBytes = resolveComfyGeneratedOutputMaxBytes({
-    cfg: params.cfg,
-    capability: params.capability,
-  });
   let assetIndex = 0;
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile({
@@ -858,7 +805,6 @@ export async function runComfyWorkflow(params: {
       file: output.file,
       mode,
       capability: params.capability,
-      maxBytes: maxOutputBytes,
     });
     assetIndex += 1;
     const originalName =

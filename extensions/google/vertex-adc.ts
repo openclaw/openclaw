@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type GoogleAuthorizedUserCredentials = {
@@ -31,7 +30,6 @@ const GOOGLE_VERTEX_OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platfor
 // is a 60s buffer) so we don't ship a request that's already revoked when it
 // leaves the gateway.
 const GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS = 60_000;
-const GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 let cachedGoogleAuthClient:
@@ -42,20 +40,6 @@ let cachedGoogleAuthClient:
     }
   | undefined;
 let cachedGoogleVertexAdcToken: GoogleVertexAdcToken | undefined;
-
-function resolveAuthorizedUserTokenExpiresAtMs(value: unknown, nowMs: number): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return (
-      resolveExpiresAtMsFromDurationSeconds(Math.max(1, value), { nowMs }) ??
-      nowMs - GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS
-    );
-  }
-  return (
-    resolveExpiresAtMsFromDurationSeconds(GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS, {
-      nowMs,
-    }) ?? nowMs - GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS
-  );
-}
 
 export function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
   cachedGoogleVertexAuthorizedUserToken = undefined;
@@ -207,10 +191,13 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   if (!token) {
     throw new Error("Google Vertex ADC token refresh response did not include an access_token.");
   }
-  const nowMs = Date.now();
+  const expiresInSeconds =
+    typeof payload?.expires_in === "number" && Number.isFinite(payload.expires_in)
+      ? payload.expires_in
+      : 3600;
   cachedGoogleVertexAuthorizedUserToken = {
     token,
-    expiresAtMs: resolveAuthorizedUserTokenExpiresAtMs(payload?.expires_in, nowMs),
+    expiresAtMs: Date.now() + Math.max(1, expiresInSeconds) * 1000,
     credentialsPath: params.credentialsPath,
     refreshToken,
   };

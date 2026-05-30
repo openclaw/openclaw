@@ -19,8 +19,6 @@ import {
   normalizeAzureSpeechBaseUrl,
 } from "./tts.js";
 
-const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
-
 type AzureSpeechProviderConfig = {
   apiKey?: string;
   region?: string;
@@ -179,16 +177,6 @@ function resolveTimeoutMs(config: AzureSpeechProviderConfig, timeoutMs: number):
   return config.timeoutMs ?? timeoutMs;
 }
 
-function resolveGeneratedAudioMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
-}
-
 export function buildAzureSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "azure-speech",
@@ -281,7 +269,6 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         lang: overrides.lang ?? config.lang,
         outputFormat,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
       });
       return {
         audioBuffer,
@@ -308,7 +295,6 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         lang: overrides.lang ?? config.lang,
         outputFormat: DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT,
         timeoutMs: resolveTimeoutMs(config, req.timeoutMs),
-        maxBytes: resolveGeneratedAudioMaxBytes(req),
       });
       return {
         audioBuffer,

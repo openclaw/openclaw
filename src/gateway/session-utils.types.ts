@@ -1,9 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type {
-  SessionCompactionCheckpoint,
-  SessionEntry,
-  SessionGoal,
-} from "../config/sessions/types.js";
+import type { SessionCompactionCheckpoint, SessionEntry } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type {
   GatewayAgentRuntime,
@@ -74,7 +70,6 @@ export type GatewaySessionRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
-  goal?: SessionGoal;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
   hasActiveRun?: boolean;

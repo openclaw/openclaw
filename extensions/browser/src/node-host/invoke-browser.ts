@@ -1,5 +1,4 @@
 import fsPromises from "node:fs/promises";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
@@ -137,7 +136,9 @@ function decodeParams<T>(raw?: string | null): T {
 }
 
 function resolveBrowserProxyTimeout(timeoutMs?: number): number {
-  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_BROWSER_PROXY_TIMEOUT_MS);
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+    ? Math.max(1, Math.floor(timeoutMs))
+    : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
 }
 
 function isBrowserProxyTimeoutError(err: unknown): boolean {

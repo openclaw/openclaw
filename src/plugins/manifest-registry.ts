@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
@@ -10,6 +9,7 @@ import {
   normalizeOptionalTrimmedStringList,
   uniqueStrings,
 } from "../shared/string-normalization.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -46,7 +46,6 @@ import {
   type PluginManifestProviderEndpoint,
   type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
-  type PluginManifestSecretProviderIntegration,
   type PluginManifestSetup,
   type PluginManifestToolMetadata,
   type PluginPackageChannel,
@@ -219,7 +218,6 @@ export type PluginManifestRecord = {
   modelIdNormalization?: PluginManifestModelIdNormalization;
   providerEndpoints?: PluginManifestProviderEndpoint[];
   providerRequest?: PluginManifestProviderRequest;
-  secretProviderIntegrations?: Record<string, PluginManifestSecretProviderIntegration>;
   cliBackends: string[];
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
@@ -536,7 +534,6 @@ function buildRecord(params: {
     modelIdNormalization: params.manifest.modelIdNormalization,
     providerEndpoints: params.manifest.providerEndpoints,
     providerRequest: params.manifest.providerRequest,
-    secretProviderIntegrations: params.manifest.secretProviderIntegrations,
     cliBackends: params.manifest.cliBackends ?? [],
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],

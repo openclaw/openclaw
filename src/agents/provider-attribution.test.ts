@@ -197,16 +197,16 @@ describe("provider attribution", () => {
     });
   });
 
-  it("maps legacy OpenAI Codex attribution to canonical OpenAI policy", () => {
+  it("returns a hidden-spec OpenAI Codex attribution policy", () => {
     expect(
       resolveProviderAttributionPolicy("openai-codex", { OPENCLAW_VERSION: "2026.3.22" }),
     ).toEqual({
-      provider: "openai",
+      provider: "openai-codex",
       enabledByDefault: true,
       verification: "vendor-hidden-api-spec",
       hook: "request-headers",
       reviewNote:
-        "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
+        "OpenAI Codex ChatGPT-backed traffic supports the same hidden originator/User-Agent attribution contract.",
       product: "OpenClaw",
       version: "2026.3.22",
       headers: {
@@ -252,6 +252,7 @@ describe("provider attribution", () => {
       ["openrouter", true, "vendor-documented", "request-headers"],
       ["nvidia", true, "vendor-documented", "request-headers"],
       ["openai", true, "vendor-hidden-api-spec", "request-headers"],
+      ["openai-codex", true, "vendor-hidden-api-spec", "request-headers"],
       ["xai", true, "vendor-hidden-api-spec", "request-headers"],
       ["anthropic", false, "vendor-sdk-hook-only", "default-headers"],
       ["google", false, "vendor-sdk-hook-only", "user-agent-extra"],
@@ -402,7 +403,7 @@ describe("provider attribution", () => {
       }),
       {
         endpointClass: "openai-codex",
-        attributionProvider: "openai",
+        attributionProvider: "openai-codex",
         allowsHiddenAttribution: true,
       },
     );
@@ -901,24 +902,6 @@ describe("provider attribution", () => {
         shouldStripResponsesPromptCache: false,
       },
     );
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "openai-codex",
-        api: "openai-codex-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        capability: "llm",
-        transport: "stream",
-      }),
-      {
-        endpointClass: "openai-codex",
-        attributionProvider: "openai",
-        allowsOpenAIServiceTier: true,
-        supportsOpenAIReasoningCompatPayload: true,
-        allowsResponsesStore: true,
-        supportsResponsesStoreField: true,
-        shouldStripResponsesPromptCache: false,
-      },
-    );
 
     expectRecordFields(
       resolveProviderRequestCapabilities({
@@ -1314,7 +1297,7 @@ describe("provider attribution", () => {
           isKnownNativeEndpoint: true,
           allowsOpenAIServiceTier: true,
           supportsOpenAIReasoningCompatPayload: true,
-          allowsResponsesStore: true,
+          allowsResponsesStore: false,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: false,
           allowsAnthropicServiceTier: false,

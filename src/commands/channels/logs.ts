@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
@@ -8,6 +7,7 @@ import { parseLogLine } from "../../logging/parse-log-line.js";
 import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { theme } from "../../terminal/theme.js";
 
 export type ChannelsLogsOptions = {
   channel?: string;

@@ -55,10 +55,7 @@ export function asRuntimeConfig(config: OpenClawConfig): RuntimeConfig {
 export function materializeRuntimeConfig(
   config: OpenClawConfig,
   mode: ConfigMaterializationMode,
-  options: {
-    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-    loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
-  } = {},
+  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
 ): RuntimeConfig {
   const profile = MATERIALIZATION_PROFILES[mode];
   let next = applyMessageDefaults(config);
@@ -74,10 +71,7 @@ export function materializeRuntimeConfig(
   if (profile.includeCompactionDefaults) {
     next = applyCompactionDefaults(next);
   }
-  next = applyModelDefaults(next, {
-    manifestRegistry: options.manifestRegistry,
-    loadManifestRegistry: options.loadManifestRegistry,
-  });
+  next = applyModelDefaults(next, { manifestRegistry: options.manifestRegistry });
   next = applyTalkConfigNormalization(next);
   if (profile.normalizePaths) {
     normalizeConfigPaths(next);

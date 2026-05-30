@@ -10,7 +10,6 @@ import {
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
@@ -605,9 +604,10 @@ export async function handleFeishuMessage(params: {
   // Parse message create_time early so every downstream consumer (pending
   // history, inbound payload, etc.) uses the original authoring timestamp
   // instead of the delivery/processing time.  Feishu uses a millisecond
-  // epoch string; fall back to Date.now() when absent or malformed.
-  const messageCreateTimeMs =
-    parseStrictNonNegativeInteger(event.message.create_time) ?? Date.now();
+  // epoch string; fall back to Date.now() only when the field is absent.
+  const messageCreateTimeMs = event.message.create_time
+    ? Number.parseInt(event.message.create_time, 10)
+    : Date.now();
 
   let requireMention = false; // DMs never require mention; groups may override below
   if (isGroup) {

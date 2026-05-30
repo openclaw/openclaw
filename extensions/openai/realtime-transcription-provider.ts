@@ -47,7 +47,27 @@ type RealtimeEvent = {
   error?: unknown;
 };
 
-type OpenAIRealtimeTranscriptionSessionPayload = {
+type OpenAIRealtimeTranscriptionSessionCreate = {
+  type: "transcription";
+  audio: {
+    input: {
+      format: { type: "audio/pcmu" };
+      transcription: {
+        model: string;
+        language?: string;
+        prompt?: string;
+      };
+      turn_detection: {
+        type: "server_vad";
+        threshold: number;
+        prefix_padding_ms: number;
+        silence_duration_ms: number;
+      };
+    };
+  };
+};
+
+type OpenAIRealtimeTranscriptionSessionUpdate = {
   type: "transcription";
   audio: {
     input: {
@@ -111,9 +131,33 @@ function normalizeVadThreshold(value: unknown): number | undefined {
   return number;
 }
 
-function buildOpenAIRealtimeTranscriptionSessionPayload(
+function buildOpenAIRealtimeTranscriptionSessionCreateConfig(
   config: OpenAIRealtimeTranscriptionSessionConfig,
-): OpenAIRealtimeTranscriptionSessionPayload {
+): OpenAIRealtimeTranscriptionSessionCreate {
+  return {
+    type: "transcription",
+    audio: {
+      input: {
+        format: { type: "audio/pcmu" },
+        transcription: {
+          model: config.model,
+          ...(config.language ? { language: config.language } : {}),
+          ...(config.prompt ? { prompt: config.prompt } : {}),
+        },
+        turn_detection: {
+          type: "server_vad",
+          threshold: config.vadThreshold,
+          prefix_padding_ms: 300,
+          silence_duration_ms: config.silenceDurationMs,
+        },
+      },
+    },
+  };
+}
+
+function buildOpenAIRealtimeTranscriptionSessionUpdateConfig(
+  config: OpenAIRealtimeTranscriptionSessionConfig,
+): OpenAIRealtimeTranscriptionSessionUpdate {
   return {
     type: "transcription",
     audio: {
@@ -143,7 +187,7 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
     return apiKey;
   }
   const authToken = await resolveProviderAuthProfileApiKey({
-    provider: "openai",
+    provider: "openai-codex",
     cfg: config.cfg,
   });
   if (!authToken) {
@@ -152,7 +196,7 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
   const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
     authToken,
     auditContext: "openai-realtime-transcription-session",
-    session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
+    session: buildOpenAIRealtimeTranscriptionSessionCreateConfig(config),
   });
   return clientSecret.value;
 }
@@ -242,7 +286,7 @@ function createOpenAIRealtimeTranscriptionSession(
     onOpen: (transport: RealtimeTranscriptionWebSocketTransport) => {
       transport.sendJson({
         type: "session.update",
-        session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
+        session: buildOpenAIRealtimeTranscriptionSessionUpdateConfig(config),
       });
     },
     onMessage: handleEvent,
@@ -261,7 +305,7 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
         process.env.OPENAI_API_KEY ||
-        isProviderAuthProfileConfigured({ provider: "openai", cfg }),
+        isProviderAuthProfileConfigured({ provider: "openai-codex", cfg }),
       ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);

@@ -26,7 +26,6 @@ import {
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
@@ -54,6 +53,7 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -61,9 +61,6 @@ type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
 type MediaParseModule = typeof import("../media/parse.js");
 type BeforeToolCallModule = typeof import("./agent-tools.before-tool-call.js");
-type ChannelToolProgress = {
-  text: string;
-};
 
 const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyModule>(
   () => import("../infra/exec-approval-reply.js"),
@@ -347,20 +344,6 @@ function extractExecOutput(result: unknown): string | undefined {
 function extractLiveExecOutput(result: unknown): string | undefined {
   const output = extractExecOutput(result);
   return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
-}
-
-function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
-  const progress = readRecordField(asOptionalObjectRecord(result)?.progress);
-  // Only an explicit typed progress field crosses into channel UI. Tool output
-  // and details may contain fetched content or private args, so never infer.
-  if (progress?.visibility !== "channel" || progress.privacy !== "public") {
-    return undefined;
-  }
-  const text = readStringValue(progress.text)?.trim();
-  if (!text) {
-    return undefined;
-  }
-  return { text: truncateLiveExecOutput(text) };
 }
 
 function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): boolean {
@@ -1079,11 +1062,7 @@ export function handleToolExecutionUpdate(
   const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
   const liveResult = isExecTool ? capLiveExecResult(sanitized) : sanitized;
-  const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
-  // Typed progress already has a sanitized item update path. Suppress the raw
-  // partial-result event for those updates to avoid duplicate preview lines.
-  const emitDetailedLiveUpdate =
-    !toolProgress && (!isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId));
+  const emitDetailedLiveUpdate = !isExecTool || shouldEmitLiveExecUpdate(ctx, toolCallId);
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,
@@ -1103,22 +1082,18 @@ export function handleToolExecutionUpdate(
     title: buildToolItemTitle(toolName, ctx.state.toolMetaById.get(toolCallId)?.meta),
     status: "running",
     name: toolName,
+    meta: ctx.state.toolMetaById.get(toolCallId)?.meta,
     toolCallId,
-    ...(toolProgress
-      ? { progressText: toolProgress.text }
-      : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
   };
   emitTrackedItemEvent(ctx, itemData);
-  if (!toolProgress) {
-    void ctx.params.onAgentEvent?.({
-      stream: "tool",
-      data: {
-        phase: "update",
-        name: toolName,
-        toolCallId,
-      },
-    });
-  }
+  void ctx.params.onAgentEvent?.({
+    stream: "tool",
+    data: {
+      phase: "update",
+      name: toolName,
+      toolCallId,
+    },
+  });
   if (isExecTool) {
     const output = extractLiveExecOutput(liveResult);
     const commandData: AgentItemEventData = {

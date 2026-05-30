@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -13,7 +12,6 @@ import {
 import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { timestampMsToIsoString } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
@@ -42,6 +40,7 @@ import {
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
+import { isRich, theme } from "../terminal/theme.js";
 import {
   buildTaskSystemAuditFindings,
   type TaskSystemAuditCode,
@@ -65,10 +64,6 @@ function formatTaskLookupMiss(lookup: string): string {
     listCommand: "openclaw tasks list",
     valueLabel: "task id",
   });
-}
-
-function formatTaskTimestamp(value: number | undefined): string {
-  return timestampMsToIsoString(value) ?? "n/a";
 }
 
 async function loadTaskCancelConfig() {
@@ -444,11 +439,11 @@ export async function tasksShowCommand(
     `runId: ${task.runId ?? "n/a"}`,
     `label: ${task.label ?? "n/a"}`,
     `task: ${task.task}`,
-    `createdAt: ${formatTaskTimestamp(task.createdAt)}`,
-    `startedAt: ${formatTaskTimestamp(task.startedAt)}`,
-    `endedAt: ${formatTaskTimestamp(task.endedAt)}`,
-    `lastEventAt: ${formatTaskTimestamp(task.lastEventAt)}`,
-    `cleanupAfter: ${formatTaskTimestamp(task.cleanupAfter)}`,
+    `createdAt: ${new Date(task.createdAt).toISOString()}`,
+    `startedAt: ${task.startedAt ? new Date(task.startedAt).toISOString() : "n/a"}`,
+    `endedAt: ${task.endedAt ? new Date(task.endedAt).toISOString() : "n/a"}`,
+    `lastEventAt: ${task.lastEventAt ? new Date(task.lastEventAt).toISOString() : "n/a"}`,
+    `cleanupAfter: ${task.cleanupAfter ? new Date(task.cleanupAfter).toISOString() : "n/a"}`,
     ...(task.error ? [`error: ${task.error}`] : []),
     ...(task.progressSummary ? [`progressSummary: ${task.progressSummary}`] : []),
     ...(task.terminalSummary ? [`terminalSummary: ${task.terminalSummary}`] : []),
@@ -657,7 +652,7 @@ export async function tasksMaintenanceCommand(
   if (retainedLostAfter.count > 0) {
     runtime.log(
       info(
-        `Retained lost tasks: ${retainedLostAfter.count} retained until ${timestampMsToIsoString(retainedLostAfter.nextCleanupAfter) ?? "cleanupAfter"}; maintenance will prune after cleanupAfter.`,
+        `Retained lost tasks: ${retainedLostAfter.count} retained until ${retainedLostAfter.nextCleanupAfter ? new Date(retainedLostAfter.nextCleanupAfter).toISOString() : "cleanupAfter"}; maintenance will prune after cleanupAfter.`,
       ),
     );
   }

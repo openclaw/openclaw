@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
-import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ComponentData } from "../internal/discord.js";
 
@@ -149,9 +148,9 @@ function parseRawPage(value: unknown): number {
   if (typeof value === "number") {
     return normalizeModelPickerPage(value);
   }
-  if (typeof value === "string") {
-    const parsed = parseStrictInteger(value);
-    if (parsed !== undefined) {
+  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed)) {
       return normalizeModelPickerPage(parsed);
     }
   }
@@ -159,7 +158,18 @@ function parseRawPage(value: unknown): number {
 }
 
 function parseRawPositiveInt(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
+  if (typeof value !== "string" && typeof value !== "number") {
+    return undefined;
+  }
+  const raw = String(value).trim();
+  if (!/^[+]?\d+$/.test(raw)) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    return undefined;
+  }
+  return parsed;
 }
 
 function coerceString(value: unknown): string {

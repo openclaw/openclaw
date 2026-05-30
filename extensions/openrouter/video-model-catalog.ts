@@ -91,38 +91,6 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
   return Object.keys(record).length > 0 ? record : undefined;
 }
 
-function buildOpenRouterVideoModeCapabilities(params: {
-  durations: number[];
-  aspectRatios: string[];
-  resolutions: VideoGenerationResolution[];
-  sizes: string[];
-  supportsAudio?: boolean;
-}): NonNullable<VideoGenerationProviderCapabilities["generate"]> {
-  return {
-    maxVideos: 1,
-    ...(params.durations.length > 0 ? { supportedDurationSeconds: params.durations } : {}),
-    ...(params.aspectRatios.length > 0
-      ? {
-          supportsAspectRatio: true,
-          aspectRatios: params.aspectRatios,
-        }
-      : {}),
-    ...(params.resolutions.length > 0
-      ? {
-          supportsResolution: true,
-          resolutions: params.resolutions,
-        }
-      : {}),
-    ...(params.sizes.length > 0
-      ? {
-          supportsSize: true,
-          sizes: params.sizes,
-        }
-      : {}),
-    ...(params.supportsAudio === undefined ? {} : { supportsAudio: params.supportsAudio }),
-  };
-}
-
 function buildOpenRouterVideoModelCapabilities(
   model: OpenRouterVideoModel,
 ): OpenRouterVideoModelCatalogCapabilities {
@@ -132,25 +100,60 @@ function buildOpenRouterVideoModelCapabilities(
   const resolutions = normalizeResolutionArray(model.supported_resolutions);
   const sizes = normalizeStringArray(model.supported_sizes);
   const allowedPassthroughParameters = normalizeStringArray(model.allowed_passthrough_parameters);
-  const supportsAudio =
-    typeof model.generate_audio === "boolean" ? model.generate_audio : undefined;
-  const modeCapabilities = buildOpenRouterVideoModeCapabilities({
-    durations,
-    aspectRatios,
-    resolutions,
-    sizes,
-    supportsAudio,
-  });
+  const audioSupport =
+    typeof model.generate_audio === "boolean" ? { supportsAudio: model.generate_audio } : {};
   const base: VideoGenerationProviderCapabilities = {
     providerOptions: {
       callback_url: "string",
       seed: "number",
     },
-    generate: modeCapabilities,
+    generate: {
+      maxVideos: 1,
+      ...(durations.length > 0 ? { supportedDurationSeconds: durations } : {}),
+      ...(aspectRatios.length > 0
+        ? {
+            supportsAspectRatio: true,
+            aspectRatios,
+          }
+        : {}),
+      ...(resolutions.length > 0
+        ? {
+            supportsResolution: true,
+            resolutions,
+          }
+        : {}),
+      ...(sizes.length > 0
+        ? {
+            supportsSize: true,
+            sizes,
+          }
+        : {}),
+      ...audioSupport,
+    },
     imageToVideo: {
       enabled: frameImages.length > 0,
-      ...modeCapabilities,
+      maxVideos: 1,
       ...(frameImages.length > 0 ? { maxInputImages: frameImages.length } : {}),
+      ...(durations.length > 0 ? { supportedDurationSeconds: durations } : {}),
+      ...(aspectRatios.length > 0
+        ? {
+            supportsAspectRatio: true,
+            aspectRatios,
+          }
+        : {}),
+      ...(resolutions.length > 0
+        ? {
+            supportsResolution: true,
+            resolutions,
+          }
+        : {}),
+      ...(sizes.length > 0
+        ? {
+            supportsSize: true,
+            sizes,
+          }
+        : {}),
+      ...audioSupport,
     },
     videoToVideo: {
       enabled: false,

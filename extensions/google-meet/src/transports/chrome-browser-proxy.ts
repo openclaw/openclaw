@@ -1,4 +1,3 @@
-import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 
 type BrowserProxyResult = {
@@ -190,7 +189,7 @@ export async function callBrowserProxyOnNode(params: {
       body: params.body,
       timeoutMs: params.timeoutMs,
     },
-    timeoutMs: addTimerTimeoutGraceMs(params.timeoutMs) ?? 1,
+    timeoutMs: params.timeoutMs + 5_000,
   });
   return parseBrowserProxyResult(raw);
 }

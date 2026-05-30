@@ -17,7 +17,6 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -134,16 +133,17 @@ function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReply
 }
 
 function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): string {
-  const forwardedAt = timestampMsToIsoString(entry.forwardedDate);
   const labels = [
     `${index + 1}. ${entry.sender ?? "unknown sender"}`,
     entry.messageId ? `id:${entry.messageId}` : undefined,
     entry.replyToId ? `reply_to:${entry.replyToId}` : undefined,
-    entry.timestamp ? timestampMsToIsoString(entry.timestamp) : undefined,
+    entry.timestamp ? new Date(entry.timestamp).toISOString() : undefined,
   ].filter(Boolean);
   const bodyLines = [
     entry.forwardedFrom
-      ? `[Forwarded from ${entry.forwardedFrom}${forwardedAt ? ` at ${forwardedAt}` : ""}]`
+      ? `[Forwarded from ${entry.forwardedFrom}${
+          entry.forwardedDate ? ` at ${new Date(entry.forwardedDate).toISOString()}` : ""
+        }]`
       : undefined,
     entry.isQuote && entry.body ? `"${entry.body}"` : entry.body,
     entry.mediaType ? `<media:${entry.mediaType}>` : undefined,
@@ -331,9 +331,6 @@ export async function buildTelegramInboundContextPayload(params: {
     return [includeForwarded ? visibleEntry : stripReplyChainForwarded(visibleEntry)];
   });
   const visibleForwardOrigin = includeForwardOrigin ? forwardOrigin : null;
-  const visibleForwardOriginAt = timestampMsToIsoString(
-    visibleForwardOrigin?.date ? visibleForwardOrigin.date * 1000 : undefined,
-  );
   const replySuffix =
     visibleReplyChain.length > 0
       ? `\n\n[Reply chain - nearest first]\n${visibleReplyChain
@@ -342,7 +339,9 @@ export async function buildTelegramInboundContextPayload(params: {
       : "";
   const forwardPrefix = visibleForwardOrigin
     ? `[Forwarded from ${visibleForwardOrigin.from}${
-        visibleForwardOriginAt ? ` at ${visibleForwardOriginAt}` : ""
+        visibleForwardOrigin.date
+          ? ` at ${new Date(visibleForwardOrigin.date * 1000).toISOString()}`
+          : ""
       }]\n`
     : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;

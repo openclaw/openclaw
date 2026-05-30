@@ -41,9 +41,6 @@ function readBundledPluginPackageJson(packageJsonPath, options = {}) {
 }
 
 function isManifestlessBundledRuntimeSupportPackage(params) {
-  if (params.packageJson?.openclaw?.release?.publishToNpm === true) {
-    return false;
-  }
   const packageName = typeof params.packageJson?.name === "string" ? params.packageJson.name : "";
   if (packageName !== `@openclaw/${params.dirName}`) {
     return false;

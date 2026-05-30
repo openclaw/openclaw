@@ -559,7 +559,7 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 
-  it("runs agentTurn continuation internally after the restart notice without routed final delivery", async () => {
+  it("dispatches agentTurn continuation after the restart notice in the same routed thread", async () => {
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:main",
@@ -595,7 +595,6 @@ describe("scheduleRestartSentinelWake", () => {
         channel: "whatsapp",
         accountId: "acct-2",
         routeSessionKey: "agent:main:main",
-        replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
       },
       {
         Body: "Reply with exactly: Yay! I did it!",
@@ -614,16 +613,9 @@ describe("scheduleRestartSentinelWake", () => {
         Surface: "webchat",
         OriginatingChannel: "whatsapp",
         OriginatingTo: "+15550002",
-        ExplicitDeliverRoute: false,
         MessageThreadId: "thread-42",
       },
     );
-    const deliveredContinuationReply = (
-      mocks.deliverOutboundPayloads.mock.calls as unknown as Array<
-        [{ payloads?: Array<{ text?: string }> }]
-      >
-    ).some(([call]) => call.payloads?.some((payload) => payload.text === "done") === true);
-    expect(deliveredContinuationReply).toBe(false);
     expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
   });
 
@@ -894,7 +886,6 @@ describe("scheduleRestartSentinelWake", () => {
         channel: "telegram",
         accountId: "default",
         routeSessionKey: "agent:main:telegram:group:-1003826723328:topic:13757",
-        replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
       },
       {
         Body: "continue in topic",
@@ -910,13 +901,13 @@ describe("scheduleRestartSentinelWake", () => {
         ChatType: "group",
         OriginatingChannel: "telegram",
         OriginatingTo: "telegram:-1003826723328:topic:13757",
-        ExplicitDeliverRoute: false,
+        ExplicitDeliverRoute: true,
         MessageThreadId: "13757",
       },
     );
   });
 
-  it("preserves derived reply transport ids in internal continuation context", async () => {
+  it("preserves derived reply transport ids in continuation context", async () => {
     mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
       meta: {
@@ -970,12 +961,79 @@ describe("scheduleRestartSentinelWake", () => {
         MessageThreadId: undefined,
       },
     );
-    const deliveredContinuationReply = (
-      mocks.deliverOutboundPayloads.mock.calls as unknown as Array<
-        [{ payloads?: Array<{ text?: string }> }]
-      >
-    ).some(([call]) => call.payloads?.some((payload) => payload.text === "done") === true);
-    expect(deliveredContinuationReply).toBe(false);
+    expectRecordFields(lastMockCallArg(mocks.deliverOutboundPayloads), {
+      payloads: [
+        {
+          text: "done",
+          replyToId: "reply:thread-42",
+        },
+      ],
+    });
+  });
+
+  it("strips synthetic reply transport ids when no real reply target exists", async () => {
+    mocks.readRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
+      await params.deliver({
+        text: "done",
+        replyToId: "restart-sentinel:agent:main:main:agentTurn:123",
+      });
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expectRecordFields(lastMockCallArg(mocks.deliverOutboundPayloads), {
+      payloads: [{ text: "done" }],
+    });
+  });
+
+  it("preserves non-synthetic reply transport ids from continuation payloads", async () => {
+    mocks.readRestartSentinel.mockResolvedValue({
+      payload: {
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "whatsapp",
+          to: "+15550002",
+          accountId: "acct-2",
+        },
+        ts: 123,
+        continuation: {
+          kind: "agentTurn",
+          message: "continue",
+        },
+      },
+    } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    mocks.recordInboundSessionAndDispatchReply.mockImplementationOnce(async (params) => {
+      await params.deliver({
+        text: "done",
+        replyToId: "provider-reply-id",
+      });
+    });
+
+    await scheduleRestartSentinelWake({ deps: {} as never });
+
+    expectRecordFields(lastMockCallArg(mocks.deliverOutboundPayloads), {
+      payloads: [
+        {
+          text: "done",
+          replyToId: "provider-reply-id",
+        },
+      ],
+    });
   });
 
   it("dispatches agentTurn continuation from session delivery context when sentinel routing is empty", async () => {
@@ -1202,14 +1260,8 @@ describe("scheduleRestartSentinelWake", () => {
       >
     ).some(([call]) => call.payloads?.some((payload) => payload.text === busyReply) === true);
     expect(deliveredBusyReply).toBe(false);
-    const deliveredFinalReply = (
-      mocks.deliverOutboundPayloads.mock.calls as unknown as Array<
-        [{ payloads?: Array<{ text?: string }> }]
-      >
-    ).some(([call]) => call.payloads?.some((payload) => payload.text === "done") === true);
-    expect(deliveredFinalReply).toBe(false);
     expectRecordFields(lastMockCallArg(mocks.deliverOutboundPayloads), {
-      payloads: [{ text: "restart message" }],
+      payloads: [{ text: "done" }],
     });
     expect(mocks.logWarn.mock.calls).toEqual(
       Array.from({ length: 6 }, () => [

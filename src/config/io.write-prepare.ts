@@ -1,9 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import {
-  type ManifestModelIdNormalizationProvider,
-  normalizeConfiguredProviderCatalogModelId,
-} from "../shared/provider-model-id-normalization.js";
 import { isRecord } from "../utils.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
@@ -410,10 +407,7 @@ function normalizeToolsModelRefsForWrite(config: unknown): unknown {
   return normalizeModelConfigPathForWrite(config, ["tools", "subagents", "model"]);
 }
 
-function normalizeModelProviderCatalogRefsForWrite(
-  config: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
-): unknown {
+function normalizeModelProviderCatalogRefsForWrite(config: unknown): unknown {
   const providers = getPathValue(config, ["models", "providers"]);
   if (!isRecord(providers)) {
     return config;
@@ -435,11 +429,7 @@ function normalizeModelProviderCatalogRefsForWrite(
       if (!trimmed) {
         return model;
       }
-      const id = normalizeConfiguredProviderCatalogModelId(
-        provider,
-        trimmed,
-        modelIdNormalizationPolicies,
-      );
+      const id = normalizeConfiguredProviderCatalogModelId(provider, trimmed);
       if (id === model.id) {
         return model;
       }
@@ -456,17 +446,13 @@ function normalizeModelProviderCatalogRefsForWrite(
   return mutated ? setPathValue(config, ["models", "providers"], nextProviders) : config;
 }
 
-function normalizeModelRefsForWrite(
-  config: unknown,
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>,
-): unknown {
+function normalizeModelRefsForWrite(config: unknown): unknown {
   return normalizeModelProviderCatalogRefsForWrite(
     normalizeToolsModelRefsForWrite(
       normalizeAgentListModelRefsForWrite(
         normalizeAgentModelRefsAtPathForWrite(config, ["agents", "defaults"]),
       ),
     ),
-    modelIdNormalizationPolicies,
   );
 }
 
@@ -610,7 +596,6 @@ export function resolvePersistCandidateForWrite(params: {
   unsetPaths?: readonly string[][];
   explicitSetPaths?: readonly (readonly string[])[];
   explicitSetValueSource?: unknown;
-  modelIdNormalizationPolicies?: ReadonlyMap<string, ManifestModelIdNormalizationProvider>;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
@@ -638,7 +623,7 @@ export function resolvePersistCandidateForWrite(params: {
     persistedCandidate: withSchema,
     unsetPaths: params.unsetPaths,
   });
-  return normalizeModelRefsForWrite(withAuthoredParams, params.modelIdNormalizationPolicies);
+  return normalizeModelRefsForWrite(withAuthoredParams);
 }
 
 function readRootSchemaUri(value: unknown): string | undefined {

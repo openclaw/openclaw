@@ -1,4 +1,3 @@
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { parseDiscordRetryAfterBodySeconds, parseRetryAfterHeaderSeconds } from "../retry-after.js";
 
 export function readDiscordCode(body: unknown): number | undefined {
@@ -6,7 +5,13 @@ export function readDiscordCode(body: unknown): number | undefined {
     body && typeof body === "object" && "code" in body
       ? (body as { code?: unknown }).code
       : undefined;
-  return parseStrictNonNegativeInteger(value);
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    return Number(value);
+  }
+  return undefined;
 }
 
 export function readDiscordMessage(body: unknown, fallback: string): string {

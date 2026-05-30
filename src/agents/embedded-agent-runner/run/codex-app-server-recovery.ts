@@ -1,6 +1,6 @@
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
-export function resolveCodexAppServerRecoveryRetry(params: {
+export function resolveCodexAppServerClientCloseRetry(params: {
   attempt: EmbeddedRunAttemptResult;
   alreadyRetried: boolean;
 }): { retry: boolean; reason?: string } {
@@ -8,17 +8,8 @@ export function resolveCodexAppServerRecoveryRetry(params: {
   if (!failure) {
     return { retry: false, reason: "not_codex_app_server_failure" };
   }
-  if (
-    failure.kind !== "client_closed_before_turn_completed" &&
-    failure.kind !== "turn_completion_idle_timeout"
-  ) {
+  if (failure.kind !== "client_closed_before_turn_completed") {
     return { retry: false, reason: failure.kind };
-  }
-  if (
-    failure.kind === "turn_completion_idle_timeout" &&
-    failure.turnWatchTimeoutKind !== "completion"
-  ) {
-    return { retry: false, reason: failure.turnWatchTimeoutKind ?? "unknown_turn_watch_timeout" };
   }
   if (failure.transport !== "stdio") {
     return { retry: false, reason: "non_stdio_transport" };
@@ -48,5 +39,3 @@ export function resolveCodexAppServerRecoveryRetry(params: {
   }
   return { retry: true };
 }
-
-export const resolveCodexAppServerClientCloseRetry = resolveCodexAppServerRecoveryRetry;

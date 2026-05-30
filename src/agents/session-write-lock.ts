@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
@@ -43,7 +42,6 @@ export const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
 export const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
-const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
 
 /**
  * Yield control to the event loop so other sessions can make progress
@@ -55,6 +53,7 @@ function yieldEventLoop(): Promise<void> {
 // A payload-less lock can be left behind if shutdown lands between open("wx")
 // and the owner metadata write. Keep the grace short so 10s callers recover.
 const ORPHAN_LOCK_PAYLOAD_GRACE_MS = 5_000;
+const MAX_LOCK_HOLD_MS = 2_147_000_000;
 
 type CleanupState = {
   registered: boolean;
@@ -254,10 +253,10 @@ export function resolveSessionLockMaxHoldFromTimeout(params: {
   const minMs = resolvePositiveMs(params.minMs, DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS);
   const timeoutMs = resolvePositiveMs(params.timeoutMs, minMs, { allowInfinity: true });
   if (timeoutMs === Number.POSITIVE_INFINITY) {
-    return MAX_TIMER_TIMEOUT_MS;
+    return MAX_LOCK_HOLD_MS;
   }
   const graceMs = resolvePositiveMs(params.graceMs, DEFAULT_TIMEOUT_GRACE_MS);
-  return Math.min(MAX_TIMER_TIMEOUT_MS, Math.max(minMs, timeoutMs + graceMs));
+  return Math.min(MAX_LOCK_HOLD_MS, Math.max(minMs, timeoutMs + graceMs));
 }
 
 /**
@@ -531,10 +530,7 @@ function shouldTreatAsNonOpenClawOwner(params: {
   heldByThisProcess: boolean;
   readOwnerProcessArgs: SessionLockOwnerProcessArgsReader;
 }): boolean {
-  if (params.inspected.pid === null || !params.inspected.pidAlive) {
-    return false;
-  }
-  if (params.inspected.staleReasons.includes("recycled-pid")) {
+  if (params.inspected.stale || params.inspected.pid === null || !params.inspected.pidAlive) {
     return false;
   }
   if (params.inspected.pid === process.pid && params.heldByThisProcess) {
@@ -580,21 +576,6 @@ async function shouldReclaimContendedLockFile(
     const code = (error as { code?: string } | null)?.code;
     return code !== "ENOENT";
   }
-}
-
-async function shouldRemoveLockDuringCleanup(
-  lockPath: string,
-  details: LockInspectionDetails,
-  staleMs: number,
-  nowMs: number,
-): Promise<boolean> {
-  if (!details.stale) {
-    return false;
-  }
-  if (details.staleReasons.every((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason))) {
-    return false;
-  }
-  return await shouldReclaimContendedLockFile(lockPath, details, staleMs, nowMs);
 }
 
 function sessionLockHeldByThisProcess(normalizedSessionFile: string): boolean {
@@ -747,7 +728,7 @@ export async function cleanStaleLockFiles(params: {
       removed: false,
     };
 
-    if (removeStale && (await shouldRemoveLockDuringCleanup(lockPath, lockInfo, staleMs, nowMs))) {
+    if (lockInfo.stale && removeStale) {
       await fs.rm(lockPath, { force: true });
       lockInfo.removed = true;
       cleaned.push(lockInfo);

@@ -1,5 +1,5 @@
 ---
-summary: "Adds Xiaomi MiMo pay-as-you-go and Token Plan provider support to OpenClaw."
+summary: "Adds Xiaomi model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the xiaomi plugin
 title: "Xiaomi plugin"
@@ -7,7 +7,7 @@ title: "Xiaomi plugin"
 
 # Xiaomi plugin
 
-Adds Xiaomi MiMo pay-as-you-go and Token Plan provider support to OpenClaw.
+Adds Xiaomi model provider support to OpenClaw.
 
 ## Distribution
 
@@ -16,7 +16,7 @@ Adds Xiaomi MiMo pay-as-you-go and Token Plan provider support to OpenClaw.
 
 ## Surface
 
-providers: xiaomi, xiaomi-token-plan; contracts: speechProviders
+providers: xiaomi; contracts: speechProviders
 
 ## Related docs
 

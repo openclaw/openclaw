@@ -1,4 +1,3 @@
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   resolveDefaultAgentId,
   resolveAgentDir,
@@ -10,6 +9,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
@@ -189,14 +189,13 @@ async function applyDefaultModelFromAuthChoice(params: {
       });
       nextConfig = migrationResult.config;
     }
-    const { ensureCopilotRuntimePluginForModelSelection } =
-      await import("../commands/copilot-runtime-plugin-install.js");
-    const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
+    const { ensureCopilotSdkForModelSelection } =
+      await import("../commands/copilot-sdk-install.js");
+    const copilotInstall = await ensureCopilotSdkForModelSelection({
       cfg: nextConfig,
       model: params.selectedModel,
       prompter: params.prompter,
       runtime: params.runtime,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     });
     nextConfig = copilotInstall.cfg;
   }

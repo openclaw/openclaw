@@ -20,7 +20,6 @@ import {
   loadActiveCallsFromStore,
   persistCallRecord,
 } from "./manager/store.js";
-import { resolveVoiceCallSecondsTimerDelayMs } from "./manager/timer-delays.js";
 import { startMaxDurationTimer } from "./manager/timers.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import {
@@ -130,7 +129,7 @@ export class CallManager {
     for (const [callId, call] of verified) {
       if (call.answeredAt && !TerminalStates.has(call.state)) {
         const elapsed = Date.now() - call.answeredAt;
-        const maxDurationMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
+        const maxDurationMs = this.config.maxDurationSeconds * 1000;
         if (elapsed >= maxDurationMs) {
           // Already expired — remove instead of keeping
           verified.delete(callId);
@@ -175,7 +174,7 @@ export class CallManager {
       return new Map();
     }
 
-    const maxAgeMs = resolveVoiceCallSecondsTimerDelayMs(this.config.maxDurationSeconds);
+    const maxAgeMs = this.config.maxDurationSeconds * 1000;
     const now = Date.now();
     const verified = new Map<CallId, CallRecord>();
     const verifyTasks: Array<{ callId: CallId; call: CallRecord; promise: Promise<void> }> = [];

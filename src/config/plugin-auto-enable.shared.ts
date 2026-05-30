@@ -1041,8 +1041,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     }
 
     const allow = next.plugins?.allow;
-    const hasRestrictiveAllowlist = Array.isArray(allow) && allow.length > 0;
-    const allowMissing = hasRestrictiveAllowlist && !allow.includes(entry.pluginId);
+    const allowMissing = Array.isArray(allow) && !allow.includes(entry.pluginId);
     const alreadyEnabled =
       builtInChannelId != null
         ? isBuiltInChannelAlreadyEnabled(next, builtInChannelId)
@@ -1052,9 +1051,7 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
     }
 
     next = registerPluginEntry(next, entry, params.manifestRegistry);
-    if (hasRestrictiveAllowlist) {
-      next = ensurePluginAllowlisted(next, entry.pluginId);
-    }
+    next = ensurePluginAllowlisted(next, entry.pluginId);
     const reason = resolvePluginAutoEnableCandidateReason(entry);
     autoEnabledReasons.set(entry.pluginId, [
       ...(autoEnabledReasons.get(entry.pluginId) ?? []),

@@ -17,7 +17,6 @@ import {
   downloadVydraAsset,
   extractVydraResultUrls,
   normalizeVydraBaseUrl,
-  resolveVydraGeneratedMediaMaxBytes,
   trimToUndefined,
 } from "./shared.js";
 
@@ -138,7 +137,6 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
           kind: "audio",
           timeoutMs: req.timeoutMs,
           fetchFn,
-          maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "audio" }),
         });
         return {
           audioBuffer: audio.buffer,

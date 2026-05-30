@@ -14,13 +14,12 @@ import {
 } from "./live-transport-scenarios.js";
 
 describe("live transport scenario helpers", () => {
-  it("uses the public live transport scenario SDK seam", () => {
+  it("keeps package-mode helpers off private QA SDK exports", () => {
     const source = fs.readFileSync(
       fileURLToPath(new URL("./live-transport-scenarios.ts", import.meta.url)),
       "utf8",
     );
 
-    expect(source).toContain("openclaw/plugin-sdk/qa-live-transport-scenarios");
     expect(source).not.toContain("openclaw/plugin-sdk/qa-runtime");
   });
 

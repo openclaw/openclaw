@@ -1,10 +1,5 @@
 import { randomBytes } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  positiveSecondsToSafeMilliseconds,
-  resolveExpiresAtMsFromDurationSeconds,
-  resolveExpiresAtMsFromEpochSeconds,
-} from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderAuthContext, ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildOauthProviderAuthResult,
@@ -217,7 +212,37 @@ export function buildXaiOAuthAuthorizationCodeTokenBody(params: {
 }
 
 function normalizeExpires(value: unknown, now: () => number): number | undefined {
-  return resolveExpiresAtMsFromDurationSeconds(value, { nowMs: now() });
+  const seconds =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? parsePositiveSeconds(value)
+        : Number.NaN;
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return undefined;
+  }
+  return now() + seconds * 1000;
+}
+
+function normalizePositiveSecondsToMs(value: unknown): number | undefined {
+  const seconds =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? parsePositiveSeconds(value)
+        : Number.NaN;
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return undefined;
+  }
+  return Math.trunc(seconds * 1000);
+}
+
+function parsePositiveSeconds(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return Number.NaN;
+  }
+  return Number(trimmed);
 }
 
 function parseXaiOAuthTokenResponse(
@@ -261,7 +286,10 @@ function deriveExpiresFromJwt(token: string | undefined): number | undefined {
   }
   const payload = decodeJwtPayload(token);
   const exp = payload.exp;
-  return resolveExpiresAtMsFromEpochSeconds(exp);
+  if (typeof exp !== "number" || !Number.isFinite(exp) || exp <= 0) {
+    return undefined;
+  }
+  return exp * 1000;
 }
 
 function parseXaiOAuthErrorResponse(value: unknown): XaiOAuthErrorResponse {
@@ -370,9 +398,8 @@ async function requestXaiDeviceCode(
     ...(trustedVerificationUriComplete
       ? { verificationUriComplete: trustedVerificationUriComplete }
       : {}),
-    expiresInMs: positiveSecondsToSafeMilliseconds(json.expires_in) ?? XAI_OAUTH_TIMEOUT_MS,
-    intervalMs:
-      positiveSecondsToSafeMilliseconds(json.interval) ?? XAI_DEVICE_CODE_DEFAULT_INTERVAL_MS,
+    expiresInMs: normalizePositiveSecondsToMs(json.expires_in) ?? XAI_OAUTH_TIMEOUT_MS,
+    intervalMs: normalizePositiveSecondsToMs(json.interval) ?? XAI_DEVICE_CODE_DEFAULT_INTERVAL_MS,
   };
 }
 

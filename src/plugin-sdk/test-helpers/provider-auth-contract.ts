@@ -86,7 +86,7 @@ function buildOpenAICodexOAuthResult(params: {
         profileId: params.profileId,
         credential: {
           type: "oauth" as const,
-          provider: "openai",
+          provider: "openai-codex",
           access: params.access,
           refresh: params.refresh,
           expires: params.expires,
@@ -147,7 +147,7 @@ export function describeOpenAICodexProviderAuthContract(
   };
   const { loginOpenAICodexOAuthMock } = options;
 
-  describe("openai provider ChatGPT auth contract", () => {
+  describe("openai-codex provider auth contract", () => {
     installSharedAuthProfileStoreHooks(state);
 
     async function expectStableFallbackProfile(params: { access: string; profileId: string }) {
@@ -187,7 +187,7 @@ export function describeOpenAICodexProviderAuthContract(
 
       expect(result).toEqual(
         buildOpenAICodexOAuthResult({
-          profileId: "openai:user@example.com",
+          profileId: "openai-codex:user@example.com",
           access: "access-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
@@ -213,7 +213,7 @@ export function describeOpenAICodexProviderAuthContract(
 
       expect(result).toEqual(
         buildOpenAICodexOAuthResult({
-          profileId: "openai:jwt-user@example.com",
+          profileId: "openai-codex:jwt-user@example.com",
           access,
           refresh: "refresh-token",
           expires: 1_700_000_000_000,
@@ -231,7 +231,7 @@ export function describeOpenAICodexProviderAuthContract(
       const expectedStableId = Buffer.from("user-123__acct-456", "utf8").toString("base64url");
       await expectStableFallbackProfile({
         access,
-        profileId: `openai:id-${expectedStableId}`,
+        profileId: `openai-codex:id-${expectedStableId}`,
       });
     });
 
@@ -245,7 +245,7 @@ export function describeOpenAICodexProviderAuthContract(
       );
       await expectStableFallbackProfile({
         access,
-        profileId: `openai:id-${expectedStableId}`,
+        profileId: `openai-codex:id-${expectedStableId}`,
       });
     });
 
@@ -256,7 +256,7 @@ export function describeOpenAICodexProviderAuthContract(
       const expectedStableId = Buffer.from("user-abc").toString("base64url");
       await expectStableFallbackProfile({
         access,
-        profileId: `openai:id-${expectedStableId}`,
+        profileId: `openai-codex:id-${expectedStableId}`,
       });
     });
 
@@ -272,7 +272,7 @@ export function describeOpenAICodexProviderAuthContract(
 
       expect(result).toEqual(
         buildOpenAICodexOAuthResult({
-          profileId: "openai:default",
+          profileId: "openai-codex:default",
           access: "not-a-jwt-token",
           refresh: "refresh-token",
           expires: 1_700_000_000_000,

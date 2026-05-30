@@ -117,10 +117,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
     expect(coreUnitShards).toEqual([
       {
-        configs: [
-          "test/vitest/vitest.unit-fast.config.ts",
-          "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-        ],
+        configs: ["test/vitest/vitest.unit-fast.config.ts"],
         requiresDist: false,
         shardName: "core-unit-fast",
       },
@@ -285,7 +282,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       (shard) => shard.shardName === "agentic-command-support",
     );
     const commandShards = shards.filter((shard) => shard.shardName.startsWith("agentic-commands-"));
-    const agentShards = shards.filter((shard) => shard.shardName.startsWith("agentic-agents-"));
+    const agentShard = shards.find((shard) => shard.shardName === "agentic-agents");
     const gatewayCoreShard = shards.find((shard) => shard.shardName === "agentic-gateway-core");
     const gatewayMethodsShard = shards.find(
       (shard) => shard.shardName === "agentic-gateway-methods",
@@ -362,36 +359,18 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .toSorted((a, b) => a.localeCompare(b));
     expect(commandShardFiles).toEqual(expectedCommandFiles);
     expect(new Set(commandShardFiles).size).toBe(commandShardFiles.length);
-    expect(agentShards).toEqual([
-      {
-        checkName: "checks-node-agentic-agents-core",
-        configs: ["test/vitest/vitest.agents-core.config.ts"],
-        requiresDist: false,
-        runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: "agentic-agents-core",
-      },
-      {
-        checkName: "checks-node-agentic-agents-embedded",
-        configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
-        requiresDist: false,
-        runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: "agentic-agents-embedded",
-      },
-      {
-        checkName: "checks-node-agentic-agents-support",
-        configs: ["test/vitest/vitest.agents-support.config.ts"],
-        requiresDist: false,
-        runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: "agentic-agents-support",
-      },
-      {
-        checkName: "checks-node-agentic-agents-tools",
-        configs: ["test/vitest/vitest.agents-tools.config.ts"],
-        requiresDist: false,
-        runner: DEFAULT_NODE_TEST_RUNNER,
-        shardName: "agentic-agents-tools",
-      },
-    ]);
+    expect(agentShard).toEqual({
+      checkName: "checks-node-agentic-agents",
+      shardName: "agentic-agents",
+      configs: [
+        "test/vitest/vitest.agents-core.config.ts",
+        "test/vitest/vitest.agents-embedded-agent.config.ts",
+        "test/vitest/vitest.agents-support.config.ts",
+        "test/vitest/vitest.agents-tools.config.ts",
+      ],
+      requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
+    });
     expect(pluginSdkShard).toEqual({
       checkName: "checks-node-agentic-plugin-sdk",
       shardName: "agentic-plugin-sdk",

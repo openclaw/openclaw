@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeProviderId } from "../agents/provider-id.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -462,19 +461,6 @@ function buildPluginMetadataOwnerMaps(
     }
     for (const providerId of plugin.providers ?? []) {
       appendOwner(providers, providerId, plugin.id);
-    }
-    for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
-      const alias = normalizeProviderId(rawAlias);
-      const targetProvider = normalizeProviderId(target);
-      if (
-        alias &&
-        targetProvider &&
-        (plugin.providers ?? []).some(
-          (providerId) => normalizeProviderId(providerId) === targetProvider,
-        )
-      ) {
-        appendOwner(providers, alias, plugin.id);
-      }
     }
     for (const providerId of Object.keys(plugin.modelCatalog?.providers ?? {})) {
       appendOwner(modelCatalogProviders, providerId, plugin.id);

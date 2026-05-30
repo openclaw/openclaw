@@ -101,11 +101,11 @@ export const pluginRegistrationContractCases = {
   },
   openai: {
     pluginId: "openai",
-    providerIds: ["openai"],
+    providerIds: ["openai", "openai-codex"],
     speechProviderIds: ["openai"],
     realtimeTranscriptionProviderIds: ["openai"],
     realtimeVoiceProviderIds: ["openai"],
-    mediaUnderstandingProviderIds: ["openai"],
+    mediaUnderstandingProviderIds: ["openai", "openai-codex"],
     imageGenerationProviderIds: ["openai"],
     requireSpeechVoices: true,
     requireDescribeImages: true,

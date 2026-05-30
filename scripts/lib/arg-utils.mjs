@@ -20,20 +20,10 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 
-function isMissingStringFlagValue(value, options = {}) {
-  if (!value) {
-    return true;
-  }
-  if (value.startsWith("--")) {
-    return true;
-  }
-  return options.rejectShortOptions === true && value.startsWith("-");
-}
-
-function consumeStringFlag(argv, index, flag, options = {}) {
+function consumeStringFlag(argv, index, flag) {
   const inlineValue = readInlineFlagValue(argv[index], flag);
   if (inlineValue !== null) {
-    if (isMissingStringFlagValue(inlineValue, options)) {
+    if (!inlineValue) {
       throw new Error(`${flag} requires a value`);
     }
     return {
@@ -45,7 +35,7 @@ function consumeStringFlag(argv, index, flag, options = {}) {
     return null;
   }
   const value = argv[index + 1];
-  if (isMissingStringFlagValue(value, options)) {
+  if (!value || value.startsWith("--")) {
     throw new Error(`${flag} requires a value`);
   }
   return {
@@ -136,10 +126,10 @@ function parseFloatFlagValue(raw, flag) {
   return parsed;
 }
 
-export function stringFlag(flag, key, options = {}) {
+export function stringFlag(flag, key) {
   return {
     consume(argv, index) {
-      const option = consumeStringFlag(argv, index, flag, options);
+      const option = consumeStringFlag(argv, index, flag);
       if (!option) {
         return null;
       }
@@ -147,24 +137,6 @@ export function stringFlag(flag, key, options = {}) {
         nextIndex: option.nextIndex,
         apply(target) {
           target[key] = option.value;
-        },
-      };
-    },
-  };
-}
-
-export function stringListFlag(flag, key, options = {}) {
-  return {
-    consume(argv, index) {
-      const option = consumeStringFlag(argv, index, flag, options);
-      if (!option) {
-        return null;
-      }
-      return {
-        nextIndex: option.nextIndex,
-        apply(target) {
-          target[key] ??= [];
-          target[key].push(option.value);
         },
       };
     },

@@ -521,8 +521,6 @@ export function installSessionToolResultGuard(
   opts?: {
     /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
-    /** Optional agent id for selected-global transcript update broadcasts. */
-    agentId?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -782,7 +780,6 @@ export function installSessionToolResultGuard(
       emitSessionTranscriptUpdate({
         sessionFile,
         sessionKey: opts?.sessionKey,
-        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,
         ...(messageSeq !== undefined ? { messageSeq } : {}),

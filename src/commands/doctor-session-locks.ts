@@ -1,4 +1,3 @@
-import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import {
   cleanStaleLockFiles,
@@ -8,6 +7,7 @@ import {
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
+import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 function formatAge(ageMs: number | null): string {

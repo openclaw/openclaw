@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import type { Command } from "commander";
 import JSON5 from "json5";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import {
   type ConfigFileSnapshot,
@@ -25,7 +23,6 @@ import {
   coerceSecretRef,
   isValidEnvSecretRefId,
   resolveSecretInputRef,
-  type PluginIntegrationSecretProviderConfig,
   type SecretProviderConfig,
   type SecretRef,
   type SecretRefSource,
@@ -37,13 +34,8 @@ import {
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  isPluginIntegrationSecretProviderConfig,
-  resolveSecretProviderIntegrationConfig,
-} from "../secrets/provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -61,6 +53,8 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
@@ -1865,68 +1859,6 @@ function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSe
   }));
 }
 
-function collectPluginIntegrationProviderErrors(params: {
-  config: OpenClawConfig;
-  operations: ConfigSetOperation[];
-}): ConfigSetDryRunError[] {
-  const providers = params.config.secrets?.providers ?? {};
-  let validateAllProviders = false;
-  const touchedProviderAliases = new Set<string>();
-  for (const operation of params.operations) {
-    if (operation.touchedProviderAlias) {
-      touchedProviderAliases.add(operation.touchedProviderAlias);
-    }
-    if (operation.assignedRef) {
-      touchedProviderAliases.add(operation.assignedRef.provider);
-    }
-    for (const ref of collectSecretRefsFromUnknown(operation.value)) {
-      touchedProviderAliases.add(ref.provider);
-    }
-    if (touchesSecretProviderCollection(operation.setPath)) {
-      validateAllProviders = true;
-    }
-  }
-  if (!validateAllProviders && touchedProviderAliases.size === 0) {
-    return [];
-  }
-  const integrationProviders: Array<{
-    alias: string;
-    provider: PluginIntegrationSecretProviderConfig;
-  }> = [];
-  for (const [alias, provider] of Object.entries(providers)) {
-    if (!validateAllProviders && !touchedProviderAliases.has(alias)) {
-      continue;
-    }
-    if (isPluginIntegrationSecretProviderConfig(provider)) {
-      integrationProviders.push({ alias, provider });
-    }
-  }
-  if (integrationProviders.length === 0) {
-    return [];
-  }
-  const manifestRegistry = loadPluginMetadataSnapshot({
-    config: params.config,
-    env: process.env,
-  }).manifestRegistry;
-  const errors: ConfigSetDryRunError[] = [];
-  for (const { alias, provider } of integrationProviders) {
-    const resolved = resolveSecretProviderIntegrationConfig({
-      manifestRegistry,
-      providerAlias: alias,
-      providerConfig: provider,
-      config: params.config,
-      env: process.env,
-    });
-    if (!resolved.ok) {
-      errors.push({
-        kind: "schema",
-        message: `secrets.providers.${alias}: ${resolved.reason}`,
-      });
-    }
-  }
-  return errors;
-}
-
 function dedupeDryRunErrors(errors: ConfigSetDryRunError[]): ConfigSetDryRunError[] {
   const deduped: ConfigSetDryRunError[] = [];
   const seen = new Set<string>();
@@ -2044,10 +1976,6 @@ async function runConfigOperations(params: {
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
     (line) => line.trim(),
   );
-  const pluginIntegrationProviderErrors = collectPluginIntegrationProviderErrors({
-    config: nextConfig,
-    operations,
-  });
 
   if (options.dryRun) {
     const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
@@ -2078,7 +2006,6 @@ async function runConfigOperations(params: {
         })),
       );
     }
-    errors.push(...pluginIntegrationProviderErrors);
     if (requiresFullSchemaValidation) {
       errors.push(
         ...collectDryRunSchemaErrors({
@@ -2107,10 +2034,7 @@ async function runConfigOperations(params: {
       configPath: shortenHomePath(snapshot.path),
       inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
-        schema:
-          requiresFullSchemaValidation ||
-          policyIssueLines.length > 0 ||
-          pluginIntegrationProviderErrors.length > 0,
+        schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
         resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
         resolvabilityComplete:
           (hasJsonMode || hasBuilderMode || hasUnsetMode) &&
@@ -2158,14 +2082,6 @@ async function runConfigOperations(params: {
   }
   if (policyIssueLines.length > 0) {
     throw new Error(formatUnsupportedSecretRefPolicyFailureMessage(policyIssueLines));
-  }
-  if (pluginIntegrationProviderErrors.length > 0) {
-    throw new Error(
-      [
-        "Config validation failed: plugin-managed SecretRef provider integration is invalid.",
-        ...pluginIntegrationProviderErrors.map((error) => `- ${error.message}`),
-      ].join("\n"),
-    );
   }
 
   await replaceConfigFile({

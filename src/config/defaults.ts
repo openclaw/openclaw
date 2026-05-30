@@ -1,10 +1,7 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import {
-  collectManifestModelIdNormalizationPolicies,
-  normalizeConfiguredProviderCatalogModelId,
-} from "../shared/provider-model-id-normalization.js";
 import { isRecord } from "../shared/record-coerce.js";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,
@@ -24,7 +21,6 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 type WarnState = { warned: boolean };
 type ProviderPolicyDefaultsOptions = {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
 
 let defaultWarnState: WarnState = { warned: false };
@@ -159,10 +155,6 @@ export function applyModelDefaults(
 
   const providerConfig = nextCfg.models?.providers;
   if (providerConfig) {
-    const manifestRegistry = options.manifestRegistry ?? options.loadManifestRegistry?.();
-    const modelIdNormalizationPolicies = manifestRegistry
-      ? collectManifestModelIdNormalizationPolicies(manifestRegistry.plugins)
-      : undefined;
     const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
       const normalizedProvider = normalizeProviderConfigForConfigDefaults({
@@ -187,11 +179,7 @@ export function applyModelDefaults(
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
         let modelMutated = false;
-        const id = normalizeConfiguredProviderCatalogModelId(
-          providerId,
-          raw.id,
-          modelIdNormalizationPolicies,
-        );
+        const id = normalizeConfiguredProviderCatalogModelId(providerId, raw.id);
         if (id !== raw.id) {
           modelMutated = true;
         }

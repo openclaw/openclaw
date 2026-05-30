@@ -4,7 +4,6 @@ export type ChatSideResult = {
   kind: "btw";
   runId: string;
   sessionKey: string;
-  agentId?: string;
   question: string;
   text: string;
   isError: boolean;
@@ -30,9 +29,6 @@ export function parseChatSideResult(payload: unknown): ChatSideResult | null {
     kind: "btw",
     runId,
     sessionKey,
-    ...(normalizeOptionalString(candidate.agentId)
-      ? { agentId: normalizeOptionalString(candidate.agentId) }
-      : {}),
     question,
     text,
     isError: candidate.isError === true,

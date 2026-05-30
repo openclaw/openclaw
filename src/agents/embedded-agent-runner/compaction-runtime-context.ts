@@ -1,17 +1,13 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SkillSnapshot } from "../../skills/types.js";
-import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
-import {
-  openAIProviderUsesCodexRuntimeByDefault,
-  resolveSelectedOpenAIRuntimeProvider,
-} from "../openai-codex-routing.js";
+import { resolveSelectedOpenAIRuntimeProvider } from "../openai-codex-routing.js";
+import type { SkillSnapshot } from "../skills.js";
 
 export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
@@ -22,7 +18,6 @@ export type EmbeddedCompactionRuntimeContext = {
   currentThreadTs?: string;
   currentMessageId?: string | number;
   authProfileId?: string;
-  agentHarnessId?: string;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -52,49 +47,37 @@ export function resolveEmbeddedCompactionTarget(params: {
   provider?: string | null;
   modelId?: string | null;
   authProfileId?: string | null;
-  harnessRuntime?: string | null;
   defaultProvider?: string;
   defaultModel?: string;
 }): {
   provider: string | undefined;
   runtimeProvider?: string;
-  contextProvider?: string;
   model: string | undefined;
   authProfileId: string | undefined;
 } {
   const provider = params.provider?.trim() || params.defaultProvider;
   const model = params.modelId?.trim() || params.defaultModel;
   const override = params.config?.agents?.defaults?.compaction?.model?.trim();
-  const resolveTargetProviders = (
+  const resolveRuntimeProvider = (
     targetProvider: string | undefined,
     authProfileId: string | undefined,
   ) => {
     if (!targetProvider) {
-      return {};
+      return undefined;
     }
-    const useCodexHarnessRuntime = shouldUseCodexRuntimeProviderForCompaction({
-      config: params.config,
-      provider: targetProvider,
-      harnessRuntime: params.harnessRuntime,
-    });
-    const harnessRuntime = useCodexHarnessRuntime ? params.harnessRuntime : "openclaw";
     const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
       provider: targetProvider,
-      harnessRuntime: harnessRuntime ?? undefined,
+      harnessRuntime: "openclaw",
       authProfileId,
       config: params.config,
     });
-    const routedRuntimeProvider = runtimeProvider === targetProvider ? undefined : runtimeProvider;
-    return {
-      runtimeProvider: routedRuntimeProvider,
-      contextProvider: useCodexHarnessRuntime ? routedRuntimeProvider : undefined,
-    };
+    return runtimeProvider === targetProvider ? undefined : runtimeProvider;
   };
   if (!override) {
     const authProfileId = params.authProfileId ?? undefined;
     return {
       provider,
-      ...resolveTargetProviders(provider, authProfileId),
+      runtimeProvider: resolveRuntimeProvider(provider, authProfileId),
       model,
       authProfileId,
     };
@@ -111,7 +94,7 @@ export function resolveEmbeddedCompactionTarget(params: {
         : (params.authProfileId ?? undefined);
     return {
       provider: overrideProvider,
-      ...resolveTargetProviders(overrideProvider, authProfileId),
+      runtimeProvider: resolveRuntimeProvider(overrideProvider, authProfileId),
       model: overrideModel,
       authProfileId,
     };
@@ -119,24 +102,10 @@ export function resolveEmbeddedCompactionTarget(params: {
   const authProfileId = params.authProfileId ?? undefined;
   return {
     provider,
-    ...resolveTargetProviders(provider, authProfileId),
+    runtimeProvider: resolveRuntimeProvider(provider, authProfileId),
     model: override,
     authProfileId,
   };
-}
-
-function shouldUseCodexRuntimeProviderForCompaction(params: {
-  config?: OpenClawConfig;
-  provider: string;
-  harnessRuntime?: string | null;
-}): boolean {
-  if (normalizeOptionalAgentRuntimeId(params.harnessRuntime) !== "codex") {
-    return false;
-  }
-  if (!openAIProviderUsesCodexRuntimeByDefault(params)) {
-    return false;
-  }
-  return true;
 }
 
 export function buildEmbeddedCompactionRuntimeContext(params: {
@@ -157,7 +126,6 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   senderId?: string | null;
   provider?: string | null;
   modelId?: string | null;
-  harnessRuntime?: string | null;
   modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
@@ -172,9 +140,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     provider: params.provider,
     modelId: params.modelId,
     authProfileId: params.authProfileId,
-    harnessRuntime: params.harnessRuntime,
   });
-  const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const processScopeKey = params.sessionKey?.trim();
   const activeProcessSessions =
     params.activeProcessSessions ??
@@ -190,7 +156,6 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
     authProfileId: resolved.authProfileId,
-    agentHarnessId,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
     agentDir: params.agentDir,

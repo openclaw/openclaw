@@ -14,7 +14,6 @@ import { resolveQaNodeExecPath } from "./node-exec.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaDreamingStatus, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
 
 type QaMemorySearchResult = {
   results?: Array<{ snippet?: string; text?: string; path?: string }>;
@@ -191,7 +190,7 @@ async function waitForAgentRun(
       timeoutMs,
     },
     {
-      timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs),
+      timeoutMs: timeoutMs + 5_000,
     },
   )) as { status?: string; error?: string };
 }

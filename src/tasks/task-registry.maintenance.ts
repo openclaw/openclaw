@@ -503,7 +503,6 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   if (task.runtime === "acp") {
     const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
       sessionKey: childSessionKey,
-      clone: false,
     });
     if (!acpEntry || acpEntry.storeReadFailed) {
       return true;
@@ -649,10 +648,7 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   ) {
     return false;
   }
-  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
-    sessionKey,
-    clone: false,
-  });
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
   if (!acpEntry || acpEntry.storeReadFailed || !acpEntry.acp) {
     return false;
   }
@@ -690,10 +686,7 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
   if (!sessionKey) {
     return;
   }
-  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
-    sessionKey,
-    clone: false,
-  });
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
   const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
   if (!acpEntry || !closeAcpSession) {
     return;
@@ -729,7 +722,7 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
 async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
   let acpSessions: AcpSessionStoreEntry[];
   try {
-    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({ clone: false });
+    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({});
   } catch (error) {
     log.warn("Failed to list ACP sessions during task maintenance", { error });
     return;

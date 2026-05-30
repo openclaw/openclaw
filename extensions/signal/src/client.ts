@@ -3,7 +3,6 @@ import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 export type SignalRpcOptions = {
   baseUrl: string;
@@ -107,7 +106,7 @@ function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return null;
   }
-  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
+  return timeoutMs;
 }
 
 function requestSignalHttpText(
@@ -121,14 +120,13 @@ function requestSignalHttpText(
   },
 ): Promise<SignalHttpResponse> {
   assertSignalHttpProtocol(url, "HTTP");
-  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const client = url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
     let settled = false;
     let request: ClientRequest | undefined;
     const deadline = setTimeout(() => {
-      request?.destroy(new Error(`Signal HTTP exceeded deadline after ${timeoutMs}ms`));
-    }, timeoutMs);
+      request?.destroy(new Error(`Signal HTTP exceeded deadline after ${options.timeoutMs}ms`));
+    }, options.timeoutMs);
     deadline.unref?.();
     const cleanup = () => {
       clearTimeout(deadline);
@@ -182,8 +180,8 @@ function requestSignalHttpText(
         });
       },
     );
-    request.setTimeout(timeoutMs, () => {
-      request?.destroy(new Error(`Signal HTTP timed out after ${timeoutMs}ms`));
+    request.setTimeout(options.timeoutMs, () => {
+      request?.destroy(new Error(`Signal HTTP timed out after ${options.timeoutMs}ms`));
     });
     request.on("error", rejectOnce);
     if (options.body !== undefined) {

@@ -1,7 +1,3 @@
-import {
-  buildAgentRunTerminalOutcome,
-  type AgentRunTerminalOutcome,
-} from "../agents/agent-run-terminal-outcome.js";
 import { updateSessionStoreEntry, type SessionEntry } from "../config/sessions.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -16,10 +12,6 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts"> & {
     endedAt?: unknown;
     aborted?: unknown;
     stopReason?: unknown;
-    error?: unknown;
-    livenessState?: unknown;
-    timeoutPhase?: unknown;
-    providerStarted?: unknown;
   };
 };
 
@@ -44,39 +36,18 @@ function resolveLifecyclePhase(event: LifecycleEventLike): LifecyclePhase | null
   return phase === "start" || phase === "end" || phase === "error" ? phase : null;
 }
 
-function mapAgentRunTerminalOutcomeToSessionStatus(
-  outcome: AgentRunTerminalOutcome,
-): SessionRunStatus {
-  switch (outcome.reason) {
-    case "completed":
-      return "done";
-    case "hard_timeout":
-    case "timed_out":
-      return "timeout";
-    case "cancelled":
-    case "aborted":
-      return "killed";
-    case "blocked":
-    case "failed":
-      return "failed";
-    default:
-      return outcome.reason satisfies never;
-  }
-}
-
 function resolveTerminalStatus(event: LifecycleEventLike): SessionRunStatus {
   const phase = resolveLifecyclePhase(event);
-  const terminal = buildAgentRunTerminalOutcome({
-    status: phase === "error" ? "error" : event.data?.aborted === true ? "timeout" : "ok",
-    error: event.data?.error,
-    stopReason: event.data?.stopReason,
-    livenessState: event.data?.livenessState,
-    timeoutPhase: event.data?.timeoutPhase,
-    providerStarted: event.data?.providerStarted,
-    startedAt: event.data?.startedAt,
-    endedAt: event.data?.endedAt ?? event.ts,
-  });
-  return mapAgentRunTerminalOutcomeToSessionStatus(terminal);
+  if (phase === "error") {
+    return "failed";
+  }
+
+  const stopReason = typeof event.data?.stopReason === "string" ? event.data.stopReason : "";
+  if (stopReason === "aborted") {
+    return "killed";
+  }
+
+  return event.data?.aborted === true ? "timeout" : "done";
 }
 
 function resolveLifecycleStartedAt(
@@ -174,7 +145,6 @@ export function derivePersistedSessionLifecyclePatch(params: {
 
 export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
-  agentId?: string;
   event: LifecycleEventLike;
 }): Promise<void> {
   const phase = resolveLifecyclePhase(params.event);
@@ -182,10 +152,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     return;
   }
 
-  const sessionEntry = loadSessionEntry(params.sessionKey, {
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    clone: false,
-  });
+  const sessionEntry = loadSessionEntry(params.sessionKey, { clone: false });
   if (!sessionEntry.entry) {
     return;
   }

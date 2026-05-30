@@ -899,7 +899,7 @@ export async function collectDoctorPreviewNotes(params: {
         ),
     );
     if (emptyAllowlistWarnings.length > 0) {
-      const { sanitizeForLog } = await import("../../../../packages/terminal-core/src/ansi.js");
+      const { sanitizeForLog } = await import("../../../terminal/ansi.js");
       warnings.push(emptyAllowlistWarnings.map((line) => sanitizeForLog(line)).join("\n"));
     }
   }

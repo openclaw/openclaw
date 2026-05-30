@@ -379,16 +379,13 @@ vi.mock("../../bootstrap-files.js", async () => {
   };
 });
 
-vi.mock("../../../skills/runtime/env-overrides.js", () => ({
+vi.mock("../../skills.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},
-}));
-
-vi.mock("../../../skills/loading/workspace.js", () => ({
   resolveSkillsPromptForRun: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
 }));
 
-vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
+vi.mock("../skills-runtime.js", () => ({
   resolveEmbeddedRunSkillEntries: (...args: unknown[]) =>
     hoisted.resolveEmbeddedRunSkillEntriesMock(...args),
 }));
@@ -779,7 +776,6 @@ vi.mock("../model.js", () => ({
 
 vi.mock("../sandbox-info.js", () => ({
   buildEmbeddedSandboxInfo: () => undefined,
-  resolveEmbeddedSandboxInfoExecPolicy: () => ({}),
 }));
 
 vi.mock("../thinking.js", () => ({
@@ -927,7 +923,6 @@ export function resetEmbeddedAttemptHarness(
   }
   hoisted.createAgentSessionMock.mockReset();
   hoisted.sessionManagerOpenMock.mockReset().mockReturnValue(hoisted.sessionManager);
-  hoisted.defaultResourceLoaderInitMock.mockReset();
   hoisted.resolveSandboxContextMock.mockReset();
   hoisted.ensureGlobalUndiciEnvProxyDispatcherMock.mockReset();
   hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock.mockReset();

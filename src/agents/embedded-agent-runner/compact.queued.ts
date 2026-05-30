@@ -16,19 +16,16 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
-import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import {
   maybeCompactAgentHarnessSession,
   resolveAgentHarnessPolicy,
 } from "../harness/selection.js";
-import { isOpenAICodexProvider, isOpenAIProvider } from "../openai-codex-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
@@ -164,7 +161,6 @@ export async function compactEmbeddedAgentSession(
   const agentIds = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
-    agentId: params.agentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, agentIds.sessionAgentId);
   const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
@@ -172,64 +168,17 @@ export async function compactEmbeddedAgentSession(
     agentDir,
     workspaceDir: resolvedWorkspaceDir,
   });
-  const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
-  const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
-      ? undefined
-      : params.agentId;
-  const policyCompactionTarget = resolveEmbeddedCompactionTarget({
-    config: params.config,
-    provider: params.provider,
-    modelId: params.model,
-    authProfileId: params.authProfileId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const configuredHarnessPolicy = resolveAgentHarnessPolicy({
-    provider: policyCompactionTarget.provider ?? DEFAULT_PROVIDER,
-    modelId: policyCompactionTarget.model ?? DEFAULT_MODEL,
-    config: params.config,
-    agentId: runtimePolicyAgentId,
-    sessionKey: runtimePolicySessionKey,
-  });
-  const configuredHarnessRuntime =
-    configuredHarnessPolicy.runtimeSource &&
-    configuredHarnessPolicy.runtimeSource !== "implicit" &&
-    !isDefaultAgentRuntimeId(configuredHarnessPolicy.runtime)
-      ? configuredHarnessPolicy.runtime
-      : undefined;
-  // The persisted harness id is the runtime contract for this session; config
-  // changes can supply a runtime only when the session has no concrete pin.
-  const selectedHarnessRuntime = params.agentHarnessId ?? configuredHarnessRuntime;
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
-    harnessRuntime: selectedHarnessRuntime,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
   const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
   const ceRuntimeProvider = resolvedCompactionTarget.runtimeProvider ?? ceProvider;
-  const ceContextConfigProvider = resolvedCompactionTarget.contextProvider ?? ceProvider;
   const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-  const attemptNativeHarnessCompaction = shouldAttemptNativeHarnessCompaction({
-    provider: ceProvider,
-    contextProvider: resolvedCompactionTarget.contextProvider,
-    selectedHarnessRuntime,
-  });
-  if (attemptNativeHarnessCompaction) {
-    await ensureSelectedAgentHarnessPlugin({
-      config: params.config,
-      provider: ceProvider,
-      modelId: ceModelId,
-      agentId: runtimePolicyAgentId,
-      sessionKey: runtimePolicySessionKey,
-      agentHarnessRuntimeOverride: selectedHarnessRuntime,
-      workspaceDir: resolvedWorkspaceDir,
-    });
-  }
   const { model: ceModel } = await resolveModelAsync(
     ceRuntimeProvider,
     ceModelId,
@@ -237,11 +186,21 @@ export async function compactEmbeddedAgentSession(
     params.config,
   );
   const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
+  const ceHarnessPolicy = resolveAgentHarnessPolicy({
+    provider: ceProvider,
+    modelId: ceModelId,
+    config: params.config,
+    agentId: agentIds.sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
   const resolvedContextTokenBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
         cfg: params.config,
-        provider: ceContextConfigProvider,
+        provider: resolveContextConfigProviderForRuntime({
+          provider: ceProvider,
+          runtimeId: params.agentHarnessId ?? ceHarnessPolicy.runtime,
+        }),
         modelId: ceModelId,
         modelContextTokens: readAgentModelContextTokens(ceModel),
         modelContextWindow: ceRuntimeModel?.contextWindow,
@@ -256,18 +215,15 @@ export async function compactEmbeddedAgentSession(
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
     params,
     agentDir,
-    harnessRuntime: selectedHarnessRuntime,
     contextTokenBudget,
     contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
-  const harnessResult = attemptNativeHarnessCompaction
-    ? await maybeCompactAgentHarnessSession({
-        ...params,
-        contextEngine,
-        contextTokenBudget,
-        contextEngineRuntimeContext,
-      })
-    : undefined;
+  const harnessResult = await maybeCompactAgentHarnessSession({
+    ...params,
+    contextEngine,
+    contextTokenBudget,
+    contextEngineRuntimeContext,
+  });
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
       await contextEngine.dispose?.();
@@ -315,7 +271,6 @@ export async function compactEmbeddedAgentSession(
         const { sessionAgentId } = resolveSessionAgentIds({
           sessionKey: params.sessionKey,
           config: params.config,
-          agentId: params.agentId,
         });
         const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
         const hookCtx = {
@@ -451,7 +406,6 @@ export async function compactEmbeddedAgentSession(
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
-            agentId: sessionAgentId,
             sessionFile: postCompactionSessionFile,
           });
         }
@@ -511,32 +465,15 @@ export async function compactEmbeddedAgentSession(
   );
 }
 
-function shouldAttemptNativeHarnessCompaction(params: {
-  provider: string;
-  contextProvider?: string;
-  selectedHarnessRuntime?: string | null;
-}): boolean {
-  if (isOpenAICodexProvider(params.provider)) {
-    return true;
-  }
-  const selectedRuntime = normalizeOptionalAgentRuntimeId(params.selectedHarnessRuntime);
-  if (!selectedRuntime || selectedRuntime === "auto" || selectedRuntime === "openclaw") {
-    return false;
-  }
-  return isOpenAIProvider(params.provider) ? params.contextProvider !== undefined : true;
-}
-
 function buildCompactionContextEngineRuntimeContext(params: {
   params: CompactEmbeddedAgentSessionParams;
   agentDir: string;
-  harnessRuntime?: string;
   contextEnginePluginId?: string;
   contextTokenBudget?: number;
 }): ContextEngineRuntimeContext {
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.params.sessionKey,
     config: params.params.config,
-    agentId: params.params.agentId,
   });
   return {
     ...params.params,
@@ -558,7 +495,6 @@ function buildCompactionContextEngineRuntimeContext(params: {
       senderId: params.params.senderId,
       provider: params.params.provider,
       modelId: params.params.model,
-      harnessRuntime: params.harnessRuntime,
       modelFallbacksOverride: params.params.modelFallbacksOverride,
       thinkLevel: params.params.thinkLevel,
       reasoningLevel: params.params.reasoningLevel,

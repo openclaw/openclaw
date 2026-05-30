@@ -1,4 +1,3 @@
-import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveSessionCleanupAction,
@@ -11,6 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { isRich, theme } from "../terminal/theme.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import { resolveSessionDisplayModel } from "./sessions-display-model.js";

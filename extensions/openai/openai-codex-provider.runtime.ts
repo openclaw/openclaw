@@ -46,10 +46,10 @@ async function getOpenAICodexOAuthApiKey(
   providerId: string,
   credentials: Record<string, OAuthCredentials>,
 ): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
-  if (providerId !== "openai" && providerId !== "openai-codex") {
+  if (providerId !== "openai-codex") {
     throw new Error(`Unknown OAuth provider: ${providerId}`);
   }
-  let creds = credentials[providerId] ?? credentials["openai-codex"];
+  let creds = credentials[providerId];
   if (!creds) {
     return null;
   }

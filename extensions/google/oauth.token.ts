@@ -1,11 +1,8 @@
-import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
 import { isGeminiCliPersonalOAuth } from "./oauth.settings.js";
 import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth.shared.js";
-
-const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
 async function requestTokenGrant(body: URLSearchParams): Promise<{
   access_token?: string;
@@ -34,11 +31,11 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
   };
 }
 
-function resolveTokenExpiresAt(value: unknown): number {
-  return (
-    resolveExpiresAtMsFromDurationSeconds(value, { bufferMs: TOKEN_EXPIRY_BUFFER_MS }) ??
-    Date.now() - TOKEN_EXPIRY_BUFFER_MS
-  );
+function resolveExpiresInMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return Math.trunc(value * 1000);
 }
 
 async function buildGeminiCliCredentials(params: {
@@ -73,7 +70,8 @@ async function buildGeminiCliCredentials(params: {
     // already-stored identity binding instead of failing token renewal.
   }
 
-  const expiresAt = resolveTokenExpiresAt(params.tokenResponse.expires_in);
+  const expiresInMs = resolveExpiresInMs(params.tokenResponse.expires_in);
+  const expiresAt = Date.now() + expiresInMs - 5 * 60 * 1000;
 
   return {
     refresh: params.tokenResponse.refresh_token ?? params.refreshTokenFallback ?? "",

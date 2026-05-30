@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import {
+  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+  type RestartSentinelPayload,
+} from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
 
@@ -206,7 +209,10 @@ describe("update.run sentinel deliveryContext", () => {
       to: "webchat:user-123",
       accountId: "default",
     });
-    expect(payload.continuation).toBeUndefined();
+    expect(payload.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
   });
 
   it("omits deliveryContext when no sessionKey is provided", async () => {
@@ -232,7 +238,10 @@ describe("update.run sentinel deliveryContext", () => {
       accountId: "workspace-1",
     });
     expect(payload.threadId).toBe("1234567890.123456");
-    expect(payload.continuation).toBeUndefined();
+    expect(payload.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
   });
 
   it("uses an explicit continuationMessage in successful update sentinels", async () => {

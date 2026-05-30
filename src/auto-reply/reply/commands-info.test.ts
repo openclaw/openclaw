@@ -43,10 +43,9 @@ vi.mock("../../agents/agent-scope.js", async () => {
   };
 });
 
-vi.mock("../../skills/discovery/chat-commands.js", async () => {
-  const actual = await vi.importActual<typeof import("../../skills/discovery/chat-commands.js")>(
-    "../../skills/discovery/chat-commands.js",
-  );
+vi.mock("../skill-commands.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../skill-commands.js")>("../skill-commands.js");
   return {
     ...actual,
     listSkillCommandsForAgents: listSkillCommandsForAgentsMock,

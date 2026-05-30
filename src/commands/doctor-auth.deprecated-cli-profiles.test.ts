@@ -26,7 +26,7 @@ vi.mock("../agents/auth-profiles/store.js", () => ({
   ensureAuthProfileStore: () => authProfileStoreMock.store,
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../terminal/note.js", () => ({
   note: vi.fn(),
 }));
 

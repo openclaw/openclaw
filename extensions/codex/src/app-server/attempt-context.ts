@@ -65,7 +65,6 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   promptContext?: string;
   developerInstructions?: string;
   turnScopedDeveloperInstructions?: string;
-  memoryCollaborationInstructions?: string;
   heartbeatCollaborationInstructions?: string;
 };
 
@@ -79,6 +78,73 @@ export async function readMirroredSessionHistoryMessages(
     });
   }
   return messages;
+}
+
+export function shouldProjectMirroredHistoryForCodexStart(params: {
+  startupBinding: CodexAppServerThreadBinding | undefined;
+  dynamicToolsFingerprint: string;
+  historyMessages: AgentMessage[];
+  forceProject?: boolean;
+}): boolean {
+  if (!params.historyMessages.some((message) => message.role === "user")) {
+    return false;
+  }
+  if (params.forceProject) {
+    return true;
+  }
+  if (!params.startupBinding?.threadId) {
+    return true;
+  }
+  if (
+    hasUserVisibleHistoryAfterCodexBinding({
+      startupBinding: params.startupBinding,
+      historyMessages: params.historyMessages,
+    })
+  ) {
+    return true;
+  }
+  return !areCodexDynamicToolFingerprintsCompatible({
+    previous: params.startupBinding.dynamicToolsFingerprint,
+    next: params.dynamicToolsFingerprint,
+  });
+}
+
+export function hasUserVisibleHistoryAfterCodexBinding(params: {
+  startupBinding: CodexAppServerThreadBinding;
+  historyMessages: AgentMessage[];
+}): boolean {
+  const bindingUpdatedAt = Date.parse(params.startupBinding.updatedAt);
+  if (!Number.isFinite(bindingUpdatedAt)) {
+    return false;
+  }
+  return params.historyMessages.some((message) => {
+    if (message.role !== "user" && message.role !== "assistant") {
+      return false;
+    }
+    if (isCodexAppServerMirroredTranscriptMessage(message)) {
+      return false;
+    }
+    const timestamp =
+      typeof message.timestamp === "number"
+        ? message.timestamp
+        : typeof message.timestamp === "string"
+          ? Date.parse(message.timestamp)
+          : Number.NaN;
+    return Number.isFinite(timestamp) && timestamp > bindingUpdatedAt;
+  });
+}
+
+export function isCodexAppServerMirroredTranscriptMessage(message: AgentMessage): boolean {
+  const record = message as unknown as Record<string, unknown>;
+  const idempotencyKey = record.idempotencyKey;
+  if (typeof idempotencyKey === "string" && idempotencyKey.startsWith("codex-app-server:")) {
+    return true;
+  }
+  const meta = record["__openclaw"];
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return false;
+  }
+  return typeof (meta as Record<string, unknown>).mirrorIdentity === "string";
 }
 
 export function readContextEngineThreadBootstrapProjection(
@@ -231,12 +297,6 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
         turnScopedDeveloperInstructionFiles,
       ),
-      memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
-        ? renderCodexWorkspaceMemoryReference({
-            files: memoryReferenceFiles,
-            toolNames: params.memoryToolNames,
-          })
-        : undefined,
       heartbeatCollaborationInstructions:
         renderCodexWorkspaceHeartbeatReference(heartbeatReferenceFiles),
     };
@@ -487,12 +547,18 @@ function readNonEmptyString(value: unknown): string | undefined {
 
 export function buildCodexOpenClawPromptContext(params: {
   params: EmbeddedRunAttemptParams;
+  skillsPrompt?: string;
   workspacePromptContext?: string;
+  workspaceMemoryReference?: string;
 }): string | undefined {
   if (!shouldInjectCodexOpenClawPromptContext(params.params)) {
     return undefined;
   }
   const sections = [
+    params.skillsPrompt?.trim()
+      ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
+      : undefined,
+    params.workspaceMemoryReference?.trim() ? params.workspaceMemoryReference.trim() : undefined,
     params.workspacePromptContext?.trim()
       ? ["## OpenClaw Workspace Context", "", params.workspacePromptContext.trim()].join("\n")
       : undefined,
@@ -516,27 +582,14 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
   );
 }
 
-export function renderCodexSkillsCollaborationInstructions(params: {
-  attempt: EmbeddedRunAttemptParams;
-  skillsPrompt?: string;
-}): string | undefined {
-  if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
-    return undefined;
-  }
-  return params.skillsPrompt?.trim()
-    ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
-    : undefined;
-}
-
 export function prependCodexOpenClawPromptContext(
   prompt: string,
   context: string | undefined,
-  options: { preservePromptWithoutContext?: boolean } = {},
 ): string {
-  const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
-  if (!context?.trim() && (!deliveryHint || options.preservePromptWithoutContext)) {
+  if (!context?.trim()) {
     return prompt;
   }
+  const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
   const promptSection = promptWithoutDeliveryHint.startsWith(
     "OpenClaw assembled context for this turn:",
   )
@@ -549,7 +602,7 @@ export function prependCodexOpenClawPromptContext(
         deliveryHint,
       ].join("\n")
     : undefined;
-  return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
+  return [context.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
 }
 
 const CODEX_DELIVERY_HINT_LINES = [
@@ -672,7 +725,6 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     header: "## OpenClaw Agent Soul",
     preamble:
       "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
-    wrapperTag: "AGENT_SOUL",
   });
 }
 
@@ -680,21 +732,14 @@ function renderCodexWorkspaceDeveloperInstructions(params: {
   files: EmbeddedContextFile[];
   header: string;
   preamble: string;
-  wrapperTag?: string;
 }): string | undefined {
-  const { files, header, preamble, wrapperTag } = params;
+  const { files, header, preamble } = params;
   if (files.length === 0) {
     return undefined;
   }
   const lines = [header, "", preamble, ""];
-  if (wrapperTag) {
-    lines.push(`<${wrapperTag}>`, "");
-  }
   for (const file of files) {
     lines.push(`### ${file.path}`, "", file.content, "");
-  }
-  if (wrapperTag) {
-    lines.push(`</${wrapperTag}>`);
   }
   return lines.join("\n").trim();
 }
@@ -761,7 +806,7 @@ export function renderCodexWorkspaceMemoryReference(params: {
   const lines = [
     "## OpenClaw Workspace Memory",
     "",
-    `MEMORY.md exists in the active agent workspace as a memory file, not an instruction file. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
+    `MEMORY.md exists in the active agent workspace. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
     "",
   ];
   for (const file of params.files) {

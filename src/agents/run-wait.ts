@@ -1,15 +1,8 @@
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
-import {
-  addTimerTimeoutGraceMs,
-  clampTimerTimeoutMs,
-  parseFiniteNumber,
-} from "../shared/number-coercion.js";
-import {
-  buildAgentRunTerminalOutcomeFromWaitResult,
-  type AgentRunTerminalOutcome,
-} from "./agent-run-terminal-outcome.js";
+import { parseFiniteNumber } from "../shared/number-coercion.js";
+import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "./run-termination.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
@@ -28,7 +21,7 @@ let runWaitDeps: {
 } = defaultRunWaitDeps;
 
 function resolveRunWaitTimeoutMs(value: number | undefined): number {
-  return clampTimerTimeoutMs(parseFiniteNumber(value) ?? 1) ?? 1;
+  return Math.max(1, Math.floor(parseFiniteNumber(value) ?? 1));
 }
 
 export type AssistantReplySnapshot = {
@@ -73,8 +66,14 @@ function normalizeAgentWaitResult(
   wait?: RawAgentWaitResponse,
 ): AgentWaitResult {
   const stopReason = typeof wait?.stopReason === "string" ? wait.stopReason : undefined;
-  const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult({ ...wait, status });
-  const normalized = normalizeTerminalOutcomeForWait(terminalOutcome, status, wait?.livenessState);
+  const abortedStopReason = isAbortedAgentStopReason(stopReason);
+  const error =
+    abortedStopReason && typeof wait?.error !== "string" ? AGENT_RUN_ABORTED_ERROR : wait?.error;
+  const normalized = normalizeBlockedLivenessWaitStatus({
+    status: abortedStopReason ? "error" : status,
+    livenessState: wait?.livenessState,
+    error,
+  });
   return {
     status: normalized.status,
     error: normalized.error,
@@ -87,21 +86,6 @@ function normalizeAgentWaitResult(
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
   };
-}
-
-function normalizeTerminalOutcomeForWait(
-  outcome: AgentRunTerminalOutcome | undefined,
-  fallbackStatus: AgentWaitResult["status"],
-  livenessState?: unknown,
-): { status: AgentWaitResult["status"]; error?: string } {
-  if (outcome?.reason === "hard_timeout") {
-    return { status: outcome.status, error: outcome.error };
-  }
-  return normalizeBlockedLivenessWaitStatus({
-    status: outcome?.status ?? fallbackStatus,
-    livenessState,
-    error: outcome?.error,
-  });
 }
 
 const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
@@ -205,7 +189,7 @@ export async function waitForAgentRun(params: {
         runId: params.runId,
         timeoutMs,
       },
-      timeoutMs: addTimerTimeoutGraceMs(timeoutMs, 2_000),
+      timeoutMs: timeoutMs + 2000,
     });
     if (wait?.status === "timeout") {
       return normalizeAgentWaitResult("timeout", wait);

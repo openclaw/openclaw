@@ -172,27 +172,6 @@ describe("flows commands", () => {
     });
   });
 
-  it("shows TaskFlows with Date-invalid timestamps without crashing", async () => {
-    await withTaskFlowCommandStateDir(async () => {
-      const flow = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/flows-command",
-        goal: "Inspect malformed flow timestamp",
-        status: "running",
-        createdAt: 100,
-        updatedAt: 8_700_000_000_000_000,
-      });
-
-      const runtime = createRuntime();
-      await flowsShowCommand({ lookup: flow.flowId, json: false }, runtime);
-
-      const lines = vi.mocked(runtime.log).mock.calls.map(([line]) => String(line));
-      expect(lines).toContain(`flowId: ${flow.flowId}`);
-      expect(lines).toContain("createdAt: 1970-01-01T00:00:00.100Z");
-      expect(lines).toContain("updatedAt: n/a");
-    });
-  });
-
   it("sanitizes TaskFlow text output before printing to the terminal", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const unsafeOwnerKey = "agent:main:\u001b[31mowner";

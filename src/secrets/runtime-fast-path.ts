@@ -13,12 +13,10 @@ import {
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveOAuthPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
-import { hasCredentialBearingObjectValue, hasSecretRefCandidate } from "./runtime-secret-scan.js";
-import type { SecretDefaults } from "./runtime-shared.js";
 import type {
   PreparedSecretsRuntimeSnapshot,
   SecretsRuntimeRefreshContext,
@@ -122,9 +120,38 @@ export function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
   };
 }
 
+const WEB_FETCH_CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);
+
+function hasCredentialBearingWebFetchValue(
+  value: unknown,
+  defaults: Parameters<typeof coerceSecretRef>[1],
+  seen = new WeakSet<object>(),
+): boolean {
+  if (coerceSecretRef(value, defaults)) {
+    return true;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasCredentialBearingWebFetchValue(entry, defaults, seen));
+  }
+  return Object.entries(value as Record<string, unknown>).some(([rawKey, entry]) => {
+    const key = rawKey.toLowerCase();
+    if (WEB_FETCH_CREDENTIAL_FIELD_NAMES.has(key) && entry != null && entry !== "") {
+      return true;
+    }
+    return hasCredentialBearingWebFetchValue(entry, defaults, seen);
+  });
+}
+
 function hasActiveRuntimeWebFetchProviderSurface(
   fetch: unknown,
-  defaults: SecretDefaults | undefined,
+  defaults: Parameters<typeof coerceSecretRef>[1],
 ): boolean {
   if (!fetch || typeof fetch !== "object" || Array.isArray(fetch)) {
     return false;
@@ -136,7 +163,7 @@ function hasActiveRuntimeWebFetchProviderSurface(
   if (typeof fetchConfig.provider === "string" && fetchConfig.provider.trim()) {
     return true;
   }
-  return hasCredentialBearingObjectValue(fetchConfig, defaults);
+  return hasCredentialBearingWebFetchValue(fetchConfig, defaults);
 }
 
 function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
@@ -178,6 +205,29 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   });
 }
 
+function hasSecretRefCandidate(
+  value: unknown,
+  defaults: Parameters<typeof coerceSecretRef>[1],
+  seen = new WeakSet<object>(),
+): boolean {
+  if (coerceSecretRef(value, defaults)) {
+    return true;
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (seen.has(value)) {
+    return false;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasSecretRefCandidate(entry, defaults, seen));
+  }
+  return Object.values(value as Record<string, unknown>).some((entry) =>
+    hasSecretRefCandidate(entry, defaults, seen),
+  );
+}
+
 export function canUseSecretsRuntimeFastPath(params: {
   sourceConfig: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
@@ -199,7 +249,6 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   includeAuthStoreRefs?: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): {
   snapshot: PreparedSecretsRuntimeSnapshot;
   refreshContext: SecretsRuntimeRefreshContext;
@@ -256,7 +305,6 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
       explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
       includeAuthStoreRefs,
       loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
-      ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
       ...(params.loadAuthStore ? { loadAuthStore: params.loadAuthStore } : {}),
     },
   };

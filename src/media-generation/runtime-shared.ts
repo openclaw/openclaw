@@ -1,5 +1,3 @@
-import { resolveCapabilityModelRefForProviders } from "../../packages/media-generation-core/src/capability-model-ref.js";
-import type { MediaGenerationNormalizationMetadataInput } from "../../packages/media-generation-core/src/normalization.js";
 import { listProfilesForProvider } from "../agents/auth-profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -14,19 +12,24 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { clampTimerTimeoutMs } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-export type {
+import { resolveCapabilityModelRefForProviders } from "./capability-model-ref.js";
+import type {
   MediaGenerationNormalizationMetadataInput,
   MediaNormalizationEntry,
   MediaNormalizationValue,
-} from "../../packages/media-generation-core/src/normalization.js";
-export { hasMediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
+} from "./normalization.types.js";
 
 export type ParsedProviderModelRef = {
   provider: string;
   model: string;
 };
+export type {
+  MediaGenerationNormalizationMetadataInput,
+  MediaNormalizationEntry,
+  MediaNormalizationValue,
+} from "./normalization.types.js";
+
 export function recordCapabilityCandidateFailure(params: {
   attempts: FallbackAttempt[];
   provider: string;
@@ -44,13 +47,25 @@ export function recordCapabilityCandidateFailure(params: {
   });
 }
 
+export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValue>(
+  entry: MediaNormalizationEntry<TValue> | undefined,
+): entry is MediaNormalizationEntry<TValue> {
+  return Boolean(
+    entry &&
+    (entry.requested !== undefined ||
+      entry.applied !== undefined ||
+      entry.derivedFrom !== undefined ||
+      (entry.supportedValues?.length ?? 0) > 0),
+  );
+}
+
 const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
 export function resolveMediaProviderDefaultTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? clampTimerTimeoutMs(timeoutMs)
+    ? Math.floor(timeoutMs)
     : undefined;
 }
 
@@ -58,10 +73,7 @@ export function resolveMediaProviderRequestTimeoutMs(params: {
   timeoutMs?: number;
   providerDefaultTimeoutMs?: number;
 }): number | undefined {
-  return (
-    resolveMediaProviderDefaultTimeoutMs(params.timeoutMs) ??
-    resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs)
-  );
+  return params.timeoutMs ?? resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs);
 }
 
 type CapabilityProviderCandidate = {

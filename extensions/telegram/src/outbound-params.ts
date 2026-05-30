@@ -1,25 +1,21 @@
-import {
-  parseStrictInteger,
-  parseStrictNonNegativeInteger,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 
-function parseIntegerId(value: unknown): number | undefined {
+function parseIntegerId(value: string): number | undefined {
   return parseStrictInteger(value);
 }
 
-export function parseTelegramMessageThreadId(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
-}
-
 export function normalizeTelegramReplyToMessageId(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? Math.trunc(value) : undefined;
+  }
   if (typeof value !== "string") {
-    return parseIntegerId(value);
+    return undefined;
   }
   const trimmed = value.trim();
   return trimmed ? parseIntegerId(trimmed) : undefined;
 }
 
-export function parseTelegramReplyToMessageId(replyToId?: unknown): number | undefined {
+export function parseTelegramReplyToMessageId(replyToId?: string | null): number | undefined {
   return normalizeTelegramReplyToMessageId(replyToId);
 }
 
@@ -28,7 +24,7 @@ export function parseTelegramThreadId(threadId?: string | number | null): number
     return undefined;
   }
   if (typeof threadId === "number") {
-    return parseIntegerId(threadId);
+    return Number.isFinite(threadId) ? Math.trunc(threadId) : undefined;
   }
   const trimmed = threadId.trim();
   if (!trimmed) {

@@ -600,9 +600,6 @@ export async function startGatewayServer(
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
-    ...(startupConfigLoad.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
-      : {}),
   });
 
   let cfgAtStart: OpenClawConfig;

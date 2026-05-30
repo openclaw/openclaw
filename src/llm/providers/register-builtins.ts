@@ -404,3 +404,5 @@ export function resetApiProviders(): void {
   unregisterApiProviders(BUILT_IN_API_PROVIDER_SOURCE_ID);
   registerBuiltInApiProviders();
 }
+
+registerBuiltInApiProviders();

@@ -73,17 +73,12 @@ export async function registerProviderPlugins(
   return captured.providers;
 }
 
-function matchesRegisteredProviderId(
-  entry: { id: string; hookAliases?: readonly string[] },
-  id: string,
-) {
-  return entry.id === id || entry.hookAliases?.includes(id) === true;
-}
-
-export function requireRegisteredProvider<
-  T extends { id: string; hookAliases?: readonly string[] },
->(providers: T[], providerId: string, label = "provider"): T {
-  const provider = providers.find((entry) => matchesRegisteredProviderId(entry, providerId));
+export function requireRegisteredProvider<T extends { id: string }>(
+  providers: T[],
+  providerId: string,
+  label = "provider",
+): T {
+  const provider = providers.find((entry) => entry.id === providerId);
   if (!provider) {
     throw new Error(`${label} ${providerId} missing`);
   }

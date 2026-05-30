@@ -6,7 +6,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   getActiveRuntimeWebToolsMetadata: vi.fn(),
-  getActiveSecretsRuntimeConfigSnapshot: vi.fn(),
+  getActiveSecretsRuntimeSnapshot: vi.fn(),
   resolveManifestContractOwnerPluginId: vi.fn(),
 }));
 
@@ -19,7 +19,7 @@ vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime-state.js", () => ({
-  getActiveSecretsRuntimeConfigSnapshot: mocks.getActiveSecretsRuntimeConfigSnapshot,
+  getActiveSecretsRuntimeSnapshot: mocks.getActiveSecretsRuntimeSnapshot,
 }));
 
 function latestOwnerLookupParams(): Record<string, unknown> {
@@ -34,8 +34,8 @@ describe("web tool runtime context", () => {
   beforeEach(() => {
     mocks.getActiveRuntimeWebToolsMetadata.mockReset();
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue(null);
-    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReset();
-    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue(null);
+    mocks.getActiveSecretsRuntimeSnapshot.mockReset();
+    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue(null);
     mocks.resolveManifestContractOwnerPluginId.mockReset();
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue(undefined);
   });
@@ -44,7 +44,7 @@ describe("web tool runtime context", () => {
     const runtimeConfig = {
       tools: { web: { search: { provider: "perplexity" } } },
     };
-    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({ config: runtimeConfig });
+    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue({ config: runtimeConfig });
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue({
       search: {
         providerConfigured: "perplexity",

@@ -15,12 +15,7 @@ import { extractReadableContent } from "../../web-fetch/content-extractors.runti
 import { resolveWebProviderConfig } from "../../web/provider-runtime-shared.js";
 import { stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
-import {
-  jsonResult,
-  readPositiveIntegerParam,
-  readStringParam,
-  scheduleToolProgress,
-} from "./common.js";
+import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
 import {
   extractBasicHtmlContent,
   htmlToMarkdown,
@@ -48,8 +43,6 @@ const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 750_000;
 const FETCH_MAX_RESPONSE_BYTES_MIN = 32_000;
 const FETCH_MAX_RESPONSE_BYTES_MAX = 10_000_000;
 const DEFAULT_FETCH_MAX_REDIRECTS = 3;
-const WEB_FETCH_PROGRESS_THRESHOLD_MS = 5_000;
-const WEB_FETCH_PROGRESS_TEXT = "Fetching page content...";
 const DEFAULT_ERROR_MAX_CHARS = 4_000;
 const DEFAULT_ERROR_MAX_BYTES = 64_000;
 const DEFAULT_FETCH_USER_AGENT =
@@ -292,7 +285,6 @@ type WebFetchRuntimeParams = {
   };
   providerCacheKey?: string;
   lookupFn?: LookupFn;
-  signal?: AbortSignal;
   resolveProviderFallback: () => Promise<WebFetchProviderFallback>;
 };
 
@@ -316,15 +308,6 @@ function normalizeProviderFinalUrl(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function throwIfFetchAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) {
-    return;
-  }
-  // readResponseText may finish after an abort races with body reading. Recheck
-  // before wrapping, caching, or returning content from a canceled tool call.
-  throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
 }
 
 function normalizeProviderWebFetchPayload(params: {
@@ -452,7 +435,6 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
       lookupFn: params.lookupFn,
       useEnvProxy: useTrustedEnvProxy,
       policy: ssrfPolicy,
@@ -479,9 +461,6 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     if (error instanceof SsrFBlockedError) {
       throw error;
     }
-    if (params.signal?.aborted) {
-      throw error;
-    }
     const payload = await maybeFetchProviderWebFetchPayload({
       ...params,
       urlToFetch: finalUrl,
@@ -496,9 +475,6 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 
   try {
     if (!res.ok) {
-      if (params.signal?.aborted) {
-        throw params.signal.reason instanceof Error ? params.signal.reason : new Error("aborted");
-      }
       const payload = await maybeFetchProviderWebFetchPayload({
         ...params,
         urlToFetch: params.url,
@@ -509,7 +485,6 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         return payload;
       }
       const rawDetailResult = await readResponseText(res, { maxBytes: DEFAULT_ERROR_MAX_BYTES });
-      throwIfFetchAborted(params.signal);
       const rawDetail = rawDetailResult.text;
       const detail = formatWebFetchErrorDetail({
         detail: rawDetail,
@@ -523,7 +498,6 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     const contentType = res.headers.get("content-type") ?? "application/octet-stream";
     const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
     const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
-    throwIfFetchAborted(params.signal);
     const body = bodyResult.text;
     const responseTruncatedWarning = bodyResult.truncated
       ? `Response body truncated after ${params.maxResponseBytes} bytes.`
@@ -656,7 +630,7 @@ export function createWebFetchTool(options?: {
     description:
       "Fetch URL and extract readable markdown/text. Lightweight page access; no browser automation.",
     parameters: WebFetchSchema,
-    execute: async (_toolCallId, args, signal, onUpdate) => {
+    execute: async (_toolCallId, args) => {
       const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(
         {
           config: options?.config,
@@ -702,47 +676,34 @@ export function createWebFetchTool(options?: {
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readPositiveIntegerParam(params, "maxChars");
       const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
-      // The progress line is emitted only if the fetch is still pending after
-      // the threshold; fast cache/network hits clear the timer before it fires.
-      const clearProgressTimer = scheduleToolProgress(
-        onUpdate,
-        { text: WEB_FETCH_PROGRESS_TEXT, id: "web_fetch:fetching" },
-        WEB_FETCH_PROGRESS_THRESHOLD_MS,
-        { signal },
-      );
-      try {
-        const result = await runWebFetch({
-          url,
-          extractMode,
-          maxChars: resolveMaxChars(
-            maxChars ?? executionFetch?.maxChars,
-            DEFAULT_FETCH_MAX_CHARS,
-            maxCharsCap,
-          ),
-          maxResponseBytes,
-          maxRedirects: resolveMaxRedirects(
-            executionFetch?.maxRedirects,
-            DEFAULT_FETCH_MAX_REDIRECTS,
-          ),
-          timeoutSeconds: resolveTimeoutSeconds(
-            executionFetch?.timeoutSeconds,
-            DEFAULT_TIMEOUT_SECONDS,
-          ),
-          cacheTtlMs: resolveCacheTtlMs(executionFetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
-          userAgent,
-          readabilityEnabled,
-          config,
-          useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
-          ssrfPolicy: executionFetch?.ssrfPolicy,
-          ...(providerCacheKey ? { providerCacheKey } : {}),
-          lookupFn: options?.lookupFn,
-          signal,
-          resolveProviderFallback,
-        });
-        return jsonResult(result);
-      } finally {
-        clearProgressTimer();
-      }
+      const result = await runWebFetch({
+        url,
+        extractMode,
+        maxChars: resolveMaxChars(
+          maxChars ?? executionFetch?.maxChars,
+          DEFAULT_FETCH_MAX_CHARS,
+          maxCharsCap,
+        ),
+        maxResponseBytes,
+        maxRedirects: resolveMaxRedirects(
+          executionFetch?.maxRedirects,
+          DEFAULT_FETCH_MAX_REDIRECTS,
+        ),
+        timeoutSeconds: resolveTimeoutSeconds(
+          executionFetch?.timeoutSeconds,
+          DEFAULT_TIMEOUT_SECONDS,
+        ),
+        cacheTtlMs: resolveCacheTtlMs(executionFetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+        userAgent,
+        readabilityEnabled,
+        config,
+        useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
+        ssrfPolicy: executionFetch?.ssrfPolicy,
+        ...(providerCacheKey ? { providerCacheKey } : {}),
+        lookupFn: options?.lookupFn,
+        resolveProviderFallback,
+      });
+      return jsonResult(result);
     },
   };
 }

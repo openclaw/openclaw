@@ -13,10 +13,6 @@ import {
 } from "./session-store.js";
 import { resolveSession } from "./session.js";
 
-const sessionStoreMocks = vi.hoisted(() => ({
-  updateSessionStore: vi.fn(),
-}));
-
 vi.mock("../model-selection.js", () => ({
   isCliProvider: (provider: string, cfg?: OpenClawConfig) =>
     Object.hasOwn(cfg?.agents?.defaults?.cliBackends ?? {}, provider),
@@ -84,8 +80,19 @@ vi.mock("../../config/sessions.js", async () => {
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf8");
   };
-  sessionStoreMocks.updateSessionStore.mockImplementation(
-    async <T>(
+  return {
+    mergeSessionEntry: (existing: SessionEntry | undefined, patch: Partial<SessionEntry>) => ({
+      ...existing,
+      ...patch,
+      sessionId: patch.sessionId ?? existing?.sessionId ?? "mock-session",
+      updatedAt: Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now()),
+    }),
+    setSessionRuntimeModel: (entry: SessionEntry, runtime: { provider: string; model: string }) => {
+      entry.modelProvider = runtime.provider;
+      entry.model = runtime.model;
+      return true;
+    },
+    updateSessionStore: async <T>(
       storePath: string,
       mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
     ) => {
@@ -108,20 +115,6 @@ vi.mock("../../config/sessions.js", async () => {
       await writeStore(storePath, store);
       return result;
     },
-  );
-  return {
-    mergeSessionEntry: (existing: SessionEntry | undefined, patch: Partial<SessionEntry>) => ({
-      ...existing,
-      ...patch,
-      sessionId: patch.sessionId ?? existing?.sessionId ?? "mock-session",
-      updatedAt: Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now()),
-    }),
-    setSessionRuntimeModel: (entry: SessionEntry, runtime: { provider: string; model: string }) => {
-      entry.modelProvider = runtime.provider;
-      entry.model = runtime.model;
-      return true;
-    },
-    updateSessionStore: sessionStoreMocks.updateSessionStore,
     loadSessionStore: (storePath: string) => {
       try {
         return JSON.parse(fsSync.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
@@ -164,72 +157,6 @@ async function withTempSessionStore<T>(
 }
 
 describe("updateSessionStoreAfterAgentRun", () => {
-  it("passes resolved maintenance config to the gateway turn store write", async () => {
-    sessionStoreMocks.updateSessionStore.mockClear();
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {
-        session: {
-          maintenance: {
-            mode: "enforce",
-            maxEntries: 42,
-          },
-        },
-      } as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-maintenance-config";
-      const sessionId = "test-maintenance-config-session";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-        },
-      };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
-      const result: EmbeddedAgentRunResult = {
-        meta: {
-          durationMs: 1,
-          agentMeta: {
-            sessionId,
-            provider: "openai",
-            model: "gpt-5.5",
-          },
-        },
-      };
-
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
-        result,
-      });
-
-      const updateOptions = sessionStoreMocks.updateSessionStore.mock.calls.at(-1)?.[2];
-      expect(updateOptions).toMatchObject({
-        takeCacheOwnership: true,
-        maintenanceConfig: {
-          mode: "enforce",
-          maxEntries: 42,
-        },
-      });
-      expect(typeof updateOptions?.resolveSingleEntryPersistence).toBe("function");
-      expect(
-        updateOptions?.resolveSingleEntryPersistence?.({
-          sessionId,
-          updatedAt: 2,
-        } as SessionEntry),
-      ).toEqual({
-        sessionKey,
-        entry: {
-          sessionId,
-          updatedAt: 2,
-        },
-      });
-    });
-  });
-
   it("persists the selected embedded harness id on the session", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -267,55 +194,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]?.agentHarnessId).toBe("codex");
       expect(loadSessionStore(storePath)[sessionKey]?.agentHarnessId).toBe("codex");
-    });
-  });
-
-  it("persists rotated compaction session identity and transcript file", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-rotated-session";
-      const sessionId = "test-rotated-session-old";
-      const rotatedSessionId = "test-rotated-session-new";
-      const rotatedSessionFile = path.join(path.dirname(storePath), "rotated-session.jsonl");
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          sessionFile: path.join(path.dirname(storePath), "old-session.jsonl"),
-          updatedAt: 1,
-        },
-      };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
-
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId: rotatedSessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        defaultProvider: "openai",
-        defaultModel: "gpt-5.5",
-        result: {
-          meta: {
-            durationMs: 1,
-            agentMeta: {
-              sessionId: rotatedSessionId,
-              sessionFile: rotatedSessionFile,
-              provider: "openai",
-              model: "gpt-5.5",
-              compactionCount: 1,
-            },
-          },
-        },
-      });
-
-      expect(sessionStore[sessionKey]).toMatchObject({
-        sessionId: rotatedSessionId,
-        sessionFile: rotatedSessionFile,
-        usageFamilyKey: sessionKey,
-        usageFamilySessionIds: [sessionId, rotatedSessionId],
-        compactionCount: 1,
-      });
-      expect(sessionStore[sessionKey]?.sessionStartedAt).toBeGreaterThan(1);
     });
   });
 
@@ -464,7 +342,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "cli-session-123",
       });
-      expect(sessionStore[sessionKey]?.sessionId).toBe(sessionId);
       expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
       expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
 
@@ -472,85 +349,8 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "cli-session-123",
       });
-      expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
       expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
       expect(persisted[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
-    });
-  });
-
-  it("clears stale CLI bindings when a successful run reports an unflushed replacement", async () => {
-    await withTempSessionStore(async ({ storePath }) => {
-      const cfg = {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {
-                command: "claude",
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-      const sessionKey = "agent:main:explicit:test-clear-unflushed-cli";
-      const sessionId = "test-openclaw-session";
-      const sessionStore: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: 1,
-          cliSessionBindings: {
-            "claude-cli": {
-              sessionId: "stale-cli-session",
-              authEpoch: "old-epoch",
-            },
-            "codex-cli": {
-              sessionId: "codex-session",
-            },
-          },
-          cliSessionIds: {
-            "claude-cli": "stale-cli-session",
-            "codex-cli": "codex-session",
-          },
-          claudeCliSessionId: "stale-cli-session",
-        },
-      };
-      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
-
-      const result: EmbeddedAgentRunResult = {
-        meta: {
-          durationMs: 1,
-          agentMeta: {
-            sessionId: "",
-            provider: "claude-cli",
-            model: "claude-sonnet-4-6",
-            clearCliSessionBinding: true,
-          },
-        },
-      };
-
-      await updateSessionStoreAfterAgentRun({
-        cfg,
-        sessionId,
-        sessionKey,
-        storePath,
-        sessionStore,
-        contextTokensOverride: 200_000,
-        defaultProvider: "claude-cli",
-        defaultModel: "claude-sonnet-4-6",
-        result,
-      });
-
-      expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cliSessionBindings?.["codex-cli"]).toEqual({
-        sessionId: "codex-session",
-      });
-      expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-      expect(sessionStore[sessionKey]?.cliSessionIds?.["codex-cli"]).toBe("codex-session");
-      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
-
-      const persisted = loadSessionStore(storePath, { skipCache: true });
-      expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-      expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-      expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
     });
   });
 

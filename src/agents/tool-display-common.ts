@@ -1,4 +1,3 @@
-import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -448,7 +447,7 @@ function parseToolSearchCallArgs(raw: string | undefined): Record<string, unknow
   }
   const args: Record<string, unknown> = {};
   const propertyPattern =
-    /(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|null|[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?)/gi;
+    /(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|null|-?\d+(?:\.\d+)?)/g;
   for (const match of source.matchAll(propertyPattern)) {
     const key = match[1];
     const value = match[2];
@@ -516,9 +515,8 @@ function parseSimpleToolSearchArgValue(raw: string): unknown {
   if (raw === "null") {
     return null;
   }
-  const numeric = parseStrictFiniteNumber(raw);
-  if (numeric !== undefined) {
-    return numeric;
+  if (/^-?\d+(?:\.\d+)?$/.test(raw)) {
+    return Number(raw);
   }
   const quote = raw[0];
   const inner = raw.slice(1, -1);

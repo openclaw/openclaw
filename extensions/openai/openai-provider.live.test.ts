@@ -183,6 +183,6 @@ describeLive("buildOpenAIProvider live", () => {
 
       expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
     },
-    180_000,
+    30_000,
   );
 });

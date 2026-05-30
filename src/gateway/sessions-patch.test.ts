@@ -18,14 +18,12 @@ async function runPatch(params: {
   store?: Record<string, SessionEntry>;
   cfg?: OpenClawConfig;
   storeKey?: string;
-  agentId?: string;
   loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
 }) {
   return applySessionsPatchToStore({
     cfg: params.cfg ?? EMPTY_CFG,
     store: params.store ?? {},
     storeKey: params.storeKey ?? MAIN_SESSION_KEY,
-    agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
   });
@@ -609,44 +607,13 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("xhigh");
   });
 
-  test("validates global patches against the selected agent", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        cfg: {
-          agents: {
-            list: [
-              {
-                id: "main",
-                default: true,
-                model: { primary: "gmn/gpt-5.4" },
-              },
-              {
-                id: "work",
-                model: { primary: "openai-codex/gpt-5.5" },
-              },
-            ],
-          },
-        } as OpenClawConfig,
-        storeKey: "global",
-        agentId: "work",
-        patch: {
-          key: "global",
-          thinkingLevel: "xhigh",
-        },
-        loadGatewayModelCatalog: async () => [],
-      }),
-    );
-
-    expect(entry.thinkingLevel).toBe("xhigh");
-  });
-
   test("accepts xhigh thinking patches from bundled startup-lazy provider policy without catalog", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai/gpt-5.5" },
+              model: { primary: "openai-codex/gpt-5.5" },
             },
           },
         } as OpenClawConfig,

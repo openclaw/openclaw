@@ -1,18 +1,9 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
-type SetupDescriptorRecord = Pick<
-  PluginManifestRecord,
-  "providers" | "cliBackends" | "providerAuthAliases" | "setup"
->;
+type SetupDescriptorRecord = Pick<PluginManifestRecord, "providers" | "cliBackends" | "setup">;
 
 export function listSetupProviderIds(record: SetupDescriptorRecord): readonly string[] {
-  const providerIds = record.setup?.providers?.map((entry) => entry.id) ?? record.providers;
-  const normalizedProviderIds = new Set(providerIds.map(normalizeProviderId));
-  const aliases = Object.entries(record.providerAuthAliases ?? {})
-    .filter(([, target]) => normalizedProviderIds.has(normalizeProviderId(target)))
-    .map(([alias]) => alias);
-  return [...providerIds, ...aliases];
+  return record.setup?.providers?.map((entry) => entry.id) ?? record.providers;
 }
 
 export function listSetupCliBackendIds(record: SetupDescriptorRecord): readonly string[] {

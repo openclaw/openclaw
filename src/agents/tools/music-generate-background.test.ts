@@ -115,7 +115,7 @@ describe("music generate background helpers", () => {
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
-  it("tells channel completion agents to follow the visible-reply contract", async () => {
+  it("warns channel completion agents that normal final replies are private", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",
@@ -135,16 +135,15 @@ describe("music generate background helpers", () => {
       },
     });
 
-    expectReplyInstructionContains("visible-reply contract");
-    expectReplyInstructionContains("MEDIA:");
+    expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
+    expectReplyInstructionContains("the media must be sent as message-tool attachments");
   });
 
   it("delivers failure completion notices directly", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
       path: "direct",
-      reason: "generated_media_missing",
-      error: "completion agent did not deliver generated media",
+      error: "completion agent did not deliver through the message tool",
     });
     const completion = createMediaCompletionFixture({
       runId: "tool:music_generate:abc",
@@ -189,8 +188,8 @@ describe("music generate background helpers", () => {
         },
       });
 
-      expectReplyInstructionContains("visible-reply contract");
-      expectReplyInstructionContains("MEDIA:");
+      expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
+      expectReplyInstructionContains("the media must be sent as message-tool attachments");
     },
   );
 

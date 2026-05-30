@@ -21,7 +21,6 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import { timestampMsToIsoString } from "../../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -88,7 +87,7 @@ function parseSessionDurationMs(raw: string): number {
 }
 
 function formatSessionExpiry(expiresAt: number) {
-  return timestampMsToIsoString(expiresAt) ?? "n/a";
+  return new Date(expiresAt).toISOString();
 }
 
 function resolveSessionBindingDurationMs(

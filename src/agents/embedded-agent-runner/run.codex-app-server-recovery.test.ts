@@ -3,6 +3,7 @@ import { makeModelFallbackCfg } from "../test-helpers/model-fallback-config-fixt
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  MockedFailoverError,
   mockedClassifyFailoverReason,
   mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
@@ -22,27 +23,6 @@ function codexClientClosedAttempt(
     promptErrorSource: "prompt",
     codexAppServerFailure: {
       kind: "client_closed_before_turn_completed",
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      replaySafe: true,
-    },
-    ...overrides,
-  });
-}
-
-function codexTurnCompletionIdleTimeoutAttempt(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-): EmbeddedRunAttemptResult {
-  return makeAttemptResult({
-    assistantTexts: [],
-    aborted: true,
-    timedOut: true,
-    promptError: new Error("codex app-server turn idle timed out waiting for turn/completed"),
-    promptErrorSource: "prompt",
-    codexAppServerFailure: {
-      kind: "turn_completion_idle_timeout",
-      turnWatchTimeoutKind: "completion",
       transport: "stdio",
       threadId: "thread-1",
       turnId: "turn-1",
@@ -158,27 +138,14 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
-  it("retries a replay-safe stdio turn/completed idle timeout once", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
-      .mockResolvedValueOnce(successAttempt());
-
-    await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-turn-completion-idle-timeout",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not retry non-completion Codex turn watch timeouts", async () => {
+  it("does not retry turn/completed idle timeouts", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      codexTurnCompletionIdleTimeoutAttempt({
+      makeAttemptResult({
+        assistantTexts: [],
+        promptError: new Error("codex app-server turn idle timed out waiting for turn/completed"),
+        promptErrorSource: "prompt",
         codexAppServerFailure: {
           kind: "turn_completion_idle_timeout",
-          turnWatchTimeoutKind: "progress",
           transport: "stdio",
           threadId: "thread-1",
           turnId: "turn-1",
@@ -187,98 +154,35 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       }),
     );
 
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-progress-idle-timeout",
-    });
-
-    expect(result.payloads?.[0]).toMatchObject({
-      isError: true,
-      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
-    });
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
-
-  it("returns a timeout payload after a replay-safe turn/completed idle timeout retry is exhausted", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt())
-      .mockResolvedValueOnce(codexTurnCompletionIdleTimeoutAttempt());
-
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-turn-completion-idle-timeout-retry-exhausted",
-    });
-
-    expect(result.payloads?.[0]).toMatchObject({
-      isError: true,
-      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
-    });
-    expect(result.meta.timeoutPhase).toBe("provider");
-    expect(result.meta.providerStarted).toBe(true);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
-  });
-
-  it("surfaces non-stdio turn/completed idle timeouts instead of throwing", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      codexTurnCompletionIdleTimeoutAttempt({
-        codexAppServerFailure: {
-          kind: "turn_completion_idle_timeout",
-          turnWatchTimeoutKind: "completion",
-          transport: "websocket",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          replaySafe: true,
-        },
+    await expect(
+      runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "codex",
+        model: "gpt-5.5",
+        runId: "run-codex-turn-completion-idle-timeout",
       }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      provider: "codex",
-      model: "gpt-5.5",
-      runId: "run-codex-turn-completion-idle-timeout-websocket",
-    });
-
-    expect(result.payloads?.[0]).toMatchObject({
-      isError: true,
-      text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
-    });
+    ).rejects.toThrow("codex app-server turn idle timed out waiting for turn/completed");
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
   it("does not hand Codex app-server idle timeouts to model fallback", async () => {
     mockedClassifyFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      codexTurnCompletionIdleTimeoutAttempt({
-        timedOut: true,
-        didSendViaMessagingTool: true,
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        promptTimeoutOutcome: {
-          message:
-            "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
-          replayInvalid: true,
-          livenessState: "abandoned",
-        },
+      makeAttemptResult({
+        assistantTexts: [],
+        promptError: new Error("codex app-server turn idle timed out waiting for turn/completed"),
+        promptErrorSource: "prompt",
         codexAppServerFailure: {
           kind: "turn_completion_idle_timeout",
-          turnWatchTimeoutKind: "completion",
           transport: "stdio",
           threadId: "thread-1",
           turnId: "turn-1",
-          replaySafe: false,
-          replayBlockedReason: "potential_side_effect",
+          replaySafe: true,
         },
       }),
     );
 
-    const result = await runEmbeddedAgent({
+    const promise = runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "codex",
       model: "gpt-5.5",
@@ -295,12 +199,10 @@ describe("runEmbeddedAgent Codex app-server recovery", () => {
       }),
     });
 
-    expect(result.payloads?.[0]).toMatchObject({
-      isError: true,
-      text: "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
-    });
-    expect(result.meta.replayInvalid).toBe(true);
-    expect(result.meta.livenessState).toBe("abandoned");
+    await expect(promise).rejects.not.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });

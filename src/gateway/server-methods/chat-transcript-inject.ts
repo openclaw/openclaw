@@ -49,8 +49,6 @@ function resolveInjectedAssistantContent(params: {
 
 export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
-  sessionKey?: string;
-  agentId?: string;
   message: string;
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
@@ -120,8 +118,6 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     });
     emitSessionTranscriptUpdate({
       sessionFile: params.transcriptPath,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
       message: appendedMessage,
       messageId,
     });

@@ -1,5 +1,3 @@
-import { styleHealthChannelLine } from "../../packages/terminal-core/src/health-style.js";
-import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { inspectChannelAccount } from "../channels/account-inspection.js";
 import {
@@ -39,6 +37,8 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
+import { styleHealthChannelLine } from "../terminal/health-style.js";
+import { isRich } from "../terminal/theme.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import type {
   AgentHealthSummary,

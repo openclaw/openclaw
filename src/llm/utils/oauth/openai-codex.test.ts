@@ -154,10 +154,10 @@ describe("OpenAI Codex OAuth compatibility provider", () => {
     });
 
     expect(mocks.refreshProviderOAuthCredentialWithPlugin).toHaveBeenCalledWith({
-      provider: "openai",
+      provider: "openai-codex",
       context: {
         type: "oauth",
-        provider: "openai",
+        provider: "openai-codex",
         access: "",
         refresh: "old-refresh-token",
         expires: 0,

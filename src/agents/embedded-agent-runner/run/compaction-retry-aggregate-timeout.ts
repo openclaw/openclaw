@@ -2,8 +2,6 @@
  * Wait for compaction retry completion with an aggregate timeout to avoid
  * holding a session lane indefinitely when retry resolution is lost.
  */
-import { resolveTimerTimeoutMs } from "../../../shared/number-coercion.js";
-
 export async function waitForCompactionRetryWithAggregateTimeout(params: {
   waitForCompactionRetry: () => Promise<void>;
   abortable: <T>(promise: Promise<T>) => Promise<T>;
@@ -11,7 +9,8 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
   onTimeout?: () => void;
   isCompactionStillInFlight?: () => boolean;
 }): Promise<{ timedOut: boolean }> {
-  const timeoutMs = resolveTimerTimeoutMs(params.aggregateTimeoutMs, 1);
+  const timeoutMsRaw = params.aggregateTimeoutMs;
+  const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(1, Math.floor(timeoutMsRaw)) : 1;
 
   let timedOut = false;
   // Reflect the retry promise so late rejections after a timeout stay handled

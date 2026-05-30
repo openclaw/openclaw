@@ -1,4 +1,3 @@
-import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -20,6 +19,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { sanitizeForLog } from "../../../terminal/ansi.js";
 
 function resolvePrimaryModelRef(
   cfg: OpenClawConfig,

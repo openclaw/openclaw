@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { note } from "../../packages/terminal-core/src/note.js";
+import { note } from "../terminal/note.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../terminal/note.js", () => ({
   note: vi.fn(),
 }));
 

@@ -1,4 +1,3 @@
-import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -20,8 +19,7 @@ import {
   appendUserTurnTranscriptMessage,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
-import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
-import { resolveUserPath } from "../../utils.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
@@ -38,6 +36,7 @@ import { resolveOpenAIRuntimeProvider } from "../openai-codex-routing.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
+import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   buildClaudeCliFallbackContextPrelude,
@@ -292,11 +291,7 @@ async function persistTextTurnTranscript(
     await lock.release();
   }
 
-  emitSessionTranscriptUpdate({
-    sessionFile,
-    sessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-  });
+  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
   return sessionEntry;
 }
 
@@ -461,7 +456,7 @@ export function runAgentAttempt(params: {
         authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
   const agentHarnessPolicy = isRawModelRun
-    ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
+    ? ({ runtime: "openclaw" } as const)
     : resolveAvailableAgentHarnessPolicy({
         provider: params.providerOverride,
         modelId: params.modelOverride,
@@ -504,20 +499,16 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
-    (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
+    (agentHarnessPolicy.runtime === "openclaw" && embeddedAgentProvider !== params.providerOverride
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
-    const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
     const resolveReusableCliSessionBinding = async () => {
       if (
         !isClaudeCliProvider(cliExecutionProvider) ||
         !cliSessionBinding?.sessionId ||
-        (await claudeCliSessionTranscriptHasContent({
-          sessionId: cliSessionBinding.sessionId,
-          workspaceDir: cliProcessCwd,
-        }))
+        (await claudeCliSessionTranscriptHasContent({ sessionId: cliSessionBinding.sessionId }))
       ) {
         return cliSessionBinding;
       }

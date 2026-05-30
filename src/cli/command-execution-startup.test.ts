@@ -45,7 +45,7 @@ describe("command-execution-startup", () => {
       startupPolicy: {
         suppressDoctorStdout: true,
         hideBanner: false,
-        skipConfigGuard: false,
+        skipConfigGuard: true,
         loadPlugins: false,
         pluginRegistry: { scope: "channels" },
       },
@@ -168,7 +168,7 @@ describe("command-execution-startup", () => {
       startupPolicy: {
         suppressDoctorStdout: true,
         hideBanner: false,
-        skipConfigGuard: false,
+        skipConfigGuard: true,
         loadPlugins: false,
         pluginRegistry: { scope: "channels" },
       },
@@ -181,7 +181,7 @@ describe("command-execution-startup", () => {
       allowInvalid: undefined,
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
-      skipConfigGuard: false,
+      skipConfigGuard: true,
     });
 
     const messageRuntime = {} as never;

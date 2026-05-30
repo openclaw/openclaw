@@ -29,25 +29,8 @@ import {
 } from "../types.js";
 import { killProcessTree } from "./kill-tree.js";
 
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
-
 function resolvePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
-}
-
-export function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
-  if (
-    typeof timeoutSeconds !== "number" ||
-    !Number.isFinite(timeoutSeconds) ||
-    timeoutSeconds <= 0
-  ) {
-    return undefined;
-  }
-  const milliseconds = Math.floor(timeoutSeconds * 1000);
-  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
-    return 1;
-  }
-  return Math.min(milliseconds, MAX_TIMER_TIMEOUT_MS);
 }
 
 function fileKindFromStats(stats: {
@@ -326,16 +309,15 @@ export class NodeExecutionEnv implements ExecutionEnv {
         return;
       }
 
-      const timeoutMs = resolveExecTimeoutMs(options?.timeout);
       timeoutId =
-        timeoutMs === undefined
-          ? undefined
-          : setTimeout(() => {
+        typeof options?.timeout === "number"
+          ? setTimeout(() => {
               timedOut = true;
               if (child?.pid) {
                 killProcessTree(child.pid, { force: true });
               }
-            }, timeoutMs);
+            }, options.timeout * 1000)
+          : undefined;
 
       if (options?.abortSignal) {
         if (options.abortSignal.aborted) {

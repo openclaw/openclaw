@@ -20,19 +20,19 @@ export {
   type MarkdownStyle,
   type MarkdownStyleSpan,
   type MarkdownTableMeta,
-} from "../../packages/markdown-core/src/ir.js";
+} from "../markdown/ir.js";
 export {
   renderMarkdownIRChunksWithinLimit,
   type RenderMarkdownIRChunksWithinLimitOptions,
-} from "../../packages/markdown-core/src/render-aware-chunking.js";
+} from "../markdown/render-aware-chunking.js";
 export {
   renderMarkdownWithMarkers,
   type RenderLink,
   type RenderOptions,
   type RenderStyleMap,
   type RenderStyleMarker,
-} from "../../packages/markdown-core/src/render.js";
-export { convertMarkdownTables } from "../../packages/markdown-core/src/tables.js";
+} from "../markdown/render.js";
+export { convertMarkdownTables } from "../markdown/tables.js";
 export {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithOptions,
@@ -52,7 +52,7 @@ export {
   type ReasoningTagTrim,
 } from "../shared/text/reasoning-tags.js";
 export { stripMarkdown } from "../shared/text/strip-markdown.js";
-export { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+export { sanitizeTerminalText } from "../terminal/safe-text.js";
 export { SYSTEM_MARK, hasSystemMark, prefixSystemMessage } from "../infra/system-message.ts";
 export {
   stripInlineDirectiveTagsForDelivery,

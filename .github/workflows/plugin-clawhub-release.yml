@@ -431,8 +431,7 @@ jobs:
           EOF
           echo "CLAWHUB_CONFIG_PATH=${RUNNER_TEMP}/clawhub-config.json" >> "$GITHUB_ENV"
 
-      - name: Check ClawHub package version
-        id: clawhub_package_version
+      - name: Ensure version is not already published
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
@@ -457,17 +456,14 @@ jobs:
           done
           if [[ "${status}" =~ ^2 ]]; then
             echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on ClawHub."
-            echo "already_published=true" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
           if [[ "${status}" != "404" ]]; then
             echo "Unexpected ClawHub response (${status}) for ${PACKAGE_NAME}@${PACKAGE_VERSION}."
             exit 1
           fi
-          echo "already_published=false" >> "$GITHUB_OUTPUT"
 
       - name: Publish
-        if: steps.clawhub_package_version.outputs.already_published != 'true'
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}

@@ -128,8 +128,7 @@ describe("image generate background helpers", () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
       path: "direct",
-      reason: "generated_media_missing",
-      error: "completion agent did not deliver generated media",
+      error: "completion agent did not deliver through the message tool",
     });
     const completion = createMediaCompletionFixture({
       runId: "tool:image_generate:abc",

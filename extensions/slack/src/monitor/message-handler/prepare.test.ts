@@ -707,18 +707,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared?.ackReactionPromise).toBeNull();
   });
 
-  it("does not coerce malformed Slack timestamps into inbound event times", async () => {
-    const prepared = await prepareWithDefaultCtx(
-      createSlackMessage({
-        ts: "0x10",
-      }),
-    );
-
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.Timestamp).toBeUndefined();
-    expect(prepared.ctxPayload.MessageSid).toBe("0x10");
-  });
-
   it("primes Slack status reactions when channel replies are message-tool-only", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -1546,7 +1534,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       messages: [
         { text: "current answer", user: "U1", ts: "300.000" },
         { text: "please choose A or B", bot_id: "B1", ts: "299.000" },
-        { text: "earlier user context", user: "U1", ts: "0x12a" },
+        { text: "earlier user context", user: "U1", ts: "298.000" },
       ],
     });
     const slackCtx = createInboundSlackCtx({
@@ -1584,7 +1572,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       {
         sender: "Alice (user)",
         body: "earlier user context",
-        timestamp: undefined,
+        timestamp: 298000,
       },
       {
         sender: "Assistant (assistant)",

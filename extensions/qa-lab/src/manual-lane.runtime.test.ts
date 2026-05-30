@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { startQaLabServer, startQaGatewayChild, startQaProviderServer } = vi.hoisted(() => ({
@@ -22,13 +21,11 @@ vi.mock("./providers/server-runtime.js", () => ({
 import { runQaManualLane } from "./manual-lane.runtime.js";
 
 describe("runQaManualLane", () => {
-  const gatewayCall = vi.fn();
   const gatewayStop = vi.fn();
   const mockStop = vi.fn();
   const labStop = vi.fn();
 
   beforeEach(() => {
-    gatewayCall.mockReset();
     gatewayStop.mockReset();
     mockStop.mockReset();
     labStop.mockReset();
@@ -60,9 +57,10 @@ describe("runQaManualLane", () => {
     });
 
     startQaGatewayChild.mockResolvedValue({
-      call: gatewayCall.mockResolvedValueOnce({ runId: "run-1" }).mockResolvedValueOnce({
-        status: "ok",
-      }),
+      call: vi
+        .fn()
+        .mockResolvedValueOnce({ runId: "run-1" })
+        .mockResolvedValueOnce({ status: "ok" }),
       stop: gatewayStop,
     });
 
@@ -126,27 +124,5 @@ describe("runQaManualLane", () => {
     expect(gatewayOptions?.providerMode).toBe("live-frontier");
     expect(gatewayOptions?.providerBaseUrl).toBeUndefined();
     expect(result.reply).toBe("Protocol note: mock reply.");
-  });
-
-  it("caps the gateway client timeout for oversized manual waits", async () => {
-    const result = await runQaManualLane({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
-      alternateModel: "mock-openai/gpt-5.5-alt",
-      message: "check the kickoff file",
-      timeoutMs: 9e15,
-      replySettleMs: 0,
-    });
-
-    expect(result.waited).toEqual({ status: "ok" });
-    expect(gatewayCall).toHaveBeenLastCalledWith(
-      "agent.wait",
-      {
-        runId: "run-1",
-        timeoutMs: 9e15,
-      },
-      { timeoutMs: MAX_TIMER_TIMEOUT_MS },
-    );
   });
 });

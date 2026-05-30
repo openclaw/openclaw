@@ -1011,40 +1011,21 @@ $0 \\"$1\\"" touch {marker}`,
     expect(second.allowlistSatisfied).toBe(false);
   });
 
-  it("keeps policy-blocked script wrapper chains out of allow-always", () => {
+  it("prevents allow-always bypass for script wrapper chains", () => {
     if (process.platform !== "darwin" && process.platform !== "freebsd") {
       return;
     }
     const dir = makeTempDir();
-    makeExecutable(dir, "echo");
+    const echo = makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
     const env = makePathEnv(dir);
-    const safeBins = resolveSafeBins(undefined);
-    const { persisted } = resolvePersistedPatterns({
-      command: "/usr/bin/script -q /dev/null /bin/sh -c 'echo warmup-ok'",
+    expectAllowAlwaysBypassBlocked({
       dir,
+      firstCommand: "/usr/bin/script -q /dev/null /bin/sh -c 'echo warmup-ok'",
+      secondCommand: "/usr/bin/script -q /dev/null /bin/sh -c 'id > marker'",
       env,
-      safeBins,
+      persistedPattern: echo,
     });
-    expect(persisted).toStrictEqual([]);
-
-    const second = evaluateShellAllowlist({
-      command: "/usr/bin/script -q /dev/null /bin/sh -c 'id > marker'",
-      allowlist: persisted.map((pattern) => ({ pattern })),
-      safeBins,
-      cwd: dir,
-      env,
-      platform: process.platform,
-    });
-    expect(second.allowlistSatisfied).toBe(false);
-    expect(
-      requiresExecApproval({
-        ask: "on-miss",
-        security: "allowlist",
-        analysisOk: second.analysisOk,
-        allowlistSatisfied: second.allowlistSatisfied,
-      }),
-    ).toBe(true);
   });
 
   it("does not persist comment-tailed payload paths that never execute", () => {

@@ -20,10 +20,6 @@ describe("resolveTokenExpiryState", () => {
     expect(resolveTokenExpiryState(Number.POSITIVE_INFINITY, now)).toBe("invalid_expires");
   });
 
-  it("treats Date-invalid future timestamps as invalid_expires", () => {
-    expect(resolveTokenExpiryState(8_700_000_000_000_000, now)).toBe("invalid_expires");
-  });
-
   it("returns expired when expires is in the past", () => {
     expect(resolveTokenExpiryState(now - 1, now)).toBe("expired");
   });

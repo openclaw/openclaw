@@ -37,7 +37,6 @@ function requireLastTtsCall(): {
   language?: string;
   speed?: number;
   responseFormat?: string;
-  maxBytes?: number;
 } {
   const params = (xaiTTSMock.mock.calls as unknown as Array<[unknown]>).at(-1)?.[0] as
     | {
@@ -48,7 +47,6 @@ function requireLastTtsCall(): {
         language?: string;
         speed?: number;
         responseFormat?: string;
-        maxBytes?: number;
       }
     | undefined;
   if (!params) {
@@ -70,13 +68,7 @@ describe("xai speech provider", () => {
     const provider = buildXaiSpeechProvider();
     const result = await provider.synthesize({
       text: "hello",
-      cfg: {
-        agents: {
-          defaults: {
-            mediaMaxMb: 2,
-          },
-        },
-      },
+      cfg: {},
       providerConfig: {
         apiKey: "xai-key",
         voiceId: "eve",
@@ -95,7 +87,6 @@ describe("xai speech provider", () => {
     expect(tts.baseUrl).toBe("https://api.x.ai/v1");
     expect(tts.voiceId).toBe("eve");
     expect(tts.responseFormat).toBe("mp3");
-    expect(tts.maxBytes).toBe(2 * 1024 * 1024);
   });
 
   it("honors configured response formats", async () => {

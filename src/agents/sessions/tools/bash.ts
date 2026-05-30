@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { resolveTimerTimeoutMs } from "../../../shared/number-coercion.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
@@ -33,17 +32,6 @@ export type { BashToolDetails, BashToolInput } from "./tool-contracts.js";
 
 export type { BashOperations } from "./bash-operations.js";
 
-export function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
-  if (
-    typeof timeoutSeconds !== "number" ||
-    !Number.isFinite(timeoutSeconds) ||
-    timeoutSeconds <= 0
-  ) {
-    return undefined;
-  }
-  return resolveTimerTimeoutMs(timeoutSeconds * 1000, 1);
-}
-
 /**
  * Create bash operations using OpenClaw runtime's built-in local shell execution backend.
  *
@@ -73,14 +61,14 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
         }
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
-        const timeoutMs = resolveBashTimeoutMs(timeout);
-        if (timeoutMs !== undefined) {
+        // Set timeout if provided.
+        if (timeout !== undefined && timeout > 0) {
           timeoutHandle = setTimeout(() => {
             timedOut = true;
             if (child.pid) {
               killProcessTree(child.pid);
             }
-          }, timeoutMs);
+          }, timeout * 1000);
         }
         // Stream stdout and stderr.
         child.stdout?.on("data", onData);

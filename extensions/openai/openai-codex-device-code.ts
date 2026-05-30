@@ -1,7 +1,4 @@
-import {
-  positiveSecondsToSafeMilliseconds,
-  resolveExpiresAtMsFromDurationSeconds,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexAccessTokenExpiry } from "./openai-codex-auth-identity.js";
 import { trimNonEmptyString } from "./openai-codex-shared.js";
 
@@ -64,6 +61,28 @@ type DeviceCodeAuthorizationCode = {
   authorizationCode: string;
   codeVerifier: string;
 };
+
+function normalizePositiveMilliseconds(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value * 1000);
+  }
+  if (typeof value === "string") {
+    const seconds = parseStrictPositiveInteger(value);
+    return seconds === undefined ? undefined : seconds * 1000;
+  }
+  return undefined;
+}
+
+function normalizeTokenLifetimeMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.trunc(value * 1000);
+  }
+  if (typeof value === "string") {
+    const seconds = parseStrictPositiveInteger(value);
+    return seconds === undefined ? undefined : seconds * 1000;
+  }
+  return undefined;
+}
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
   try {
@@ -156,8 +175,7 @@ async function requestOpenAICodexDeviceCode(fetchFn: typeof fetch): Promise<Requ
     userCode,
     verificationUrl: `${OPENAI_AUTH_BASE_URL}/codex/device`,
     intervalMs:
-      positiveSecondsToSafeMilliseconds(body?.interval) ??
-      OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS,
+      normalizePositiveMilliseconds(body?.interval) ?? OPENAI_CODEX_DEVICE_CODE_DEFAULT_INTERVAL_MS,
   };
 }
 
@@ -247,10 +265,11 @@ async function exchangeOpenAICodexDeviceCode(params: {
     throw new Error("OpenAI token exchange succeeded but did not return OAuth tokens.");
   }
 
+  const expiresInMs = normalizeTokenLifetimeMs(body?.expires_in);
   const expires =
-    resolveExpiresAtMsFromDurationSeconds(body?.expires_in) ??
-    resolveCodexAccessTokenExpiry(access) ??
-    Date.now();
+    expiresInMs !== undefined
+      ? Date.now() + expiresInMs
+      : (resolveCodexAccessTokenExpiry(access) ?? Date.now());
 
   return {
     access,

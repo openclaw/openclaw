@@ -101,10 +101,6 @@ const uiHintIndexCache = new WeakMap<
 >();
 const schemaHasChildrenCache = new WeakMap<JsonSchemaObject, boolean>();
 
-function compareBaselineStrings(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 function logConfigDocBaselineDebug(message: string): void {
   if (process.env.OPENCLAW_CONFIG_DOC_BASELINE_DEBUG === "1") {
     console.error(`[config-doc-baseline] ${message}`);
@@ -157,7 +153,7 @@ function normalizeJsonValue(value: unknown): JsonValue | undefined {
   }
 
   const entries = Object.entries(value as Record<string, unknown>)
-    .toSorted(([left], [right]) => compareBaselineStrings(left, right))
+    .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([key, entry]) => {
       const normalized = normalizeJsonValue(entry);
       return normalized === undefined ? null : ([key, normalized] as const);
@@ -317,7 +313,7 @@ function mergeJsonValueArrays(
     merged.set(JSON.stringify(value), value);
   }
   return [...merged.entries()]
-    .toSorted(([leftKey], [rightKey]) => compareBaselineStrings(leftKey, rightKey))
+    .toSorted(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
     .map(([, value]) => value);
 }
 
@@ -419,7 +415,7 @@ export function collectConfigDocBaselineEntries(
       defaultValue: normalizeJsonValue(schema.default),
       deprecated: schema.deprecated === true,
       sensitive: hint?.sensitive === true,
-      tags: [...(hint?.tags ?? [])].toSorted(compareBaselineStrings),
+      tags: [...(hint?.tags ?? [])].toSorted((left, right) => left.localeCompare(right)),
       label: hint?.label,
       help: hint?.help,
       hasChildren: resolveSchemaHasChildren(schema),
@@ -427,7 +423,9 @@ export function collectConfigDocBaselineEntries(
   }
 
   const requiredKeys = new Set(schema.required ?? []);
-  for (const key of Object.keys(schema.properties ?? {}).toSorted(compareBaselineStrings)) {
+  for (const key of Object.keys(schema.properties ?? {}).toSorted((left, right) =>
+    left.localeCompare(right),
+  )) {
     const child = asSchemaObject(schema.properties?.[key]);
     if (!child) {
       continue;
@@ -489,9 +487,7 @@ export function dedupeConfigDocBaselineEntries(
     const current = byPath.get(entry.path);
     byPath.set(entry.path, current ? mergeConfigDocBaselineEntry(current, entry) : entry);
   }
-  return [...byPath.values()].toSorted((left, right) =>
-    compareBaselineStrings(left.path, right.path),
-  );
+  return [...byPath.values()].toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
 function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {

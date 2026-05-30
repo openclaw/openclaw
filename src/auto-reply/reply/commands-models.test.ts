@@ -803,7 +803,7 @@ describe("handleModelsCommand", () => {
     expect(authLabelParams.workspaceDir).toBe("/tmp");
   });
 
-  it("labels OpenAI provider pages with canonical and legacy auth provider ids", async () => {
+  it("labels OpenAI provider pages with the effective Codex auth provider set", async () => {
     modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(
       "oauth (openai-codex:user@example.com)",
     );
@@ -827,7 +827,7 @@ describe("handleModelsCommand", () => {
     );
     expect(openaiAuthCall?.[0]).toMatchObject({
       provider: "openai",
-      acceptedProviderIds: ["openai-codex", "openai"],
+      acceptedProviderIds: ["openai-codex"],
     });
   });
 

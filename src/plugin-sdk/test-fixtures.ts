@@ -14,14 +14,14 @@ export {
   createSandboxPruneConfig,
   createSandboxSshConfig,
 } from "./test-helpers/sandbox-fixtures.js";
-export { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
+export { writeSkill } from "../agents/skills.e2e-test-helpers.js";
 export {
   castAgentMessage,
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../agents/test-helpers/agent-message-fixtures.js";
 export { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
-export { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+export { sanitizeTerminalText } from "../terminal/safe-text.js";
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { typedCases } from "../test-utils/typed-cases.js";

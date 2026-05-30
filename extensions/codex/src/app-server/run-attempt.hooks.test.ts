@@ -87,7 +87,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(llmInputPayload.model).toBe("gpt-5.4-codex");
     expect(llmInputPayload.prompt).toBe("hello");
     expect(llmInputPayload.imagesCount).toBe(0);
-    expect(llmInputPayload.historyMessages).toEqual([]);
+    expect(llmInputPayload.historyMessages?.[0]?.role).toBe("assistant");
     expect(llmInputPayload.systemPrompt).toContain(
       "You are a personal agent running inside OpenClaw.",
     );
@@ -241,8 +241,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         return {};
       });
       const params = createParams(sessionFile, workspaceDir);
-      const sessionManager = SessionManager.open(sessionFile);
-      sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
       params.runtimePlan = createCodexRuntimePlanFixture();
       params.config = {
         diagnostics: {
@@ -285,7 +283,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       expect(JSON.stringify(startedEvent)).not.toContain("hello");
       const startedContent = diagnosticContentByType.get("model.call.started")?.modelContent;
       expect(JSON.stringify(startedContent?.inputMessages)).toContain("hello");
-      expect(JSON.stringify(startedContent?.inputMessages)).not.toContain("existing context");
       expect(startedContent?.systemPrompt).toContain(
         "You are a personal agent running inside OpenClaw.",
       );

@@ -22,13 +22,6 @@ vi.mock("../../../plugins/provider-auth-choices.js", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  applyNonInteractivePluginProviderChoice.mockReset();
-  applyNonInteractivePluginProviderChoice.mockResolvedValue(undefined);
-  resolveNonInteractiveApiKey.mockReset();
-  resolveManifestDeprecatedProviderAuthChoice.mockReset();
-  resolveManifestDeprecatedProviderAuthChoice.mockReturnValue(undefined);
-  resolveManifestProviderAuthChoices.mockReset();
-  resolveManifestProviderAuthChoices.mockReturnValue([]);
 });
 
 function createRuntime() {
@@ -61,7 +54,7 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("fails with manifest-owned replacement guidance for deprecated auth choices", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
-    resolveManifestDeprecatedProviderAuthChoice.mockReturnValue({
+    resolveManifestDeprecatedProviderAuthChoice.mockReturnValueOnce({
       choiceId: "demo-provider-modern-api",
     } as never);
 
@@ -79,37 +72,6 @@ describe("applyNonInteractiveAuthChoice", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();
-  });
-
-  it("normalizes legacy OpenAI Codex setup choice before provider auth", async () => {
-    const runtime = createRuntime();
-    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
-    const resolvedConfig = { auth: { profiles: { "openai:default": { mode: "oauth" } } } };
-    resolveManifestDeprecatedProviderAuthChoice.mockImplementation(((choiceId: string) =>
-      choiceId === "openai-codex"
-        ? {
-            choiceId: "openai",
-            choiceLabel: "ChatGPT Login",
-          }
-        : undefined) as never);
-    applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
-
-    const result = await applyNonInteractiveAuthChoice({
-      nextConfig,
-      authChoice: "openai-codex",
-      opts: {} as never,
-      runtime: runtime as never,
-      baseConfig: nextConfig,
-    });
-
-    expect(result).toBe(resolvedConfig);
-    expect(runtime.log).toHaveBeenCalledWith(
-      'Auth choice "openai-codex" is deprecated; using ChatGPT Login setup instead.',
-    );
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledWith(
-      expect.objectContaining({ authChoice: "openai" }),
-    );
   });
 
   it("escapes deprecated auth choice guidance for terminal output", async () => {

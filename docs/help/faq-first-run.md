@@ -599,24 +599,22 @@ and troubleshooting see the main [FAQ](/help/faq).
     native Codex app-server execution. `openai-codex/gpt-*` model refs are
     legacy config repaired by `openclaw doctor --fix`. Direct OpenAI API-key
     access remains available for non-agent OpenAI API surfaces and for agent
-    models through an ordered `openai` API-key profile.
+    models through an ordered `openai-codex` API-key profile.
     See [Model providers](/concepts/model-providers) and [Onboarding (CLI)](/start/wizard).
   </Accordion>
 
   <Accordion title="Why does OpenClaw still mention openai-codex?">
-    `openai` is the provider and auth-profile id for both OpenAI API keys and
-    ChatGPT/Codex OAuth. You may still see `openai-codex` in legacy config and
-    migration warnings.
+    `openai-codex` is the provider and auth-profile id for ChatGPT/Codex OAuth.
     Older configs also used it as a model prefix:
 
     - `openai/gpt-5.5` = ChatGPT/Codex subscription auth with native Codex runtime for agent turns
     - `openai-codex/gpt-5.5` = legacy model route repaired by `openclaw doctor --fix`
-    - `openai/gpt-5.5` plus an ordered `openai` API-key profile = API-key auth for an OpenAI agent model
-    - `openai-codex:...` = legacy auth profile id migrated by `openclaw doctor --fix`
+    - `openai/gpt-5.5` plus an ordered `openai-codex` API-key profile = API-key auth for an OpenAI agent model
+    - `openai-codex:...` = auth profile id, not a model ref
 
     If you want the direct OpenAI Platform billing/limit path, set
     `OPENAI_API_KEY`. If you want ChatGPT/Codex subscription auth, sign in with
-    `openclaw models auth login --provider openai`. Keep the model ref as
+    `openclaw models auth login --provider openai-codex`. Keep the model ref as
     `openai/gpt-5.5`; `openai-codex/*` model refs are legacy config that
     `openclaw doctor --fix` rewrites.
 

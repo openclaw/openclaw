@@ -9,11 +9,8 @@ import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sd
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
-  buildOpenAICodexCredentialExtra,
   buildOauthProviderAuthResult,
   readCodexCliCredentialsCached,
-  resolveOpenAICodexAuthIdentity,
-  resolveOpenAICodexImportProfileName,
   updateAuthProfileStoreWithLock,
   type AuthProfileStore,
   type OAuthCredential,
@@ -28,6 +25,7 @@ import { readJsonObject } from "./helpers.js";
 import type { CodexSource } from "./source.js";
 import type { resolveCodexMigrationTargets } from "./targets.js";
 
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-5.5";
 const CODEX_IMPORT_DISPLAY_NAME = "Codex import";
@@ -47,7 +45,7 @@ type AgentDefaultModelConfigEntry = AgentDefaultModelConfigs[string];
 type CodexAuthCredential =
   | {
       kind: "oauth";
-      provider: typeof OPENAI_PROVIDER_ID;
+      provider: typeof OPENAI_CODEX_PROVIDER_ID;
       profileId: string;
       result: ProviderAuthResult;
       modelConfigs: AgentDefaultModelConfigs;
@@ -70,6 +68,87 @@ type CodexAuthProfileConfig = {
 type CodexAuthConfigApplyResult = "configured" | "conflict" | "unavailable";
 
 class CodexAuthConfigConflict extends Error {}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
+  const payload = token.split(".")[1];
+  if (!payload) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveCodexIdentity(
+  access: string,
+  accountId?: string,
+): {
+  accountId?: string;
+  chatgptPlanType?: string;
+  email?: string;
+  profileName?: string;
+} {
+  const payload = decodeJwtPayload(access);
+  const auth = isRecord(payload?.["https://api.openai.com/auth"])
+    ? payload["https://api.openai.com/auth"]
+    : {};
+  const profile = isRecord(payload?.["https://api.openai.com/profile"])
+    ? payload["https://api.openai.com/profile"]
+    : {};
+  const email = readString(profile.email);
+  const resolvedAccountId = accountId ?? readString(auth.chatgpt_account_id);
+  const chatgptPlanType = readString(auth.chatgpt_plan_type);
+  if (email) {
+    return {
+      ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
+      ...(chatgptPlanType ? { chatgptPlanType } : {}),
+      email,
+      profileName: email,
+    };
+  }
+  const stableSubject =
+    readString(auth.chatgpt_account_user_id) ??
+    readString(auth.chatgpt_user_id) ??
+    readString(auth.user_id) ??
+    readString(payload?.sub) ??
+    resolvedAccountId;
+  return {
+    ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
+    ...(chatgptPlanType ? { chatgptPlanType } : {}),
+    ...(stableSubject
+      ? { profileName: `id-${Buffer.from(stableSubject).toString("base64url")}` }
+      : {}),
+  };
+}
+
+function credentialExtra(identity: {
+  accountId?: string;
+  chatgptPlanType?: string;
+  idToken?: string;
+}): Record<string, unknown> | undefined {
+  const extra = {
+    ...(identity.accountId ? { accountId: identity.accountId } : {}),
+    ...(identity.chatgptPlanType ? { chatgptPlanType: identity.chatgptPlanType } : {}),
+    ...(identity.idToken ? { idToken: identity.idToken } : {}),
+  };
+  return Object.keys(extra).length > 0 ? extra : undefined;
+}
+
+function importProfileName(
+  identity: { accountId?: string; profileName?: string },
+  fallback: string,
+): string {
+  if (identity.accountId) {
+    return `account-${identity.accountId.replaceAll(/[^A-Za-z0-9._-]+/gu, "-")}`;
+  }
+  if (identity.profileName?.startsWith("id-")) {
+    return identity.profileName;
+  }
+  return fallback;
+}
 
 async function readModelRefs(source: CodexSource): Promise<string[]> {
   const cache = await readJsonObject(source.modelsCachePath);
@@ -109,10 +188,7 @@ async function buildCodexOAuthCredential(source: CodexSource): Promise<CodexAuth
   if (!credential) {
     return null;
   }
-  const identity = resolveOpenAICodexAuthIdentity({
-    access: credential.access,
-    accountId: credential.accountId,
-  });
+  const identity = resolveCodexIdentity(credential.access, credential.accountId);
   const modelRefs = await readModelRefs(source);
   const configPatch = {
     agents: {
@@ -122,15 +198,15 @@ async function buildCodexOAuthCredential(source: CodexSource): Promise<CodexAuth
     },
   } satisfies Partial<OpenClawConfig>;
   const result = buildOauthProviderAuthResult({
-    providerId: OPENAI_PROVIDER_ID,
+    providerId: OPENAI_CODEX_PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     access: credential.access,
     refresh: credential.refresh,
     expires: credential.expires,
     email: identity.email,
-    profileName: resolveOpenAICodexImportProfileName(identity, "codex-import"),
+    profileName: importProfileName(identity, "codex-import"),
     displayName: CODEX_IMPORT_DISPLAY_NAME,
-    credentialExtra: buildOpenAICodexCredentialExtra({
+    credentialExtra: credentialExtra({
       accountId: identity.accountId,
       chatgptPlanType: identity.chatgptPlanType,
       idToken: credential.idToken,
@@ -141,7 +217,7 @@ async function buildCodexOAuthCredential(source: CodexSource): Promise<CodexAuth
   return profile
     ? {
         kind: "oauth",
-        provider: OPENAI_PROVIDER_ID,
+        provider: OPENAI_CODEX_PROVIDER_ID,
         profileId: profile.profileId,
         result,
         modelConfigs: readProviderAuthModelConfigs(result),

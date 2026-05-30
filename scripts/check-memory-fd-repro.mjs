@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 const ISSUE_FILE_COUNTS = [
   ["memory/transcripts", 9394],
@@ -26,7 +25,6 @@ const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
 export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
-export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
 
 const SKIP_GATEWAY_ENV = {
   NODE_ENV: "test",
@@ -433,8 +431,6 @@ export async function stopGatewayWithRuntime({
   }
 }
 
-export { readBoundedResponseText };
-
 async function invokeMemorySearch({ port, token, timeoutMs }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -457,11 +453,7 @@ async function invokeMemorySearch({ port, token, timeoutMs }) {
       }),
       signal: controller.signal,
     });
-    const text = await readBoundedResponseText(
-      res,
-      "memory_search",
-      MEMORY_SEARCH_RESPONSE_MAX_BYTES,
-    );
+    const text = await res.text();
     return {
       ok: res.ok,
       status: res.status,

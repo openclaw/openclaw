@@ -83,15 +83,15 @@ vi.mock("../../infra/widearea-dns.js", () => ({
   resolveWideAreaDiscoveryDomain: () => undefined,
 }));
 
-vi.mock("../../../packages/terminal-core/src/health-style.js", () => ({
+vi.mock("../../terminal/health-style.js", () => ({
   styleHealthChannelLine: (line: string) => line,
 }));
 
-vi.mock("../../../packages/terminal-core/src/links.js", () => ({
+vi.mock("../../terminal/links.js", () => ({
   formatDocsLink: () => "docs.openclaw.ai/cli/gateway",
 }));
 
-vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
+vi.mock("../../terminal/theme.js", () => ({
   colorize: (_rich: boolean, _fn: (value: string) => string, value: string) => value,
   isRich: () => false,
   theme: {

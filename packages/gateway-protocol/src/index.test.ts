@@ -3,9 +3,6 @@ import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provide
 import * as protocol from "./index.js";
 import {
   formatValidationErrors,
-  validateChatAbortParams,
-  validateChatHistoryParams,
-  validateChatSendParams,
   validateChatEvent,
   validateCommandsListParams,
   validateConnectParams,
@@ -71,37 +68,6 @@ describe("lazy protocol validators", () => {
       }),
     ).toBe(true);
     expect(validateConnectParams.errors).toBeNull();
-  });
-
-  it("accepts selected-agent scope on chat send, history, and abort params", () => {
-    expect(
-      validateChatHistoryParams({
-        sessionKey: "global",
-        agentId: "work",
-        limit: 50,
-      }),
-    ).toBe(true);
-    expect(
-      validateChatSendParams({
-        sessionKey: "global",
-        agentId: "work",
-        message: "hello",
-        idempotencyKey: "run-global-work",
-      }),
-    ).toBe(true);
-    expect(
-      validateChatAbortParams({
-        sessionKey: "global",
-        agentId: "work",
-        runId: "run-global-work",
-      }),
-    ).toBe(true);
-    expect(
-      protocol.validateSessionsCompactParams({
-        key: "global",
-        agentId: "work",
-      }),
-    ).toBe(true);
   });
 
   it("can still compile every exported protocol validator", () => {
@@ -607,19 +573,6 @@ describe("validateChatEvent", () => {
           role: "assistant",
           content: [{ type: "text", text: "replacement" }],
         },
-      }),
-    ).toBe(true);
-  });
-
-  it("accepts selected-agent chat events", () => {
-    expect(
-      validateChatEvent({
-        runId: "run-chat",
-        sessionKey: "global",
-        agentId: "work",
-        seq: 1,
-        state: "delta",
-        deltaText: "hello",
       }),
     ).toBe(true);
   });

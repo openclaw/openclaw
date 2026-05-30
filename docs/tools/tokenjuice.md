@@ -1,13 +1,13 @@
 ---
-summary: "Compact noisy exec and bash tool results with the optional Tokenjuice plugin"
+summary: "Compact noisy exec and bash tool results with an optional bundled plugin"
 title: "Tokenjuice"
 read_when:
   - You want shorter `exec` or `bash` tool results in OpenClaw
-  - You want to install or enable the Tokenjuice plugin
+  - You want to enable the bundled tokenjuice plugin
   - You need to understand what tokenjuice changes and what it leaves raw
 ---
 
-`tokenjuice` is an optional external plugin that compacts noisy `exec` and `bash`
+`tokenjuice` is an optional bundled plugin that compacts noisy `exec` and `bash`
 tool results after the command has already run.
 
 It changes the returned `tool_result`, not the command itself. Tokenjuice does
@@ -19,13 +19,7 @@ trims the output before it goes back into the active harness session.
 
 ## Enable the plugin
 
-Install once:
-
-```bash
-openclaw plugins install clawhub:@openclaw/tokenjuice
-```
-
-Then enable it:
+Fast path:
 
 ```bash
 openclaw config set plugins.entries.tokenjuice.enabled true
@@ -36,6 +30,9 @@ Equivalent:
 ```bash
 openclaw plugins enable tokenjuice
 ```
+
+OpenClaw already ships the plugin. There is no separate `plugins install`
+or `tokenjuice install openclaw` step.
 
 If you prefer editing config directly:
 

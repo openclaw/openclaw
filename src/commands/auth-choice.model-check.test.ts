@@ -46,14 +46,13 @@ describe("warnIfModelConfigLooksOff", () => {
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).toHaveBeenCalledOnce();
-    expect(listProfilesForProvider).toHaveBeenCalledTimes(2);
+    expect(listProfilesForProvider).toHaveBeenCalledOnce();
     expect(listProfilesForProvider).toHaveBeenCalledWith(
       { version: 1, profiles: {} },
       "openai-codex",
     );
-    expect(listProfilesForProvider).toHaveBeenCalledWith({ version: 1, profiles: {} }, "openai");
     expect(note).toHaveBeenCalledWith(
-      'No auth configured for provider "openai-codex". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai`, `openclaw configure`, or set an API key env var.',
+      'No auth configured for provider "openai-codex". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai-codex`, `openclaw configure`, or set an API key env var.',
       "Model check",
     );
   });

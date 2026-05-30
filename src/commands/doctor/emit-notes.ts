@@ -1,4 +1,4 @@
-import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 
 export function sanitizeDoctorNote(note: string): string {
   return note

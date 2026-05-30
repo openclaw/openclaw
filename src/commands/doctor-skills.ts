@@ -1,16 +1,16 @@
 import { existsSync } from "node:fs";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SkillStatusEntry } from "../skills/discovery/status.js";
-import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import type { SkillStatusEntry } from "../agents/skills-status.js";
+import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import {
   detectGhConfigDirMismatch,
   formatGhConfigDirMismatchHint,
   type GhConfigDiscoveryInput,
   type GhConfigDiscoveryResult,
-} from "../skills/lifecycle/gh-config-discovery.js";
+} from "../agents/skills/gh-config-discovery.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   collectUnavailableAgentSkills,

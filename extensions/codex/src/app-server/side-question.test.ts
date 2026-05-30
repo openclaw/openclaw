@@ -405,7 +405,6 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
-      "features.apply_patch_streaming_events": true,
     });
     expect(forkParams?.developerInstructions).toContain("You are in a side conversation");
     expect(forkParams?.developerInstructions).toContain(
@@ -807,7 +806,6 @@ describe("runCodexAppServerSideQuestion", () => {
       "features.hooks": false,
       "features.code_mode": true,
       "features.code_mode_only": false,
-      "features.apply_patch_streaming_events": true,
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],

@@ -1,5 +1,4 @@
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -379,7 +378,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
     contentType: msgType,
-    createTime: parseStrictNonNegativeInteger(item.create_time),
+    createTime: item.create_time ? Number.parseInt(item.create_time, 10) : undefined,
     threadId: item.thread_id || undefined,
   };
 }

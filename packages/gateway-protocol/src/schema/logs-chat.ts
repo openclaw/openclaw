@@ -26,7 +26,6 @@ export const LogsTailResultSchema = Type.Object(
 export const ChatHistoryParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
-    agentId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
   },
@@ -36,7 +35,6 @@ export const ChatHistoryParamsSchema = Type.Object(
 export const ChatSendParamsSchema = Type.Object(
   {
     sessionKey: ChatSendSessionKeyString,
-    agentId: Type.Optional(NonEmptyString),
     sessionId: Type.Optional(NonEmptyString),
     message: Type.String(),
     thinking: Type.Optional(Type.String()),
@@ -58,7 +56,6 @@ export const ChatSendParamsSchema = Type.Object(
 export const ChatAbortParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
-    agentId: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
@@ -67,7 +64,6 @@ export const ChatAbortParamsSchema = Type.Object(
 export const ChatInjectParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
-    agentId: Type.Optional(NonEmptyString),
     message: NonEmptyString,
     label: Type.Optional(Type.String({ maxLength: 100 })),
   },
@@ -77,7 +73,6 @@ export const ChatInjectParamsSchema = Type.Object(
 const ChatEventBaseSchema = {
   runId: NonEmptyString,
   sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
   spawnedBy: Type.Optional(NonEmptyString),
   seq: Type.Integer({ minimum: 0 }),
 };

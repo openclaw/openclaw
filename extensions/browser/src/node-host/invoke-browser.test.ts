@@ -1,4 +1,3 @@
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const controlServiceMocks = vi.hoisted(() => ({
@@ -451,29 +450,6 @@ describe("runBrowserProxyCommand", () => {
     const request = firstBrowserDispatchRequest();
     expect(request.path).toBe("/stop");
     expect(request.query).toEqual({ profile: "openclaw" });
-  });
-
-  it("caps browser proxy command timeout before dispatch", async () => {
-    dispatcherMocks.dispatch.mockResolvedValue({
-      status: 200,
-      body: { ok: true },
-    });
-    const timeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-
-    try {
-      await runBrowserProxyCommand(
-        JSON.stringify({
-          method: "GET",
-          path: "/snapshot",
-          timeoutMs: Number.MAX_SAFE_INTEGER,
-        }),
-      );
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    } finally {
-      timeoutSpy.mockRestore();
-    }
   });
 
   it("rejects persistent profile creation when allowProfiles is empty", async () => {

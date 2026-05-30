@@ -4,6 +4,7 @@ import {
   NON_GPT5_CONTRACT_MODEL_ID,
   NON_OPENAI_CONTRACT_PROVIDER_ID,
   CODEX_CONTRACT_PROVIDER_ID,
+  OPENAI_CODEX_CONTRACT_PROVIDER_ID,
   OPENAI_CONTRACT_PROVIDER_ID,
   openAiPluginPersonalityConfig,
   sharedGpt5PersonalityConfig,
@@ -52,7 +53,7 @@ describe("GPT-5 prompt overlay runtime contract", () => {
 
   it("scopes OpenAI plugin personality fallback to OpenAI-family GPT-5 providers", () => {
     const openAiContribution = resolveGpt5SystemPromptContribution({
-      providerId: OPENAI_CONTRACT_PROVIDER_ID,
+      providerId: OPENAI_CODEX_CONTRACT_PROVIDER_ID,
       modelId: GPT5_CONTRACT_MODEL_ID,
       config: openAiPluginPersonalityConfig("off"),
     });

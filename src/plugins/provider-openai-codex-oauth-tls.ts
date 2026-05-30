@@ -1,9 +1,8 @@
 import path from "node:path";
-import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
+import { note } from "../terminal/note.js";
 
 const TLS_CERT_ERROR_CODES = new Set([
   "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
@@ -83,9 +82,7 @@ function hasOpenAICodexOAuthProfile(cfg: OpenClawConfig): boolean {
     return false;
   }
   return Object.values(profiles).some(
-    (profile) =>
-      (profile.provider === "openai" || profile.provider === "openai-codex") &&
-      profile.mode === "oauth",
+    (profile) => profile.provider === "openai-codex" && profile.mode === "oauth",
   );
 }
 
@@ -103,7 +100,7 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 }): Promise<OpenAIOAuthTlsPreflightResult> {
-  const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
+  const timeoutMs = options?.timeoutMs ?? 5000;
   const fetchImpl = options?.fetchImpl ?? fetch;
   try {
     await fetchImpl(OPENAI_AUTH_PROBE_URL, {

@@ -1,7 +1,5 @@
 profile: openclaw-check
-# Default OpenClaw runner spend to the Azure-backed Crabbox account.
-# Use `--provider aws` only for AWS-specific runner proof.
-provider: azure
+provider: aws
 class: standard
 capacity:
   market: spot

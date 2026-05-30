@@ -1,4 +1,3 @@
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const TELEGRAM_POLLING_LEASES_KEY = Symbol.for("openclaw.telegram.pollingLeases");
@@ -72,9 +71,8 @@ async function waitForPreviousRelease(params: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
   try {
-    const waitMs = resolveTimerTimeoutMs(params.waitMs, DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS, 0);
     const timeout = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), waitMs);
+      timer = setTimeout(() => resolve("timeout"), Math.max(0, params.waitMs));
       timer.unref?.();
     });
     const aborted = new Promise<"aborted">((resolve) => {

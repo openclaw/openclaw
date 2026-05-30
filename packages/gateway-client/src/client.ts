@@ -688,9 +688,9 @@ export class GatewayClient {
       return;
     }
     const timeoutMs =
-      opts?.timeoutMs === undefined
-        ? STOP_AND_WAIT_TIMEOUT_MS
-        : resolveSafeTimeoutDelayMs(opts.timeoutMs);
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.floor(opts.timeoutMs))
+        : STOP_AND_WAIT_TIMEOUT_MS;
     let timeout: NodeJS.Timeout | null = null;
     try {
       await Promise.race([

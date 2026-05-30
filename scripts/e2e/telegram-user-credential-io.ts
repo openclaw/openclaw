@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -139,6 +138,46 @@ export function runCommand(
   });
 }
 
+async function readBoundedResponseText(
+  response: Response,
+  label: string,
+  byteLimit: number,
+  timeoutPromise: Promise<never>,
+) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw bodyTooLargeError(`${label} response body exceeded ${byteLimit} bytes`);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw bodyTooLargeError(`${label} response body exceeded ${byteLimit} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function fetchJsonWithTimeout(params: FetchJsonParams) {
   const timeoutMs = Math.max(1, params.timeoutMs);
   const maxBodyBytes = resolveFetchBodyLimit(params.maxBodyBytes);
@@ -161,10 +200,12 @@ export async function fetchJsonWithTimeout(params: FetchJsonParams) {
       }),
       timeoutPromise,
     ]);
-    const rawPayload = await readBoundedResponseText(response, params.label, maxBodyBytes, {
-      createTooLargeError: bodyTooLargeError,
+    const rawPayload = await readBoundedResponseText(
+      response,
+      params.label,
+      maxBodyBytes,
       timeoutPromise,
-    });
+    );
     const payload = JSON.parse(rawPayload) as JsonObject;
     return { payload, response };
   } finally {

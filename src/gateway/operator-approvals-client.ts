@@ -35,18 +35,6 @@ function shouldSendApprovalRuntimeToken(urlSource: string): boolean {
   );
 }
 
-function shouldOmitApprovalRuntimeDeviceIdentity(params: {
-  url: string;
-  token?: string;
-  password?: string;
-  sendsApprovalRuntimeToken: boolean;
-}): boolean {
-  if (params.sendsApprovalRuntimeToken) {
-    return true;
-  }
-  return shouldOmitOperatorApprovalDeviceIdentity(params);
-}
-
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
     GatewayClientOptions,
@@ -66,13 +54,12 @@ export async function createOperatorApprovalsGatewayClient(
     gatewayUrl: params.gatewayUrl,
     env: process.env,
   });
-  const sendsApprovalRuntimeToken = shouldSendApprovalRuntimeToken(bootstrap.urlSource);
 
   return new GatewayClient({
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
-    ...(sendsApprovalRuntimeToken
+    ...(shouldSendApprovalRuntimeToken(bootstrap.urlSource)
       ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
       : {}),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
@@ -80,11 +67,10 @@ export async function createOperatorApprovalsGatewayClient(
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     scopes: ["operator.approvals"],
-    deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
+    deviceIdentity: shouldOmitOperatorApprovalDeviceIdentity({
       url: bootstrap.url,
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
-      sendsApprovalRuntimeToken,
     })
       ? null
       : undefined,

@@ -180,14 +180,6 @@ const config = {
       entry: ["src/index.ts!", "src/ip.ts!"],
       project: ["src/**/*.ts!"],
     },
-    "packages/markdown-core": {
-      entry: ["src/*.ts!"],
-      project: ["src/**/*.ts!"],
-    },
-    "packages/terminal-core": {
-      entry: ["src/*.ts!"],
-      project: ["src/**/*.ts!"],
-    },
     "packages/speech-core": {
       entry: ["api.ts!", "runtime-api.ts!", "speaker.ts!", "voice-models.ts!"],
       project: ["**/*.ts!"],

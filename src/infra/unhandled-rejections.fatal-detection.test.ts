@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../packages/terminal-core/src/restore.js", () => ({
+vi.mock("../terminal/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
 

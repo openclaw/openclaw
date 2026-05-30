@@ -185,10 +185,7 @@ describe("loadPluginLookUpTable", () => {
       createManifestRecord({
         id: "openai",
         origin: "bundled",
-        providers: ["openai"],
-        providerAuthAliases: {
-          "openai-codex": "openai",
-        },
+        providers: ["openai", "openai-codex"],
         modelCatalog: {
           aliases: {
             "azure-openai-responses": {
@@ -251,7 +248,6 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.channels.get("telegram")).toEqual(["telegram"]);
     expect(table.owners.channelConfigs.get("telegram")).toEqual(["telegram"]);
     expect(table.owners.providers.get("openai")).toEqual(["openai"]);
-    expect(table.owners.providers.get("openai-codex")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("azure-openai-responses")).toEqual(["openai"]);
     expect(table.owners.cliBackends.get("codex-cli")).toBeUndefined();

@@ -5,22 +5,14 @@ import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
-import {
-  clampTimerTimeoutMs,
-  parseStrictPositiveInteger,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
   listGoogleMeetCalendarEvents,
   type GoogleMeetCalendarLookupResult,
 } from "./calendar.js";
-import {
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  type GoogleMeetConfig,
-  type GoogleMeetModeInput,
-  type GoogleMeetTransport,
-} from "./config.js";
+import type { GoogleMeetConfig, GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import { hasCreateSpaceConfigInput, resolveCreateSpaceConfig } from "./create.js";
 import {
   buildGoogleMeetPreflightReport,
@@ -60,13 +52,6 @@ type OAuthLoginOptions = {
   manual?: boolean;
   json?: boolean;
   timeoutSec?: string;
-};
-
-export const testing = {
-  parsePositiveNumber,
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  resolveGoogleMeetGatewayTimeoutMs,
-  resolveGoogleMeetOAuthCallbackTimeoutMs,
 };
 
 type ResolveSpaceOptions = {
@@ -289,18 +274,6 @@ function parsePositiveNumber(value: string | undefined, label: string): number |
   return parsed;
 }
 
-function resolveGoogleMeetGatewayTimeoutMs(timeoutMs: unknown): number {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-    ? (clampTimerTimeoutMs(Math.ceil(timeoutMs)) ?? 1)
-    : GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS;
-}
-
-function resolveGoogleMeetOAuthCallbackTimeoutMs(timeoutSec: string | undefined): number {
-  return (
-    clampTimerTimeoutMs((parsePositiveNumber(timeoutSec, "timeout-sec") ?? 300) * 1000) ?? 300_000
-  );
-}
-
 function parsePositiveIntegerOption(value: string | undefined, label: string): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -319,7 +292,10 @@ async function callGoogleMeetGateway(params: {
   timeoutMs?: number;
 }): Promise<GoogleMeetGatewayCallResult> {
   try {
-    const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
+    const timeoutMs =
+      typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
+        ? Math.max(1, Math.ceil(params.timeoutMs))
+        : GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS;
     return {
       ok: true,
       payload: await params.callGateway(
@@ -335,6 +311,14 @@ async function callGoogleMeetGateway(params: {
     }
     throw err;
   }
+}
+
+function resolveGoogleMeetGatewayOperationTimeoutMs(config: GoogleMeetConfig): number {
+  return Math.max(
+    60_000,
+    config.chrome.joinTimeoutMs + 30_000,
+    config.voiceCall.requestTimeoutMs + 10_000,
+  );
 }
 
 function formatDuration(value: number | undefined): string {
@@ -1466,7 +1450,7 @@ export function registerGoogleMeetCli(params: {
       const code = await waitForGoogleMeetAuthCode({
         state,
         manual: Boolean(options.manual),
-        timeoutMs: resolveGoogleMeetOAuthCallbackTimeoutMs(options.timeoutSec),
+        timeoutMs: (parsePositiveNumber(options.timeoutSec, "timeout-sec") ?? 300) * 1000,
         authUrl,
         promptInput,
         writeLine: (message) => writeStdoutLine("%s", message),

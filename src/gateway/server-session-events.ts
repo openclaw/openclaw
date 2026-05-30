@@ -1,10 +1,6 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { getRuntimeConfig } from "../config/io.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { asPositiveSafeInteger } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
@@ -23,24 +19,8 @@ import {
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
 
-function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
-  const normalizedAgentId = normalizeOptionalString(agentId);
-  if (sessionKey === "global") {
-    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()));
-    if (normalizedAgentId) {
-      const scopedKey = `agent:${normalizeAgentId(normalizedAgentId)}:global`;
-      return normalizeAgentId(normalizedAgentId) === defaultAgentId
-        ? [scopedKey, sessionKey]
-        : [scopedKey];
-    }
-    return [`agent:${defaultAgentId}:global`, sessionKey];
-  }
-  return [sessionKey];
-}
-
 function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
-  agentId?: string;
   includeSession?: boolean;
   label?: string;
   displayName?: string;
@@ -50,13 +30,8 @@ function buildGatewaySessionSnapshot(params: {
   if (!sessionRow) {
     return {};
   }
-  const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
-  const session = params.includeSession ? { ...sessionRow } : undefined;
-  if (session && omitUnscopedGlobalGoal) {
-    delete session.goal;
-  }
   return {
-    ...(session ? { session } : {}),
+    ...(params.includeSession ? { session: sessionRow } : {}),
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
     kind: sessionRow.kind,
@@ -94,7 +69,6 @@ function buildGatewaySessionSnapshot(params: {
     lastThreadId: sessionRow.lastThreadId,
     totalTokens: sessionRow.totalTokens,
     totalTokensFresh: sessionRow.totalTokensFresh,
-    ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
     contextTokens: sessionRow.contextTokens,
     estimatedCostUsd: sessionRow.estimatedCostUsd,
     responseUsage: sessionRow.responseUsage,
@@ -136,29 +110,19 @@ async function handleTranscriptUpdateBroadcast(
   if (!sessionKey || update.message === undefined) {
     return;
   }
-  const effectiveAgentId = update.agentId;
-  const defaultGlobalAgentId =
-    sessionKey === "global"
-      ? normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()))
-      : undefined;
-  const visibleAgentId =
-    update.agentId ??
-    (effectiveAgentId && effectiveAgentId !== defaultGlobalAgentId ? effectiveAgentId : undefined);
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
   }
-  for (const broadcastKey of resolveSessionMessageBroadcastKeys(sessionKey, effectiveAgentId)) {
-    for (const connId of params.sessionMessageSubscribers.get(broadcastKey)) {
-      connIds.add(connId);
-    }
+  for (const connId of params.sessionMessageSubscribers.get(sessionKey)) {
+    connIds.add(connId);
   }
   if (connIds.size === 0) {
     return;
   }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   if (messageSeq === undefined) {
-    const { entry, storePath } = loadSessionEntry(sessionKey, { agentId: visibleAgentId });
+    const { entry, storePath } = loadSessionEntry(sessionKey);
     messageSeq = entry?.sessionId
       ? asPositiveSafeInteger(
           await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile),
@@ -166,11 +130,7 @@ async function handleTranscriptUpdateBroadcast(
       : undefined;
   }
   const sessionSnapshot = buildGatewaySessionSnapshot({
-    sessionRow: loadGatewaySessionRow(sessionKey, {
-      agentId: visibleAgentId,
-      transcriptUsageMaxBytes: 64 * 1024,
-    }),
-    agentId: visibleAgentId,
+    sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),
     includeSession: true,
   });
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
@@ -183,7 +143,6 @@ async function handleTranscriptUpdateBroadcast(
       "session.message",
       {
         sessionKey,
-        ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
         message,
         ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
         ...(messageSeq !== undefined ? { messageSeq } : {}),
@@ -203,7 +162,6 @@ async function handleTranscriptUpdateBroadcast(
     "sessions.changed",
     {
       sessionKey,
-      ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
       phase: "message",
       ts: Date.now(),
       ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),

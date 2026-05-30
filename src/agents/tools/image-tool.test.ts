@@ -2100,16 +2100,11 @@ describe("image tool data URL support", () => {
 
   it("applies model image maxBytes to data URLs", async () => {
     await withTempAgentDir(async (agentDir) => {
+      installImageUnderstandingProviderStubs();
       const model = {
         ...makeModelDefinition("tiny-vision", ["text", "image"]),
         mediaInput: { image: { maxBytes: 1 } },
       } satisfies ModelDefinitionConfig;
-      installImageUnderstandingProviderDeps([], {
-        resolveImageCompressionPolicy: async () => ({
-          imageCount: 1,
-          models: [model.mediaInput.image],
-        }),
-      });
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -2140,31 +2135,21 @@ describe("image tool data URL support", () => {
   it("downscales data URL images to the resolved model side limit", async () => {
     await withTempAgentDir(async (agentDir) => {
       let observedDimensions: { width: number; height: number } | undefined;
+      installImageUnderstandingProviderStubs({
+        id: "openai",
+        capabilities: ["image"],
+        describeImage: async (params) => {
+          observedDimensions =
+            params.mime === "image/png"
+              ? readPngDimensions(params.buffer)
+              : readJpegDimensions(params.buffer);
+          return { text: "ok", model: params.model };
+        },
+      });
       const model = {
         ...makeModelDefinition("tiny-vision", ["text", "image"]),
         mediaInput: { image: { maxSidePx: 512, preferredSidePx: 512 } },
       } satisfies ModelDefinitionConfig;
-      installImageUnderstandingProviderDeps(
-        [
-          {
-            id: "openai",
-            capabilities: ["image"],
-            describeImage: async (params) => {
-              observedDimensions =
-                params.mime === "image/png"
-                  ? readPngDimensions(params.buffer)
-                  : readJpegDimensions(params.buffer);
-              return { text: "ok", model: params.model };
-            },
-          },
-        ],
-        {
-          resolveImageCompressionPolicy: async () => ({
-            imageCount: 1,
-            models: [model.mediaInput.image],
-          }),
-        },
-      );
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {

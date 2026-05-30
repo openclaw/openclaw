@@ -17,12 +17,6 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
-import {
-  asFiniteNumberInRange,
-  clampTimerTimeoutMs,
-  parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
-} from "../shared/number-coercion.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {
@@ -42,13 +36,6 @@ const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
-const HTTP_DATE_MONTH_INDEX = new Map(
-  ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map(
-    (month, index) => [month, index],
-  ),
-);
-const OBSOLETE_ASCTIME_HTTP_DATE_RE =
-  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([ \d]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -251,12 +238,9 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
     const trimmedRetryAfterMs = retryAfterMs.trim();
-    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs)) {
-      const milliseconds = asFiniteNumberInRange(parseStrictFiniteNumber(trimmedRetryAfterMs), {
-        min: 0,
-        max: Number.MAX_SAFE_INTEGER,
-      });
-      return milliseconds === undefined ? Number.POSITIVE_INFINITY : milliseconds / 1000;
+    const milliseconds = Number(trimmedRetryAfterMs);
+    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs) && Number.isFinite(milliseconds)) {
+      return milliseconds / 1000;
     }
   }
 
@@ -265,63 +249,22 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const trimmedRetryAfterSeconds = retryAfter.trim();
-  if (/^\d+$/.test(trimmedRetryAfterSeconds)) {
-    return parseStrictNonNegativeInteger(trimmedRetryAfterSeconds) ?? Number.POSITIVE_INFINITY;
+  const seconds = Number(retryAfter.trim());
+  if (/^\d+$/.test(retryAfter.trim()) && Number.isFinite(seconds) && seconds >= 0) {
+    return seconds;
   }
 
-  const trimmedRetryAfter = trimmedRetryAfterSeconds;
+  const trimmedRetryAfter = retryAfter.trim();
   if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
     return undefined;
   }
 
-  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfter);
+  const retryAt = Date.parse(trimmedRetryAfter);
   if (Number.isNaN(retryAt)) {
     return undefined;
   }
 
   return Math.max(0, (retryAt - Date.now()) / 1000);
-}
-
-function parseRetryAfterHttpDateMs(value: string): number {
-  const match = OBSOLETE_ASCTIME_HTTP_DATE_RE.exec(value);
-  if (match) {
-    const month = HTTP_DATE_MONTH_INDEX.get(match[1] ?? "");
-    if (month === undefined) {
-      return Number.NaN;
-    }
-    const year = Number.parseInt(match[6] ?? "", 10);
-    const day = Number.parseInt((match[2] ?? "").trim(), 10);
-    const hours = Number.parseInt(match[3] ?? "", 10);
-    const minutes = Number.parseInt(match[4] ?? "", 10);
-    const seconds = Number.parseInt(match[5] ?? "", 10);
-    if (
-      day < 1 ||
-      day > 31 ||
-      hours > 23 ||
-      minutes > 59 ||
-      seconds > 59 ||
-      [year, day, hours, minutes, seconds].some((component) => !Number.isFinite(component))
-    ) {
-      return Number.NaN;
-    }
-    const timestamp = Date.UTC(year, month, day, hours, minutes, seconds);
-    const parsedDate = new Date(timestamp);
-    return parsedDate.getUTCFullYear() === year &&
-      parsedDate.getUTCMonth() === month &&
-      parsedDate.getUTCDate() === day &&
-      parsedDate.getUTCHours() === hours &&
-      parsedDate.getUTCMinutes() === minutes &&
-      parsedDate.getUTCSeconds() === seconds
-      ? timestamp
-      : Number.NaN;
-  }
-
-  const parsed = Date.parse(value);
-  if (!Number.isNaN(parsed)) {
-    return parsed;
-  }
-  return Number.NaN;
 }
 
 function resolveMaxSdkRetryWaitSeconds(): number | undefined {
@@ -338,12 +281,8 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
   }
 
-  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
-    min: 0,
-    minExclusive: true,
-    max: Number.MAX_SAFE_INTEGER,
-  });
-  if (seconds !== undefined) {
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) {
     return seconds;
   }
 
@@ -466,13 +405,11 @@ export function resolveModelRequestTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
-    return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-      ? clampTimerTimeoutMs(timeoutMs)
-      : undefined;
+    return timeoutMs;
   }
   const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
   return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
-    ? clampTimerTimeoutMs(modelTimeoutMs)
+    ? Math.floor(modelTimeoutMs)
     : undefined;
 }
 

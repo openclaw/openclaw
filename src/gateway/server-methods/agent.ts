@@ -65,7 +65,6 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
@@ -87,7 +86,6 @@ import {
   isAcpSessionKey,
   isSubagentSessionKey,
   normalizeAgentId,
-  parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -145,9 +143,7 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
-  resolveSessionStoreKey,
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
@@ -257,7 +253,6 @@ function emitAgentSendSessionLifecycleTransition(
 
 async function runSessionResetFromAgent(params: {
   key: string;
-  agentId?: string;
   reason: "new" | "reset";
 }): Promise<
   | { ok: true; key: string; sessionId?: string }
@@ -265,7 +260,6 @@ async function runSessionResetFromAgent(params: {
 > {
   const result = await performGatewaySessionReset({
     key: params.key,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
     reason: params.reason,
     commandSource: "gateway:agent",
   });
@@ -284,14 +278,11 @@ function resolveSessionRuntimeWorkspace(params: {
   sessionKey: string;
   sessionEntry?: SessionEntry;
   spawnedBy?: string;
-  agentId?: string;
 }): {
   runtimeWorkspaceDir: string;
   isCanonicalWorkspace: boolean;
 } {
-  const sessionAgentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : resolveAgentIdFromSessionKey(params.sessionKey);
+  const sessionAgentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const workspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
     spawnedBy: params.spawnedBy,
     workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
@@ -313,14 +304,11 @@ function shouldSkipStartupContextForSpawnedSandbox(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   spawnedBy?: string;
-  agentId?: string;
 }): boolean {
   if (!params.spawnedBy) {
     return false;
   }
-  const agentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, agentId);
   if (sandboxCfg.mode === "off") {
     return false;
@@ -398,21 +386,13 @@ function emitSessionsChanged(
     GatewayRequestHandlerOptions["context"],
     "broadcastToConnIds" | "getSessionEventSubscriberConnIds"
   >,
-  payload: { sessionKey?: string; agentId?: string; reason: string },
+  payload: { sessionKey?: string; reason: string },
 ) {
   const connIds = context.getSessionEventSubscriberConnIds();
   if (connIds.size === 0) {
     return;
   }
-  const sessionRow = payload.sessionKey
-    ? loadGatewaySessionRow(
-        payload.sessionKey,
-        payload.sessionKey === "global" && payload.agentId
-          ? { agentId: payload.agentId }
-          : undefined,
-      )
-    : null;
-  const omitUnscopedGlobalGoal = payload.sessionKey === "global" && !payload.agentId;
+  const sessionRow = payload.sessionKey ? loadGatewaySessionRow(payload.sessionKey) : null;
   context.broadcastToConnIds(
     "sessions.changed",
     {
@@ -458,7 +438,6 @@ function emitSessionsChanged(
             lastThreadId: sessionRow.lastThreadId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
-            ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
             contextTokens: sessionRow.contextTokens,
             estimatedCostUsd: sessionRow.estimatedCostUsd,
             responseUsage: sessionRow.responseUsage,
@@ -534,7 +513,6 @@ function readGatewayDedupeEntry(params: {
 
 function isAcceptedAgentDedupePayload(payload: unknown): payload is {
   acceptedAt?: unknown;
-  agentId?: unknown;
   dedupeKeys?: unknown;
   expiresAtMs?: unknown;
   ownerConnId?: unknown;
@@ -551,7 +529,6 @@ function isAcceptedAgentDedupePayload(payload: unknown): payload is {
 }
 
 function isPreRegistrationAbortedAgentDedupePayload(payload: unknown): payload is {
-  agentId?: unknown;
   runId?: unknown;
   sessionKey?: unknown;
   status: "timeout";
@@ -613,7 +590,6 @@ function setGatewayDedupeEntries(params: {
 function setAbortedAgentDedupeEntries(params: {
   dedupe: GatewayRequestContext["dedupe"];
   keys: readonly string[];
-  agentId?: string;
   runId: string;
   stopReason: string;
 }) {
@@ -625,7 +601,6 @@ function setAbortedAgentDedupeEntries(params: {
       ok: true,
       payload: {
         runId: params.runId,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
         status: "timeout" as const,
         summary: "aborted",
         stopReason: params.stopReason,
@@ -966,19 +941,12 @@ export const agentHandlers: GatewayRequestHandlers = {
           typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
             ? cached.payload.sessionKey.trim()
             : undefined;
-        const cachedAgentId =
-          cachedSessionKey === "global" &&
-          typeof cached.payload.agentId === "string" &&
-          cached.payload.agentId.trim()
-            ? cached.payload.agentId.trim()
-            : undefined;
         respond(
           true,
           {
             runId: cachedRunId,
             status: "in_flight" as const,
             ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
-            ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
           },
           undefined,
           {
@@ -998,11 +966,10 @@ export const agentHandlers: GatewayRequestHandlers = {
     const ownerConnId = typeof client?.connId === "string" ? client.connId : undefined;
     const ownerDeviceId =
       typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined;
-    const reservePreAcceptedAgentDedupe = (sessionKey?: string, dedupeAgentId?: string) => {
+    const reservePreAcceptedAgentDedupe = (sessionKey?: string) => {
       if (agentDedupeReserved || !sessionKey) {
         return;
       }
-      const dedupeSessionResolvesGlobal = resolveSessionStoreKey({ cfg, sessionKey }) === "global";
       const acceptedAt = Date.now();
       const pendingTimeoutMs = resolveAgentTimeoutMs({
         cfg,
@@ -1018,7 +985,6 @@ export const agentHandlers: GatewayRequestHandlers = {
             runId,
             status: "accepted" as const,
             sessionKey,
-            ...(dedupeSessionResolvesGlobal && dedupeAgentId ? { agentId: dedupeAgentId } : {}),
             acceptedAt,
             dedupeKeys: agentDedupeKeys,
             expiresAtMs: resolveAgentRunExpiresAtMs({
@@ -1088,27 +1054,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!agentId && requestedSessionKeyRaw) {
-      const parsed = parseAgentSessionKey(requestedSessionKeyRaw);
-      const inferredAgentId =
-        parsed && resolveSessionStoreKey({ cfg, sessionKey: requestedSessionKeyRaw }) === "global"
-          ? normalizeAgentId(parsed.agentId)
-          : undefined;
-      if (inferredAgentId) {
-        if (!knownAgents.includes(inferredAgentId)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `invalid agent params: unknown agent id "${parsed?.agentId}"`,
-            ),
-          );
-          return;
-        }
-        agentId = inferredAgentId;
-      }
-    }
     const requestedSessionId = normalizeOptionalString(request.sessionId);
     let requestedSessionKey =
       requestedSessionKeyRaw ??
@@ -1119,16 +1064,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           })
         : undefined);
     if (agentId && requestedSessionKeyRaw) {
-      const parsedRequestedSessionKey = parseAgentSessionKey(requestedSessionKeyRaw);
-      const requestedCanonicalKey = resolveSessionStoreKey({
-        cfg,
-        sessionKey: requestedSessionKeyRaw,
-      });
-      const sessionAgentId = parsedRequestedSessionKey?.agentId
-        ? normalizeAgentId(parsedRequestedSessionKey.agentId)
-        : requestedCanonicalKey === "global"
-          ? agentId
-          : resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
+      const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
       if (sessionAgentId !== agentId) {
         respond(
           false,
@@ -1143,12 +1079,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     // Reserve the run before awaited attachment/session/delivery work so duplicate calls dedupe and
     // pre-registration chat.abort can be made durable by idempotency key.
-    const preAcceptedReservedSessionKey =
-      requestedSessionKey &&
-      resolveSessionStoreKey({ cfg, sessionKey: requestedSessionKey }) === "global"
-        ? "global"
-        : requestedSessionKey;
-    reservePreAcceptedAgentDedupe(preAcceptedReservedSessionKey, agentId);
+    const preAcceptedReservedSessionKey = requestedSessionKey;
+    reservePreAcceptedAgentDedupe(preAcceptedReservedSessionKey);
 
     try {
       let message = (request.message ?? "").trim();
@@ -1160,38 +1092,22 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (normalizedAttachments.length > 0) {
         let baseProvider: string | undefined;
         let baseModel: string | undefined;
-        let requestedSessionEntry: SessionEntry | undefined;
         if (requestedSessionKeyRaw) {
-          const {
-            cfg: sessCfg,
-            entry: sessEntry,
-            canonicalKey: sessCanonicalKey,
-          } = loadSessionEntry(requestedSessionKeyRaw, {
-            ...(agentId ? { agentId } : {}),
+          const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw, {
             clone: false,
           });
-          requestedSessionEntry = sessEntry;
-          const sessionAgentId =
-            sessCanonicalKey === "global" && agentId
-              ? agentId
-              : resolveAgentIdFromSessionKey(sessCanonicalKey);
+          const sessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
           const modelRef = resolveSessionModelRef(sessCfg, sessEntry, sessionAgentId);
           baseProvider = modelRef.provider;
           baseModel = modelRef.model;
         }
         const effectiveProvider = providerOverride || baseProvider;
         const effectiveModel = modelOverride || baseModel;
-        const isConfirmedAcpSession =
-          request.acpTurnSource === "manual_spawn" &&
-          isAcpSessionKey(requestedSessionKeyRaw) &&
-          requestedSessionEntry?.acp != null;
-        const supportsInlineImages = isConfirmedAcpSession
-          ? true
-          : await resolveGatewayModelSupportsImages({
-              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-              provider: effectiveProvider,
-              model: effectiveModel,
-            });
+        const supportsInlineImages = await resolveGatewayModelSupportsImages({
+          loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          provider: effectiveProvider,
+          model: effectiveModel,
+        });
 
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
@@ -1325,7 +1241,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       let bestEffortDeliver = requestedBestEffortDeliver ?? false;
       let cfgForAgent: OpenClawConfig | undefined;
       let resolvedSessionKey = requestedSessionKey;
-      let resolvedSessionAgentId: string | undefined;
       let isNewSession = false;
       let skipTimestampInjection = false;
       let shouldPrependStartupContext = false;
@@ -1345,7 +1260,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           normalizeOptionalLowercaseString(resetCommandMatch[1]) === "new" ? "new" : "reset";
         const resetResult = await runSessionResetFromAgent({
           key: requestedSessionKey,
-          ...(requestedSessionKey === "global" && agentId ? { agentId } : {}),
           reason: resetReason,
         });
         if (!resetResult.ok) {
@@ -1358,21 +1272,12 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (postResetMessage) {
           message = postResetMessage;
         } else {
-          const selectedGlobalResetAgentId =
-            requestedSessionKey === "global" && agentId ? agentId : undefined;
-          const resetLoadedSession = loadSessionEntry(requestedSessionKey, {
-            clone: false,
-            ...(selectedGlobalResetAgentId ? { agentId: selectedGlobalResetAgentId } : {}),
-          });
+          const resetLoadedSession = loadSessionEntry(requestedSessionKey, { clone: false });
           const resetCfg = resetLoadedSession?.cfg ?? cfg;
           const resetSessionEntry = resetLoadedSession?.entry;
-          const resetSessionAgentId =
-            selectedGlobalResetAgentId ??
-            resolveAgentIdFromSessionKey(requestedSessionKey) ??
-            resolveDefaultAgentId(resetCfg);
           const resetSpawnedBy = canonicalizeSpawnedByForAgent(
             resetCfg,
-            resetSessionAgentId,
+            resolveAgentIdFromSessionKey(requestedSessionKey),
             resetSessionEntry?.spawnedBy,
           );
           const { runtimeWorkspaceDir, isCanonicalWorkspace } = resolveSessionRuntimeWorkspace({
@@ -1380,8 +1285,8 @@ export const agentHandlers: GatewayRequestHandlers = {
             sessionKey: requestedSessionKey,
             sessionEntry: resetSessionEntry,
             spawnedBy: resetSpawnedBy,
-            agentId: resetSessionAgentId,
           });
+          const resetSessionAgentId = resolveAgentIdFromSessionKey(requestedSessionKey);
           const resetBaseModelRef = resolveSessionModelRef(
             resetCfg,
             resetSessionEntry,
@@ -1427,22 +1332,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
 
       if (requestedSessionKey) {
-        const sessionLoadOptions = {
-          ...(agentId ? { agentId } : {}),
+        const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey, {
           clone: false,
-        };
-        const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(
-          requestedSessionKey,
-          sessionLoadOptions,
-        );
+        });
         cfgForAgent = cfg;
-        const sessionMaintenanceConfig = resolveMaintenanceConfigFromInput(
-          cfg.session?.maintenance,
-        );
-        const canonicalSessionAgentId =
-          canonicalKey === "global"
-            ? (agentId ?? resolveDefaultAgentId(cfg))
-            : resolveAgentIdFromSessionKey(canonicalKey);
         const now = Date.now();
         const resetPolicy = resolveSessionResetPolicy({
           sessionCfg: cfg.session,
@@ -1456,7 +1349,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           ? resolveSessionLifecycleTimestamps({
               entry,
               storePath,
-              agentId: canonicalSessionAgentId,
+              agentId: resolveAgentIdFromSessionKey(canonicalKey),
             })
           : undefined;
         const freshness = entry
@@ -1472,7 +1365,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           try {
             const sessionPathOpts = resolveSessionFilePathOptions({
               storePath,
-              agentId: canonicalSessionAgentId,
+              agentId: resolveAgentIdFromSessionKey(canonicalKey),
             });
             failedSessionTranscriptMissing = !existsSync(
               resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
@@ -1501,7 +1394,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           request.bootstrapContextRunKind !== "cron" &&
           request.bootstrapContextRunKind !== "heartbeat" &&
           !request.internalEvents?.length;
-        const sessionAgent = canonicalSessionAgentId;
+        const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
         type AgentSessionPatchBuild = {
           patch: Partial<SessionEntry>;
           spawnedBy: string | undefined;
@@ -1654,9 +1547,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedSessionId = sessionEntry?.sessionId ?? sessionId;
         const canonicalSessionKey = canonicalKey;
         resolvedSessionKey = canonicalSessionKey;
-        const sessionAgentId = canonicalSessionAgentId;
-        resolvedSessionAgentId = sessionAgentId;
-        const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: sessionAgentId });
+        const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
+        const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
         // Legacy stores may lack sessionStartedAt entirely. Pre-compute a
         // JSONL-transcript-derived candidate outside the store lock; the
         // updater below only writes it when the freshly-loaded store still
@@ -1667,41 +1559,20 @@ export const agentHandlers: GatewayRequestHandlers = {
             ? resolveSessionLifecycleTimestamps({
                 entry,
                 storePath,
-                agentId: sessionAgentId,
+                agentId,
               }).sessionStartedAt
             : undefined;
         if (storePath && !suppressVisibleSessionEffects) {
           const requestedStoreKey = requestedSessionKey;
           let deniedBySendPolicy = false;
-          let singleEntryPersistence:
-            | {
-                sessionKey: string;
-                entry: SessionEntry;
-              }
-            | undefined;
           const persisted = await updateSessionStore(
             storePath,
             (store) => {
-              const storeKeysBeforeMigration = new Set(Object.keys(store));
-              const preMigrationTarget = resolveGatewaySessionStoreTarget({
-                cfg,
-                key: requestedStoreKey,
-                store,
-                ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-              });
-              const hadLegacyStoreKey = preMigrationTarget.storeKeys.some(
-                (storeKey) =>
-                  storeKey !== preMigrationTarget.canonicalKey &&
-                  Object.prototype.hasOwnProperty.call(store, storeKey),
-              );
-              const { target, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+              const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
                 cfg,
                 key: requestedStoreKey,
                 store,
               });
-              const prunedStoreKey = [...storeKeysBeforeMigration].some(
-                (storeKey) => !Object.prototype.hasOwnProperty.call(store, storeKey),
-              );
               const freshEntry = store[primaryKey];
               patchBuild = buildSessionPatch(freshEntry);
               const effectivePatch =
@@ -1726,21 +1597,9 @@ export const agentHandlers: GatewayRequestHandlers = {
                 return merged;
               }
               store[primaryKey] = merged;
-              const canonicalKeyChanged = target.canonicalKey !== preMigrationTarget.canonicalKey;
-              singleEntryPersistence =
-                freshEntry && !hadLegacyStoreKey && !canonicalKeyChanged && !prunedStoreKey
-                  ? {
-                      sessionKey: primaryKey,
-                      entry: merged,
-                    }
-                  : undefined;
               return merged;
             },
-            {
-              takeCacheOwnership: true,
-              maintenanceConfig: sessionMaintenanceConfig,
-              resolveSingleEntryPersistence: () => singleEntryPersistence,
-            },
+            { takeCacheOwnership: true },
           );
           if (persisted) {
             sessionEntry = persisted;
@@ -1774,7 +1633,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             sessionId: resolvedSessionId,
             storePath,
             sessionFile: sessionEntry?.sessionFile,
-            agentId: sessionAgentId,
+            agentId,
             previousSessionId,
             previousSessionFile: previousSessionId ? entry?.sessionFile : undefined,
             previousEndReason: previousSessionId
@@ -1807,11 +1666,8 @@ export const agentHandlers: GatewayRequestHandlers = {
           !suppressVisibleSessionEffects &&
           (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global")
         ) {
-          const selectedGlobalAgentId =
-            canonicalSessionKey === "global" ? sessionAgentId : undefined;
           context.addChatRun(idem, {
             sessionKey: canonicalSessionKey,
-            ...(selectedGlobalAgentId ? { agentId: selectedGlobalAgentId } : {}),
             clientRunId: idem,
           });
           if (requestedBestEffortDeliver === undefined) {
@@ -1826,13 +1682,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         );
       }
 
-      const activeSessionAgentId =
-        resolvedSessionKey === "global" && resolvedSessionAgentId
-          ? resolvedSessionAgentId
-          : resolvedSessionKey
-            ? resolveAgentIdFromSessionKey(resolvedSessionKey)
-            : (agentId ?? resolveDefaultAgentId(cfgForAgent ?? cfg));
-
       const connId = typeof client?.connId === "string" ? client.connId : undefined;
       const wantsToolEvents = hasGatewayClientCap(
         client?.connect?.caps,
@@ -1844,10 +1693,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         // late-joining clients (e.g. page refresh mid-response) receive
         // in-progress tool events without leaking cross-session data.
         for (const [activeRunId, active] of context.chatAbortControllers) {
-          const sameSession = active.sessionKey === resolvedSessionKey;
-          const sameSelectedGlobalAgent =
-            resolvedSessionKey === "global" ? active.agentId === activeSessionAgentId : true;
-          if (activeRunId !== runId && sameSession && sameSelectedGlobalAgent) {
+          if (activeRunId !== runId && active.sessionKey === requestedSessionKey) {
             context.registerToolEventRecipient(activeRunId, connId);
           }
         }
@@ -1862,7 +1708,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       const turnSourceAccountId = normalizeOptionalString(request.accountId);
       const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
         cfg: cfgForAgent ?? cfg,
-        agentId: activeSessionAgentId,
+        agentId: resolvedSessionKey
+          ? resolveAgentIdFromSessionKey(resolvedSessionKey)
+          : (agentId ?? resolveDefaultAgentId(cfgForAgent ?? cfg)),
         currentSessionKey: resolvedSessionKey,
         sessionEntry,
         requestedChannel: request.replyChannel ?? request.channel,
@@ -2013,7 +1861,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       const activeModelProvider =
         providerOverride ??
-        resolveSessionModelRef(cfgForAgent ?? cfg, sessionEntry, activeSessionAgentId).provider;
+        resolveSessionModelRef(
+          cfgForAgent ?? cfg,
+          sessionEntry,
+          resolvedSessionKey
+            ? resolveAgentIdFromSessionKey(resolvedSessionKey)
+            : (agentId ?? resolveDefaultAgentId(cfgForAgent ?? cfg)),
+        ).provider;
       const activeAuthProvider = resolveProviderIdForAuth(activeModelProvider, {
         config: cfgForAgent ?? cfg,
       });
@@ -2022,7 +1876,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         runId,
         sessionId: resolvedSessionId ?? runId,
         sessionKey: resolvedSessionKey,
-        agentId: resolvedSessionKey === "global" ? activeSessionAgentId : undefined,
         timeoutMs,
         now,
         expiresAtMs: resolveAgentRunExpiresAtMs({ now, timeoutMs }),
@@ -2045,7 +1898,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       const accepted = {
         runId,
         sessionKey: resolvedSessionKey,
-        ...(resolvedSessionKey === "global" ? { agentId: activeSessionAgentId } : {}),
         status: "accepted" as const,
         acceptedAt: Date.now(),
       };
@@ -2081,7 +1933,6 @@ export const agentHandlers: GatewayRequestHandlers = {
             setAbortedAgentDedupeEntries({
               dedupe: context.dedupe,
               keys: agentDedupeKeys,
-              agentId: resolvedSessionKey === "global" ? activeSessionAgentId : undefined,
               runId,
               stopReason,
             });
@@ -2111,14 +1962,12 @@ export const agentHandlers: GatewayRequestHandlers = {
           if (requestedSessionKey && resolvedSessionKey && isNewSession) {
             emitSessionsChanged(context, {
               sessionKey: resolvedSessionKey,
-              ...(resolvedSessionKey === "global" ? { agentId: activeSessionAgentId } : {}),
               reason: "create",
             });
           }
           if (resolvedSessionKey) {
             emitSessionsChanged(context, {
               sessionKey: resolvedSessionKey,
-              ...(resolvedSessionKey === "global" ? { agentId: activeSessionAgentId } : {}),
               reason: "send",
             });
           }
@@ -2130,7 +1979,6 @@ export const agentHandlers: GatewayRequestHandlers = {
                 cfg: startupCfg,
                 sessionKey: resolvedSessionKey,
                 spawnedBy: spawnedByValue,
-                agentId: activeSessionAgentId,
               })
             ) {
               const { runtimeWorkspaceDir } = resolveSessionRuntimeWorkspace({
@@ -2138,7 +1986,6 @@ export const agentHandlers: GatewayRequestHandlers = {
                 sessionKey: resolvedSessionKey,
                 sessionEntry,
                 spawnedBy: spawnedByValue,
-                agentId: activeSessionAgentId,
               });
               const startupContextPrelude = await buildSessionStartupContextPrelude({
                 workspaceDir: runtimeWorkspaceDir,
@@ -2155,13 +2002,10 @@ export const agentHandlers: GatewayRequestHandlers = {
 
           const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
           const ingressAgentId =
-            resolvedSessionKey === "global"
-              ? activeSessionAgentId
-              : agentId &&
-                  (!resolvedSessionKey ||
-                    resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
-                ? agentId
-                : undefined;
+            agentId &&
+            (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
+              ? agentId
+              : undefined;
           let execApprovalFollowupRuntimeHandoff =
             canUseInternalRuntimeHandoff && execApprovalFollowupApprovalId
               ? consumeExecApprovalFollowupRuntimeHandoff({

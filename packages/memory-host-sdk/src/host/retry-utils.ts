@@ -1,5 +1,3 @@
-import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
-
 export type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
@@ -62,16 +60,13 @@ export function resolveRetryConfig(
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
   const attempts = resolveAttempts(overrides?.attempts, defaults.attempts);
-  const minDelayMs = resolveSafeTimeoutDelayMs(
+  const minDelayMs = Math.max(
+    0,
     Math.round(clampNumber(overrides?.minDelayMs, defaults.minDelayMs, 0)),
-    { minMs: 0 },
   );
   const maxDelayMs = Math.max(
     minDelayMs,
-    resolveSafeTimeoutDelayMs(
-      Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
-      { minMs: 0 },
-    ),
+    Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
   );
   const jitter = clampNumber(overrides?.jitter, defaults.jitter, 0, 1);
   return { attempts, minDelayMs, maxDelayMs, jitter };
@@ -101,7 +96,7 @@ export async function retryAsync<T>(
         if (i === attempts - 1) {
           break;
         }
-        await sleep(resolveSafeTimeoutDelayMs(initialDelayMs * 2 ** i, { minMs: 0 }));
+        await sleep(initialDelayMs * 2 ** i);
       }
     }
     throw lastErr ?? new Error("Retry failed");
@@ -130,8 +125,8 @@ export async function retryAsync<T>(
       const retryAfterMs = options.retryAfterMs?.(err);
       const hasRetryAfter = typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs);
       const baseDelay = hasRetryAfter
-        ? Math.max(resolveSafeTimeoutDelayMs(retryAfterMs, { minMs: 0 }), minDelayMs)
-        : resolveSafeTimeoutDelayMs(minDelayMs * 2 ** (attempt - 1), { minMs: 0 });
+        ? Math.max(retryAfterMs, minDelayMs)
+        : minDelayMs * 2 ** (attempt - 1);
       let delay = Math.min(baseDelay, maxDelayMs);
       delay = applyJitter(delay, resolved.jitter);
       delay = Math.min(Math.max(delay, minDelayMs), maxDelayMs);

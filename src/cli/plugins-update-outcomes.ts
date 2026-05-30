@@ -1,4 +1,4 @@
-import { theme } from "../../packages/terminal-core/src/theme.js";
+import { theme } from "../terminal/theme.js";
 
 type PluginUpdateCliOutcome = {
   status: string;

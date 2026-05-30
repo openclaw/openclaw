@@ -1,12 +1,10 @@
-import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
-
 export function parseSandboxStatSize(value: string | undefined): number {
   const raw = value ?? "0";
-  const parsed = parseStrictNonNegativeInteger(raw);
-  if (parsed !== undefined) {
-    return parsed;
+  if (!/^\d+$/.test(raw)) {
+    return 0;
   }
-  return /^\d+$/.test(raw) ? Number.MAX_SAFE_INTEGER : 0;
+  const size = Number(raw);
+  return Number.isFinite(size) ? size : 0;
 }
 
 export function parseSandboxStatMtimeMs(value: string | undefined): number {

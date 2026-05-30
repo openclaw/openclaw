@@ -1,5 +1,3 @@
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
 import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
@@ -13,7 +11,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
 import {
   clearAgentRunContext,
@@ -42,9 +39,7 @@ import {
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { resolveEffectiveAgentSkillFilter } from "../skills/discovery/agent-filter.js";
-import type { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
-import type { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
@@ -61,6 +56,7 @@ import {
   resolveDefaultAgentId,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
+  resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
@@ -102,6 +98,8 @@ import {
 } from "./model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
+import type { SkillSnapshot } from "./skills/types.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -119,10 +117,10 @@ type CliCompactionRuntime = typeof import("./command/cli-compaction.js");
 type TranscriptResolveRuntime = typeof import("../config/sessions/transcript-resolve.runtime.js");
 type CliDepsRuntime = typeof import("../cli/deps.js");
 type ExecDefaultsRuntime = typeof import("./exec-defaults.js");
-type SkillsRuntime = {
-  getRemoteSkillEligibility: typeof getRemoteSkillEligibility;
-  resolveReusableWorkspaceSkillSnapshot: typeof resolveReusableWorkspaceSkillSnapshot;
-};
+type SkillsRuntime = typeof import("./skills.js");
+type SkillsFilterRuntime = typeof import("./skills/filter.js");
+type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
+type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
 
 const attemptExecutionRuntimeLoader = createLazyImportLoader<AttemptExecutionRuntime>(
   () => import("./command/attempt-execution.runtime.js"),
@@ -155,16 +153,29 @@ const cliDepsRuntimeLoader = createLazyImportLoader<CliDepsRuntime>(() => import
 const execDefaultsRuntimeLoader = createLazyImportLoader<ExecDefaultsRuntime>(
   () => import("./exec-defaults.js"),
 );
-const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(async () => {
-  const [remote, sessionSnapshot] = await Promise.all([
-    import("../skills/runtime/remote.js"),
-    import("../skills/runtime/session-snapshot.js"),
-  ]);
+const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(() => import("./skills.js"));
+const skillsFilterRuntimeLoader = createLazyImportLoader<SkillsFilterRuntime>(
+  () => import("./skills/filter.js"),
+);
+const skillsRefreshStateRuntimeLoader = createLazyImportLoader<SkillsRefreshStateRuntime>(
+  () => import("./skills/refresh-state.js"),
+);
+const skillsRemoteRuntimeLoader = createLazyImportLoader<SkillsRemoteRuntime>(
+  () => import("../infra/skills-remote.js"),
+);
+
+function createEmptySkillsSnapshot(params: {
+  skillFilter: string[];
+  version?: number;
+}): SkillSnapshot {
   return {
-    getRemoteSkillEligibility: remote.getRemoteSkillEligibility,
-    resolveReusableWorkspaceSkillSnapshot: sessionSnapshot.resolveReusableWorkspaceSkillSnapshot,
+    prompt: "",
+    skills: [],
+    resolvedSkills: [],
+    skillFilter: params.skillFilter,
+    version: params.version,
   };
-});
+}
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
   return attemptExecutionRuntimeLoader.load();
@@ -212,6 +223,18 @@ function loadExecDefaultsRuntime(): Promise<ExecDefaultsRuntime> {
 
 function loadSkillsRuntime(): Promise<SkillsRuntime> {
   return skillsRuntimeLoader.load();
+}
+
+function loadSkillsFilterRuntime(): Promise<SkillsFilterRuntime> {
+  return skillsFilterRuntimeLoader.load();
+}
+
+function loadSkillsRefreshStateRuntime(): Promise<SkillsRefreshStateRuntime> {
+  return skillsRefreshStateRuntimeLoader.load();
+}
+
+function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
+  return skillsRemoteRuntimeLoader.load();
 }
 
 async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDeps> {
@@ -338,27 +361,6 @@ function createAgentCommandSessionWorkingCopy(params: {
   return result;
 }
 
-function resolveExplicitAgentCommandSessionKey(params: {
-  rawExplicitSessionKey?: string;
-  agentIdOverride?: string;
-  shouldScopeDefaultAgentKey?: boolean;
-  cfg: OpenClawConfig;
-}): string | undefined {
-  if (
-    isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
-    !params.shouldScopeDefaultAgentKey
-  ) {
-    return params.rawExplicitSessionKey;
-  }
-  return scopeLegacySessionKeyToAgent({
-    agentId:
-      params.agentIdOverride ??
-      (params.shouldScopeDefaultAgentKey ? resolveDefaultAgentId(params.cfg) : undefined),
-    sessionKey: params.rawExplicitSessionKey,
-    mainKey: params.cfg.session?.mainKey,
-  });
-}
-
 async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
@@ -392,17 +394,16 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
       );
     }
   }
-  const shouldScopeDefaultAgentKey = Boolean(
+  const shouldScopeDefaultAgentKey =
     rawExplicitSessionKey &&
     !agentIdOverride &&
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
-    !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
-  );
-  const explicitSessionKey = resolveExplicitAgentCommandSessionKey({
-    rawExplicitSessionKey,
-    agentIdOverride,
-    shouldScopeDefaultAgentKey,
-    cfg,
+    !isUnscopedSessionKeySentinel(rawExplicitSessionKey);
+  const explicitSessionKey = scopeLegacySessionKeyToAgent({
+    agentId:
+      agentIdOverride ?? (shouldScopeDefaultAgentKey ? resolveDefaultAgentId(cfg) : undefined),
+    sessionKey: rawExplicitSessionKey,
+    mainKey: cfg.session?.mainKey,
   });
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
@@ -662,12 +663,10 @@ async function agentCommandInternal(
           throw agentPolicyError;
         }
 
-        const acpImageAttachments = resolveInlineAgentImageAttachments(opts.images);
         await acpManager.runTurn({
           cfg,
           sessionKey,
           text: body,
-          attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
           mode: "prompt",
           requestId: runId,
           signal: opts.abortSignal,
@@ -818,33 +817,55 @@ async function agentCommandInternal(
       });
     }
 
-    const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
+    const [{ getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion }, { matchesSkillFilter }] =
+      await Promise.all([loadSkillsRefreshStateRuntime(), loadSkillsFilterRuntime()]);
+    const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+    const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
-    const [
-      { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
-      { canExecRequestNode },
-    ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
-    const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir,
-      config: cfg,
-      agentId: sessionAgentId,
-      existingSnapshot: isNewSession ? undefined : currentSkillsSnapshot,
-      skillFilter,
-      eligibility: {
-        remote: getRemoteSkillEligibility({
-          advertiseExecNode: canExecRequestNode({
-            cfg,
-            sessionEntry,
-            sessionKey,
-            agentId: sessionAgentId,
+    const shouldRefreshSkillsSnapshot =
+      !currentSkillsSnapshot ||
+      shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
+      !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
+    const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
+    const emptySkillsFilter = skillFilter !== undefined && skillFilter.length === 0;
+    const buildSkillsSnapshot = async () => {
+      if (emptySkillsFilter) {
+        return createEmptySkillsSnapshot({
+          skillFilter,
+          version: skillsSnapshotVersion,
+        });
+      }
+      const [
+        { buildWorkspaceSkillSnapshot },
+        { getRemoteSkillEligibility },
+        { canExecRequestNode },
+      ] = await Promise.all([
+        loadSkillsRuntime(),
+        loadSkillsRemoteRuntime(),
+        loadExecDefaultsRuntime(),
+      ]);
+      return buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: cfg,
+        eligibility: {
+          remote: getRemoteSkillEligibility({
+            advertiseExecNode: canExecRequestNode({
+              cfg,
+              sessionEntry,
+              sessionKey,
+              agentId: sessionAgentId,
+            }),
           }),
-        }),
-      },
-      watch: false,
-    });
-    const needsSkillsSnapshot =
-      isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;
-    const skillsSnapshot = skillSnapshotState.snapshot;
+        },
+        snapshotVersion: skillsSnapshotVersion,
+        skillFilter,
+        agentId: sessionAgentId,
+      });
+    };
+    const skillsSnapshot = needsSkillsSnapshot
+      ? await buildSkillsSnapshot()
+      : !currentSkillsSnapshot
+        ? undefined
+        : await hydrateResolvedSkillsAsync(currentSkillsSnapshot, buildSkillsSnapshot);
 
     if (
       skillsSnapshot &&
@@ -1601,19 +1622,13 @@ async function agentCommandInternal(
     try {
       await fallbackTrajectoryRecorder?.flush();
 
-      const rotatedSessionFile = result.meta.agentMeta?.sessionFile;
-      const effectiveSessionId = rotatedSessionFile
-        ? (result.meta.agentMeta?.sessionId ?? sessionId)
-        : sessionId;
-      const effectiveSessionFile = rotatedSessionFile ?? attemptSessionFile;
-
       // Update token+model fields in the session store.
       if (sessionStore && sessionKey && !suppressVisibleSessionEffects) {
         const { updateSessionStoreAfterAgentRun } = await loadSessionStoreRuntime();
         await updateSessionStoreAfterAgentRun({
           cfg,
           contextTokensOverride: agentCfg?.contextTokens,
-          sessionId: effectiveSessionId,
+          sessionId,
           sessionKey,
           storePath,
           sessionStore,
@@ -1644,20 +1659,20 @@ async function agentCommandInternal(
           const transcriptSessionEntry: SessionEntry | undefined = suppressVisibleSessionEffects
             ? {
                 ...(sessionEntry ?? {
-                  sessionId: effectiveSessionId,
+                  sessionId,
                   updatedAt: Date.now(),
                   sessionStartedAt: Date.now(),
                 }),
-                sessionId: effectiveSessionId,
-                sessionFile: effectiveSessionFile,
+                sessionId,
+                sessionFile: attemptSessionFile,
               }
             : sessionEntry;
           sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
             body,
             transcriptBody,
             result,
-            sessionId: effectiveSessionId,
-            sessionKey: sessionKey ?? effectiveSessionId,
+            sessionId,
+            sessionKey: sessionKey ?? sessionId,
             sessionEntry: transcriptSessionEntry,
             sessionStore: suppressVisibleSessionEffects ? undefined : sessionStore,
             storePath: suppressVisibleSessionEffects ? undefined : storePath,
@@ -1681,8 +1696,8 @@ async function agentCommandInternal(
             await loadCliCompactionRuntime()
           ).runCliTurnCompactionLifecycle({
             cfg,
-            sessionId: effectiveSessionId,
-            sessionKey: sessionKey ?? effectiveSessionId,
+            sessionId,
+            sessionKey: sessionKey ?? sessionId,
             sessionEntry,
             sessionStore,
             storePath,
@@ -1753,7 +1768,7 @@ async function agentCommandInternal(
                 clone: false,
               });
               const freshEntry = freshStore[sessionKey];
-              if (!freshEntry || freshEntry.sessionId !== effectiveSessionId) {
+              if (!freshEntry || freshEntry.sessionId !== sessionId) {
                 return undefined;
               }
               sessionStore[sessionKey] = freshEntry;
@@ -1774,7 +1789,7 @@ async function agentCommandInternal(
         resolveFreshSessionEntryForDelivery
           ? {
               ...deliveryParams,
-              expectedSessionIdForFreshDelivery: effectiveSessionId,
+              expectedSessionIdForFreshDelivery: sessionId,
               resolveFreshSessionEntryForDelivery,
             }
           : deliveryParams,
@@ -1862,7 +1877,6 @@ export async function agentCommandFromIngress(
 export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
-  resolveExplicitAgentCommandSessionKey,
 };
 
 /** @deprecated Use `testing`. */

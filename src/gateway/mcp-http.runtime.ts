@@ -23,9 +23,6 @@ export function resolveMcpLoopbackScopedTools(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   messageProvider: string | undefined;
-  currentChannelId: string | undefined;
-  currentThreadTs: string | undefined;
-  currentMessageId: string | number | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
@@ -35,9 +32,6 @@ export function resolveMcpLoopbackScopedTools(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
-    currentChannelId: params.currentChannelId,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
     accountId: params.accountId,
     inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -58,9 +52,6 @@ export class McpLoopbackToolCache {
     cfg: OpenClawConfig;
     sessionKey: string;
     messageProvider: string | undefined;
-    currentChannelId: string | undefined;
-    currentThreadTs: string | undefined;
-    currentMessageId: string | number | undefined;
     accountId: string | undefined;
     inboundEventKind: InboundEventKind | undefined;
     sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
@@ -69,9 +60,6 @@ export class McpLoopbackToolCache {
     const cacheKey = [
       params.sessionKey,
       params.messageProvider ?? "",
-      params.currentChannelId ?? "",
-      params.currentThreadTs ?? "",
-      params.currentMessageId != null ? String(params.currentMessageId) : "",
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
@@ -87,9 +75,6 @@ export class McpLoopbackToolCache {
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       messageProvider: params.messageProvider,
-      currentChannelId: params.currentChannelId,
-      currentThreadTs: params.currentThreadTs,
-      currentMessageId: params.currentMessageId,
       accountId: params.accountId,
       inboundEventKind: params.inboundEventKind,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

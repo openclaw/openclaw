@@ -1004,7 +1004,7 @@ function refreshSessionEntryFromStore(params: {
     return fallbackEntry;
   }
   try {
-    const latestStore = loadSessionStore(storePath, { skipCache: true, clone: false });
+    const latestStore = loadSessionStore(storePath, { skipCache: true });
     const latestEntry = latestStore?.[sessionKey];
     if (!latestEntry) {
       return fallbackEntry;
@@ -1143,8 +1143,6 @@ export async function runReplyAgent(params: {
       await applySessionStoreEntryPatch({
         storePath,
         sessionKey,
-        skipMaintenance: true,
-        takeCacheOwnership: true,
         patch: { updatedAt },
       });
     }
@@ -1528,8 +1526,6 @@ export async function runReplyAgent(params: {
         await applySessionStoreEntryPatch({
           storePath,
           sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
           patch: {
             groupActivationNeedsSystemIntro: false,
             updatedAt,
@@ -1592,8 +1588,6 @@ export async function runReplyAgent(params: {
         await applySessionStoreEntryPatch({
           storePath,
           sessionKey,
-          skipMaintenance: true,
-          takeCacheOwnership: true,
           patch: {
             fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
             fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
@@ -1609,8 +1603,6 @@ export async function runReplyAgent(params: {
     const cliSessionBinding = usedCliProvider
       ? runResult.meta?.agentMeta?.cliSessionBinding
       : undefined;
-    const clearCliSessionBinding =
-      usedCliProvider && runResult.meta?.agentMeta?.clearCliSessionBinding === true;
     const runtimeContextTokens =
       typeof runResult.meta?.agentMeta?.contextTokens === "number" &&
       Number.isFinite(runResult.meta.agentMeta.contextTokens) &&
@@ -1646,7 +1638,6 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
-      clearCliSessionBinding,
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 

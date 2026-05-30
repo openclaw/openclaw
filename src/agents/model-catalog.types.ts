@@ -1,4 +1,4 @@
-import type { ModelApi, ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
+import type { ModelCompatConfig, ModelMediaInputConfig } from "../config/types.models.js";
 
 export type ModelInputType = "text" | "image" | "audio" | "video" | "document";
 
@@ -7,7 +7,6 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   alias?: string;
-  api?: ModelApi;
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;

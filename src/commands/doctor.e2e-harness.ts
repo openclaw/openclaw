@@ -206,15 +206,6 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetDir: "/tmp/state/agents/main/agent",
       hasLegacy: false,
     },
-    pluginStateSidecar: {
-      sourcePath: "/tmp/state/plugin-state/state.sqlite",
-      hasLegacy: false,
-    },
-    taskStateSidecars: {
-      taskRunsPath: "/tmp/state/tasks/runs.sqlite",
-      flowRunsPath: "/tmp/state/flows/registry.sqlite",
-      hasLegacy: false,
-    },
     channelPlans: {
       hasLegacy: false,
       plans: [],
@@ -251,7 +242,7 @@ vi.mock("@clack/prompts", () => ({
   select,
 }));
 
-vi.mock("../skills/discovery/status.js", () => ({
+vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: () => ({ skills: [] }),
 }));
 

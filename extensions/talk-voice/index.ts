@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -98,7 +97,12 @@ function asTrimmedString(value: unknown): string {
 }
 
 function parsePositiveIntegerToken(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
+  const trimmed = asTrimmedString(value);
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function resolveCommandLabel(channel: string): string {

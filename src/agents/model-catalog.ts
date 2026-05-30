@@ -223,7 +223,6 @@ export function loadManifestModelCatalog(params: {
       id: row.id,
       name: row.name,
       provider: row.provider,
-      api: row.api,
     };
     const contextWindow = row.contextWindow ?? row.contextTokens;
     if (contextWindow) {

@@ -10,10 +10,6 @@ import {
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
 import {
-  buildHistoryPrunePlanWithWorker,
-  computeAdaptiveChunkRatioWithWorker,
-} from "../compaction-planning-worker.js";
-import {
   hasMeaningfulConversationContent,
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
@@ -23,7 +19,9 @@ import {
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
   computeAdaptiveChunkRatio,
+  estimateMessagesTokens,
   isOversizedForSummary,
+  pruneHistoryForContextShare,
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
@@ -1073,18 +1071,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let droppedSummary: string | undefined;
 
       if (tokensBefore !== undefined) {
-        const prunePlan = await buildHistoryPrunePlanWithWorker({
-          messagesToSummarize,
-          turnPrefixMessages,
-          tokensBefore,
-          contextWindowTokens,
-          maxHistoryShare,
-          parts: 2,
-          signal,
-        });
-        const { newContentTokens, maxHistoryTokens, pruned } = prunePlan;
+        const summarizableTokens =
+          estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
+        const newContentTokens = Math.max(0, Math.floor(tokensBefore - summarizableTokens));
+        // Apply SAFETY_MARGIN so token underestimates don't trigger unnecessary pruning
+        const maxHistoryTokens = Math.floor(contextWindowTokens * maxHistoryShare * SAFETY_MARGIN);
 
-        if (newContentTokens > maxHistoryTokens && pruned) {
+        if (newContentTokens > maxHistoryTokens) {
+          const pruned = pruneHistoryForContextShare({
+            messages: messagesToSummarize,
+            maxContextTokens: contextWindowTokens,
+            maxHistoryShare,
+            parts: 2,
+          });
           if (pruned.droppedChunks > 0) {
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
             log.warn(
@@ -1098,11 +1097,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             // Summarize dropped messages so context isn't lost
             if (pruned.droppedMessagesList.length > 0) {
               try {
-                const droppedChunkRatio = await computeAdaptiveChunkRatioWithWorker({
-                  messages: pruned.droppedMessagesList,
-                  contextWindow: contextWindowTokens,
-                  signal,
-                });
+                const droppedChunkRatio = computeAdaptiveChunkRatio(
+                  pruned.droppedMessagesList,
+                  contextWindowTokens,
+                );
                 const droppedMaxChunkTokens = Math.max(
                   1,
                   Math.floor(contextWindowTokens * droppedChunkRatio) -
@@ -1157,11 +1155,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // the summarization prompt, system prompt, previous summary, and reasoning budget
       // that generateSummary adds on top of the serialized conversation chunk.
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
-      const adaptiveRatio = await computeAdaptiveChunkRatioWithWorker({
-        messages: allMessages,
-        contextWindow: contextWindowTokens,
-        signal,
-      });
+      const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
       const maxChunkTokens = Math.max(
         1,
         Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,

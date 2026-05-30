@@ -281,6 +281,7 @@ async function downloadOpenAIVideo(
 export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "openai",
+    aliases: ["openai-codex"],
     label: "OpenAI",
     defaultModel: DEFAULT_OPENAI_VIDEO_MODEL,
     models: [DEFAULT_OPENAI_VIDEO_MODEL, "sora-2-pro"],
@@ -288,7 +289,6 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       isProviderApiKeyConfigured({
         provider: "openai",
         agentDir,
-        profileTypes: ["api_key"],
       }),
     capabilities: {
       generate: {
@@ -319,9 +319,8 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
-        modelApi: "openai-responses",
       });
-      if (!auth.apiKey || (auth.mode !== undefined && auth.mode !== "api-key")) {
+      if (!auth.apiKey) {
         throw new Error("OpenAI API key missing");
       }
 

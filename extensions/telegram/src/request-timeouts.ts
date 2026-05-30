@@ -1,8 +1,3 @@
-import {
-  finiteSecondsToTimerSafeMilliseconds,
-  MAX_TIMER_TIMEOUT_MS,
-} from "openclaw/plugin-sdk/number-runtime";
-
 export const TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS = 45_000;
 const TELEGRAM_OUTBOUND_TEXT_REQUEST_TIMEOUT_MS = 60_000;
 const TELEGRAM_DEFAULT_LONG_POLL_TIMEOUT_SECONDS = 30;
@@ -39,11 +34,7 @@ function resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds: unknown): num
   if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {
     return undefined;
   }
-  return (
-    finiteSecondsToTimerSafeMilliseconds(Math.max(1, timeoutSeconds), {
-      floorSeconds: true,
-    }) ?? MAX_TIMER_TIMEOUT_MS
-  );
+  return Math.max(1, Math.floor(timeoutSeconds)) * 1000;
 }
 
 export function resolveTelegramRequestTimeoutMs(
@@ -79,6 +70,6 @@ export function resolveTelegramStartupProbeTimeoutMs(timeoutSeconds: unknown): n
   if (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds)) {
     return getMeTimeoutMs;
   }
-  const configuredTimeoutMs = resolveConfiguredTelegramRequestTimeoutMs(timeoutSeconds) ?? 1_000;
+  const configuredTimeoutMs = Math.max(1, Math.floor(timeoutSeconds)) * 1000;
   return Math.max(getMeTimeoutMs, configuredTimeoutMs);
 }

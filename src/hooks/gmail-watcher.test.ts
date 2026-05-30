@@ -16,7 +16,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-vi.mock("../skills/loading/config.js", () => ({
+vi.mock("../agents/skills.js", () => ({
   hasBinary: mocks.hasBinary,
 }));
 

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { note } from "../../packages/terminal-core/src/note.js";
 import {
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
@@ -10,6 +9,7 @@ import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { note } from "../terminal/note.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
@@ -89,15 +89,6 @@ export function shouldSkipPluginValidationForDoctorConfigPreflight(
   return isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS);
 }
 
-function noteStateMigrationResult(result: { changes: string[]; warnings: string[] }): void {
-  if (result.changes.length > 0) {
-    note(result.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
-  }
-}
-
 export async function runDoctorConfigPreflight(
   options: {
     migrateState?: boolean;
@@ -109,7 +100,12 @@ export async function runDoctorConfigPreflight(
   if (options.migrateState !== false) {
     const { autoMigrateLegacyStateDir } = await import("./doctor-state-migrations.js");
     const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
-    noteStateMigrationResult(stateDirResult);
+    if (stateDirResult.changes.length > 0) {
+      note(stateDirResult.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+    }
+    if (stateDirResult.warnings.length > 0) {
+      note(stateDirResult.warnings.map((entry) => `- ${entry}`).join("\n"), "Doctor warnings");
+    }
   }
 
   if (options.migrateLegacyConfig !== false) {
@@ -154,18 +150,8 @@ export async function runDoctorConfigPreflight(
     note(formatConfigIssueLines(warnings, "-").join("\n"), "Config warnings");
   }
 
-  const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
-  if (options.migrateState !== false) {
-    const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } =
-      await import("./doctor-state-migrations.js");
-    const stateResult = snapshot.valid
-      ? await autoMigrateLegacyState({ cfg: baseConfig, env: process.env })
-      : await autoMigrateLegacyTaskStateSidecars({ env: process.env });
-    noteStateMigrationResult(stateResult);
-  }
-
   return {
     snapshot,
-    baseConfig,
+    baseConfig: snapshot.sourceConfig ?? snapshot.config ?? {},
   };
 }

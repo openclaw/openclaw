@@ -26,7 +26,6 @@ export {
   normalizeFreshness,
   normalizeToIsoDate,
   parseIsoDateRange,
-  parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readProviderEnvValue,

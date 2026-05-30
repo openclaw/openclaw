@@ -6,7 +6,6 @@ import { GoogleGenAI, Modality } from "@google/genai";
 import { chromium, type Browser } from "playwright";
 import { createServer } from "vite";
 import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   parseStrictIntegerOption,
   previewForDevToolLog,
@@ -17,7 +16,6 @@ const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2";
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
 const DEFAULT_OPENAI_HTTP_TIMEOUT_MS = 30_000;
-const OPENAI_HTTP_RESPONSE_MAX_BYTES = 256 * 1024;
 const GOOGLE_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_GOOGLE_MODEL?.trim() ||
   "gemini-2.5-flash-native-audio-preview-12-2025";
@@ -51,25 +49,9 @@ function shortError(error: unknown): string {
   return previewForDevToolLog(error instanceof Error ? error.message : String(error), 800);
 }
 
-async function readBoundedText(
-  response: Response,
-  label: string,
-  maxBytes = OPENAI_HTTP_RESPONSE_MAX_BYTES,
-  signal?: AbortSignal,
-): Promise<string> {
-  return await readBoundedResponseText(response, label, maxBytes, {
-    createTooLargeError: (message) => new Error(message),
-    signal,
-  });
-}
-
-async function readBoundedJsonResponse(
-  response: Response,
-  label: string,
-  signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
-  const text = await readBoundedText(response, label, OPENAI_HTTP_RESPONSE_MAX_BYTES, signal);
-  return JSON.parse(text) as Record<string, unknown>;
+async function readBoundedText(response: Response): Promise<string> {
+  const text = await response.text();
+  return previewForDevToolLog(text, 600);
 }
 
 function resolveOpenAIHttpTimeoutMs(
@@ -142,18 +124,12 @@ async function createOpenAIClientSecret(
       });
       if (!response.ok) {
         throw new Error(
-          `OpenAI Realtime client secret failed (${response.status}): ${previewForDevToolLog(
-            await readBoundedText(
-              response,
-              "OpenAI Realtime client secret error",
-              OPENAI_HTTP_RESPONSE_MAX_BYTES,
-              signal,
-            ),
-            600,
+          `OpenAI Realtime client secret failed (${response.status}): ${await readBoundedText(
+            response,
           )}`,
         );
       }
-      return await readBoundedJsonResponse(response, "OpenAI Realtime client secret", signal);
+      return (await response.json()) as Record<string, unknown>;
     },
   });
   const nested =
@@ -219,56 +195,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
       const page = await context.newPage();
       await page.evaluate("globalThis.__name = (fn) => fn");
       const result = await page.evaluate(
-        async ({ clientSecret: secret, sdpAnswerMaxBytes, timeoutMs }) => {
-          const responseBodyTooLargeError = (label: string, maxBytes: number): Error =>
-            new Error(`${label} response body exceeded ${maxBytes} bytes`);
-          const readBoundedText = async (
-            response: Response,
-            label: string,
-            maxBytes: number,
-          ): Promise<string> => {
-            const contentLength = Number(response.headers.get("content-length") ?? "");
-            if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
-              await response.body?.cancel().catch(() => undefined);
-              throw responseBodyTooLargeError(label, maxBytes);
-            }
-            if (!response.body) {
-              return "";
-            }
-
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            const chunks: string[] = [];
-            let totalBytes = 0;
-            let canceled = false;
-
-            try {
-              for (;;) {
-                const { done, value } = await reader.read();
-                if (done) {
-                  const tail = decoder.decode();
-                  if (tail) {
-                    chunks.push(tail);
-                  }
-                  break;
-                }
-
-                totalBytes += value.byteLength;
-                if (totalBytes > maxBytes) {
-                  canceled = true;
-                  await reader.cancel().catch(() => undefined);
-                  throw responseBodyTooLargeError(label, maxBytes);
-                }
-                chunks.push(decoder.decode(value, { stream: true }));
-              }
-            } finally {
-              if (!canceled) {
-                reader.releaseLock();
-              }
-            }
-
-            return chunks.join("");
-          };
+        async ({ clientSecret: secret, timeoutMs }) => {
           const withBrowserTimeout = async <T>(
             label: string,
             run: (signal: AbortSignal) => Promise<T>,
@@ -341,11 +268,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
                 if (!response.ok) {
                   throw new Error(`OpenAI Realtime SDP offer failed (${response.status})`);
                 }
-                return await readBoundedText(
-                  response,
-                  "OpenAI Realtime SDP answer",
-                  sdpAnswerMaxBytes,
-                );
+                return await response.text();
               },
             );
             await peer.setRemoteDescription({ type: "answer", sdp: answer });
@@ -360,11 +283,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
             media?.getTracks().forEach((track) => track.stop());
           }
         },
-        {
-          clientSecret,
-          sdpAnswerMaxBytes: OPENAI_HTTP_RESPONSE_MAX_BYTES,
-          timeoutMs: openAIHttpTimeoutMs,
-        },
+        { clientSecret, timeoutMs: openAIHttpTimeoutMs },
       );
       return {
         name: "openai-webrtc-browser",
@@ -758,8 +677,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
-  OPENAI_HTTP_RESPONSE_MAX_BYTES,
   createOpenAIClientSecret,
-  readBoundedText,
   resolveOpenAIHttpTimeoutMs,
 };

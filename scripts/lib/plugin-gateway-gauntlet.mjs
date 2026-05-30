@@ -225,13 +225,11 @@ function collectMetricObservations(rows, thresholds = {}) {
   const wallAnomalyMultiplier = thresholds.wallAnomalyMultiplier ?? 3;
   const maxRssWarnMb = thresholds.maxRssWarnMb ?? null;
   const rssAnomalyMultiplier = thresholds.rssAnomalyMultiplier ?? 2.5;
-  const firstWorkRow = rows.find((row) => row.phase !== "prebuild");
   const observations = [];
   for (const [phase, phaseRows] of groupByPhase(rows)) {
     const wallMedianMs = median(phaseRows.map((row) => row.wallMs));
     const rssMedianMb = median(phaseRows.map((row) => row.maxRssMb));
     for (const row of phaseRows) {
-      const coldStart = row === firstWorkRow;
       const cpuCoreRatio =
         phase === "qa:rpc" && typeof row.qaMetrics?.gatewayCpuCoreRatio === "number"
           ? row.qaMetrics.gatewayCpuCoreRatio
@@ -252,7 +250,6 @@ function collectMetricObservations(rows, thresholds = {}) {
           phase,
           cpuCoreRatio,
           wallMs,
-          ...(coldStart ? { coldStart } : {}),
         });
       }
       if (
@@ -268,7 +265,6 @@ function collectMetricObservations(rows, thresholds = {}) {
           wallMs: row.wallMs,
           medianWallMs: wallMedianMs,
           multiplier: wallAnomalyMultiplier,
-          ...(coldStart ? { coldStart } : {}),
         });
       }
       if (
@@ -282,7 +278,6 @@ function collectMetricObservations(rows, thresholds = {}) {
           phase,
           maxRssMb: row.maxRssMb,
           thresholdMb: maxRssWarnMb,
-          ...(coldStart ? { coldStart } : {}),
         });
       }
       if (
@@ -299,7 +294,6 @@ function collectMetricObservations(rows, thresholds = {}) {
           maxRssMb: row.maxRssMb,
           medianRssMb: rssMedianMb,
           multiplier: rssAnomalyMultiplier,
-          ...(coldStart ? { coldStart } : {}),
         });
       }
     }

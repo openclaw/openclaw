@@ -1,9 +1,6 @@
 import { confirm, select } from "@clack/prompts";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-} from "../../packages/terminal-core/src/prompt-style.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
 import {
   resolveDoctorRepairMode,
   shouldAutoApproveDoctorFix,

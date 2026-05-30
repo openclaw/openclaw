@@ -1,6 +1,5 @@
 import { URL } from "node:url";
 import type { GatewayConfig } from "../config/types.gateway.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -24,10 +23,6 @@ type ApnsRelayConfigResolution =
   | { ok: true; value: ApnsRelayConfig }
   | { ok: false; error: string };
 
-type ApnsRelayConfigResolutionOptions = {
-  registrationRelayOrigin?: string;
-};
-
 export type ApnsRelayPushResponse = {
   ok: boolean;
   status: number;
@@ -50,7 +45,6 @@ export type ApnsRelayRequestSender = (params: {
   payload: object;
 }) => Promise<ApnsRelayPushResponse>;
 
-export const DEFAULT_APNS_RELAY_BASE_URL = "https://ios-push-relay.openclaw.ai";
 const DEFAULT_APNS_RELAY_TIMEOUT_MS = 10_000;
 const GATEWAY_DEVICE_ID_HEADER = "x-openclaw-gateway-device-id";
 const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
@@ -72,7 +66,10 @@ function normalizeTimeoutMs(value: string | number | undefined): number {
     return DEFAULT_APNS_RELAY_TIMEOUT_MS;
   }
   const parsed = Number(raw);
-  return resolveTimerTimeoutMs(parsed, DEFAULT_APNS_RELAY_TIMEOUT_MS, 1000);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_APNS_RELAY_TIMEOUT_MS;
+  }
+  return Math.max(1000, Math.trunc(parsed));
 }
 
 function readAllowHttp(value: string | undefined): boolean {
@@ -96,10 +93,38 @@ function parseReason(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalString(value) : undefined;
 }
 
-export function normalizeApnsRelayBaseUrl(
-  baseUrl: string,
+function buildRelayGatewaySignaturePayload(params: {
+  gatewayDeviceId: string;
+  signedAtMs: number;
+  bodyJson: string;
+}): string {
+  return [
+    "openclaw-relay-send-v1",
+    params.gatewayDeviceId.trim(),
+    String(Math.trunc(params.signedAtMs)),
+    params.bodyJson,
+  ].join("\n");
+}
+
+export function resolveApnsRelayConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
-): { ok: true; value: string } | { ok: false; error: string } {
+  gatewayConfig?: GatewayConfig,
+): ApnsRelayConfigResolution {
+  const configuredRelay = gatewayConfig?.push?.apns?.relay;
+  const envBaseUrl = normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_BASE_URL);
+  const configBaseUrl = normalizeNonEmptyString(configuredRelay?.baseUrl);
+  const baseUrl = envBaseUrl ?? configBaseUrl;
+  const baseUrlSource = envBaseUrl
+    ? "OPENCLAW_APNS_RELAY_BASE_URL"
+    : "gateway.push.apns.relay.baseUrl";
+  if (!baseUrl) {
+    return {
+      ok: false,
+      error:
+        "APNs relay config missing: set gateway.push.apns.relay.baseUrl or OPENCLAW_APNS_RELAY_BASE_URL",
+    };
+  }
+
   try {
     const parsed = new URL(baseUrl);
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
@@ -122,87 +147,22 @@ export function normalizeApnsRelayBaseUrl(
     if (parsed.search || parsed.hash) {
       throw new Error("query and fragment are not allowed");
     }
-    return { ok: true, value: parsed.toString().replace(/\/+$/, "") };
+    return {
+      ok: true,
+      value: {
+        baseUrl: parsed.toString().replace(/\/+$/, ""),
+        timeoutMs: normalizeTimeoutMs(
+          env.OPENCLAW_APNS_RELAY_TIMEOUT_MS ?? configuredRelay?.timeoutMs,
+        ),
+      },
+    };
   } catch (err) {
-    return { ok: false, error: formatErrorMessage(err) };
-  }
-}
-
-function buildRelayGatewaySignaturePayload(params: {
-  gatewayDeviceId: string;
-  signedAtMs: number;
-  bodyJson: string;
-}): string {
-  return [
-    "openclaw-relay-send-v1",
-    params.gatewayDeviceId.trim(),
-    String(Math.trunc(params.signedAtMs)),
-    params.bodyJson,
-  ].join("\n");
-}
-
-export function resolveApnsRelayConfigFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  gatewayConfig?: GatewayConfig,
-  options: ApnsRelayConfigResolutionOptions = {},
-): ApnsRelayConfigResolution {
-  const configuredRelay = gatewayConfig?.push?.apns?.relay;
-  const envBaseUrl = normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_BASE_URL);
-  const configBaseUrl = normalizeNonEmptyString(configuredRelay?.baseUrl);
-  const explicitBaseUrl = envBaseUrl ?? configBaseUrl;
-  const normalizedRegistrationOrigin = options.registrationRelayOrigin
-    ? normalizeApnsRelayBaseUrl(options.registrationRelayOrigin, env)
-    : undefined;
-  if (normalizedRegistrationOrigin && !normalizedRegistrationOrigin.ok) {
+    const message = formatErrorMessage(err);
     return {
       ok: false,
-      error: `invalid relay registration origin (${options.registrationRelayOrigin}): ${normalizedRegistrationOrigin.error}`,
+      error: `invalid ${baseUrlSource} (${baseUrl}): ${message}`,
     };
   }
-
-  const baseUrl =
-    explicitBaseUrl ??
-    (normalizedRegistrationOrigin?.value === DEFAULT_APNS_RELAY_BASE_URL
-      ? DEFAULT_APNS_RELAY_BASE_URL
-      : undefined);
-  const baseUrlSource = envBaseUrl
-    ? "OPENCLAW_APNS_RELAY_BASE_URL"
-    : configBaseUrl
-      ? "gateway.push.apns.relay.baseUrl"
-      : "default APNs relay base URL";
-  if (!baseUrl) {
-    return {
-      ok: false,
-      error:
-        "APNs relay config missing: set gateway.push.apns.relay.baseUrl or OPENCLAW_APNS_RELAY_BASE_URL for relay registrations without the hosted relay origin",
-    };
-  }
-
-  const normalizedBaseUrl = normalizeApnsRelayBaseUrl(baseUrl, env);
-  if (!normalizedBaseUrl.ok) {
-    return {
-      ok: false,
-      error: `invalid ${baseUrlSource} (${baseUrl}): ${normalizedBaseUrl.error}`,
-    };
-  }
-  if (
-    normalizedRegistrationOrigin &&
-    normalizedRegistrationOrigin.value !== normalizedBaseUrl.value
-  ) {
-    return {
-      ok: false,
-      error: `APNs relay config origin mismatch: registration uses ${normalizedRegistrationOrigin.value} but ${baseUrlSource} is ${normalizedBaseUrl.value}`,
-    };
-  }
-  return {
-    ok: true,
-    value: {
-      baseUrl: normalizedBaseUrl.value,
-      timeoutMs: normalizeTimeoutMs(
-        env.OPENCLAW_APNS_RELAY_TIMEOUT_MS ?? configuredRelay?.timeoutMs,
-      ),
-    },
-  };
 }
 
 async function sendApnsRelayRequest(params: {

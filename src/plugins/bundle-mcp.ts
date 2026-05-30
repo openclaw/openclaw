@@ -17,7 +17,6 @@ import {
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 
 export type BundleMcpServerConfig = Record<string, unknown>;
@@ -291,12 +290,10 @@ export function inspectBundleMcpRuntimeSupport(params: {
 export function loadEnabledBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): EnabledBundleMcpConfigResult {
   return loadEnabledBundleConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
-    manifestRegistry: params.manifestRegistry,
     createEmptyConfig: () => ({ mcpServers: {} }),
     loadBundleConfig: loadBundleMcpConfig,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),

@@ -1,4 +1,3 @@
-import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolPolicy,
@@ -91,14 +90,6 @@ export type GoogleMeetConfig = {
     tokenPath?: string;
   };
 };
-
-export function resolveGoogleMeetGatewayOperationTimeoutMs(config: GoogleMeetConfig): number {
-  return Math.max(
-    60_000,
-    addTimerTimeoutGraceMs(config.chrome.joinTimeoutMs, 30_000) ?? 1,
-    addTimerTimeoutGraceMs(config.voiceCall.requestTimeoutMs, 10_000) ?? 1,
-  );
-}
 
 const SOX_DEFAULT_BUFFER_BYTES = 8192;
 const SOX_MIN_BUFFER_BYTES = 17;

@@ -771,7 +771,7 @@ export async function runCli(argv: string[] = process.argv) {
           import("./failure-output.js"),
           import("../infra/fatal-error-hooks.js"),
           import("../infra/unhandled-rejections.js"),
-          import("../../packages/terminal-core/src/restore.js"),
+          import("../terminal/restore.js"),
         ]),
       );
       const program = await startupTrace.measure("build-program", () => buildProgram());

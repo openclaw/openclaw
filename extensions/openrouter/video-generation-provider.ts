@@ -10,7 +10,6 @@ import {
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
@@ -33,7 +32,6 @@ const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 const SUPPORTED_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const OPENROUTER_VIDEO_MALFORMED_RESPONSE = "OpenRouter video generation response malformed";
 const SUPPORTED_DURATION_SECONDS = [4, 6, 8] as const;
@@ -351,36 +349,13 @@ function resolveOpenRouterContentUrl(params: { baseUrl: string; jobId: string })
   );
 }
 
-function resolveDeliverableOpenRouterVideoUrl(value: string | undefined): string | undefined {
-  const normalized = normalizeOptionalString(value);
-  if (!normalized) {
-    return undefined;
-  }
-  try {
-    const url = new URL(normalized);
-    return url.protocol === "https:" || url.protocol === "http:" ? normalized : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
-}
-
 async function downloadOpenRouterVideo(params: {
   url: string;
-  deliveryUrl?: string;
   baseUrl: string;
   headers: Headers;
   timeoutMs: number;
   allowPrivateNetwork: boolean;
   dispatcherPolicy: OpenRouterVideoDispatcherPolicy;
-  maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
   const { response, release } = await fetchOpenRouterVideoGet({
     ...params,
@@ -389,30 +364,11 @@ async function downloadOpenRouterVideo(params: {
   try {
     await assertOkOrThrowHttpError(response, "OpenRouter generated video download failed");
     const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-    const fileName = `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`;
-    let exceededMaxBytes = false;
-    let buffer: Buffer;
-    try {
-      buffer = await readResponseWithLimit(response, params.maxBytes, {
-        onOverflow: ({ maxBytes }) => {
-          exceededMaxBytes = true;
-          return new Error(`OpenRouter generated video download exceeds ${maxBytes} bytes`);
-        },
-      });
-    } catch (error) {
-      if (exceededMaxBytes && params.deliveryUrl) {
-        return {
-          url: params.deliveryUrl,
-          mimeType,
-          fileName,
-        };
-      }
-      throw error;
-    }
+    const buffer = Buffer.from(await response.arrayBuffer());
     return {
       buffer,
       mimeType,
-      fileName,
+      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
     };
   } finally {
     await release();
@@ -548,12 +504,11 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
                 dispatcherPolicy,
               });
         const completedJobId = normalizeOptionalString(completed.id) ?? jobId;
-        const unsignedUrl = completed.unsigned_urls?.find((url) => normalizeOptionalString(url));
         const videoUrl =
-          unsignedUrl ?? resolveOpenRouterContentUrl({ baseUrl, jobId: completedJobId });
+          completed.unsigned_urls?.find((url) => normalizeOptionalString(url)) ??
+          resolveOpenRouterContentUrl({ baseUrl, jobId: completedJobId });
         const video = await downloadOpenRouterVideo({
           url: videoUrl,
-          deliveryUrl: resolveDeliverableOpenRouterVideoUrl(unsignedUrl),
           baseUrl,
           headers,
           timeoutMs: resolveProviderOperationTimeoutMs({
@@ -562,7 +517,6 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
           }),
           allowPrivateNetwork,
           dispatcherPolicy,
-          maxBytes: resolveGeneratedVideoMaxBytes(req),
         });
 
         return {

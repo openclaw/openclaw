@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeOptionalString,
@@ -257,8 +256,11 @@ function pruneToLimit(polls: Record<string, MSTeamsPoll>) {
 export function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
-    .map((entry) => parseStrictNonNegativeInteger(entry))
-    .filter((value): value is number => value !== undefined)
+    .map((entry) => {
+      const trimmed = entry.trim();
+      return /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    })
+    .filter((value) => Number.isSafeInteger(value))
     .filter((value) => value >= 0 && value < poll.options.length)
     .map((value) => String(value));
   const limited = maxSelections > 1 ? mapped.slice(0, maxSelections) : mapped.slice(0, 1);

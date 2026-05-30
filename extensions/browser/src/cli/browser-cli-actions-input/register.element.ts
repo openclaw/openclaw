@@ -1,10 +1,6 @@
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  parseBrowserNonNegativeIntegerOption,
-  parseBrowserPositiveIntegerOption,
-  type BrowserParentOpts,
-} from "../browser-cli-shared.js";
+import type { BrowserParentOpts } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
 import {
   callBrowserAct,
@@ -32,6 +28,24 @@ export function registerBrowserElementCommands(
       defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
       defaultRuntime.exit(1);
       return undefined;
+    }
+    return parsed;
+  };
+
+  const parseNonNegativeIntegerOption = (value: string, flag: string): number => {
+    const trimmed = value.trim();
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (!Number.isSafeInteger(parsed)) {
+      throw new Error(`${flag} must be a non-negative integer.`);
+    }
+    return parsed;
+  };
+
+  const parsePositiveIntegerOption = (value: string, flag: string): number => {
+    const trimmed = value.trim();
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (!Number.isSafeInteger(parsed) || parsed < 1) {
+      throw new Error(`${flag} must be a positive integer.`);
     }
     return parsed;
   };
@@ -107,7 +121,7 @@ export function registerBrowserElementCommands(
     .option("--double", "Double click", false)
     .option("--button <left|right|middle>", "Mouse button to use")
     .option("--delay-ms <ms>", "Delay between mouse down/up", (v: string) =>
-      parseBrowserNonNegativeIntegerOption(v, "--delay-ms"),
+      parseNonNegativeIntegerOption(v, "--delay-ms"),
     )
     .action(async (xRaw: string, yRaw: string, opts, cmd) => {
       const x = parseRequiredNumber(xRaw, "x");
@@ -193,7 +207,7 @@ export function registerBrowserElementCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option("--timeout-ms <ms>", "How long to wait for scroll (default: 20000)", (v: string) =>
-      parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
+      parsePositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (ref: string | undefined, opts, cmd) => {
       const refValue = requireRef(ref);

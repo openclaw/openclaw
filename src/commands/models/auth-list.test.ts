@@ -147,7 +147,7 @@ describe("modelsAuthListCommand", () => {
 
     expect(mocks.externalCliDiscoveryForProviderAuth).toHaveBeenCalledWith({
       cfg: {},
-      provider: "openai",
+      provider: "openai-codex",
     });
     expect(runtime.jsonPayloads).toStrictEqual([
       {
@@ -186,49 +186,6 @@ describe("modelsAuthListCommand", () => {
       "Agent: main",
       "Auth state file: /tmp/openclaw/agents/main/auth-state.json",
       "Profiles: (none)",
-    ]);
-  });
-
-  it("omits Date-invalid auth timestamps without failing", async () => {
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles: {
-        "openai-codex:user@example.com": {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "access-secret",
-          refresh: "refresh-secret",
-          expires: 8_700_000_000_000_000,
-          email: "user@example.com",
-        },
-      },
-      usageStats: {
-        "openai-codex:user@example.com": {
-          cooldownUntil: 8_700_000_000_000_000,
-        },
-      },
-    };
-    mocks.ensureAuthProfileStore.mockReturnValue(store);
-    const runtime = createRuntime();
-
-    await modelsAuthListCommand({ provider: "openai-codex", json: true }, runtime);
-
-    expect(runtime.jsonPayloads).toStrictEqual([
-      {
-        agentDir: "/tmp/openclaw/agents/main",
-        agentId: "main",
-        authStatePath: "/tmp/openclaw/agents/main/auth-state.json",
-        profiles: [
-          {
-            email: "user@example.com",
-            id: "openai-codex:user@example.com",
-            label: "openai-codex:user@example.com",
-            provider: "openai-codex",
-            type: "oauth",
-          },
-        ],
-        provider: "openai-codex",
-      },
     ]);
   });
 });

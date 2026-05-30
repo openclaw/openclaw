@@ -271,7 +271,7 @@ export type FileSecretProviderConfig = {
   allowInsecurePath?: boolean;
 };
 
-export type ManualExecSecretProviderConfig = {
+export type ExecSecretProviderConfig = {
   source: "exec";
   command: string;
   args?: string[];
@@ -285,18 +285,6 @@ export type ManualExecSecretProviderConfig = {
   allowInsecurePath?: boolean;
   allowSymlinkCommand?: boolean;
 };
-
-export type PluginIntegrationSecretProviderConfig = {
-  source: "exec";
-  pluginIntegration: {
-    pluginId: string;
-    integrationId: string;
-  };
-};
-
-export type ExecSecretProviderConfig =
-  | ManualExecSecretProviderConfig
-  | PluginIntegrationSecretProviderConfig;
 
 export type SecretProviderConfig =
   | EnvSecretProviderConfig

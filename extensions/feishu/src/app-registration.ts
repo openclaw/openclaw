@@ -1,4 +1,3 @@
-import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 /**
  * Feishu app registration via OAuth device-code flow.
  *
@@ -20,8 +19,6 @@ const LARK_ACCOUNTS_URL = "https://accounts.larksuite.com";
 const REGISTRATION_PATH = "/oauth/v1/app/registration";
 
 const REQUEST_TIMEOUT_MS = 10_000;
-const DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS = 5;
-const DEFAULT_REGISTRATION_EXPIRE_SECONDS = 600;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -154,14 +151,8 @@ export async function beginAppRegistration(domain: FeishuDomain = "feishu"): Pro
     deviceCode: res.device_code,
     qrUrl: qrUrl.toString(),
     userCode: res.user_code,
-    interval:
-      finiteSecondsToTimerSafeMilliseconds(res.interval) === undefined
-        ? DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS
-        : res.interval,
-    expireIn:
-      finiteSecondsToTimerSafeMilliseconds(res.expire_in) === undefined
-        ? DEFAULT_REGISTRATION_EXPIRE_SECONDS
-        : res.expire_in,
+    interval: res.interval || 5,
+    expireIn: res.expire_in || 600,
   };
 }
 
@@ -184,11 +175,7 @@ export async function pollAppRegistration(params: {
   let domain: FeishuDomain = initialDomain;
   let domainSwitched = false;
 
-  const expireInMs =
-    finiteSecondsToTimerSafeMilliseconds(expireIn) ??
-    finiteSecondsToTimerSafeMilliseconds(DEFAULT_REGISTRATION_EXPIRE_SECONDS) ??
-    REQUEST_TIMEOUT_MS;
-  const deadline = Date.now() + expireInMs;
+  const deadline = Date.now() + expireIn * 1000;
 
   while (Date.now() < deadline) {
     if (abortSignal?.aborted) {
@@ -206,7 +193,7 @@ export async function pollAppRegistration(params: {
       });
     } catch {
       // Transient network error — keep polling.
-      await sleepRegistrationPollInterval(currentInterval);
+      await sleep(currentInterval * 1000);
       continue;
     }
 
@@ -252,7 +239,7 @@ export async function pollAppRegistration(params: {
       }
     }
 
-    await sleepRegistrationPollInterval(currentInterval);
+    await sleep(currentInterval * 1000);
   }
 
   return { status: "timeout" };
@@ -341,12 +328,4 @@ export async function getAppOwnerOpenId(params: {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function sleepRegistrationPollInterval(intervalSeconds: number): Promise<void> {
-  const intervalMs =
-    finiteSecondsToTimerSafeMilliseconds(intervalSeconds) ??
-    finiteSecondsToTimerSafeMilliseconds(DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS) ??
-    REQUEST_TIMEOUT_MS;
-  return sleep(intervalMs);
 }

@@ -335,7 +335,6 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           sessionFile: params.sessionFile,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
-          agentId: params.agentId,
           config: params.config,
           request,
         });

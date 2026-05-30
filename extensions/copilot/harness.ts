@@ -7,7 +7,6 @@ import type {
   AgentHarnessCompactResult,
   AgentHarnessResetParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveCopilotAuth } from "./src/auth-bridge.js";
 import { writeOpenClawCompactionMarker } from "./src/compaction-bridge.js";
 import type { CopilotClientPool, CopilotClientPoolOptions, PooledClient } from "./src/runtime.js";
@@ -22,7 +21,6 @@ export interface CreateCopilotAgentHarnessOptions {
   pluginConfig?: unknown;
   pool?: CopilotClientPool;
   poolOptions?: CopilotClientPoolOptions;
-  sessionStore?: CopilotSessionBindingStore;
 }
 
 interface TrackedSession {
@@ -36,86 +34,6 @@ interface TrackedSession {
   // `createSession` (no resume injection) and the new sdkSessionId
   // replaces this entry via `onSessionEstablished`.
   compatKey: string;
-}
-
-export type CopilotSessionBinding = {
-  schemaVersion: 1;
-  sdkSessionId: string;
-  compatKey: string;
-  updatedAt: number;
-};
-
-type CopilotSessionBindingStore = Pick<
-  PluginStateSyncKeyedStore<CopilotSessionBinding>,
-  "delete" | "lookup" | "register"
->;
-
-function normalizeBinding(
-  value: CopilotSessionBinding | undefined,
-): CopilotSessionBinding | undefined {
-  if (
-    !value ||
-    value.schemaVersion !== 1 ||
-    typeof value.sdkSessionId !== "string" ||
-    value.sdkSessionId.trim() === "" ||
-    typeof value.compatKey !== "string" ||
-    value.compatKey.trim() === "" ||
-    typeof value.updatedAt !== "number" ||
-    !Number.isFinite(value.updatedAt)
-  ) {
-    return undefined;
-  }
-  return {
-    schemaVersion: 1,
-    sdkSessionId: value.sdkSessionId.trim(),
-    compatKey: value.compatKey,
-    updatedAt: value.updatedAt,
-  };
-}
-
-function lookupStoredBinding(
-  store: CopilotSessionBindingStore | undefined,
-  key: string,
-): CopilotSessionBinding | undefined {
-  try {
-    return normalizeBinding(store?.lookup(key));
-  } catch {
-    try {
-      store?.delete(key);
-    } catch {
-      // Durable binding cleanup is best-effort; the turn can create a fresh SDK session.
-    }
-    return undefined;
-  }
-}
-
-function registerStoredBinding(
-  store: CopilotSessionBindingStore | undefined,
-  key: string,
-  binding: CopilotSessionBinding,
-): boolean {
-  try {
-    store?.register(key, binding);
-    return true;
-  } catch {
-    try {
-      store?.delete(key);
-    } catch {
-      // A failed invalidation just degrades to in-memory reuse for this process.
-    }
-    // The in-memory binding still keeps this process warm; persistence is an optimization.
-    return false;
-  }
-}
-
-function deleteStoredBinding(store: CopilotSessionBindingStore | undefined, key: string): boolean {
-  try {
-    store?.delete(key);
-    return true;
-  } catch {
-    // Reset must still clear tracked SDK sessions even if plugin state is unhealthy.
-    return false;
-  }
 }
 
 // Build a string fingerprint of the attempt params that must agree
@@ -165,8 +83,6 @@ function computeSessionCompatKey(params: AgentHarnessAttemptParams): string {
   // (would break the deterministic equality check). Use a stable
   // sentinel that will never match any previously-tracked compat key.
   let authParts: string[];
-  let resolvedAgentId = "";
-  let resolvedCopilotHome = "";
   try {
     const resolved = resolveCopilotAuth({
       agentId: typeof p.agentId === "string" ? p.agentId : undefined,
@@ -178,8 +94,6 @@ function computeSessionCompatKey(params: AgentHarnessAttemptParams): string {
       authProfileId: typeof p.authProfileId === "string" ? p.authProfileId : undefined,
       profileVersion: typeof p.profileVersion === "string" ? p.profileVersion : undefined,
     });
-    resolvedAgentId = resolved.agentId;
-    resolvedCopilotHome = resolved.copilotHome;
     authParts = [
       `auth.mode=${resolved.authMode}`,
       `auth.profileId=${resolved.authProfileId ?? ""}`,
@@ -193,10 +107,8 @@ function computeSessionCompatKey(params: AgentHarnessAttemptParams): string {
     `model=${modelObj.id ?? ""}`,
     `api=${modelObj.api ?? ""}`,
     `cwd=${p.cwd ?? p.workspaceDir ?? ""}`,
-    `agentId=${resolvedAgentId}`,
     `agentDir=${p.agentDir ?? ""}`,
     `copilotHome=${p.copilotHome ?? ""}`,
-    `resolvedCopilotHome=${resolvedCopilotHome}`,
     ...authParts,
   ];
   return parts.join("|");
@@ -215,7 +127,6 @@ export function createCopilotAgentHarness(
   // runCopilotAttempt via the onSessionEstablished callback so that
   // reset(params) can call client.deleteSession on the right client.
   const trackedSessions = new Map<string, TrackedSession>();
-  const resetBlockedStoredSessions = new Set<string>();
 
   async function getPool(): Promise<CopilotClientPool> {
     if (options?.pool) {
@@ -290,17 +201,8 @@ export function createCopilotAgentHarness(
         //     surfaces as a prompt error.
         const currentCompatKey = computeSessionCompatKey(params);
         const tracked = openclawSessionId ? trackedSessions.get(openclawSessionId) : undefined;
-        const stored = openclawSessionId
-          ? resetBlockedStoredSessions.has(openclawSessionId)
-            ? undefined
-            : lookupStoredBinding(options?.sessionStore, openclawSessionId)
-          : undefined;
         const resumableSessionId =
-          tracked && tracked.compatKey === currentCompatKey
-            ? tracked.sdkSessionId
-            : !tracked && stored && stored.compatKey === currentCompatKey
-              ? stored.sdkSessionId
-              : undefined;
+          tracked && tracked.compatKey === currentCompatKey ? tracked.sdkSessionId : undefined;
         const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
           ? ({
               ...params,
@@ -326,15 +228,6 @@ export function createCopilotAgentHarness(
                   client: pooledClient.client,
                   compatKey: currentCompatKey,
                 });
-                const persisted = registerStoredBinding(options?.sessionStore, openclawSessionId, {
-                  schemaVersion: 1,
-                  sdkSessionId,
-                  compatKey: currentCompatKey,
-                  updatedAt: Date.now(),
-                });
-                if (persisted) {
-                  resetBlockedStoredSessions.delete(openclawSessionId);
-                }
               }
             : undefined,
         });
@@ -353,11 +246,6 @@ export function createCopilotAgentHarness(
         return;
       }
       const tracked = trackedSessions.get(openclawSessionId);
-      if (deleteStoredBinding(options?.sessionStore, openclawSessionId)) {
-        resetBlockedStoredSessions.delete(openclawSessionId);
-      } else {
-        resetBlockedStoredSessions.add(openclawSessionId);
-      }
       if (!tracked) {
         // Session was created by a different harness, or already reset.
         return;
@@ -438,7 +326,6 @@ export function createCopilotAgentHarness(
           await Promise.allSettled(inFlight);
         }
         trackedSessions.clear();
-        resetBlockedStoredSessions.clear();
         if (createdPool) {
           const errors = await createdPool.dispose();
           if (errors.length > 0) {

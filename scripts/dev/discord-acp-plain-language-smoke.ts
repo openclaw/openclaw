@@ -15,7 +15,6 @@ import {
   redactForDevToolLog,
   redactHomePath,
 } from "../lib/dev-tooling-safety.ts";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);
@@ -136,7 +135,6 @@ type FailureResult = {
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_OPENCLAW_CLI_TIMEOUT_MS = 60_000;
-const DISCORD_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 const WEBHOOK_CLEANUP_TIMEOUT_MS = 10_000;
 
 function sleep(ms: number): Promise<void> {
@@ -185,41 +183,6 @@ async function withTimeout<T>(params: {
 
 function parseNumber(value: string | undefined, fallback: number, label: string): number {
   return parseStrictIntegerOption({ fallback, label, min: 1, raw: value });
-}
-
-function createDiscordResponseTooLargeError(message: string): Error {
-  const error = new Error(message);
-  (error as NodeJS.ErrnoException).code = "ETOOBIG";
-  return error;
-}
-
-function isTooLargeError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "ETOOBIG";
-}
-
-async function readDiscordResponseText(params: {
-  response: Response;
-  label: string;
-  signal: AbortSignal;
-  maxBytes: number;
-}): Promise<string> {
-  return await readBoundedResponseText(params.response, params.label, params.maxBytes, {
-    createTooLargeError: createDiscordResponseTooLargeError,
-    signal: params.signal,
-  });
-}
-
-async function readDiscordResponseJson(params: {
-  response: Response;
-  label: string;
-  signal: AbortSignal;
-  maxBytes: number;
-}): Promise<unknown> {
-  const text = await readDiscordResponseText(params);
-  if (!text) {
-    return {};
-  }
-  return JSON.parse(text);
 }
 
 function resolveStateDir(): string {
@@ -495,14 +458,12 @@ async function requestDiscordJson<T>(params: {
   retries?: number;
   timeoutMs?: number;
   errorPrefix: string;
-  responseBodyMaxBytes?: number;
   fetchImpl?: typeof fetch;
   sleepImpl?: (ms: number) => Promise<void>;
 }): Promise<T> {
   const retries = params.retries ?? 6;
   const fetchImpl = params.fetchImpl ?? fetch;
   const sleepImpl = params.sleepImpl ?? sleep;
-  const responseBodyMaxBytes = params.responseBodyMaxBytes ?? DISCORD_RESPONSE_BODY_MAX_BYTES;
   const deadlineMs = Date.now() + (params.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
   const timeoutError = () =>
     new Error(
@@ -527,42 +488,20 @@ async function requestDiscordJson<T>(params: {
     if (response.status === 429) {
       const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
       const body = (await withTimeout({
-        operation: readDiscordResponseJson({
-          response,
-          label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
-          signal: controller.signal,
-          maxBytes: responseBodyMaxBytes,
-        }).catch((error) => {
-          if (isTooLargeError(error)) {
-            throw error;
-          }
-          return {};
-        }),
+        operation: response.json().catch(() => ({})),
         timeoutMs: bodyTimeoutMs,
         timeoutError,
         onTimeout: () => controller.abort(),
       })) as { retry_after?: number };
       const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
-      const waitMs = Math.ceil(waitSeconds * 1000);
-      const remainingMs = remainingTimeoutMs(deadlineMs);
-      if (waitMs >= remainingMs) {
-        throw new Error(
-          `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} exceeded total timeout before retry.`,
-        );
-      }
-      await sleepImpl(waitMs);
+      await sleepImpl(Math.min(Math.ceil(waitSeconds * 1000), remainingTimeoutMs(deadlineMs)));
       continue;
     }
 
     if (!response.ok) {
       const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
       const text = await withTimeout({
-        operation: readDiscordResponseText({
-          response,
-          label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
-          signal: controller.signal,
-          maxBytes: responseBodyMaxBytes,
-        }),
+        operation: response.text().catch(() => ""),
         timeoutMs: bodyTimeoutMs,
         timeoutError,
         onTimeout: () => controller.abort(),
@@ -580,12 +519,7 @@ async function requestDiscordJson<T>(params: {
 
     const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
     return (await withTimeout({
-      operation: readDiscordResponseJson({
-        response,
-        label: `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)}`,
-        signal: controller.signal,
-        maxBytes: responseBodyMaxBytes,
-      }),
+      operation: response.json(),
       timeoutMs: bodyTimeoutMs,
       timeoutError,
       onTimeout: () => controller.abort(),
@@ -1054,9 +988,7 @@ async function main(): Promise<number> {
 export const testing = {
   parseDriverMode,
   parseNumber,
-  DISCORD_RESPONSE_BODY_MAX_BYTES,
   redactDiscordApiPath,
-  readDiscordResponseText,
   remainingTimeoutMs,
   requestDiscordJson,
   resolveStateDir,

@@ -44,8 +44,11 @@ export type {
 export {
   AssistantMessageEventStream,
   createAssistantMessageEventStream,
-} from "../../packages/llm-core/src/utils/event-stream.js";
+} from "../llm/utils/event-stream.js";
 export { parseStreamingJson } from "../llm/utils/json-parse.js";
 export { createHttpProxyAgentsForTarget } from "../llm/utils/node-http-proxy.js";
 export { sanitizeSurrogates } from "../llm/utils/sanitize-unicode.js";
-export { validateToolArguments, validateToolCall } from "../../packages/llm-core/src/validation.js";
+export {
+  validateToolArguments,
+  validateToolCall,
+} from "../../packages/agent-core/src/validation.js";

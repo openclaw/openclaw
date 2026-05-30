@@ -1,5 +1,3 @@
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-
 export type TelegramTarget = {
   chatId: string;
   messageThreadId?: number;
@@ -104,32 +102,18 @@ export function parseTelegramTarget(to: string): TelegramTarget {
 
   const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
   if (topicMatch) {
-    const messageThreadId = parseStrictNonNegativeInteger(topicMatch[2]);
-    if (messageThreadId === undefined) {
-      return {
-        chatId: normalized,
-        chatType: resolveTelegramChatType(normalized),
-      };
-    }
     return {
       chatId: topicMatch[1],
-      messageThreadId,
+      messageThreadId: Number.parseInt(topicMatch[2], 10),
       chatType: resolveTelegramChatType(topicMatch[1]),
     };
   }
 
   const colonMatch = /^(.+):(\d+)$/.exec(normalized);
   if (colonMatch) {
-    const messageThreadId = parseStrictNonNegativeInteger(colonMatch[2]);
-    if (messageThreadId === undefined) {
-      return {
-        chatId: normalized,
-        chatType: resolveTelegramChatType(normalized),
-      };
-    }
     return {
       chatId: colonMatch[1],
-      messageThreadId,
+      messageThreadId: Number.parseInt(colonMatch[2], 10),
       chatType: resolveTelegramChatType(colonMatch[1]),
     };
   }

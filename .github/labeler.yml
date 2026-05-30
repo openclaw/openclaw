@@ -47,12 +47,6 @@
           - "extensions/meeting-notes/**"
           - "docs/plugins/meeting-notes.md"
           - "src/meeting-notes/**"
-"plugin: workboard":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/workboard/**"
-          - "docs/plugins/workboard.md"
-          - "docs/plugins/reference/workboard.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -355,11 +349,6 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
-"extensions: gmi":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/gmi/**"
-          - "docs/providers/gmi.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:
@@ -441,11 +430,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/nvidia/**"
-"extensions: novita":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/novita/**"
-          - "docs/providers/novita.md"
 "extensions: phone-control":
   - changed-files:
       - any-glob-to-any-file:

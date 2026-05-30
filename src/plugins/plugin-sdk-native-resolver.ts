@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { buildPluginLoaderAliasMap, type PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 type ResolveFilename = (
@@ -13,18 +13,6 @@ type ResolveFilename = (
 
 type ModuleWithResolver = typeof Module & {
   _resolveFilename?: ResolveFilename;
-  registerHooks?: (options: {
-    resolve?: (
-      specifier: string,
-      context: { parentURL?: string | undefined },
-      nextResolve: (
-        specifier: string,
-        context?: { parentURL?: string | undefined },
-      ) => {
-        url: string;
-      },
-    ) => { shortCircuit?: boolean; url: string };
-  }) => { deregister: () => void };
 };
 
 type NativeAliasEntry = {
@@ -47,7 +35,6 @@ const PLUGIN_SDK_PACKAGE_PREFIXES = ["openclaw/plugin-sdk", "@openclaw/plugin-sd
 const pluginSdkNativeAliases = new Map<string, NativeAliasEntry[]>();
 let installed = false;
 let previousResolveFilename: ResolveFilename | undefined;
-let esmHooks: { deregister: () => void } | undefined;
 
 function resolveLoaderModulePath(options: InstallOpenClawPluginSdkNativeResolverOptions): string {
   return options.modulePath ?? fileURLToPath(options.moduleUrl ?? import.meta.url);
@@ -167,28 +154,8 @@ function resolveAliasTargetForParent(
   request: string,
   parent: NodeJS.Module | undefined,
 ): string | undefined {
-  return resolveAliasTargetForParentPath(request, parent?.filename);
-}
-
-function resolveAliasTargetForParentUrl(
-  request: string,
-  parentUrl: string | undefined,
-): string | undefined {
-  if (!isPluginSdkAliasSpecifier(request) || !parentUrl?.startsWith("file:")) {
-    return undefined;
-  }
-  try {
-    return resolveAliasTargetForParentPath(request, fileURLToPath(parentUrl));
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveAliasTargetForParentPath(
-  request: string,
-  parentFilename: string | undefined,
-): string | undefined {
   const entries = pluginSdkNativeAliases.get(request);
+  const parentFilename = parent?.filename;
   if (!entries || !parentFilename) {
     return undefined;
   }
@@ -234,18 +201,6 @@ function installResolver(): void {
     }
     return previousResolveFilename?.(request, parent, isMain, options) ?? request;
   }) satisfies ResolveFilename;
-  esmHooks = moduleWithResolver.registerHooks?.({
-    resolve(specifier, context, nextResolve) {
-      const aliasTarget = resolveAliasTargetForParentUrl(specifier, context.parentURL);
-      if (aliasTarget) {
-        return {
-          shortCircuit: true,
-          url: pathToFileURL(aliasTarget).href,
-        };
-      }
-      return nextResolve(specifier, context);
-    },
-  });
   installed = true;
 }
 
@@ -281,8 +236,6 @@ export function installOpenClawPluginSdkNativeResolver(
 
 export function resetOpenClawPluginSdkNativeResolverForTest(): void {
   pluginSdkNativeAliases.clear();
-  esmHooks?.deregister();
-  esmHooks = undefined;
   if (installed && previousResolveFilename) {
     moduleWithResolver[nodeResolveFilenameProperty] = previousResolveFilename;
   }

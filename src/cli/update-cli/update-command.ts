@@ -5,8 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
-import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
-import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
@@ -101,6 +99,8 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { stylePromptMessage } from "../../terminal/prompt-style.js";
+import { theme } from "../../terminal/theme.js";
 import { resolveUserPath } from "../../utils.js";
 import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";

@@ -44,10 +44,10 @@ Designed to be called from workflow engines (for example, Lobster via
       "llm-task": {
         "enabled": true,
         "config": {
-          "defaultProvider": "openai",
-          "defaultModel": "gpt-5.5",
+          "defaultProvider": "openai-codex",
+          "defaultModel": "gpt-5.2",
           "defaultAuthProfileId": "main",
-          "allowedModels": ["openai/gpt-5.5"],
+          "allowedModels": ["openai-codex/gpt-5.2"],
           "maxTokens": 800,
           "timeoutMs": 30000
         }

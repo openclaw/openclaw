@@ -4,7 +4,6 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 
 function hasRouteInputValue(value: unknown): boolean {
   return value != null;
@@ -50,15 +49,6 @@ export function readRoutePositiveInteger(
     throw new Error(options?.invalidMessage ?? `${fieldName} must be a positive integer.`);
   }
   return parsed;
-}
-
-export function readRouteTimerTimeoutMs(
-  value: unknown,
-  fieldName = "timeoutMs",
-  opts?: { minMs?: number; invalidMessage?: string },
-): number | undefined {
-  const parsed = readRoutePositiveInteger(value, fieldName, opts);
-  return parsed === undefined ? undefined : normalizeBrowserTimerDelayMs(parsed, opts);
 }
 
 export function readRouteNonNegativeInteger(

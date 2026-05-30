@@ -6,7 +6,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
@@ -22,13 +21,6 @@ const SIGNAL_EXIT_CODES = {
   SIGTERM: 143,
 };
 let forwardedSignalExitCode;
-
-class ForwardedSignalExitError extends Error {
-  constructor(exitCode) {
-    super(`forwarded signal requested exit ${exitCode}`);
-    this.exitCode = exitCode;
-  }
-}
 
 for (const signal of Object.keys(SIGNAL_EXIT_CODES)) {
   process.on(signal, () => {
@@ -120,10 +112,6 @@ function run(command, args, cwd, options = {}) {
       }
       ACTIVE_CHILD_KILLERS.delete(killChild);
       if (forwardedSignalExitCode !== undefined && ACTIVE_CHILD_KILLERS.size === 0) {
-        if (options.deferForwardedSignalExit) {
-          reject(new ForwardedSignalExitError(forwardedSignalExitCode));
-          return;
-        }
         process.exit(forwardedSignalExitCode);
       }
       if (error) {
@@ -257,32 +245,6 @@ async function newestOpenClawTarball(outputDir, packOutput) {
   return path.join(outputDir, packed);
 }
 
-export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
-  const runCaptureImpl = options.runCaptureImpl ?? runCapture;
-  const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
-  const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
-  console.error("==> Packing OpenClaw package");
-  await prepareChangelog(sourceDir);
-  let packOutput = "";
-  try {
-    packOutput = await runCaptureImpl(
-      "npm",
-      ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
-      sourceDir,
-      {
-        deferForwardedSignalExit: true,
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      },
-    );
-  } finally {
-    await restoreChangelog(sourceDir);
-  }
-  return await newestOpenClawTarball(outputDir, packOutput);
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const sourceDir = path.resolve(ROOT_DIR, options.sourceDir || ROOT_DIR);
@@ -315,7 +277,19 @@ async function main() {
     },
   );
 
-  let tarball = await packOpenClawPackageForDocker(sourceDir, outputDir);
+  console.error("==> Packing OpenClaw package");
+  const packOutput = await runCapture(
+    "npm",
+    ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
+    sourceDir,
+    {
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+        DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+      ),
+    },
+  );
+  let tarball = await newestOpenClawTarball(outputDir, packOutput);
 
   if (options.outputName) {
     const target = path.join(outputDir, options.outputName);
@@ -349,6 +323,6 @@ async function main() {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
+    process.exit(1);
   });
 }

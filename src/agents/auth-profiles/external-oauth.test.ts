@@ -104,31 +104,6 @@ describe("auth external oauth helpers", () => {
     expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not bootstrap arbitrary named OpenAI OAuth profiles from the Codex CLI account", () => {
-    readCodexCliCredentialsCachedMock.mockReturnValueOnce(
-      createCredential({
-        provider: "openai",
-        access: "codex-cli-access",
-        refresh: "codex-cli-refresh",
-        expires: createUsableOAuthExpiry(),
-      }),
-    );
-
-    const store = createStore({
-      "openai:work": createCredential({
-        provider: "openai",
-        access: undefined,
-        refresh: undefined,
-        expires: 0,
-      }),
-    });
-
-    const overlaid = overlayExternalOAuthProfiles(store);
-
-    expect(readCodexCliCredentialsCachedMock).not.toHaveBeenCalled();
-    expect(overlaid.profiles["openai:work"]).toEqual(store.profiles["openai:work"]);
-  });
-
   it("omits exact runtime-only overlays from persisted store writes", () => {
     const credential = createCredential();
     resolveExternalAuthProfilesWithPluginsMock.mockReturnValueOnce([

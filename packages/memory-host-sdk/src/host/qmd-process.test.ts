@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../../../gateway-client/src/timeouts.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -65,7 +64,6 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
   process.env.PATH = originalPath;
   process.env.PATHEXT = originalPathExt;
   spawnMock.mockReset();
@@ -201,22 +199,6 @@ describe("checkQmdBinaryAvailability", () => {
       checkQmdBinaryAvailability({ command: "qmd", env: process.env, cwd: tempDir }),
     ).resolves.toEqual({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
   });
-
-  it("caps oversized availability probe timeouts before scheduling", async () => {
-    vi.useFakeTimers();
-    const child = createMockChild();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    spawnMock.mockReturnValueOnce(child);
-
-    void checkQmdBinaryAvailability({
-      command: "qmd",
-      env: process.env,
-      cwd: tempDir,
-      timeoutMs: Number.MAX_SAFE_INTEGER,
-    });
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
-  });
 });
 
 describe("runCliCommand", () => {
@@ -321,23 +303,5 @@ describe("runCliCommand", () => {
         maxOutputChars: 2,
       }),
     ).rejects.toThrow(/🙂/);
-  });
-
-  it("caps oversized command timeouts before scheduling", async () => {
-    vi.useFakeTimers();
-    const child = createMockChild();
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    spawnMock.mockReturnValueOnce(child);
-
-    void runCliCommand({
-      commandSummary: "qmd query test",
-      spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
-      env: process.env,
-      cwd: tempDir,
-      maxOutputChars: 10_000,
-      timeoutMs: Number.MAX_SAFE_INTEGER,
-    }).catch(() => undefined);
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
   });
 });

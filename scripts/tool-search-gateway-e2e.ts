@@ -3,14 +3,12 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
 import { startQaMockOpenAiServer } from "../extensions/qa-lab/src/providers/mock-openai/server.js";
 import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shared/mock-auth.js";
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
-import { readBoundedResponseText } from "./lib/bounded-response.ts";
 
 type Lane = "normal" | "code";
 
@@ -58,8 +56,50 @@ function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
 }
 
-function bodyTooLargeErrorMessage(url: string, byteLimit: number) {
-  return `HTTP response from ${url} exceeded ${byteLimit} bytes`;
+function bodyTooLargeError(url: string, byteLimit: number) {
+  return Object.assign(new Error(`HTTP response from ${url} exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
+}
+
+async function readBoundedResponseText(
+  response: Response,
+  url: string,
+  byteLimit: number,
+  timeoutPromise: Promise<never>,
+) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw bodyTooLargeError(url, byteLimit);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw bodyTooLargeError(url, byteLimit);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function freePort(): Promise<number> {
@@ -149,12 +189,13 @@ export async function fetchJson(
   const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_BODY_MAX_BYTES);
   const controller = new AbortController();
   const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
-  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
+  let timeout: NodeJS.Timeout | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setNodeTimeout(() => {
+    timeout = setTimeout(() => {
       controller.abort(error);
       reject(error);
     }, timeoutMs);
+    timeout.unref?.();
   });
 
   let response: Response;
@@ -167,17 +208,10 @@ export async function fetchJson(
       }),
       timeoutPromise,
     ]);
-    text = await readBoundedResponseText(response, url, maxBodyBytes, {
-      createTooLargeError(message) {
-        return Object.assign(new Error(message), { code: "ETOOBIG" });
-      },
-      formatTooLargeMessage: bodyTooLargeErrorMessage,
-      timeoutPromise,
-      signal: controller.signal,
-    });
+    text = await readBoundedResponseText(response, url, maxBodyBytes, timeoutPromise);
   } finally {
     if (timeout) {
-      clearNodeTimeout(timeout);
+      clearTimeout(timeout);
     }
   }
   let parsed: unknown;

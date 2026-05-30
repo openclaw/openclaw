@@ -93,10 +93,10 @@ function createButtonComponent(params: {
       id: componentId,
       kind: params.modalId ? "modal-trigger" : "button",
       label: params.spec.label,
-      ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
-      ...(params.modalId !== undefined ? { modalId: params.modalId } : {}),
-      ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
-      ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
+      callbackData: params.spec.callbackData,
+      modalId: params.modalId,
+      reusable: params.spec.reusable,
+      allowedUsers: params.spec.allowedUsers,
     },
   };
 }
@@ -126,10 +126,10 @@ function createSelectComponent(params: {
     id: componentId,
     kind: "select",
     label,
-    ...(params.spec.callbackData !== undefined ? { callbackData: params.spec.callbackData } : {}),
+    callbackData: params.spec.callbackData,
     selectType,
     ...(options ? { options } : {}),
-    ...(params.spec.allowedUsers !== undefined ? { allowedUsers: params.spec.allowedUsers } : {}),
+    allowedUsers: params.spec.allowedUsers,
   });
 
   if (type === "string") {
@@ -252,13 +252,12 @@ export function buildDiscordComponentMessage(params: {
   > = [];
 
   const addEntry = (entry: DiscordComponentEntry) => {
-    const reusable = entry.reusable ?? params.spec.reusable;
     entries.push({
       ...entry,
-      ...(params.sessionKey !== undefined ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-      ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
-      ...(reusable !== undefined ? { reusable } : {}),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      accountId: params.accountId,
+      reusable: entry.reusable ?? params.spec.reusable,
       consumptionGroupId,
     });
   };
@@ -340,30 +339,26 @@ export function buildDiscordComponentMessage(params: {
       name: normalizeModalFieldName(field.name, index),
       label: field.label,
       type: field.type,
-      ...(field.description !== undefined ? { description: field.description } : {}),
-      ...(field.placeholder !== undefined ? { placeholder: field.placeholder } : {}),
-      ...(field.required !== undefined ? { required: field.required } : {}),
-      ...(field.options !== undefined ? { options: field.options } : {}),
-      ...(field.minValues !== undefined ? { minValues: field.minValues } : {}),
-      ...(field.maxValues !== undefined ? { maxValues: field.maxValues } : {}),
-      ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
-      ...(field.maxLength !== undefined ? { maxLength: field.maxLength } : {}),
-      ...(field.style !== undefined ? { style: field.style } : {}),
+      description: field.description,
+      placeholder: field.placeholder,
+      required: field.required,
+      options: field.options,
+      minValues: field.minValues,
+      maxValues: field.maxValues,
+      minLength: field.minLength,
+      maxLength: field.maxLength,
+      style: field.style,
     }));
     modals.push({
       id: modalId,
       title: params.spec.modal.title,
+      callbackData: params.spec.modal.callbackData,
       fields,
-      ...(params.spec.modal.callbackData !== undefined
-        ? { callbackData: params.spec.modal.callbackData }
-        : {}),
-      ...(params.sessionKey !== undefined ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
-      ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
-      ...(params.spec.reusable !== undefined ? { reusable: params.spec.reusable } : {}),
-      ...(params.spec.modal.allowedUsers !== undefined
-        ? { allowedUsers: params.spec.modal.allowedUsers }
-        : {}),
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      accountId: params.accountId,
+      reusable: params.spec.reusable,
+      allowedUsers: params.spec.modal.allowedUsers,
     });
 
     const triggerSpec: DiscordComponentButtonSpec = {

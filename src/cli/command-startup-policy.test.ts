@@ -24,7 +24,7 @@ describe("command-startup-policy", () => {
         commandPath: ["status"],
         suppressDoctorStdout: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldSkipRouteConfigGuardForCommandPath({
         commandPath: ["gateway", "status"],
@@ -239,7 +239,7 @@ describe("command-startup-policy", () => {
     ).toEqual({
       suppressDoctorStdout: true,
       hideBanner: false,
-      skipConfigGuard: false,
+      skipConfigGuard: true,
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
     });

@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
+vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
@@ -15,20 +15,6 @@ function buildOpenAICodexOAuthConfig(): OpenClawConfig {
       profiles: {
         "openai-codex:user@example.com": {
           provider: "openai-codex",
-          mode: "oauth",
-          email: "user@example.com",
-        },
-      },
-    },
-  };
-}
-
-function buildOpenAIOAuthConfig(): OpenClawConfig {
-  return {
-    auth: {
-      profiles: {
-        "openai:user@example.com": {
-          provider: "openai",
           mode: "oauth",
           email: "user@example.com",
         },
@@ -74,21 +60,6 @@ describe("noteOpenAIOAuthTlsPrerequisites", () => {
     } finally {
       vi.stubGlobal("fetch", originalFetch);
     }
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("runs the preflight for canonical OpenAI OAuth profiles", async () => {
-    const fetchMock = vi.fn(async () => new Response("", { status: 400 }));
-    const originalFetch = globalThis.fetch;
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      await noteOpenAIOAuthTlsPrerequisites({ cfg: buildOpenAIOAuthConfig() });
-    } finally {
-      vi.stubGlobal("fetch", originalFetch);
-    }
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(note).not.toHaveBeenCalled();
   });
 

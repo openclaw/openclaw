@@ -1,11 +1,9 @@
 import { assertOkOrThrowProviderError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { XAI_BASE_URL } from "./api.js";
 import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 export { XAI_BASE_URL };
 
-const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 export const XAI_TTS_VOICES = ["eve", "ara", "rex", "sal", "leo", "una"] as const;
 
 type XaiTtsVoice = (typeof XAI_TTS_VOICES)[number];
@@ -51,7 +49,6 @@ export async function xaiTTS(params: {
   speed?: number;
   responseFormat?: "mp3" | "wav" | "pcm" | "mulaw" | "alaw";
   timeoutMs: number;
-  maxBytes?: number;
 }): Promise<Buffer> {
   const {
     text,
@@ -62,7 +59,6 @@ export async function xaiTTS(params: {
     speed,
     responseFormat = "mp3",
     timeoutMs,
-    maxBytes = DEFAULT_TTS_MAX_BYTES,
   } = params;
   const language = normalizeXaiLanguageCode(rawLanguage) ?? "en";
 
@@ -94,9 +90,7 @@ export async function xaiTTS(params: {
   try {
     await assertOkOrThrowProviderError(response, "xAI TTS API error");
 
-    return await readResponseWithLimit(response, maxBytes, {
-      onOverflow: ({ maxBytes }) => new Error(`xAI TTS audio response exceeds ${maxBytes} bytes`),
-    });
+    return Buffer.from(await response.arrayBuffer());
   } finally {
     await release();
   }

@@ -2,22 +2,49 @@ use axum::{extract::State, Json};
 use crate::state::SharedState;
 use crate::models::protocol::{RequestFrame, ResponseFrame};
 use serde_json::json;
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::fs::File;
+use std::io::{BufReader, BufRead};
+use chrono::Utc;
 
 pub async fn handle_chat_history(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Json(req): Json<RequestFrame>,
 ) -> Json<ResponseFrame> {
-    let payload = json!({
-        "sessionKey": "placeholder",
-        "messages": [
-            {
-                "role": "assistant",
-                "content": [{"type": "text", "text": "OpenClaw Gateway (Rust) is active."}],
-                "timestamp": chrono::Utc::now().timestamp_millis()
+    let session_key = req.params.as_ref()
+        .and_then(|p| p.get("sessionKey"))
+        .and_then(|s| s.as_str())
+        .unwrap_or("unknown");
+
+    let store = state.session_manager.load_store().unwrap_or_default();
+    let entry = store.sessions.get(session_key);
+
+    let mut messages = Vec::new();
+
+    if let Some(entry) = entry {
+        let transcript_path = entry.session_file.as_deref()
+            .unwrap_or_else(|| "nonexistent.jsonl");
+
+        if let Ok(file) = File::open(transcript_path) {
+            let reader = BufReader::new(file);
+            for line in reader.lines().flatten() {
+                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) {
+                    messages.push(msg);
+                }
             }
-        ],
+        }
+    }
+
+    if messages.is_empty() {
+        messages.push(json!({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "OpenClaw Gateway (Rust) transcript is empty."}],
+            "timestamp": Utc::now().timestamp_millis()
+        }));
+    }
+
+    let payload = json!({
+        "sessionKey": session_key,
+        "messages": messages,
     });
 
     Json(ResponseFrame {
@@ -29,7 +56,7 @@ pub async fn handle_chat_history(
 }
 
 pub async fn handle_chat_send(
-    State(_state): State<SharedState>,
+    State(state): State<SharedState>,
     Json(req): Json<RequestFrame>,
 ) -> Json<ResponseFrame> {
     let session_key = req.params.as_ref()
@@ -44,19 +71,15 @@ pub async fn handle_chat_send(
 
     tracing::info!("Received message for {}: {}", session_key, message);
 
-    // Record message to transcript (simulated path)
-    let transcript_path = format!("transcripts/{}.jsonl", session_key.replace(":", "_"));
-    if let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&transcript_path)
-    {
-        let entry = json!({
-            "role": "user",
-            "content": [{"type": "text", "text": message}],
-            "timestamp": chrono::Utc::now().timestamp_millis()
-        });
-        let _ = writeln!(file, "{}", entry.to_string());
+    let store = state.session_manager.load_store().unwrap_or_default();
+    let entry = store.sessions.get(session_key);
+
+    if let Some(entry) = entry {
+        let session_id = &entry.session_id;
+        let _ = state.session_manager.append_to_transcript(session_id, "user", message);
+
+        // Simple echo response for now
+        let _ = state.session_manager.append_to_transcript(session_id, "assistant", &format!("Echo: {}", message));
     }
 
     let payload = json!({

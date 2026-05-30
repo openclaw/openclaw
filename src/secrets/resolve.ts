@@ -3,29 +3,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
+  ExecSecretProviderConfig,
   FileSecretProviderConfig,
-  ManualExecSecretProviderConfig,
   SecretProviderConfig,
   SecretRef,
   SecretRefSource,
 } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
-import {
-  isPluginIntegrationSecretProviderConfig,
-  resolveSecretProviderIntegrationConfig,
-} from "./provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -52,7 +43,6 @@ type ResolveSecretRefOptions = {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   cache?: SecretRefResolveCache;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 };
 
 type ResolutionLimits = {
@@ -189,13 +179,7 @@ function toProviderKey(source: SecretRefSource, provider: string): string {
   return `${source}:${provider}`;
 }
 
-function resolveConfiguredProvider(params: {
-  ref: SecretRef;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-}): SecretProviderConfig {
-  const { ref, config } = params;
+function resolveConfiguredProvider(ref: SecretRef, config: OpenClawConfig): SecretProviderConfig {
   const providerConfig = config.secrets?.providers?.[ref.provider];
   if (!providerConfig) {
     if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
@@ -213,34 +197,6 @@ function resolveConfiguredProvider(params: {
       provider: ref.provider,
       message: `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
     });
-  }
-  if (isPluginIntegrationSecretProviderConfig(providerConfig)) {
-    const manifestRegistry =
-      params.manifestRegistry ??
-      getCurrentPluginMetadataSnapshot({
-        config,
-        env: params.env,
-        allowWorkspaceScopedSnapshot: true,
-      })?.manifestRegistry ??
-      loadPluginManifestRegistry({
-        config,
-        env: params.env,
-      });
-    const resolved = resolveSecretProviderIntegrationConfig({
-      manifestRegistry,
-      providerAlias: ref.provider,
-      providerConfig,
-      config,
-      env: params.env,
-    });
-    if (!resolved.ok) {
-      throw providerResolutionError({
-        source: ref.source,
-        provider: ref.provider,
-        message: `Secret provider "${ref.provider}" plugin integration is unavailable: ${resolved.reason}.`,
-      });
-    }
-    return resolved.providerConfig;
   }
   return providerConfig;
 }
@@ -677,7 +633,7 @@ function parseExecValues(params: {
 async function resolveExecRefs(params: {
   refs: SecretRef[];
   providerName: string;
-  providerConfig: ManualExecSecretProviderConfig;
+  providerConfig: ExecSecretProviderConfig;
   env: NodeJS.ProcessEnv;
   limits: ResolutionLimits;
 }): Promise<ProviderResolutionOutput> {
@@ -834,13 +790,6 @@ async function resolveProviderRefs(params: {
       });
     }
     if (params.providerConfig.source === "exec") {
-      if (isPluginIntegrationSecretProviderConfig(params.providerConfig)) {
-        throw providerResolutionError({
-          source: params.source,
-          provider: params.providerName,
-          message: `Secret provider "${params.providerName}" plugin integration was not materialized before exec resolution.`,
-        });
-      }
       return await resolveExecRefs({
         refs: params.refs,
         providerName: params.providerName,
@@ -908,12 +857,7 @@ export async function resolveSecretRefValues(
           message: `Secret provider "${group.providerName}" exceeded maxRefsPerProvider (${limits.maxRefsPerProvider}).`,
         });
       }
-      const providerConfig = resolveConfiguredProvider({
-        ref: group.refs[0],
-        config: options.config,
-        env: options.env ?? process.env,
-        manifestRegistry: options.manifestRegistry,
-      });
+      const providerConfig = resolveConfiguredProvider(group.refs[0], options.config);
       const values = await resolveProviderRefs({
         refs: group.refs,
         source: group.source,

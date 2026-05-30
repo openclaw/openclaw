@@ -433,78 +433,6 @@ describe("getApiKeyForModel", () => {
     );
   });
 
-  it("keeps OpenAI OAuth profiles on the Codex transport and API keys on direct OpenAI", async () => {
-    const store = {
-      version: 1 as const,
-      profiles: {
-        "openai:chatgpt": {
-          type: "oauth" as const,
-          provider: "openai",
-          ...oauthFixture,
-        },
-        "openai:api-key": {
-          type: "api_key" as const,
-          provider: "openai",
-          key: "direct-openai-key",
-        },
-      },
-    };
-
-    const directAuth = await getApiKeyForModel({
-      model: {
-        id: "chat-latest",
-        provider: "openai",
-        api: "openai-responses",
-      } as Model,
-      store,
-    });
-    const codexAuth = await getApiKeyForModel({
-      model: {
-        id: "gpt-5.5",
-        provider: "openai",
-        api: "openai-codex-responses",
-      } as Model,
-      store,
-    });
-
-    expect(directAuth).toMatchObject({
-      apiKey: "direct-openai-key",
-      mode: "api-key",
-      profileId: "openai:api-key",
-    });
-    expect(codexAuth).toMatchObject({
-      apiKey: oauthFixture.access,
-      mode: "oauth",
-      profileId: "openai:chatgpt",
-    });
-  });
-
-  it("rejects an explicit OpenAI OAuth profile for direct OpenAI Platform models", async () => {
-    const store = {
-      version: 1 as const,
-      profiles: {
-        "openai:chatgpt": {
-          type: "oauth" as const,
-          provider: "openai",
-          ...oauthFixture,
-        },
-      },
-    };
-
-    await expect(
-      getApiKeyForModel({
-        model: {
-          id: "chat-latest",
-          provider: "openai",
-          api: "openai-responses",
-        } as Model,
-        profileId: "openai:chatgpt",
-        lockedProfile: true,
-        store,
-      }),
-    ).rejects.toThrow(/requires an OpenAI API key profile/);
-  });
-
   it("uses the config default agent dir when resolving provider profiles", async () => {
     await withOpenClawTestState(
       {
@@ -652,7 +580,7 @@ describe("getApiKeyForModel", () => {
     );
 
     expect(cliCredentialMocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
-    expect(cliCredentialMocks.readCodexCliCredentialsCached).toHaveBeenCalled();
+    expect(cliCredentialMocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
     expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 

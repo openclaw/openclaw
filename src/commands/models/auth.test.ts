@@ -493,6 +493,9 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai-codex/gpt-5.5 (use --set-default to apply)",
     );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
+    );
   });
 
   it("defaults OpenAI login to ChatGPT OAuth when API key is also available", async () => {
@@ -1227,10 +1230,10 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(
       modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
-    ).rejects.toThrow("paste-api-key --provider openai");
+    ).rejects.toThrow("paste-api-key --provider openai-codex");
 
     expect(validateMessages).toEqual([
-      "That looks like an OpenAI API key. Use openclaw models auth paste-api-key --provider openai for API-key auth.",
+      "That looks like an OpenAI API key. Use openclaw models auth paste-api-key --provider openai-codex for API-key auth.",
     ]);
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(mocks.updateConfig).not.toHaveBeenCalled();
@@ -1243,7 +1246,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(
       modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
-    ).rejects.toThrow("paste-api-key --provider openai");
+    ).rejects.toThrow("paste-api-key --provider openai-codex");
 
     expect(mocks.clackText).not.toHaveBeenCalled();
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
@@ -1257,7 +1260,7 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(
       modelsAuthPasteTokenCommand({ provider: "openai-codex" }, runtime),
-    ).rejects.toThrow("paste-api-key --provider openai");
+    ).rejects.toThrow("paste-api-key --provider openai-codex");
 
     expect(mocks.clackText).not.toHaveBeenCalled();
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
@@ -1273,19 +1276,21 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
-      profileId: "openai:manual",
+      profileId: "openai-codex:manual",
       credential: {
         type: "api_key",
-        provider: "openai",
+        provider: "openai-codex",
         key: "sk-openai-codex-api-key-value",
       },
       agentDir: "/tmp/openclaw/agents/coder",
     });
-    expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
-      provider: "openai",
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:manual"]).toEqual({
+      provider: "openai-codex",
       mode: "api_key",
     });
-    expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Auth profile: openai-codex:manual (openai-codex/api_key)",
+    );
   });
 
   it("writes piped OpenAI Codex API keys to API-key profiles", async () => {
@@ -1297,16 +1302,16 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(mocks.clackPassword).not.toHaveBeenCalled();
     expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
-      profileId: "openai:manual",
+      profileId: "openai-codex:manual",
       credential: {
         type: "api_key",
-        provider: "openai",
+        provider: "openai-codex",
         key: "sk-openai-codex-api-key-value",
       },
       agentDir: "/tmp/openclaw/agents/main",
     });
-    expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
-      provider: "openai",
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:manual"]).toEqual({
+      provider: "openai-codex",
       mode: "api_key",
     });
   });
@@ -1320,16 +1325,16 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(mocks.clackPassword).not.toHaveBeenCalled();
     expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
-      profileId: "openai:manual",
+      profileId: "openai-codex:manual",
       credential: {
         type: "api_key",
-        provider: "openai",
+        provider: "openai-codex",
         key: "sk-openai-codex-api-key-value",
       },
       agentDir: "/tmp/openclaw/agents/main",
     });
-    expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
-      provider: "openai",
+    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:manual"]).toEqual({
+      provider: "openai-codex",
       mode: "api_key",
     });
   });
@@ -1351,10 +1356,10 @@ describe("modelsAuthLoginCommand", () => {
 
     await expect(
       modelsAuthPasteApiKeyCommand({ provider: "openai-codex" }, runtime),
-    ).rejects.toThrow("paste-token --provider openai");
+    ).rejects.toThrow("paste-token --provider openai-codex");
 
     expect(validateMessages).toEqual([
-      "That looks like token or OAuth material, not an OpenAI API key. Use openclaw models auth paste-token --provider openai for token auth material.",
+      "That looks like token or OAuth material, not an OpenAI API key. Use openclaw models auth paste-token --provider openai-codex for token auth material.",
     ]);
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
     expect(mocks.updateConfig).not.toHaveBeenCalled();

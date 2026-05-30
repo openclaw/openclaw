@@ -10,11 +10,11 @@ const formatDocsLinkMock = vi.hoisted(() =>
 );
 const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 
-vi.mock("../../../packages/terminal-core/src/links.js", () => ({
+vi.mock("../../terminal/links.js", () => ({
   formatDocsLink: formatDocsLinkMock,
 }));
 
-vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
+vi.mock("../../terminal/theme.js", () => ({
   isRich: () => false,
   theme: {
     heading: (s: string) => s,

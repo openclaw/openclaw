@@ -20,9 +20,7 @@ const state = vi.hoisted(() => ({
   acpRunTurnMock: vi.fn((..._args: unknown[]): unknown => undefined),
   buildAcpResultMock: vi.fn(),
   createAcpVisibleTextAccumulatorMock: vi.fn(),
-  persistCliTurnTranscriptMock: vi.fn(),
   persistAcpTurnTranscriptMock: vi.fn(),
-  runCliTurnCompactionLifecycleMock: vi.fn(),
   resolveAcpAgentPolicyErrorMock: vi.fn(),
   resolveAcpDispatchPolicyErrorMock: vi.fn(),
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
@@ -56,7 +54,6 @@ const state = vi.hoisted(() => ({
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
   storePathMock: undefined as string | undefined,
-  resolvedSessionKeyMock: undefined as string | undefined,
 }));
 
 vi.mock("./model-fallback.js", () => ({
@@ -71,7 +68,6 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   emitAcpLifecycleError: vi.fn(),
   emitAcpLifecycleStart: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
-  persistCliTurnTranscript: (...args: unknown[]) => state.persistCliTurnTranscriptMock(...args),
   persistAcpTurnTranscript: (...args: unknown[]) => state.persistAcpTurnTranscriptMock(...args),
   persistSessionEntry: vi.fn(),
   prependInternalEventContext: (body: string) => body,
@@ -91,11 +87,6 @@ vi.mock("./command/attempt-execution.shared.js", async () => {
 
 vi.mock("./command/delivery.runtime.js", () => ({
   deliverAgentCommandResult: (...args: unknown[]) => state.deliverAgentCommandResultMock(...args),
-}));
-
-vi.mock("./command/cli-compaction.js", () => ({
-  runCliTurnCompactionLifecycle: (...args: unknown[]) =>
-    state.runCliTurnCompactionLifecycleMock(...args),
 }));
 
 vi.mock("./command/run-context.js", () => ({
@@ -120,7 +111,7 @@ vi.mock("./command/session-store.runtime.js", () => ({
 vi.mock("./command/session.js", () => ({
   resolveSession: () => ({
     sessionId: "session-1",
-    sessionKey: state.resolvedSessionKeyMock ?? "agent:main:main",
+    sessionKey: "agent:main:main",
     sessionEntry: state.sessionEntryMock ?? {
       sessionId: "session-1",
       updatedAt: Date.now(),
@@ -243,6 +234,10 @@ vi.mock("../infra/outbound/session-context.js", () => ({
   buildOutboundSessionContext: () => ({}),
 }));
 
+vi.mock("../infra/skills-remote.js", () => ({
+  getRemoteSkillEligibility: () => ({ eligible: false }),
+}));
+
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => {
     const logger = {
@@ -290,7 +285,7 @@ vi.mock("../sessions/send-policy.js", () => ({
   resolveSendPolicy: () => "allow",
 }));
 
-vi.mock("../../packages/terminal-core/src/ansi.js", () => ({
+vi.mock("../terminal/ansi.js", () => ({
   sanitizeForLog: (s: string) => s,
 }));
 
@@ -601,52 +596,18 @@ vi.mock("./provider-auth-aliases.js", () => ({
     provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
-vi.mock("../skills/discovery/agent-filter.js", () => ({
-  resolveEffectiveAgentSkillFilter: (_cfg: unknown, agentId: string) =>
-    state.resolveAgentSkillsFilterMock(_cfg, agentId),
+vi.mock("./skills.js", () => ({
+  buildWorkspaceSkillSnapshot: (workspaceDir: string, opts: unknown) =>
+    state.buildWorkspaceSkillSnapshotMock(workspaceDir, opts),
 }));
 
-vi.mock("../skills/runtime/remote.js", () => ({
-  getRemoteSkillEligibility: () => ({ eligible: false }),
+vi.mock("./skills/filter.js", () => ({
+  matchesSkillFilter: () => true,
 }));
 
-vi.mock("../skills/runtime/session-snapshot.js", () => ({
-  resolveReusableWorkspaceSkillSnapshot: (params: {
-    workspaceDir: string;
-    existingSnapshot?: { resolvedSkills?: unknown };
-    skillFilter?: string[];
-  }) => {
-    if (params.skillFilter !== undefined && params.skillFilter.length === 0) {
-      return {
-        snapshot: {
-          prompt: "",
-          skills: [],
-          resolvedSkills: [],
-          skillFilter: params.skillFilter,
-          version: 0,
-        },
-        shouldRefresh: !params.existingSnapshot,
-        snapshotVersion: 0,
-      };
-    }
-    if (params.existingSnapshot?.resolvedSkills !== undefined) {
-      return {
-        snapshot: params.existingSnapshot,
-        shouldRefresh: false,
-        snapshotVersion: 0,
-      };
-    }
-    const rebuilt = state.buildWorkspaceSkillSnapshotMock(params.workspaceDir, params) as {
-      resolvedSkills?: unknown;
-    };
-    return {
-      snapshot: params.existingSnapshot
-        ? { ...params.existingSnapshot, resolvedSkills: rebuilt?.resolvedSkills }
-        : rebuilt,
-      shouldRefresh: !params.existingSnapshot,
-      snapshotVersion: 0,
-    };
-  },
+vi.mock("./skills/refresh-state.js", () => ({
+  getSkillsSnapshotVersion: () => 0,
+  shouldRefreshSnapshotForVersion: () => false,
 }));
 
 vi.mock("./spawned-context.js", () => ({
@@ -669,12 +630,9 @@ vi.mock("../acp/control-plane/manager.js", () => ({
 }));
 
 let agentCommand: typeof import("./agent-command.js").agentCommand;
-let agentCommandTesting: typeof import("./agent-command.js").testing;
 
 beforeAll(async () => {
-  const mod = await import("./agent-command.js");
-  agentCommand ??= mod.agentCommand;
-  agentCommandTesting ??= mod.testing;
+  agentCommand ??= (await import("./agent-command.js")).agentCommand;
 });
 
 type FallbackRunnerParams = {
@@ -812,7 +770,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(null);
     state.resolveAcpExplicitTurnPolicyErrorMock.mockReturnValue(null);
     state.runtimeConfigMock = undefined;
-    delete (state.defaultRuntimeConfig.agents as { list?: unknown }).list;
     state.isThinkingLevelSupportedMock.mockReturnValue(true);
     state.resolveThinkingDefaultMock.mockReturnValue("low");
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
@@ -837,20 +794,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       payloads: params.payloadText ? [{ text: params.payloadText }] : [],
       meta: { durationMs: 0, stopReason: "end_turn" },
     }));
-    state.persistCliTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    );
     state.persistAcpTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    );
-    state.runCliTurnCompactionLifecycleMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
     );
     state.authProfileStoreMock = { profiles: {} };
     state.sessionEntryMock = undefined;
     state.sessionStoreMock = undefined;
     state.storePathMock = undefined;
-    state.resolvedSessionKeyMock = undefined;
     state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
       const params = args[0] as {
         sessionStore?: Record<string, unknown>;
@@ -970,98 +920,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(state.persistSessionEntryMock).not.toHaveBeenCalled();
     expect(state.updateSessionStoreAfterAgentRunMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses rotated session identity for all post-run session persistence", async () => {
-    setupSingleAttemptFallback();
-    setupSessionTouchStore();
-    const rotatedEntry: SessionEntry = {
-      sessionId: "rotated-session",
-      sessionFile: "/tmp/rotated-session.jsonl",
-      updatedAt: 2,
-      skillsSnapshot: { prompt: "", skills: [], version: 0 },
-    };
-    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
-      typeof makeSuccessResult
-    > & {
-      meta: Record<string, unknown> & { agentMeta: Record<string, unknown> };
-    };
-    result.meta.executionTrace = {
-      runner: "embedded",
-      fallbackUsed: false,
-      winnerProvider: "openai",
-      winnerModel: "gpt-5.4",
-    };
-    result.meta.finalAssistantVisibleText = "ok";
-    result.meta.agentMeta = {
-      ...result.meta.agentMeta,
-      sessionId: "rotated-session",
-      sessionFile: "/tmp/rotated-session.jsonl",
-    };
-    state.runAgentAttemptMock.mockResolvedValue(result);
-    state.updateSessionStoreAfterAgentRunMock.mockImplementation(async () => {
-      state.sessionStoreMock = { "agent:main:main": rotatedEntry };
-    });
-    state.persistCliTurnTranscriptMock.mockResolvedValue(rotatedEntry);
-    state.runCliTurnCompactionLifecycleMock.mockResolvedValue(rotatedEntry);
-
-    await runBasicAgentCommand();
-
-    expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
-      sessionId: "rotated-session",
-    });
-    expectRecordFields(mockCallArg(state.persistCliTurnTranscriptMock), {
-      sessionId: "rotated-session",
-      sessionKey: "agent:main:main",
-    });
-    expectRecordFields(mockCallArg(state.runCliTurnCompactionLifecycleMock), {
-      sessionId: "rotated-session",
-      sessionKey: "agent:main:main",
-    });
-    expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
-      expectedSessionIdForFreshDelivery: "rotated-session",
-    });
-  });
-
-  it("does not treat backend CLI session id as OpenClaw session identity", async () => {
-    setupSingleAttemptFallback();
-    setupSessionTouchStore();
-    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
-      typeof makeSuccessResult
-    > & {
-      meta: Record<string, unknown> & { agentMeta: Record<string, unknown> };
-    };
-    result.meta.agentMeta = {
-      ...result.meta.agentMeta,
-      sessionId: "backend-cli-session",
-    };
-    state.runAgentAttemptMock.mockResolvedValue(result);
-
-    await runBasicAgentCommand();
-
-    expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
-      sessionId: "session-1",
-    });
-    expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
-      expectedSessionIdForFreshDelivery: "session-1",
-    });
-  });
-
-  it("keeps explicit-agent global keys literal before command routing", () => {
-    expect(
-      agentCommandTesting.resolveExplicitAgentCommandSessionKey({
-        rawExplicitSessionKey: "global",
-        agentIdOverride: "work",
-        cfg: {},
-      }),
-    ).toBe("global");
-    expect(
-      agentCommandTesting.resolveExplicitAgentCommandSessionKey({
-        rawExplicitSessionKey: "main",
-        agentIdOverride: "work",
-        cfg: {},
-      }),
-    ).toBe("agent:work:main");
   });
 
   it("persists explicit overrides even when ingress skips the initial touch", async () => {

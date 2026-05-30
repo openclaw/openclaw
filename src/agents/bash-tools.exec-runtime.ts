@@ -37,7 +37,6 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
-import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   addSession,
   appendOutput,
@@ -59,13 +58,6 @@ export { execSchema } from "./bash-tools.schemas.js";
 
 const SMKX = "\x1b[?1h";
 const RMKX = "\x1b[?1l";
-
-function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | undefined {
-  if (typeof timeoutSec !== "number" || !Number.isFinite(timeoutSec) || timeoutSec <= 0) {
-    return undefined;
-  }
-  return resolveSafeTimeoutDelayMs(timeoutSec * 1000);
-}
 
 /**
  * Detect cursor key mode from PTY output chunk.
@@ -771,7 +763,10 @@ export async function runExecProcess(opts: {
     }
   };
 
-  const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
+  const timeoutMs =
+    typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
+      ? Math.floor(opts.timeoutSec * 1000)
+      : undefined;
   let sandboxFinalizeToken: unknown;
 
   const spawnSpec:

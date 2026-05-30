@@ -353,14 +353,15 @@ export function enforceStrictInlineEvalApprovalBoundary(params: {
   approvedByAsk: boolean;
   deniedReason: string | null;
   requiresInlineEvalApproval: boolean;
-  requiresAutoReviewHumanApproval?: boolean;
 }): {
   approvedByAsk: boolean;
   deniedReason: string | null;
 } {
-  const requiresRealApproval =
-    params.requiresInlineEvalApproval || params.requiresAutoReviewHumanApproval === true;
-  if (!params.baseDecision.timedOut || !requiresRealApproval || !params.approvedByAsk) {
+  if (
+    !params.baseDecision.timedOut ||
+    !params.requiresInlineEvalApproval ||
+    !params.approvedByAsk
+  ) {
     return {
       approvedByAsk: params.approvedByAsk,
       deniedReason: params.deniedReason,

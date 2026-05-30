@@ -2,8 +2,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
-import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { tryReadJson, writeJson } from "../infra/json-files.js";
@@ -67,7 +65,6 @@ type ManagedImageRetentionClass = "transient" | "history";
 type ManagedImageRecord = {
   attachmentId: string;
   sessionKey: string;
-  agentId?: string;
   messageId: string | null;
   createdAt: string;
   updatedAt?: string;
@@ -103,13 +100,6 @@ const sessionManagedOutgoingAttachmentIndexCache = new Map<
   SessionManagedOutgoingAttachmentIndexCacheEntry
 >();
 const MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES = 500;
-
-function buildSessionManagedOutgoingAttachmentIndexCacheKey(
-  sessionKey: string,
-  agentId?: string,
-): string {
-  return sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey;
-}
 
 export function resolveManagedImageAttachmentLimits(
   config?: ManagedImageAttachmentLimitsConfig | null,
@@ -401,16 +391,12 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
   nowMs?: number;
   transientMaxAgeMs?: number;
   sessionKey?: string;
-  agentId?: string;
   forceDeleteSessionRecords?: boolean;
 }): Promise<CleanupManagedOutgoingImageRecordsResult> {
   const stateDir = params?.stateDir ?? resolveStateDir();
   const nowMs = params?.nowMs ?? Date.now();
   const transientMaxAgeMs = params?.transientMaxAgeMs ?? DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS;
   const sessionKeyFilter = params?.sessionKey ?? null;
-  const agentIdFilter = params?.agentId?.trim() || undefined;
-  const defaultAgentId =
-    sessionKeyFilter === "global" ? resolveDefaultAgentId(getRuntimeConfig()) : undefined;
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
   const recordsDir = resolveOutgoingRecordsDir(stateDir);
   let names: string[] = [];
@@ -444,19 +430,6 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
       continue;
     }
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
-      if (record.original?.path) {
-        retainedReferencedPaths.add(record.original.path);
-      }
-      retainedCount += 1;
-      continue;
-    }
-    if (
-      sessionKeyFilter === "global" &&
-      record.sessionKey === "global" &&
-      ((agentIdFilter &&
-        resolveManagedImageRecordAgentId(record, defaultAgentId) !== agentIdFilter) ||
-        (!agentIdFilter && typeof record.agentId === "string" && record.agentId.trim()))
-    ) {
       if (record.original?.path) {
         retainedReferencedPaths.add(record.original.path);
       }
@@ -497,14 +470,6 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
   });
 
   return { deletedRecordCount, deletedFileCount, retainedCount };
-}
-
-function resolveManagedImageRecordAgentId(
-  record: ManagedImageRecord,
-  defaultAgentId: string | undefined,
-): string | undefined {
-  const explicitAgentId = record.agentId?.trim();
-  return explicitAgentId || defaultAgentId;
 }
 
 async function readManagedImageRecord(
@@ -612,11 +577,9 @@ function collectManagedOutgoingAttachmentRefs(
 
 function getCachedSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
-  agentId: string | undefined,
   stat: { transcriptPath: string; mtimeMs: number; size: number },
 ) {
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
-  const cached = sessionManagedOutgoingAttachmentIndexCache.get(cacheKey);
+  const cached = sessionManagedOutgoingAttachmentIndexCache.get(sessionKey);
   if (!cached) {
     return null;
   }
@@ -625,29 +588,25 @@ function getCachedSessionManagedOutgoingAttachmentIndex(
     cached.mtimeMs !== stat.mtimeMs ||
     cached.size !== stat.size
   ) {
-    sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
+    sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
     return null;
   }
-  sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
-  sessionManagedOutgoingAttachmentIndexCache.set(cacheKey, cached);
+  sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
+  sessionManagedOutgoingAttachmentIndexCache.set(sessionKey, cached);
   return cached.index;
 }
 
 function setCachedSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
-  agentId: string | undefined,
   stat: { transcriptPath: string; mtimeMs: number; size: number },
   index: SessionManagedOutgoingAttachmentIndex,
 ) {
-  sessionManagedOutgoingAttachmentIndexCache.set(
-    buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId),
-    {
-      transcriptPath: stat.transcriptPath,
-      mtimeMs: stat.mtimeMs,
-      size: stat.size,
-      index,
-    },
-  );
+  sessionManagedOutgoingAttachmentIndexCache.set(sessionKey, {
+    transcriptPath: stat.transcriptPath,
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    index,
+  });
   while (
     sessionManagedOutgoingAttachmentIndexCache.size >
     MAX_SESSION_MANAGED_OUTGOING_ATTACHMENT_INDEX_CACHE_ENTRIES
@@ -663,19 +622,14 @@ function setCachedSessionManagedOutgoingAttachmentIndex(
 async function getSessionManagedOutgoingAttachmentIndex(
   sessionKey: string,
   cache?: Map<string, SessionManagedOutgoingAttachmentIndex | null>,
-  agentId?: string,
 ) {
-  const cacheKey = buildSessionManagedOutgoingAttachmentIndexCacheKey(sessionKey, agentId);
-  if (cache?.has(cacheKey)) {
-    return cache.get(cacheKey) ?? null;
+  if (cache?.has(sessionKey)) {
+    return cache.get(sessionKey) ?? null;
   }
-  const { storePath, entry } = loadSessionEntry(
-    sessionKey,
-    sessionKey === "global" && agentId ? { agentId } : undefined,
-  );
+  const { storePath, entry } = loadSessionEntry(sessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId) {
-    cache?.set(cacheKey, null);
+    cache?.set(sessionKey, null);
     return null;
   }
 
@@ -691,15 +645,14 @@ async function getSessionManagedOutgoingAttachmentIndex(
       };
       const cachedIndex = getCachedSessionManagedOutgoingAttachmentIndex(
         sessionKey,
-        agentId,
         transcriptStat,
       );
       if (cachedIndex) {
-        cache?.set(cacheKey, cachedIndex);
+        cache?.set(sessionKey, cachedIndex);
         return cachedIndex;
       }
     } catch {
-      sessionManagedOutgoingAttachmentIndexCache.delete(cacheKey);
+      sessionManagedOutgoingAttachmentIndexCache.delete(sessionKey);
     }
   }
 
@@ -725,9 +678,9 @@ async function getSessionManagedOutgoingAttachmentIndex(
   }
 
   if (transcriptStat) {
-    setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, agentId, transcriptStat, index);
+    setCachedSessionManagedOutgoingAttachmentIndex(sessionKey, transcriptStat, index);
   }
-  cache?.set(cacheKey, index);
+  cache?.set(sessionKey, index);
   return index;
 }
 
@@ -738,11 +691,7 @@ async function recordMatchesTranscriptMessage(
   if (!record.messageId) {
     return false;
   }
-  const index = await getSessionManagedOutgoingAttachmentIndex(
-    record.sessionKey,
-    cache,
-    record.agentId,
-  );
+  const index = await getSessionManagedOutgoingAttachmentIndex(record.sessionKey, cache);
   return (
     index?.has(buildManagedOutgoingAttachmentRefKey(record.messageId, record.attachmentId)) ?? false
   );
@@ -785,7 +734,6 @@ export async function attachManagedOutgoingImagesToMessage(params: {
 
 export async function createManagedOutgoingImageBlocks(params: {
   sessionKey: string;
-  agentId?: string;
   mediaUrls?: string[] | null;
   stateDir?: string;
   messageId?: string | null;
@@ -922,9 +870,6 @@ export async function createManagedOutgoingImageBlocks(params: {
       const record: ManagedImageRecord = {
         attachmentId: randomUUID(),
         sessionKey,
-        ...(sessionKey === "global" && params.agentId?.trim()
-          ? { agentId: params.agentId.trim() }
-          : {}),
         messageId: params.messageId ?? null,
         createdAt: new Date().toISOString(),
         retentionClass: params.messageId ? "history" : "transient",

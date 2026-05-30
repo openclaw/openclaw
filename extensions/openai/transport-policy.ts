@@ -10,6 +10,7 @@ import { isOpenAIApiBaseUrl, isOpenAICodexBaseUrl } from "./base-url.js";
 
 const DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS = 60_000;
 const AZURE_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
 
 function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -34,10 +35,13 @@ function usesKnownNativeOpenAIRoute(provider: string, baseUrl?: string): boolean
     return false;
   }
   if (normalizedProvider === "openai") {
-    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
+    return !baseUrl || isOpenAIApiBaseUrl(baseUrl);
   }
   if (AZURE_PROVIDER_IDS.has(normalizedProvider)) {
     return !baseUrl || isAzureOpenAIBaseUrl(baseUrl);
+  }
+  if (normalizedProvider === OPENAI_CODEX_PROVIDER_ID) {
+    return !baseUrl || isOpenAIApiBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl);
   }
   return false;
 }

@@ -1,5 +1,3 @@
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   collectConfiguredRuntimePluginIds,
   resolveConfiguredRuntimePluginInstallCandidate,
@@ -13,6 +11,8 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 import { shortenHomeInString } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
 import type { PluginMarketplaceListOptions, PluginRegistryOptions } from "./plugins-cli.js";

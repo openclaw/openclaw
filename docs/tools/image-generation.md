@@ -11,18 +11,17 @@ sidebarTitle: "Image generation"
 The `image_generate` tool lets the agent create and edit images using your
 configured providers. In chat sessions, image generation runs asynchronously:
 OpenClaw records a background task, returns the task id immediately, and wakes
-the agent when the provider finishes. The completion agent follows the
-session's normal visible-reply mode: automatic final reply delivery when
-configured, or `message(action="send")` when the session requires the message
-tool. If the requester session is inactive or its active wake fails, and some
-generated images are still missing from the completion reply, OpenClaw sends an
-idempotent direct fallback with only the missing images.
+the agent when the provider finishes. The completion agent must send generated
+images through the `message` tool. If the requester session is inactive or
+its active wake fails, and some generated images are still missing from
+message-tool delivery, OpenClaw sends an idempotent direct fallback with only
+the missing images.
 
 <Note>
 The tool only appears when at least one image-generation provider is
 available. If you do not see `image_generate` in your agent's tools,
 configure `agents.defaults.imageGenerationModel`, set up a provider API key,
-or sign in with OpenAI ChatGPT/Codex OAuth.
+or sign in with OpenAI Codex OAuth.
 </Note>
 
 ## Quick start
@@ -46,9 +45,9 @@ or sign in with OpenAI ChatGPT/Codex OAuth.
     }
     ```
 
-    ChatGPT/Codex OAuth uses the same `openai/gpt-image-2` model ref. When an
-    `openai` OAuth profile is configured, OpenClaw routes image requests
-    through that OAuth profile instead of first trying
+    Codex OAuth uses the same `openai/gpt-image-2` model ref. When an
+    `openai-codex` OAuth profile is configured, OpenClaw routes image
+    requests through that OAuth profile instead of first trying
     `OPENAI_API_KEY`. Explicit `models.providers.openai` config (API key,
     custom/Azure base URL) opts back into the direct OpenAI Images API
     route.
@@ -77,7 +76,7 @@ internal image endpoints remain blocked by default.
 | Goal                                                 | Model ref                                          | Auth                                   |
 | ---------------------------------------------------- | -------------------------------------------------- | -------------------------------------- |
 | OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                       |
-| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI ChatGPT/Codex OAuth             |
+| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI Codex OAuth                     |
 | OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                             | `OPENAI_API_KEY` or OpenAI Codex OAuth |
 | DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell`       | `DEEPINFRA_API_KEY`                    |
 | fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                 | `FAL_KEY`                              |
@@ -105,7 +104,7 @@ backend emits it.
 | Google     | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
 | LiteLLM    | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
 | MiniMax    | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
-| OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
+| OpenAI     | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI Codex OAuth                |
 | OpenRouter | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
 | Vydra      | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
 | xAI        | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
@@ -280,7 +279,7 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
 <AccordionGroup>
   <Accordion title="OpenAI gpt-image-2 (and gpt-image-1.5)">
     OpenAI image generation defaults to `openai/gpt-image-2`. If an
-    `openai` OAuth profile is configured, OpenClaw reuses the same
+    `openai-codex` OAuth profile is configured, OpenClaw reuses the same
     OAuth profile used by Codex subscription chat models and sends the
     image request through the Codex Responses backend. Legacy Codex base
     URLs such as `https://chatgpt.com/backend-api` are canonicalized to

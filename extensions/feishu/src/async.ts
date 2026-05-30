@@ -1,5 +1,3 @@
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-
 const RACE_TIMEOUT = Symbol("race-timeout");
 const RACE_ABORT = Symbol("race-abort");
 
@@ -28,10 +26,9 @@ export async function raceWithTimeoutAndAbort<T>(
   const contenders: Array<Promise<T | typeof RACE_TIMEOUT | typeof RACE_ABORT>> = [promise];
 
   if (options.timeoutMs !== undefined) {
-    const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, 1);
     contenders.push(
       new Promise((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(RACE_TIMEOUT), timeoutMs);
+        timeoutHandle = setTimeout(() => resolve(RACE_TIMEOUT), options.timeoutMs);
       }),
     );
   }

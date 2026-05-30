@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveEffectiveToolPolicy,
@@ -491,43 +490,21 @@ export async function maybeCompactAgentHarnessSession(
   if (params.provider && isCliRuntimeProvider(params.provider, { config: params.config })) {
     return undefined;
   }
-  const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
-  const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
-      ? undefined
-      : params.agentId;
   const runtime = resolveConfiguredAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
     config: params.config,
-    agentId: runtimePolicyAgentId,
-    sessionKey: runtimePolicySessionKey,
+    sessionKey: params.sessionKey,
   }).runtime;
   if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider, cfg: params.config })) {
     return undefined;
   }
-  const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
-  const agentHarnessRuntimeOverride =
-    selectedRuntime && !isDefaultAgentRuntimeId(selectedRuntime) ? selectedRuntime : undefined;
-  let harness: AgentHarness;
-  try {
-    harness = selectAgentHarness({
-      provider: params.provider ?? "",
-      modelId: params.model,
-      config: params.config,
-      agentId: runtimePolicyAgentId,
-      sessionKey: runtimePolicySessionKey,
-      agentHarnessRuntimeOverride,
-    });
-  } catch (err) {
-    if (agentHarnessRuntimeOverride) {
-      const message = formatErrorMessage(err);
-      if (message.includes("does not support")) {
-        return undefined;
-      }
-    }
-    throw err;
-  }
+  const harness = selectAgentHarness({
+    provider: params.provider ?? "",
+    modelId: params.model,
+    config: params.config,
+    sessionKey: params.sessionKey,
+  });
   if (!harness.compact) {
     if (harness.id !== "openclaw") {
       return {

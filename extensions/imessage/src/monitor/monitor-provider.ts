@@ -654,7 +654,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
-    const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
+    const { ctxPayload, chatTarget } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -671,7 +671,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const updateTarget = chatTarget || imessageTo;
+    const updateTarget = chatTarget || decision.sender;
     const pinnedMainDmOwner = resolvePinnedMainDmOwnerFromAllowlist({
       dmScope: cfg.session?.dmScope,
       allowFrom,

@@ -1,8 +1,3 @@
-import {
-  addTimerTimeoutGraceMs,
-  clampTimerTimeoutMs,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { DEFAULT_BROWSER_LOCAL_LAUNCH_TIMEOUT_MS } from "./constants.js";
 
 export const CDP_HTTP_REQUEST_TIMEOUT_MS = 1500;
@@ -37,11 +32,10 @@ export function usesFastLoopbackCdpProbeClass(params: {
 }
 
 function normalizeTimeoutMs(value: number | undefined): number | undefined {
-  return clampTimerTimeoutMs(value);
-}
-
-function maxTimerTimeoutMs(...values: number[]): number {
-  return values.reduce((max, value) => Math.max(max, resolveTimerTimeoutMs(value, 1)), 1);
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(value));
 }
 
 export function resolveCdpReachabilityTimeouts(params: {
@@ -52,14 +46,6 @@ export function resolveCdpReachabilityTimeouts(params: {
   remoteHandshakeTimeoutMs: number;
 }): { httpTimeoutMs: number; wsTimeoutMs: number } {
   const normalized = normalizeTimeoutMs(params.timeoutMs);
-  const remoteHttpTimeoutMs = resolveTimerTimeoutMs(
-    params.remoteHttpTimeoutMs,
-    CDP_HTTP_REQUEST_TIMEOUT_MS,
-  );
-  const remoteHandshakeTimeoutMs = resolveTimerTimeoutMs(
-    params.remoteHandshakeTimeoutMs,
-    CDP_WS_HANDSHAKE_TIMEOUT_MS,
-  );
   if (
     usesFastLoopbackCdpProbeClass({
       profileIsLoopback: params.profileIsLoopback,
@@ -75,14 +61,13 @@ export function resolveCdpReachabilityTimeouts(params: {
   }
 
   if (normalized !== undefined) {
-    const requestedWsTimeoutMs = addTimerTimeoutGraceMs(normalized, normalized) ?? normalized;
     return {
-      httpTimeoutMs: maxTimerTimeoutMs(normalized, remoteHttpTimeoutMs),
-      wsTimeoutMs: maxTimerTimeoutMs(requestedWsTimeoutMs, remoteHandshakeTimeoutMs),
+      httpTimeoutMs: Math.max(normalized, params.remoteHttpTimeoutMs),
+      wsTimeoutMs: Math.max(normalized * 2, params.remoteHandshakeTimeoutMs),
     };
   }
   return {
-    httpTimeoutMs: remoteHttpTimeoutMs,
-    wsTimeoutMs: remoteHandshakeTimeoutMs,
+    httpTimeoutMs: params.remoteHttpTimeoutMs,
+    wsTimeoutMs: params.remoteHandshakeTimeoutMs,
   };
 }

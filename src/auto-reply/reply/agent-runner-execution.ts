@@ -3,7 +3,6 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
@@ -67,6 +66,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import { sanitizeForLog } from "../../terminal/ansi.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -86,11 +86,7 @@ import {
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
-import {
-  clearDroppedCliSessionBinding,
-  keepCliSessionBindingOnlyWhenReused,
-  runCliAgentWithLifecycle,
-} from "./agent-runner-cli-dispatch.js";
+import { runCliAgentWithLifecycle } from "./agent-runner-cli-dispatch.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -721,7 +717,7 @@ function buildMissingApiKeyFailureText(message: string): string | null {
     return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (provider === "openai-codex") {
-    return "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.";
+    return "⚠️ The session is pointing at a stale OpenAI Codex auth route. Run `openclaw doctor --fix` to repair Codex model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai-codex` or run `openclaw configure`.";
   }
   if (SAFE_MISSING_API_KEY_PROVIDERS.has(provider)) {
     return `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`;
@@ -1676,15 +1672,10 @@ export async function runAgentTurnWithFallback(params: {
             model: effectiveRun.model,
           }
         : candidateRun;
-    const persistedProvider = resolveOpenAIRuntimeProvider({
-      provider,
-      config: runtimeConfig,
-      workspaceDir: params.followupRun.run.workspaceDir,
-    });
     const applied = applyFallbackCandidateSelectionToEntry({
       entry: activeSessionEntry,
       run: selectionRun,
-      provider: persistedProvider,
+      provider,
       model,
       force: candidateRun !== effectiveRun && Boolean(effectiveRun.autoFallbackPrimaryProbe),
       ...(effectiveRun.autoFallbackPrimaryProbe
@@ -2008,26 +1999,17 @@ export async function runAgentTurnWithFallback(params: {
             );
 
             if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
-              const cliSessionBinding = getCliSessionBinding(
-                params.getActiveSessionEntry(),
-                cliExecutionProvider,
-              );
+              const isRoomEventCliRun = params.followupRun.currentInboundEventKind === "room_event";
+              const cliSessionBinding = isRoomEventCliRun
+                ? undefined
+                : getCliSessionBinding(params.getActiveSessionEntry(), cliExecutionProvider);
               const authProfile = resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
                 config: runtimeConfig,
               });
-              let droppedCliSessionReplacement = false;
               const hookMessageProvider = resolveOriginMessageProvider({
                 originatingChannel: params.followupRun.originatingChannel,
                 provider: params.sessionCtx.Provider,
               });
-              const cliCurrentThreadId =
-                params.followupRun.originatingThreadId ?? params.sessionCtx.MessageThreadId;
-              const isRestartSentinelContinuation =
-                params.sessionCtx.InputProvenance?.kind === "internal_system" &&
-                params.sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
-              const cliCurrentMessageId = isRestartSentinelContinuation
-                ? params.sessionCtx.ReplyToId
-                : (params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid);
               const result = await agentTurnTiming.measure("cli_run", () =>
                 runCliAgentWithLifecycle({
                   runId,
@@ -2068,17 +2050,6 @@ export async function runAgentTurnWithFallback(params: {
                       );
                     }
                   },
-                  transformResult:
-                    params.followupRun.currentInboundEventKind === "room_event"
-                      ? (result) =>
-                          keepCliSessionBindingOnlyWhenReused({
-                            result,
-                            existingSessionId: cliSessionBinding?.sessionId,
-                            onDroppedReplacement: () => {
-                              droppedCliSessionReplacement = true;
-                            },
-                          })
-                      : undefined,
                   runParams: {
                     sessionId: params.followupRun.run.sessionId,
                     sessionKey: params.sessionKey,
@@ -2120,30 +2091,31 @@ export async function runAgentTurnWithFallback(params: {
                     skillsSnapshot: params.followupRun.run.skillsSnapshot,
                     messageChannel: params.followupRun.originatingChannel ?? undefined,
                     messageProvider: hookMessageProvider,
-                    currentChannelId:
-                      params.followupRun.originatingTo ??
-                      params.sessionCtx.OriginatingTo ??
-                      params.sessionCtx.To,
-                    currentThreadTs:
-                      cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
-                    currentMessageId: cliCurrentMessageId,
                     agentAccountId: params.followupRun.run.agentAccountId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
                     disableTools: params.opts?.disableTools,
                     abortSignal: runAbortSignal,
                     replyOperation: params.replyOperation,
                   },
+                  transformResult: (rawResult) =>
+                    isRoomEventCliRun && rawResult.meta.agentMeta
+                      ? (() => {
+                          const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
+                            rawResult.meta.agentMeta;
+                          return {
+                            ...rawResult,
+                            meta: {
+                              ...rawResult.meta,
+                              agentMeta: {
+                                ...agentMeta,
+                                sessionId: "",
+                              },
+                            },
+                          };
+                        })()
+                      : rawResult,
                 }),
               );
-              if (droppedCliSessionReplacement) {
-                await clearDroppedCliSessionBinding({
-                  provider: cliExecutionProvider,
-                  sessionKey: params.sessionKey,
-                  sessionStore: params.activeSessionStore,
-                  storePath: params.storePath,
-                  activeSessionEntry: params.getActiveSessionEntry(),
-                });
-              }
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
               );

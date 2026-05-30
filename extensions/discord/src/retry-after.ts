@@ -1,14 +1,7 @@
-import {
-  asFiniteNumberInRange,
-  parseStrictFiniteNumber,
-  parseStrictNonNegativeInteger,
-} from "openclaw/plugin-sdk/number-runtime";
-
 const RETRY_AFTER_HEADER_DELAY_RE = /^\d+$/;
 const RETRY_AFTER_BODY_SECONDS_RE = /^(?:\d+\.?\d*|\.\d+)$/;
 const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
-const MAX_SAFE_RETRY_AFTER_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
 export function parseRetryAfterHeaderSeconds(
   value: string | null | undefined,
@@ -19,10 +12,8 @@ export function parseRetryAfterHeaderSeconds(
   }
   const trimmed = value.trim();
   if (RETRY_AFTER_HEADER_DELAY_RE.test(trimmed)) {
-    return asFiniteNumberInRange(parseStrictNonNegativeInteger(trimmed), {
-      min: 0,
-      max: MAX_SAFE_RETRY_AFTER_SECONDS,
-    });
+    const delaySeconds = Number(trimmed);
+    return Number.isFinite(delaySeconds) ? delaySeconds : undefined;
   }
   if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmed)) {
     return undefined;
@@ -36,7 +27,7 @@ export function parseDiscordRetryAfterBodySeconds(value: unknown): number | unde
     typeof value === "number"
       ? value
       : typeof value === "string" && RETRY_AFTER_BODY_SECONDS_RE.test(value.trim())
-        ? parseStrictFiniteNumber(value.trim())
+        ? Number(value.trim())
         : undefined;
-  return asFiniteNumberInRange(seconds, { min: 0, max: MAX_SAFE_RETRY_AFTER_SECONDS });
+  return seconds !== undefined && Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
 }

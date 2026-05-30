@@ -89,7 +89,6 @@ function isTaskRecentSuccessfulDuplicate(params: {
 }): boolean {
   return (
     params.task.status === "succeeded" &&
-    params.task.terminalOutcome !== "blocked" &&
     Boolean(params.requestKey && params.cachedRequestKey === params.requestKey) &&
     isRecentMediaGenerationTaskRecord({
       task: params.task,

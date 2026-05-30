@@ -187,7 +187,6 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     ...buildEmbeddedAttemptToolRunContext(params),
     exec: {
       ...params.execOverrides,
-      config: params.config,
       elevated: params.bashElevated,
     },
     sandbox: input.sandbox,

@@ -1,6 +1,5 @@
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import { Format } from "typebox/format";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import {
   applyJsonSchemaDefaults,
@@ -8,6 +7,7 @@ import {
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 type TypeBoxValidationError = {

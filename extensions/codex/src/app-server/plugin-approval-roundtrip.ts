@@ -2,7 +2,6 @@ import {
   callGatewayTool,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveCodexGatewayTimeoutWithGraceMs } from "./attempt-timeouts.js";
 
 const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
@@ -38,7 +37,7 @@ export async function requestPluginApproval(params: {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return callGatewayTool(
     "plugin.approval.request",
-    { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
+    { timeoutMs: timeoutMs + 10_000 },
     {
       pluginId: "openclaw-codex-app-server",
       title: truncateForGateway(params.title, MAX_PLUGIN_APPROVAL_TITLE_LENGTH),
@@ -79,7 +78,7 @@ export async function waitForPluginApprovalDecision(params: {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   const waitPromise: Promise<ApprovalWaitResult | undefined> = callGatewayTool(
     "plugin.approval.waitDecision",
-    { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
+    { timeoutMs: timeoutMs + 10_000 },
     { id: params.approvalId },
   );
   if (!params.signal) {
