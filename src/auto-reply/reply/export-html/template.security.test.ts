@@ -628,7 +628,7 @@ describe("export html security hardening", () => {
   it("does not crash when assistant message has non-array content", async () => {
     for (const content of [null, undefined, "plain string", 42]) {
       const session: SessionData = {
-        header: { id: "session-malformed-content", timestamp: now() },
+        header: { id: "session-malformed-assistant", timestamp: now() },
         entries: [
           {
             id: "1",
@@ -646,6 +646,27 @@ describe("export html security hardening", () => {
           },
         ],
         leafId: "2",
+        systemPrompt: "",
+        tools: [],
+      };
+      await expect(renderTemplate(session)).resolves.toBeDefined();
+    }
+  });
+
+  it("does not crash when user message has non-array non-string content", async () => {
+    for (const content of [null, undefined, 42]) {
+      const session: SessionData = {
+        header: { id: "session-malformed-user", timestamp: now() },
+        entries: [
+          {
+            id: "1",
+            parentId: null,
+            timestamp: now(),
+            type: "message",
+            message: { role: "user", content },
+          },
+        ],
+        leafId: "1",
         systemPrompt: "",
         tools: [],
       };

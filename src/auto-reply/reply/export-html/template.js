@@ -1344,10 +1344,12 @@
         const text =
           typeof content === "string"
             ? content
-            : content
-                .filter((c) => c.type === "text")
-                .map((c) => c.text)
-                .join("\n");
+            : Array.isArray(content)
+                ? content
+                    .filter((c) => c.type === "text")
+                    .map((c) => c.text)
+                    .join("\n")
+                : "";
         if (text.trim()) {
           html += `<div class="markdown-content">${safeMarkedParse(text)}</div>`;
         }
