@@ -304,7 +304,7 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     const resultMessage = {
       role: "assistant",
       content: [
-        { type: "text", text: "[tool:exec]\n<parameter=command>" },
+        { type: "text", text: "[tool:exec]\n<parameter=command>\n" },
         { type: "text", text: "pwd\n</parameter>\n</function>" },
         { type: "thinking", thinking: "Checking location." },
       ],
@@ -313,7 +313,7 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     const baseFn = vi.fn(() =>
       createFakeStream({
         events: [
-          { type: "text_delta", contentIndex: 0, delta: "[tool:exec]\n<parameter=command>" },
+          { type: "text_delta", contentIndex: 0, delta: "[tool:exec]\n<parameter=command>\n" },
           { type: "text_delta", contentIndex: 1, delta: "pwd\n</parameter>\n</function>" },
           {
             type: "thinking_delta",

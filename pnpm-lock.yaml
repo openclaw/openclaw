@@ -1855,6 +1855,8 @@ importers:
 
   packages/web-content-core: {}
 
+  packages/tool-call-repair: {}
+
   ui:
     dependencies:
       '@create-markdown/preview':

@@ -332,6 +332,98 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     });
   });
 
+  it("promotes serialized tool calls split across adjacent text blocks", async () => {
+    const { source, stream } = createControlledPlainTextToolCallCompatStream();
+    const resultPromise = (await resolveStream(stream)).result();
+    const rawToolText = [
+      "[tool:read]",
+      "<parameter=path>",
+      "src/index.ts",
+      "</parameter>",
+      "</function>",
+    ].join("\n");
+
+    source.push({ type: "start", partial: { content: [] } } as never);
+    source.push({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: rawToolText,
+    } as never);
+    source.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "[tool:read]\n<parameter=path>" },
+          { type: "text", text: "src/index.ts\n</parameter>\n</function>" },
+        ],
+        stopReason: "stop",
+      },
+    } as never);
+    source.end();
+
+    const message = requireRecord(await resultPromise, "result message");
+    expect(message.stopReason).toBe("toolUse");
+    expect(requireRecord((message.content as unknown[])[0], "tool call")).toMatchObject({
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "src/index.ts" },
+    });
+  });
+
+  it("preserves exact text block adjacency inside promoted arguments", async () => {
+    const { source, stream } = createControlledPlainTextToolCallCompatStream();
+    const resultPromise = (await resolveStream(stream)).result();
+
+    source.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "[tool:read]\n<parameter=path>\nsrc/ind" },
+          { type: "text", text: "ex.ts\n</parameter>\n</function>" },
+        ],
+        stopReason: "stop",
+      },
+    } as never);
+    source.end();
+
+    const message = requireRecord(await resultPromise, "result message");
+    expect(requireRecord((message.content as unknown[])[0], "tool call")).toMatchObject({
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "src/index.ts" },
+    });
+  });
+
+  it("repairs bracketed tool-call block boundaries when providers split header text", async () => {
+    const { source, stream } = createControlledPlainTextToolCallCompatStream();
+    const resultPromise = (await resolveStream(stream)).result();
+
+    source.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "[read]" },
+          { type: "text", text: '{"path":"src/index.ts"}\n[END_TOOL_REQUEST]' },
+        ],
+        stopReason: "stop",
+      },
+    } as never);
+    source.end();
+
+    const message = requireRecord(await resultPromise, "result message");
+    expect(requireRecord((message.content as unknown[])[0], "tool call")).toMatchObject({
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "src/index.ts" },
+    });
+  });
+
   it("keeps possible tool-call text buffered across interleaved non-text events", async () => {
     const rawToolText = [
       "[tool:read]",

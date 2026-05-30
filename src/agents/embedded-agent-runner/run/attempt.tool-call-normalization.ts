@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
 import {
-  parseStandalonePlainTextToolCallBlocks,
-  type PlainTextToolCallBlock,
-} from "../../../plugin-sdk/tool-payload.js";
-import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
-import {
+  extractStandalonePlainTextToolCallText,
   normalizePlainTextToolCallStreamEvents,
+  promoteStandalonePlainTextToolCallMessage as promotePlainTextToolCallMessage,
   scrubOverCapPlainTextToolCallMessage,
+  type PlainTextToolCallBlock,
   type PlainTextToolCallNameMatcher,
-} from "../../../shared/plain-text-tool-call-stream-normalizer.js";
+} from "../../../../packages/tool-call-repair/src/index.js";
+import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import {
@@ -901,42 +900,12 @@ function extractStandaloneTextToolCallCandidateForStopReasons(
       text: string;
     }
   | undefined {
-  const record = asRecord(message);
-  if (!record || record.role !== "assistant" || !allowedStopReasons.has(record.stopReason)) {
-    return undefined;
-  }
-
-  const content = record.content;
-  if (typeof content === "string") {
-    const text = content.trim();
-    return text ? { text } : undefined;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-
-  const textParts: string[] = [];
-  for (const block of content) {
-    const blockRecord = asRecord(block);
-    if (!blockRecord) {
-      return undefined;
-    }
-    if (blockRecord.type === "text") {
-      if (typeof blockRecord.text !== "string") {
-        return undefined;
-      }
-      if (blockRecord.text.trim()) {
-        textParts.push(blockRecord.text);
-      }
-      continue;
-    }
-    if (isRetainableNonVisibleBlock(blockRecord)) {
-      continue;
-    }
-    return undefined;
-  }
-
-  const text = textParts.join("\n").trim();
+  const text = extractStandalonePlainTextToolCallText({
+    allowedStopReasons,
+    isRetainableNonTextBlock: isRetainableNonVisibleBlock,
+    message,
+    requireAssistantRole: true,
+  });
   return text ? { text } : undefined;
 }
 
@@ -944,120 +913,18 @@ function promoteStandaloneTextToolCallMessage(
   message: unknown,
   allowedToolNames?: Set<string>,
 ): Record<string, unknown> | undefined {
-  if (!allowedToolNames || allowedToolNames.size === 0) {
+  if (!allowedToolNames) {
     return undefined;
   }
-  const messageRecord = asRecord(message);
-  if (
-    !messageRecord ||
-    messageRecord.role !== "assistant" ||
-    !STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(messageRecord.stopReason)
-  ) {
-    return undefined;
-  }
-
-  const originalContent = messageRecord.content;
-  if (typeof originalContent === "string") {
-    const text = originalContent.trim();
-    if (!text) {
-      return undefined;
-    }
-    const toolCalls = createPromotedTextToolCallBlocks(text, allowedToolNames);
-    if (!toolCalls) {
-      return undefined;
-    }
-    return {
-      ...messageRecord,
-      content: toolCalls,
-      stopReason: "toolUse",
-    };
-  }
-
-  if (!Array.isArray(originalContent)) {
-    return undefined;
-  }
-
-  const content: Array<Record<string, unknown>> = [];
-  let promotedTextBlock = false;
-  let textParts: string[] = [];
-  const flushTextParts = (): boolean | undefined => {
-    if (textParts.length === 0) {
-      return false;
-    }
-    const text = textParts.join("\n").trim();
-    textParts = [];
-    if (!text) {
-      return false;
-    }
-    const toolCalls = createPromotedTextToolCallBlocks(text, allowedToolNames);
-    if (!toolCalls) {
-      return undefined;
-    }
-    content.push(...toolCalls);
-    return true;
-  };
-
-  for (const block of originalContent) {
-    const blockRecord = asRecord(block);
-    if (!blockRecord) {
-      return undefined;
-    }
-    if (blockRecord.type === "text") {
-      if (typeof blockRecord.text !== "string") {
-        return undefined;
-      }
-      const text = blockRecord.text.trim();
-      if (!text) {
-        continue;
-      }
-      textParts.push(blockRecord.text);
-      continue;
-    }
-    const promotedTextRun = flushTextParts();
-    if (promotedTextRun === undefined) {
-      return undefined;
-    }
-    promotedTextBlock ||= promotedTextRun;
-    if (isRetainableNonVisibleBlock(blockRecord)) {
-      content.push(blockRecord);
-      continue;
-    }
-    return undefined;
-  }
-  const promotedTrailingTextRun = flushTextParts();
-  if (promotedTrailingTextRun === undefined) {
-    return undefined;
-  }
-  promotedTextBlock ||= promotedTrailingTextRun;
-  if (!promotedTextBlock) {
-    return undefined;
-  }
-
-  return {
-    ...messageRecord,
-    content,
-    stopReason: "toolUse",
-  };
-}
-
-function createPromotedTextToolCallBlocks(
-  text: string,
-  allowedToolNames: Set<string>,
-): PromotedTextToolCallBlock[] | undefined {
-  const parsedBlocks = parseStandalonePlainTextToolCallBlocks(text);
-  if (!parsedBlocks) {
-    return undefined;
-  }
-
-  const toolCalls: PromotedTextToolCallBlock[] = [];
-  for (const block of parsedBlocks) {
-    const resolvedName = resolveExactAllowedToolName(block.name, allowedToolNames);
-    if (!resolvedName) {
-      return undefined;
-    }
-    toolCalls.push(createPromotedTextToolCallBlock(block, resolvedName));
-  }
-  return toolCalls;
+  return promotePlainTextToolCallMessage({
+    allowedStopReasons: STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS,
+    allowedToolNames,
+    createToolCallBlock: createPromotedTextToolCallBlock,
+    isRetainableNonTextBlock: isRetainableNonVisibleBlock,
+    message,
+    requireAssistantRole: true,
+    resolveToolName: resolveExactAllowedToolName,
+  });
 }
 
 function createPromotedToolCallEvents(

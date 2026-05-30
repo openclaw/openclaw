@@ -1,17 +1,18 @@
 import { randomUUID } from "node:crypto";
+import {
+  extractStandalonePlainTextToolCallText,
+  normalizePlainTextToolCallStreamEvents,
+  promoteStandalonePlainTextToolCallMessage,
+  scrubOverCapPlainTextToolCallMessage,
+  type PlainTextToolCallNameMatcher,
+  type PlainTextToolCallMessageNormalization,
+} from "../../packages/tool-call-repair/src/index.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import {
-  normalizePlainTextToolCallStreamEvents,
-  scrubOverCapPlainTextToolCallMessage,
-  type PlainTextToolCallNameMatcher,
-  type PlainTextToolCallMessageNormalization,
-} from "../shared/plain-text-tool-call-stream-normalizer.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
-import { parseStandalonePlainTextToolCallBlocks } from "./tool-payload.js";
 
 export type ProviderStreamWrapperFactory =
   | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
@@ -69,65 +70,18 @@ function promotePlainTextToolCalls(
   toolNames: Set<string>,
 ): Record<string, unknown> | undefined {
   const messageRecord = toRecord(message);
-  if (!messageRecord) {
-    return undefined;
-  }
-  if (!Array.isArray(messageRecord.content)) {
-    if (typeof messageRecord.content !== "string" || !messageRecord.content.trim()) {
-      return undefined;
-    }
-    const parsed = parseStandalonePlainTextToolCallBlocks(messageRecord.content, {
-      allowedToolNames: toolNames,
-    });
-    if (!parsed) {
-      return undefined;
-    }
-    return {
-      ...messageRecord,
-      content: parsed.map(createPlainTextToolCallBlock),
-      stopReason: "toolUse",
-    };
-  }
   if (
-    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall") ||
-    messageRecord.content.length === 0
+    Array.isArray(messageRecord?.content) &&
+    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall")
   ) {
     return undefined;
   }
-
-  let promoted = false;
-  const nextContent: Array<Record<string, unknown>> = [];
-  for (const block of messageRecord.content) {
-    const blockRecord = toRecord(block);
-    if (!blockRecord) {
-      return undefined;
-    }
-    if (blockRecord.type !== "text") {
-      nextContent.push(blockRecord);
-      continue;
-    }
-    const text = typeof blockRecord.text === "string" ? blockRecord.text : "";
-    if (!text.trim()) {
-      continue;
-    }
-    const parsed = parseStandalonePlainTextToolCallBlocks(text, {
-      allowedToolNames: toolNames,
-    });
-    if (!parsed) {
-      return undefined;
-    }
-    nextContent.push(...parsed.map(createPlainTextToolCallBlock));
-    promoted = true;
-  }
-
-  if (!promoted) {
-    return undefined;
-  }
-  return {
-    ...messageRecord,
-    content: nextContent,
-    stopReason: "toolUse",
-  };
+  return promoteStandalonePlainTextToolCallMessage({
+    allowedToolNames: toolNames,
+    createToolCallBlock: (block, name) => createPlainTextToolCallBlock({ ...block, name }),
+    isRetainableNonTextBlock: () => true,
+    message,
+  });
 }
 
 function emitPromotedToolCallEvents(
@@ -151,37 +105,10 @@ function emitPromotedToolCallEvents(
 }
 
 function extractPlainTextToolCallCandidate(message: unknown): string | undefined {
-  const messageRecord = toRecord(message);
-  if (!messageRecord) {
-    return undefined;
-  }
-  const content = messageRecord.content;
-  if (typeof content === "string") {
-    const text = content.trim();
-    return text || undefined;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-
-  const textParts: string[] = [];
-  for (const block of content) {
-    const blockRecord = toRecord(block);
-    if (!blockRecord) {
-      return undefined;
-    }
-    if (blockRecord.type !== "text") {
-      continue;
-    }
-    if (typeof blockRecord.text !== "string") {
-      return undefined;
-    }
-    if (blockRecord.text.trim()) {
-      textParts.push(blockRecord.text);
-    }
-  }
-  const text = textParts.join("\n").trim();
-  return text || undefined;
+  return extractStandalonePlainTextToolCallText({
+    allowOtherNonTextBlocks: true,
+    message,
+  });
 }
 
 function createProviderToolNameMatcher(toolNames: Set<string>): PlainTextToolCallNameMatcher {

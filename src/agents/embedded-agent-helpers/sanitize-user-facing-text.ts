@@ -1,5 +1,5 @@
+import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
-import { stripPlainTextToolCallBlocks } from "../../plugin-sdk/tool-payload.js";
 import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
