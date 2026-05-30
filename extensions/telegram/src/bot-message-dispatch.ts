@@ -1852,7 +1852,7 @@ export const dispatchTelegramMessage = async ({
                       const finalText = await resolveTranscriptBackedFinalText(text);
                       stripInterleavedFinalAnswer(finalText);
                       if (interleavedProgressEnabled) {
-                        await flushDraftLane(reasoningLane);
+                        await reasoningLane.stream?.stop();
                       }
                       if (streamMode === "progress") {
                         return deliverProgressModeFinalAnswer(answerPayload, finalText);

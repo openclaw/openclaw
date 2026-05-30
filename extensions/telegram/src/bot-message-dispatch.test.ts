@@ -2566,6 +2566,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(lastReasoningUpdate).toContain("Final check");
     expect(lastReasoningUpdate.match(/Thinking/gu)?.length).toBe(1);
     expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+    expect(reasoningDraftStream.stop.mock.invocationCallOrder[0]).toBeLessThan(
+      answerDraftStream.update.mock.invocationCallOrder[0],
+    );
   });
 
   it("replaces reasoning snapshots on the reasoning lane", async () => {
