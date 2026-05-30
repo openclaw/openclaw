@@ -628,6 +628,7 @@ export const SkillsProposalInspectResultSchema = Type.Object(
   {
     record: SkillProposalRecordSchema,
     content: Type.String(),
+    supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
   },
   { additionalProperties: false },
 );

@@ -287,6 +287,9 @@ function proposalResult(
       scanState: proposal.record.scan.state,
       proposedVersion: proposal.record.proposedVersion,
       ...(options.includeContent ? { proposalContent: proposal.content } : {}),
+      ...(options.includeContent && proposal.supportFiles
+        ? { supportFiles: proposal.supportFiles }
+        : {}),
     },
   };
 }
@@ -310,10 +313,15 @@ async function readProposalForInspect(
     }
     return proposal;
   }
-  return await resolvePendingSkillProposal({
+  const resolved = await resolvePendingSkillProposal({
     name: readStringParam(params, "name", { required: true }),
     workspaceDir,
   });
+  const proposal = await inspectSkillProposal(resolved.record.id, { workspaceDir });
+  if (!proposal) {
+    throw new ToolInputError(`Skill proposal not found: ${resolved.record.id}`);
+  }
+  return proposal;
 }
 
 function readProposalStatusParam(params: Record<string, unknown>): SkillProposalStatus | undefined {
@@ -398,6 +406,14 @@ function formatProposalList(proposals: readonly SkillProposalManifestEntry[]): s
 }
 
 function formatProposalInspect(proposal: SkillProposalReadResult): string {
+  const supportFiles =
+    proposal.supportFiles && proposal.supportFiles.length > 0
+      ? [
+          "",
+          "Support files:",
+          ...proposal.supportFiles.flatMap((file) => ["", `--- ${file.path} ---`, file.content]),
+        ]
+      : [];
   return [
     `Proposal: ${proposal.record.id}`,
     `Status: ${proposal.record.status}`,
@@ -407,6 +423,7 @@ function formatProposalInspect(proposal: SkillProposalReadResult): string {
     `Scan: ${proposal.record.scan.state}`,
     "",
     proposal.content,
+    ...supportFiles,
   ].join("\n");
 }
 

@@ -118,6 +118,18 @@ describe("skills proposal gateway handlers", () => {
     });
     expect(inspect.ok).toBe(true);
     expect((inspect.response as { content: string }).content).toContain("status: proposal");
+    expect(
+      (
+        inspect.response as {
+          supportFiles?: Array<{ path: string; content: string }>;
+        }
+      ).supportFiles,
+    ).toEqual([
+      {
+        path: "references/weather.md",
+        content: "Use current weather before recommendations.\n",
+      },
+    ]);
 
     const revise = await callHandler("skills.proposals.revise", {
       proposalId: created.record.id,

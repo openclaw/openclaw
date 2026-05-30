@@ -71,6 +71,18 @@ describe("skill workshop proposals", () => {
       "references/weather-api.md",
       "scripts/check-weather.js",
     ]);
+    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+      supportFiles: [
+        {
+          path: "references/weather-api.md",
+          content: "# Weather API\n\nUse the current weather endpoint.\n",
+        },
+        {
+          path: "scripts/check-weather.js",
+          content: "export function parseWeather(value) { return value; }\n",
+        },
+      ],
+    });
     expect(proposal.record.target.skillFile).toBe(
       path.join(workspaceDir, "skills", "weather-helper", "SKILL.md"),
     );

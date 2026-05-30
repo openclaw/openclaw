@@ -169,7 +169,7 @@ export async function inspectSkillProposal(
   if (options.workspaceDir && !isProposalInWorkspace(read.record, options.workspaceDir)) {
     return null;
   }
-  return read;
+  return await hydrateProposalSupportFiles(read);
 }
 
 export async function resolvePendingSkillProposal(input: {
@@ -802,6 +802,22 @@ async function readRequiredProposal(
     throw new Error(`Skill proposal not found: ${proposalId}`);
   }
   return read;
+}
+
+async function hydrateProposalSupportFiles(
+  read: SkillProposalReadResult,
+): Promise<SkillProposalReadResult> {
+  const supportFiles = await readProposalSupportFiles(read.record);
+  if (supportFiles.length === 0) {
+    return read;
+  }
+  return {
+    ...read,
+    supportFiles: supportFiles.map((file) => ({
+      path: file.path,
+      content: file.content,
+    })),
+  };
 }
 
 function isProposalInWorkspace(record: SkillProposalRecord, workspaceDir: string): boolean {

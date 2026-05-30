@@ -104,6 +104,12 @@ describe("SkillsProposalInspectResultSchema", () => {
         ],
       },
       content: "# Weather Helper\n",
+      supportFiles: [
+        {
+          path: "references/weather.md",
+          content: "Use current weather before recommendations.\n",
+        },
+      ],
     };
 
     expect(Value.Check(SkillsProposalInspectResultSchema, result)).toBe(true);

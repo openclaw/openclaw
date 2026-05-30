@@ -139,6 +139,8 @@ describe("skills workshop cli", () => {
 
     await runCommand(["skills", "workshop", "inspect", proposalId!]);
     expect(mocks.runtimeStdout.at(-1)).toContain("status: proposal");
+    expect(mocks.runtimeStdout.at(-1)).toContain("--- references/weather.md ---");
+    expect(mocks.runtimeStdout.at(-1)).toContain("Use current conditions before recommendations.");
 
     const revisedPath = path.join(mocks.workspaceDir, "revised-proposal.md");
     await fs.writeFile(

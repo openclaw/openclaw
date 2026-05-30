@@ -192,6 +192,14 @@ function formatSkillProposalList(manifest: SkillProposalManifest): string {
 
 function formatSkillProposalInspect(read: SkillProposalReadResult): string {
   const { record } = read;
+  const supportFiles =
+    read.supportFiles && read.supportFiles.length > 0
+      ? [
+          "",
+          "Support files:",
+          ...read.supportFiles.flatMap((file) => ["", `--- ${file.path} ---`, file.content]),
+        ]
+      : [];
   return [
     `ID: ${record.id}`,
     `Status: ${record.status}`,
@@ -202,6 +210,7 @@ function formatSkillProposalInspect(read: SkillProposalReadResult): string {
     record.statusReason ? `Reason: ${record.statusReason}` : undefined,
     "",
     read.content,
+    ...supportFiles,
   ]
     .filter((line) => line !== undefined)
     .join("\n");

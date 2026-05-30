@@ -141,6 +141,7 @@ export type SkillProposalActionInput = {
 export type SkillProposalReadResult = {
   record: SkillProposalRecord;
   content: string;
+  supportFiles?: SkillProposalSupportFileInput[];
 };
 
 export type SkillProposalApplyResult = {

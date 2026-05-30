@@ -158,6 +158,21 @@ describe("skill_research tool", () => {
     expect((inspected.details as { proposalContent: string }).proposalContent).toContain(
       "Check weather, alerts, and timing.",
     );
+    expect((inspected.content[0] as { text: string }).text).toContain(
+      "--- references/weather.md ---",
+    );
+    expect(
+      (
+        inspected.details as {
+          supportFiles: Array<{ path: string; content: string }>;
+        }
+      ).supportFiles,
+    ).toEqual([
+      {
+        path: "references/weather.md",
+        content: "Use weather API details and current alerts.\n",
+      },
+    ]);
 
     const revisedByName = await tool.execute("call-5", {
       action: "revise",
