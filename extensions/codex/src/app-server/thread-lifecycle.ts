@@ -973,6 +973,9 @@ export function buildTurnCollaborationMode(
   };
 }
 
+// Authority boundary: highest-precedence developer lane (collaborationMode overrides
+// developer_instructions). Only allow-listed workspace identity files (SOUL/IDENTITY/USER)
+// belong here; never route the mixed-source skills catalog or MEMORY.md body in.
 function buildTurnScopedCollaborationInstructions(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -1126,6 +1129,9 @@ function compareJsonFingerprint(left: JsonValue, right: JsonValue): number {
   return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
 
+// Authority boundary: keep the mixed-source skills catalog and MEMORY.md body out of this
+// thread-level developer lane (only OpenClaw-owned/static content + allow-listed workspace
+// files belong here); promoting author-controlled metadata would grant it developer authority.
 export function buildDeveloperInstructions(
   params: EmbeddedRunAttemptParams,
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},

@@ -158,6 +158,22 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("<available_skills>");
   });
 
+  it("keeps OpenClaw skill catalogs out of the turn collaboration developer instructions", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
+
+    // The collaboration builder has no skills input; pin that wiring skillsSnapshot in here
+    // (a future context-reduction shortcut) would fail closed.
+    const collaboration = buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: "Soul voice goes here.",
+    });
+
+    expect(collaboration.settings.developer_instructions ?? "").not.toContain("<available_skills>");
+  });
+
   it("enables Codex code mode on thread/start without clobbering other config", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",

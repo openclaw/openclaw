@@ -1157,6 +1157,58 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("keeps mixed-source skill descriptions out of both Codex developer-instruction lanes", async () => {
+    const sessionFile = path.join(tempDir, "session-skill-source-boundary.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-skill-source-boundary");
+    const soulGuidance = "Soul voice goes here.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    // Populate the collaboration developer lane with legitimate identity content so the
+    // "skills are absent" assertions below are meaningful (the lane is non-empty).
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Identity guidance goes here.");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "User profile goes here.");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    setAgentWorkspaceForTest(params, workspaceDir);
+    // Author-controlled metadata from a non-bundled skill (workspace/project/personal/
+    // managed/plugin-generated). It must stay in the user/reference lane and never gain
+    // developer authority (boundary set by #83454/#84331).
+    const untrustedSkillDescription = "UNTRUSTED_SKILL_DESCRIPTION_SENTINEL";
+    params.skillsSnapshot = {
+      prompt: `<available_skills><skill><name>workspace-demo</name><description>${untrustedSkillDescription}</description><location>~/.agents/skills/workspace-demo</location></skill></available_skills>`,
+      skills: [{ name: "workspace-demo" }],
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as { developerInstructions?: string };
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+      collaborationMode?: { settings?: { developer_instructions?: string | null } };
+    };
+    const collaborationInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+
+    // Thread-level developer instructions: no skills catalog, no author-controlled metadata.
+    expect(threadStartParams.developerInstructions ?? "").not.toContain("<available_skills>");
+    expect(threadStartParams.developerInstructions ?? "").not.toContain(untrustedSkillDescription);
+    // Turn-scoped collaboration developer instructions (highest-precedence lane): populated
+    // with identity content, but never the skills catalog or its descriptions.
+    expect(collaborationInstructions).toContain(soulGuidance);
+    expect(collaborationInstructions).not.toContain("<available_skills>");
+    expect(collaborationInstructions).not.toContain(untrustedSkillDescription);
+    // The skills catalog stays visible in the non-authoritative user/reference lane.
+    expect(inputText).toContain("<available_skills>");
+    expect(inputText).toContain(untrustedSkillDescription);
+  });
+
   it("keeps leading delivery hints out of the Codex current user request", async () => {
     const sessionFile = path.join(tempDir, "session-delivery-hint.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-delivery-hint");
@@ -3705,6 +3757,67 @@ describe("runCodexAppServerAttempt", () => {
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
     expect(resumeRequestParams?.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+  });
+
+  it("keeps reused-snapshot skills and MEMORY.md body out of developer instructions on resume", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const soulGuidance = "Soul voice goes here.";
+    const memorySummary = "Persisted memory body goes here.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    // Populate the collaboration developer lane with legitimate identity content so the
+    // collaboration-sink assertions below are non-trivial (the lane is non-empty on resume).
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "Identity guidance goes here.");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "User profile goes here.");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const { requests, waitForMethod, completeTurn } = createResumeHarness();
+
+    const params = createParams(sessionFile, workspaceDir);
+    setAgentWorkspaceForTest(params, workspaceDir);
+    // Lightweight persisted snapshot: per-skill source is runtime-only and stripped on
+    // persistence (SessionSkillSnapshot keeps only prompt + catalog), so on a reused
+    // snapshot the render path cannot reconstruct trust. The mixed-source prompt must
+    // therefore never be promoted into a developer-instruction lane on resume.
+    const untrustedSkillDescription = "UNTRUSTED_REUSED_SKILL_DESCRIPTION_SENTINEL";
+    params.skillsSnapshot = {
+      prompt: `<available_skills><skill><name>workspace-demo</name><description>${untrustedSkillDescription}</description><location>~/.agents/skills/workspace-demo</location></skill></available_skills>`,
+      skills: [{ name: "workspace-demo" }],
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    const resumeRequest = requests.find((request) => request.method === "thread/resume");
+    const resumeDeveloperInstructions =
+      (resumeRequest?.params as { developerInstructions?: string } | undefined)
+        ?.developerInstructions ?? "";
+    const turnStart = requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      input?: Array<{ text?: string }>;
+      collaborationMode?: { settings?: { developer_instructions?: string | null } };
+    };
+    const collaborationInstructions =
+      turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
+    const inputText = turnStartParams.input?.[0]?.text ?? "";
+
+    // Resume thread-level developer instructions: no reused skills, no persisted memory body.
+    expect(resumeDeveloperInstructions).not.toContain("<available_skills>");
+    expect(resumeDeveloperInstructions).not.toContain(untrustedSkillDescription);
+    expect(resumeDeveloperInstructions).not.toContain(memorySummary);
+    // Turn-scoped collaboration developer instructions: populated with identity content, but
+    // never the reused skills catalog or the persisted memory body.
+    expect(collaborationInstructions).toContain(soulGuidance);
+    expect(collaborationInstructions).not.toContain("<available_skills>");
+    expect(collaborationInstructions).not.toContain(untrustedSkillDescription);
+    expect(collaborationInstructions).not.toContain(memorySummary);
+    // The reused skills catalog and bounded MEMORY.md body stay in the user/reference lane.
+    expect(inputText).toContain("<available_skills>");
+    expect(inputText).toContain(untrustedSkillDescription);
+    expect(inputText).toContain(memorySummary);
   });
 
   it("starts a fresh Codex thread before resume when the native rollout reaches the fallback fuse", async () => {
