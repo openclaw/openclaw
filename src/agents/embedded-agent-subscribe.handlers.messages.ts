@@ -1,5 +1,5 @@
-import { createInlineCodeState } from "@openclaw/markdown-core/code-spans";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,

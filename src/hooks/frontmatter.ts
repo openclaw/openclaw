@@ -1,4 +1,4 @@
-import { parseFrontmatterBlock } from "@openclaw/markdown-core/frontmatter";
+import { parseFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import {
   applyOpenClawManifestInstallCommonFields,
   getFrontmatterString,

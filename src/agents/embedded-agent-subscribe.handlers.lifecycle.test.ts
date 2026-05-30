@@ -1,5 +1,5 @@
-import { createInlineCodeState } from "@openclaw/markdown-core/code-spans";
 import { describe, expect, it, vi } from "vitest";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { handleAgentEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 

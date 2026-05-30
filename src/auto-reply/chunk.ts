@@ -2,7 +2,11 @@
 // unintentionally breaking on newlines. Using [\s\S] keeps newlines inside
 // the chunk so messages are only split when they truly exceed the limit.
 
-import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "@openclaw/markdown-core/fences";
+import {
+  findFenceSpanAt,
+  isSafeFenceBreak,
+  parseFenceSpans,
+} from "../../packages/markdown-core/src/fences.js";
 import type { ChannelId } from "../channels/plugins/types.core.js";
 import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

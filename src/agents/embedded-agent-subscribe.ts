@@ -1,6 +1,9 @@
-import type { InlineCodeState } from "@openclaw/markdown-core/code-spans";
-import { buildCodeSpanIndex, createInlineCodeState } from "@openclaw/markdown-core/code-spans";
-import type { FenceScanState } from "@openclaw/markdown-core/fences";
+import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import {
+  buildCodeSpanIndex,
+  createInlineCodeState,
+} from "../../packages/markdown-core/src/code-spans.js";
+import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";

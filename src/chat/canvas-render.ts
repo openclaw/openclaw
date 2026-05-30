@@ -1,4 +1,4 @@
-import { parseFenceSpans } from "@openclaw/markdown-core/fences";
+import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { asFiniteNumber } from "../shared/number-coercion.js";
 import { asOptionalRecord } from "../shared/record-coerce.js";
 

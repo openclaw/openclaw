@@ -1,4 +1,4 @@
-import { parseFrontmatterBlock } from "@openclaw/markdown-core/frontmatter";
+import { parseFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { validateRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import {
   applyOpenClawManifestInstallCommonFields,

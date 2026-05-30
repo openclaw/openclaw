@@ -1,4 +1,4 @@
-import { convertMarkdownTables } from "@openclaw/markdown-core/tables";
+import { convertMarkdownTables } from "../../../packages/markdown-core/src/tables.js";
 import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
 import {
   chunkByNewline,
