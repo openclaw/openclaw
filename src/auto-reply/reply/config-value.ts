@@ -10,8 +10,8 @@ export function parseConfigValue(raw: string): {
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
       return { value: JSON.parse(trimmed) };
-    } catch (err) {
-      return { error: `Invalid JSON: ${String(err)}` };
+    } catch {
+      return { value: trimmed };
     }
   }
 

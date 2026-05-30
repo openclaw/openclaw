@@ -27,6 +27,11 @@ describe("markdownToTelegramHtml", () => {
         "&lt;script&gt;nope&lt;/script&gt;",
       ],
       ["escapes unsafe characters", "a & b < c", "a &amp; b &lt; c"],
+      [
+        "keeps bracketed config values visible",
+        '⚙️ Config updated: messages.responsePrefix="[cu-bracket]"',
+        '⚙️ Config updated: messages.responsePrefix="[cu-bracket]"',
+      ],
       ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
       ["renders lists without block HTML", "- one\n- two", "• one\n• two"],
       ["renders ordered lists with numbering", "2. two\n3. three", "2. two\n3. three"],
@@ -57,6 +62,9 @@ describe("markdownToTelegramHtml", () => {
   it("does not promote Telegram HTML tags inside code", () => {
     expect(markdownToTelegramHtml("`<b>literal</b>`")).toBe(
       "<code>&lt;b&gt;literal&lt;/b&gt;</code>",
+    );
+    expect(markdownToTelegramHtml('```json\n"[cu-bracket]"\n```')).toBe(
+      '<pre><code class="language-json">"[cu-bracket]"\n</code></pre>',
     );
     expect(markdownToTelegramHtml("```\n<blockquote>literal</blockquote>\n```")).toBe(
       "<pre><code>&lt;blockquote&gt;literal&lt;/blockquote&gt;\n</code></pre>",

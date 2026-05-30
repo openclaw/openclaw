@@ -18,6 +18,11 @@ describe("COMMAND_ARG_FORMATTERS", () => {
     expect(formatArgs("config", { action: "set" })).toBe("set");
     expect(formatArgs("config", { action: "set", path: "x" })).toBe("set x");
     expect(formatArgs("config", { action: "set", path: "x", value: 1 })).toBe("set x=1");
+    expect(formatArgs("config", { action: "set", path: "x", value: "1" })).toBe('set x="1"');
+    expect(formatArgs("config", { action: "set", path: "x", value: "[tag]" })).toBe(
+      'set x="[tag]"',
+    );
+    expect(formatArgs("config", { action: "set", path: "x", value: "" })).toBe('set x=""');
     expect(formatArgs("config", { action: "set", path: "x", value: { ok: true } })).toBe(
       'set x={"ok":true}',
     );

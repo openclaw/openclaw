@@ -26,6 +26,17 @@ function normalizeArgValue(value: unknown): string | undefined {
   return text ? text : undefined;
 }
 
+function formatAssignmentArgValue(value: unknown): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const text = normalizeOptionalString(value) ?? "";
+    return JSON.stringify(text);
+  }
+  return normalizeArgValue(value);
+}
+
 function formatActionArgs(
   values: CommandArgValues,
   params: {
@@ -34,7 +45,7 @@ function formatActionArgs(
 ): string | undefined {
   const action = normalizeOptionalLowercaseString(normalizeArgValue(values.action));
   const path = normalizeArgValue(values.path);
-  const value = normalizeArgValue(values.value);
+  const value = formatAssignmentArgValue(values.value);
   if (!action) {
     return undefined;
   }

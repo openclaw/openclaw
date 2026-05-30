@@ -18,6 +18,19 @@ describe("stripStructuralPrefixes", () => {
     expect(stripStructuralPrefixes("just a message")).toBe("just a message");
   });
 
+  it("preserves bracketed values inside command arguments", () => {
+    expect(stripStructuralPrefixes('/config set messages.responsePrefix="[cu]"')).toBe(
+      '/config set messages.responsePrefix="[cu]"',
+    );
+    expect(stripStructuralPrefixes('/config set messages.responsePrefix="pre[cu]post"')).toBe(
+      '/config set messages.responsePrefix="pre[cu]post"',
+    );
+  });
+
+  it("strips leading bracketed structural prefixes", () => {
+    expect(stripStructuralPrefixes("[Fri 2026-05-29 00:00 PDT] /status")).toBe("/status");
+  });
+
   it("flattens multiline soft reset commands before downstream parsing", () => {
     expect(stripStructuralPrefixes("/reset soft\nre-read persona files")).toBe(
       "/reset soft re-read persona files",

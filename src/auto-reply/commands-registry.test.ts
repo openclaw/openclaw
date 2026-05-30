@@ -626,6 +626,26 @@ describe("commands registry args", () => {
     );
   });
 
+  it("serializes native config string values without changing their type", () => {
+    const command = requireNativeCommand("config");
+
+    expect(
+      buildCommandTextFromArgs(command, {
+        values: { action: "set", path: "messages.responsePrefix", value: "[tag]" },
+      }),
+    ).toBe('/config set messages.responsePrefix="[tag]"');
+    expect(
+      buildCommandTextFromArgs(command, {
+        values: { action: "set", path: "messages.responsePrefix", value: "true" },
+      }),
+    ).toBe('/config set messages.responsePrefix="true"');
+    expect(
+      buildCommandTextFromArgs(command, {
+        values: { action: "set", path: "messages.responsePrefix", value: "" },
+      }),
+    ).toBe('/config set messages.responsePrefix=""');
+  });
+
   it("resolves auto arg menus when missing a choice arg", () => {
     const command = createUsageModeCommand();
 

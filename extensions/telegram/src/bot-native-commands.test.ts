@@ -411,6 +411,69 @@ describe("registerTelegramNativeCommands", () => {
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
   });
 
+  it("preserves raw /config values when routing Telegram native commands", async () => {
+    const { bot, commandHandlers } = createCommandBot();
+    const params = createNativeCommandTestParams(
+      { commands: { config: true } },
+      { bot, allowFrom: [200] },
+    );
+
+    registerTelegramNativeCommands(params);
+
+    const handler = commandHandlers.get("config");
+    if (!handler) {
+      throw new Error("expected config command handler to be registered");
+    }
+    await handler(
+      createPrivateCommandContext({
+        match: 'set messages.responsePrefix="[cu-bracket]"',
+      }),
+    );
+
+    const dispatchParams = firstCallArg(
+      params.telegramDeps?.dispatchReplyWithBufferedBlockDispatcher as unknown as {
+        mock: { calls: Array<Array<unknown>> };
+      },
+    );
+    const ctxPayload = dispatchParams.ctx as Record<string, unknown>;
+    expect(ctxPayload.CommandBody).toBe('/config set messages.responsePrefix="[cu-bracket]"');
+    expect(ctxPayload.CommandArgs).toEqual({
+      raw: 'set messages.responsePrefix="[cu-bracket]"',
+    });
+  });
+
+  it("prefers Telegram message text when framework command payload drops bracketed spans", async () => {
+    const { bot, commandHandlers } = createCommandBot();
+    const params = createNativeCommandTestParams(
+      { commands: { config: true } },
+      { bot, allowFrom: [200] },
+    );
+
+    registerTelegramNativeCommands(params);
+
+    const handler = commandHandlers.get("config");
+    if (!handler) {
+      throw new Error("expected config command handler to be registered");
+    }
+    await handler(
+      createPrivateCommandContext({
+        match: 'set messages.responsePrefix="prepost"',
+        text: '/config set messages.responsePrefix="pre[cu]post"',
+      }),
+    );
+
+    const dispatchParams = firstCallArg(
+      params.telegramDeps?.dispatchReplyWithBufferedBlockDispatcher as unknown as {
+        mock: { calls: Array<Array<unknown>> };
+      },
+    );
+    const ctxPayload = dispatchParams.ctx as Record<string, unknown>;
+    expect(ctxPayload.CommandBody).toBe('/config set messages.responsePrefix="pre[cu]post"');
+    expect(ctxPayload.CommandArgs).toEqual({
+      raw: 'set messages.responsePrefix="pre[cu]post"',
+    });
+  });
+
   it("passes agent-scoped media roots for plugin command replies with media", async () => {
     const mediaMaxBytes = 50 * 1024 * 1024;
     const cfg: OpenClawConfig = {

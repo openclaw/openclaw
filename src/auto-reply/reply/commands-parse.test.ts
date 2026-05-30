@@ -35,6 +35,31 @@ describe("config/debug command parsing", () => {
         input: '/config set foo={"a":1}',
         expected: { action: "set", path: "foo", value: { a: 1 } },
       },
+      {
+        parse: parseConfigCommand,
+        input: '/config set messages.responsePrefix="cu-quoted"',
+        expected: { action: "set", path: "messages.responsePrefix", value: "cu-quoted" },
+      },
+      {
+        parse: parseConfigCommand,
+        input: '/config set messages.responsePrefix="[cu-bracket]"',
+        expected: { action: "set", path: "messages.responsePrefix", value: "[cu-bracket]" },
+      },
+      {
+        parse: parseConfigCommand,
+        input: "/config set messages.responsePrefix=[cu-unquoted]",
+        expected: { action: "set", path: "messages.responsePrefix", value: "[cu-unquoted]" },
+      },
+      {
+        parse: parseConfigCommand,
+        input: "/config set messages.responsePrefix={cu-objectish}",
+        expected: { action: "set", path: "messages.responsePrefix", value: "{cu-objectish}" },
+      },
+      {
+        parse: parseConfigCommand,
+        input: '/config set messages.responsePrefix="pre[cu]post"',
+        expected: { action: "set", path: "messages.responsePrefix", value: "pre[cu]post" },
+      },
       { parse: parseDebugCommand, input: "/debug", expected: { action: "show" } },
       { parse: parseDebugCommand, input: "/debug show", expected: { action: "show" } },
       { parse: parseDebugCommand, input: "/debug reset", expected: { action: "reset" } },

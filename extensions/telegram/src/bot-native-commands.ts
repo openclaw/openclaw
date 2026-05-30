@@ -142,6 +142,49 @@ type TelegramNativeCommandThreadContext = {
   threadParams: ReturnType<typeof buildTelegramThreadParams>;
 };
 
+function resolveTelegramNativeCommandPayloadFromText(params: {
+  text?: unknown;
+  commandName: string;
+  botUsername?: string;
+}): string | undefined {
+  if (typeof params.text !== "string") {
+    return undefined;
+  }
+  const text = params.text.trimStart();
+  if (!text.startsWith("/")) {
+    return undefined;
+  }
+
+  let index = 1;
+  while (index < text.length && /[A-Za-z0-9_]/.test(text[index] ?? "")) {
+    index += 1;
+  }
+  const incomingName = text.slice(1, index);
+  if (
+    normalizeTelegramCommandName(incomingName) !== normalizeTelegramCommandName(params.commandName)
+  ) {
+    return undefined;
+  }
+
+  if (text[index] === "@") {
+    let mentionEnd = index + 1;
+    while (mentionEnd < text.length && /[A-Za-z0-9_]/.test(text[mentionEnd] ?? "")) {
+      mentionEnd += 1;
+    }
+    const mention = text.slice(index + 1, mentionEnd);
+    const botUsername = normalizeOptionalLowercaseString(params.botUsername);
+    if (botUsername && normalizeOptionalLowercaseString(mention) !== botUsername) {
+      return undefined;
+    }
+    index = mentionEnd;
+  }
+
+  if (index < text.length && !/\s/.test(text[index] ?? "")) {
+    return undefined;
+  }
+  return text.slice(index).trim();
+}
+
 let telegramNativeCommandDeliveryRuntimePromise:
   | Promise<typeof import("./bot-native-commands.delivery.runtime.js")>
   | undefined;
@@ -1092,7 +1135,14 @@ export const registerTelegramNativeCommands = ({
         const executionCfg = getRuntimeConfigSnapshot() ?? cfg;
 
         const commandDefinition = findCommandByNativeName(command.name, "telegram");
-        const rawText = ctx.match?.trim() ?? "";
+        const rawText =
+          resolveTelegramNativeCommandPayloadFromText({
+            text: "text" in msg ? msg.text : undefined,
+            commandName: command.name,
+            botUsername: ctx.me?.username,
+          }) ??
+          ctx.match?.trim() ??
+          "";
         const commandArgs = commandDefinition
           ? parseCommandArgs(commandDefinition, rawText)
           : rawText
@@ -1369,7 +1419,14 @@ export const registerTelegramNativeCommands = ({
         const runtimeCfg = loadFreshRuntimeConfig();
         const runtimeTelegramCfg = resolveFreshTelegramConfig(runtimeCfg);
         const { threadParams } = await resolveTelegramNativeCommandThreadContext({ msg, bot });
-        const rawText = ctx.match?.trim() ?? "";
+        const rawText =
+          resolveTelegramNativeCommandPayloadFromText({
+            text: "text" in msg ? msg.text : undefined,
+            commandName: pluginCommand.command,
+            botUsername: ctx.me?.username,
+          }) ??
+          ctx.match?.trim() ??
+          "";
         const commandBody = `/${pluginCommand.command}${rawText ? ` ${rawText}` : ""}`;
         const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
         const match = nativeCommandRuntime.matchPluginCommand(commandBody);

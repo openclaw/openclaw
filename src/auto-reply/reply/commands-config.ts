@@ -171,10 +171,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
       }
       throw error;
     }
-    const valueLabel =
-      typeof configCommand.value === "string"
-        ? `"${configCommand.value}"`
-        : JSON.stringify(configCommand.value);
+    const valueLabel = JSON.stringify(configCommand.value);
     return {
       shouldContinue: false,
       reply: {

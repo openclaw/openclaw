@@ -178,7 +178,7 @@ export function stripStructuralPrefixes(text: string): string {
     : text;
 
   return afterMarker
-    .replace(/\[[^\]]+\]\s*/g, "")
+    .replace(/(^|\n)[ \t]*\[[^\]\n]+\][ \t]*/g, "$1")
     .replace(/^[ \t]*[A-Za-z0-9+()\-_. ]+:\s*/gm, "")
     .replace(/\\n/g, " ")
     .replace(/\s+/g, " ")

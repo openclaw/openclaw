@@ -63,6 +63,7 @@ export function createNativeCommandTestParams(
 
 export function createTelegramPrivateCommandContext(params?: {
   match?: string;
+  text?: string;
   messageId?: number;
   date?: number;
   chatId?: number;
@@ -76,6 +77,7 @@ export function createTelegramPrivateCommandContext(params?: {
       message_id: params?.messageId ?? 1,
       date: params?.date ?? Math.floor(Date.now() / 1000),
       chat: { id: params?.chatId ?? 100, type: "private" as const },
+      ...(params?.text != null ? { text: params.text } : {}),
       ...(params?.threadId != null ? { message_thread_id: params.threadId } : {}),
       from: { id: params?.userId ?? 200, username: params?.username ?? "bob" },
     },
