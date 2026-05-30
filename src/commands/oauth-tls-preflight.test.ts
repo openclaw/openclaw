@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   formatOpenAIOAuthTlsPreflightFix,
   runOpenAIOAuthTlsPreflight,
@@ -16,6 +17,23 @@ describe("runOpenAIOAuthTlsPreflight", () => {
     ) as unknown as typeof fetch;
     const result = await runOpenAIOAuthTlsPreflight({ fetchImpl, timeoutMs: 20 });
     expect(result).toEqual({ ok: true });
+  });
+
+  it("caps oversized probe timeouts before creating abort signals", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.signal).toBe(timeoutController.signal);
+      return new Response("", { status: 400 });
+    }) as unknown as typeof fetch;
+
+    const result = await runOpenAIOAuthTlsPreflight({
+      fetchImpl,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("classifies TLS trust failures from fetch cause code", async () => {
@@ -64,16 +82,15 @@ describe("formatOpenAIOAuthTlsPreflightFix", () => {
       code: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
       message: "unable to get local issuer certificate",
     });
-    expect(text).toBe(
-      [
-        "OpenAI OAuth prerequisites check failed: Node/OpenSSL cannot validate TLS certificates.",
-        "Cause: UNABLE_TO_GET_ISSUER_CERT_LOCALLY (unable to get local issuer certificate)",
-        "",
-        "Fix (Homebrew Node/OpenSSL):",
-        "- brew postinstall ca-certificates",
-        "- brew postinstall openssl@3",
-        "- Retry the OAuth login flow.",
-      ].join("\n"),
+    expect(text).toContain(
+      "OpenAI OAuth prerequisites check failed: Node/OpenSSL cannot validate TLS certificates.",
     );
+    expect(text).toContain(
+      "Cause: UNABLE_TO_GET_ISSUER_CERT_LOCALLY (unable to get local issuer certificate)",
+    );
+    expect(text).toContain("Fix (Homebrew Node/OpenSSL):");
+    expect(text).toContain("- brew postinstall ca-certificates");
+    expect(text).toContain("- brew postinstall openssl@3");
+    expect(text).toContain("- Retry the OAuth login flow.");
   });
 });

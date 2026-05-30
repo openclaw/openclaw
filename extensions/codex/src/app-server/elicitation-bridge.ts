@@ -43,6 +43,8 @@ const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY = "tool_params_display";
 const MCP_TOOL_APPROVAL_SOURCE_KEY = "source";
 const MCP_TOOL_APPROVAL_CONNECTOR_SOURCE = "connector";
 const CODEX_APPS_SERVER_NAME = "codex_apps";
+const COMPUTER_USE_APPROVAL_TITLE = "Computer Use approval";
+const EMPTY_OBJECT_SCHEMA: JsonObject = { type: "object", properties: {} };
 const PLUGIN_APP_ID_META_KEYS = ["app_id", "appId", "codex_app_id", "codexAppId"];
 const PLUGIN_CONNECTOR_ID_META_KEYS = ["connector_id", "connectorId"];
 const PLUGIN_NAME_META_KEYS = ["plugin_name", "pluginName", "codex_plugin_name", "codexPluginName"];
@@ -82,6 +84,7 @@ export async function handleCodexAppServerElicitationRequest(params: {
   threadId: string;
   turnId: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
+  computerUseMcpServerName?: string;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   const requestParams = isJsonObject(params.requestParams) ? params.requestParams : undefined;
@@ -110,7 +113,9 @@ export async function handleCodexAppServerElicitationRequest(params: {
     return buildPluginPolicyElicitationResponse(pluginResolution.entry, requestParams);
   }
 
-  const approvalPrompt = readBridgeableApprovalElicitation(requestParams);
+  const approvalPrompt =
+    readComputerUseApprovalElicitation(requestParams, params.computerUseMcpServerName) ??
+    readBridgeableApprovalElicitation(requestParams);
   if (!approvalPrompt) {
     return undefined;
   }
@@ -347,6 +352,46 @@ function readBridgeableApprovalElicitation(
     }),
     requestedSchema,
     meta: requestParams["_meta"],
+  };
+}
+
+function readComputerUseApprovalElicitation(
+  requestParams: JsonObject | undefined,
+  expectedServerName: string | undefined,
+): BridgeableApprovalElicitation | undefined {
+  const serverName = readString(requestParams, "serverName");
+  if (
+    !serverName ||
+    !expectedServerName ||
+    serverName !== expectedServerName ||
+    readString(requestParams, "mode") !== "form"
+  ) {
+    return undefined;
+  }
+
+  const requestedSchema = isJsonObject(requestParams?.requestedSchema)
+    ? requestParams.requestedSchema
+    : EMPTY_OBJECT_SCHEMA;
+  if (
+    readString(requestedSchema, "type") !== "object" ||
+    !isJsonObject(requestedSchema.properties)
+  ) {
+    return undefined;
+  }
+
+  const meta = isJsonObject(requestParams?.["_meta"]) ? requestParams["_meta"] : {};
+  const title =
+    sanitizeDisplayText(readString(requestParams, "message") ?? "") || COMPUTER_USE_APPROVAL_TITLE;
+  return {
+    title,
+    description: buildApprovalDescription({
+      title,
+      meta,
+      requestedSchema,
+      serverName: sanitizeOptionalDisplayText(serverName),
+    }),
+    requestedSchema,
+    meta,
   };
 }
 

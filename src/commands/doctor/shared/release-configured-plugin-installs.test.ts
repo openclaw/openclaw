@@ -428,11 +428,9 @@ describe("configured plugin install release step", () => {
     });
   });
 
-  it("defers package-manager plugins for writable legacy parents without explicit deferral", async () => {
+  it("defers package-manager plugin release completion for writable legacy parents", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [
-        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
+      changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
     });
 
@@ -459,9 +457,7 @@ describe("configured plugin install release step", () => {
       OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
     });
     expect(result).toEqual({
-      changes: [
-        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
-      ],
+      changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
       completed: false,
       touchedConfig: false,

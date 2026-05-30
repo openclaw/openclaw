@@ -36,6 +36,8 @@ export interface HealthFinding {
   readonly line?: number;
   readonly column?: number;
   readonly ocPath?: string;
+  readonly target?: string;
+  readonly requirement?: string;
   readonly fixHint?: string;
 }
 
@@ -47,6 +49,7 @@ export interface HealthCheckContext {
   readonly cfg: OpenClawConfig;
   readonly cwd?: string;
   readonly configPath?: string;
+  readonly allowExecSecretRefs?: boolean;
 }
 
 export interface HealthRepairContext extends Omit<HealthCheckContext, "mode"> {

@@ -12,6 +12,7 @@ import {
   normalizeBaseUrl,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeSecretInputString,
   resolveSecretInputString,
@@ -25,9 +26,11 @@ import {
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asBoolean,
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -37,6 +40,8 @@ const DEFAULT_PROMPT_INPUT_NAME = "text";
 const DEFAULT_INPUT_IMAGE_INPUT_NAME = "image";
 const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const DEFAULT_GENERATED_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
 
@@ -111,9 +116,21 @@ export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | n
   comfyFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
+function resolveComfyGeneratedOutputMaxBytes(params: {
+  cfg: OpenClawConfig;
+  capability: ComfyCapability;
+}): number {
+  const configured = params.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return params.capability === "image"
+    ? DEFAULT_GENERATED_IMAGE_MAX_BYTES
+    : DEFAULT_GENERATED_MEDIA_MAX_BYTES;
+}
+
 function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
-  const value = config[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean(config[key]);
 }
 
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
@@ -504,6 +521,7 @@ async function downloadOutputFile(params: {
   file: ComfyOutputFile;
   mode: ComfyMode;
   capability: ComfyCapability;
+  maxBytes: number;
 }): Promise<{ buffer: Buffer; mimeType: string }> {
   const fileName =
     normalizeOptionalString(params.file.filename) || normalizeOptionalString(params.file.name);
@@ -556,7 +574,15 @@ async function downloadOutputFile(params: {
           normalizeOptionalString(redirected.response.headers.get("content-type")) ||
           "application/octet-stream";
         return {
-          buffer: Buffer.from(await redirected.response.arrayBuffer()),
+          buffer: await readResponseWithLimit(redirected.response, params.maxBytes, {
+            chunkTimeoutMs: params.timeoutMs,
+            onOverflow: ({ maxBytes }) =>
+              new Error(`Comfy ${params.capability} output download exceeds ${maxBytes} bytes`),
+            onIdleTimeout: ({ chunkTimeoutMs }) =>
+              new Error(
+                `Comfy ${params.capability} output download stalled after ${chunkTimeoutMs}ms`,
+              ),
+          }),
           mimeType,
         };
       } finally {
@@ -569,7 +595,13 @@ async function downloadOutputFile(params: {
       normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
       "application/octet-stream";
     return {
-      buffer: Buffer.from(await firstResponse.response.arrayBuffer()),
+      buffer: await readResponseWithLimit(firstResponse.response, params.maxBytes, {
+        chunkTimeoutMs: params.timeoutMs,
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Comfy ${params.capability} output download exceeds ${maxBytes} bytes`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`Comfy ${params.capability} output download stalled after ${chunkTimeoutMs}ms`),
+      }),
       mimeType,
     };
   } finally {
@@ -793,6 +825,10 @@ export async function runComfyWorkflow(params: {
   }
 
   const assets: ComfyGeneratedAsset[] = [];
+  const maxOutputBytes = resolveComfyGeneratedOutputMaxBytes({
+    cfg: params.cfg,
+    capability: params.capability,
+  });
   let assetIndex = 0;
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile({
@@ -804,6 +840,7 @@ export async function runComfyWorkflow(params: {
       file: output.file,
       mode,
       capability: params.capability,
+      maxBytes: maxOutputBytes,
     });
     assetIndex += 1;
     const originalName =
@@ -822,6 +859,6 @@ export async function runComfyWorkflow(params: {
     assets,
     model: providerModel,
     promptId,
-    outputNodeIds: Array.from(new Set(outputFiles.map((entry) => entry.nodeId))),
+    outputNodeIds: uniqueStrings(outputFiles.map((entry) => entry.nodeId)),
   };
 }

@@ -102,10 +102,12 @@ export class CodexAppServerClient {
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  private activeSharedLeaseCountProvider: (() => number | undefined) | undefined;
   private nextId = 1;
   private initialized = false;
   private closed = false;
   private closeError: Error | undefined;
+  private serverVersion: string | undefined;
   private stderrTail = "";
   private pendingParse:
     | {
@@ -178,9 +180,13 @@ export class CodexAppServerClient {
         experimentalApi: true,
       },
     } satisfies CodexInitializeParams);
-    assertSupportedCodexAppServerVersion(response);
+    this.serverVersion = assertSupportedCodexAppServerVersion(response);
     this.notify("initialized");
     this.initialized = true;
+  }
+
+  getServerVersion(): string | undefined {
+    return this.serverVersion;
   }
 
   request<M extends CodexAppServerRequestMethod>(
@@ -255,7 +261,7 @@ export class CodexAppServerClient {
         return;
       }
       try {
-        this.writeMessage(message);
+        this.writeMessage(message, (error) => rejectPending(error));
       } catch (error) {
         rejectPending(error instanceof Error ? error : new Error(String(error)));
       }
@@ -274,6 +280,16 @@ export class CodexAppServerClient {
   addNotificationHandler(handler: CodexServerNotificationHandler): () => void {
     this.notificationHandlers.add(handler);
     return () => this.notificationHandlers.delete(handler);
+  }
+
+  setActiveSharedLeaseCountProviderForUnscopedNotifications(
+    provider: (() => number | undefined) | undefined,
+  ): void {
+    this.activeSharedLeaseCountProvider = provider;
+  }
+
+  getActiveSharedLeaseCountForUnscopedNotifications(): number | undefined {
+    return this.activeSharedLeaseCountProvider?.();
   }
 
   addCloseHandler(handler: (client: CodexAppServerClient) => void): () => void {
@@ -296,7 +312,7 @@ export class CodexAppServerClient {
     await closeCodexAppServerTransportAndWait(this.child, options);
   }
 
-  private writeMessage(message: RpcRequest | RpcResponse): void {
+  private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
     if (this.closed) {
       return;
     }
@@ -307,6 +323,7 @@ export class CodexAppServerClient {
       (error?: Error | null) => {
         if (error) {
           embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+          onError?.(error);
         }
       },
     );
@@ -348,6 +365,7 @@ export class CodexAppServerClient {
     } catch (error) {
       const lineCount = pending.lineCount + 1;
       if (
+        shouldBufferCodexAppServerParseFailure(candidate.trim(), error) &&
         candidate.length <= CODEX_APP_SERVER_PARSE_BUFFER_MAX &&
         lineCount <= CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES
       ) {
@@ -568,18 +586,19 @@ function timeoutServerRequestResponse(
   };
 }
 
-function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): void {
+function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
   if (!detectedVersion) {
     throw new Error(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
-  if (compareVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
+  if (compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
     throw new Error(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
+  return detectedVersion;
 }
 
 export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
@@ -592,7 +611,7 @@ export function readCodexVersionFromUserAgent(userAgent: string | undefined): st
   return match?.[1];
 }
 
-function compareVersions(left: string, right: string): number {
+export function compareCodexAppServerVersions(left: string, right: string): number {
   const leftVersion = parseVersionForComparison(left);
   const rightVersion = parseVersionForComparison(right);
   const leftParts = leftVersion.parts;

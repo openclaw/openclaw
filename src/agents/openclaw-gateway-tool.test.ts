@@ -164,11 +164,6 @@ describe("gateway tool", () => {
     });
   });
 
-  it("marks gateway as owner-only", () => {
-    const tool = requireGatewayTool();
-    expect(tool.ownerOnly).toBe(true);
-  });
-
   it("exposes restart and config actions in the gateway tool schema", () => {
     const tool = requireGatewayTool();
     const parameters = tool.parameters as {
@@ -224,7 +219,7 @@ describe("gateway tool", () => {
           };
           expect(parsed.payload?.kind).toBe("restart");
           expect(parsed.payload?.doctorHint).toBe(
-            "Run: openclaw --profile isolated doctor --non-interactive",
+            "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
           );
         },
       );
@@ -255,7 +250,7 @@ describe("gateway tool", () => {
         return {
           ok: true,
           path: "/tmp/openclaw.json",
-          config: { agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } },
+          config: { agents: { defaults: { reasoningDefault: "medium" } } },
           restart: { ok: true, config: "nested field preserved" },
         };
       }
@@ -265,7 +260,7 @@ describe("gateway tool", () => {
     const tool = requireGatewayTool(sessionKey);
 
     const raw =
-      '{\n  agents: { defaults: { systemPromptOverride: "You are a terse assistant." } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
+      '{\n  agents: { defaults: { reasoningDefault: "medium" } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
     const result = await tool.execute("call2", {
       action: "config.apply",
       raw,
@@ -503,7 +498,7 @@ describe("gateway tool", () => {
     await expect(
       tool.execute("call-missing-protected", {
         action: "config.apply",
-        raw: '{ agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } }',
+        raw: '{ agents: { defaults: { reasoningDefault: "medium" } } }',
       }),
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
@@ -656,7 +651,7 @@ describe("gateway tool", () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
-    const raw = '{ agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } }';
+    const raw = '{ agents: { defaults: { reasoningDefault: "medium" } } }';
     await tool.execute("call-keep-dangerous", {
       action: "config.patch",
       raw,

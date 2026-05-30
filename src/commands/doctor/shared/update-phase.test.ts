@@ -36,7 +36,7 @@ describe("update-phase env helpers", () => {
     expect(isPostCoreConvergencePass(env)).toBe(true);
   });
 
-  it("defers configured plugin repair for explicit or writable-parent update handoffs", () => {
+  it("defers configured plugin repair for post-core handoffs", () => {
     expect(
       shouldDeferConfiguredPluginInstallRepair({
         [UPDATE_IN_PROGRESS_ENV]: "1",

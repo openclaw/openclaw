@@ -48,19 +48,6 @@ type Workflow = {
   permissions?: Record<string, string>;
 };
 
-type PackageJson = {
-  packageManager?: string;
-};
-
-function repositoryPnpmMajor(): string {
-  const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as PackageJson;
-  const major = packageJson.packageManager?.match(/^pnpm@(\d+)\./)?.[1];
-  if (!major) {
-    throw new Error(`Missing pnpm packageManager pin in ${PACKAGE_JSON}`);
-  }
-  return major;
-}
-
 function workflowStep(name: string): WorkflowStep {
   const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
   const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
@@ -89,13 +76,12 @@ function filesUnder(root: string): string[] {
 }
 
 describe("Mantis Telegram Desktop proof workflow", () => {
-  it("runs with the repository pnpm major", () => {
+  it("uses repository pnpm setup defaults", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
-    const pnpmMajor = repositoryPnpmMajor();
 
-    expect(workflow.env?.PNPM_VERSION?.split(".", 1)[0]).toBe(pnpmMajor);
-    expect(liveWorkflow.env?.PNPM_VERSION?.split(".", 1)[0]).toBe(pnpmMajor);
+    expect(workflow.env?.PNPM_VERSION).toBeUndefined();
+    expect(liveWorkflow.env?.PNPM_VERSION).toBeUndefined();
   });
 
   it("serializes all Mantis Telegram account runs without workflow concurrency cancellation", () => {
@@ -155,11 +141,34 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(cleanupStep.env?.OPENCLAW_QA_CONVEX_SITE_URL).toContain(
       "secrets.OPENCLAW_QA_CONVEX_SITE_URL",
     );
+    expect(cleanupStep.env?.CRABBOX_PROVIDER).toContain(
+      "needs.resolve_request.outputs.crabbox_provider",
+    );
     expect(cleanupStep.run).toContain("sudo find .artifacts/qa-e2e");
-    expect(cleanupStep.run).toContain("*/telegram-user-crabbox/*/.session/lease.json");
+    expect(cleanupStep.run).toContain("-name session.json");
+    expect(cleanupStep.run).toContain('session.command === "telegram-user-crabbox-session"');
+    expect(cleanupStep.run).toContain("telegram-user-crabbox-proof.ts");
+    expect(cleanupStep.run).toContain(
+      'finish --session "$session_file" --preview-crop telegram-window',
+    );
+    expect(cleanupStep.run).toContain("*/.session/lease.json");
+    expect(cleanupStep.run).toContain('lease.kind === "telegram-user"');
     expect(cleanupStep.run).toContain("telegram-user-credential.ts");
     expect(cleanupStep.run).toContain("release --lease-file");
+    expect(cleanupStep.run).toContain("status=1");
     expect(cleanupStep.run).toContain("sudo -u codex env");
+    expect(cleanupStep.run).not.toContain("*/telegram-user-crabbox/*/session.json");
+    expect(cleanupStep.run).not.toContain("*/telegram-user-crabbox/*/.session/lease.json");
+  });
+
+  it("cleans partially started proof daemons when local SUT startup fails", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+
+    expect(proofScript).toContain("let mockPid: number | undefined;");
+    expect(proofScript).toContain("let gatewayPid: number | undefined;");
+    expect(proofScript).toContain("killPidTree(gatewayPid);");
+    expect(proofScript).toContain("killPidTree(mockPid);");
+    expect(proofScript).toContain("throw error;");
   });
 
   it("uses the OpenClaw Mantis mention as the comment trigger", () => {
@@ -323,6 +332,31 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
   });
 
+  it("pins AWS Crabbox proof runs to the working region", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
+
+    expect(workflow.env?.CRABBOX_AWS_REGION).toBe("us-east-1");
+    expect(workflow.env?.CRABBOX_CAPACITY_REGIONS).toBe("us-east-1");
+    expect(liveWorkflow.env?.CRABBOX_AWS_REGION).toBe("us-east-1");
+    expect(liveWorkflow.env?.CRABBOX_CAPACITY_REGIONS).toBe("us-east-1");
+
+    const agent = workflowStep("Run Codex Mantis Telegram agent");
+    expect(agent.env?.CRABBOX_AWS_REGION).toBe("${{ env.CRABBOX_AWS_REGION }}");
+    expect(agent.env?.CRABBOX_CAPACITY_REGIONS).toBe("${{ env.CRABBOX_CAPACITY_REGIONS }}");
+
+    const liveRun = jobStep(
+      LIVE_WORKFLOW,
+      "run_telegram_live",
+      "Run Telegram live scenario and capture desktop evidence",
+    );
+    expect(liveRun.env?.CRABBOX_AWS_REGION).toBe("${{ env.CRABBOX_AWS_REGION }}");
+    expect(liveRun.env?.CRABBOX_CAPACITY_REGIONS).toBe("${{ env.CRABBOX_CAPACITY_REGIONS }}");
+
+    const prepare = workflowStep("Prepare Codex user");
+    expect(prepare.run).toContain("CRABBOX_AWS_REGION CRABBOX_CAPACITY_REGIONS");
+  });
+
   it("runs the Mantis Codex agent in fast medium-effort mode", () => {
     const agent = workflowStep("Run Codex Mantis Telegram agent");
 
@@ -375,6 +409,18 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(startSession.indexOf("requireUserDriverScript(opts);")).toBeLessThan(
       startSession.indexOf("leaseCredential({ localRoot, opts, root })"),
     );
+    expect(startSession.indexOf("try {")).toBeLessThan(
+      startSession.indexOf("leaseCredential({ localRoot, opts, root })"),
+    );
+    expect(startSession.indexOf("leaseCredential({ localRoot, opts, root })")).toBeLessThan(
+      startSession.indexOf("warmupCrabbox(opts, root)"),
+    );
+    expect(startSession.indexOf("if (credential)")).toBeGreaterThan(
+      startSession.indexOf("catch (error)"),
+    );
+    expect(
+      startSession.indexOf("releaseCredential(root, opts, credential.leaseFile)"),
+    ).toBeGreaterThan(startSession.indexOf("catch (error)"));
     expect(defaultProof.indexOf("requireUserDriverScript(opts);")).toBeLessThan(
       defaultProof.indexOf("leaseCredential({ localRoot, opts, root })"),
     );
@@ -392,6 +438,34 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(proofScript).toContain("crop: TELEGRAM_PROOF_CROP");
     expect(skill).toContain("crop can isolate the chat pane");
     expect(skill).not.toContain("650px` is the largest tested clean width");
+  });
+
+  it("bounds Telegram user Crabbox remote bootstrap network and build steps", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+
+    expect(proofScript).toContain("run_setup_step()");
+    expect(proofScript).toContain("download_file()");
+    expect(proofScript).toContain('timeout --kill-after="$setup_step_timeout_kill_after"');
+    expect(proofScript).not.toContain("timeout --foreground");
+    expect(proofScript).toContain(
+      'apt_timeout="\\${OPENCLAW_TELEGRAM_USER_APT_TIMEOUT_SECONDS:-900}s"',
+    );
+    expect(proofScript).toContain(
+      'download_connect_timeout="\\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_CONNECT_TIMEOUT_SECONDS:-15}"',
+    );
+    expect(proofScript).toContain(
+      'download_timeout="\\${OPENCLAW_TELEGRAM_USER_DOWNLOAD_TIMEOUT_SECONDS:-600}"',
+    );
+    expect(proofScript).toContain('run_setup_step "apt-get update" "$apt_timeout"');
+    expect(proofScript).toContain("download_file https://telegram.org/dl/desktop/linux");
+    expect(proofScript).toContain('download_file "$tdlib_url" "$root/tdlib-linux.tgz"');
+    expect(proofScript).toContain(
+      'tdlib_clone_timeout="\\${OPENCLAW_TELEGRAM_USER_TDLIB_CLONE_TIMEOUT_SECONDS:-600}s"',
+    );
+    expect(proofScript).toContain('run_setup_step "tdlib clone" "$tdlib_clone_timeout"');
+    expect(proofScript).toContain('run_setup_step "tdlib build" "$tdlib_build_timeout"');
+    expect(proofScript).not.toContain("curl -fL https://telegram.org/dl/desktop/linux -o");
+    expect(proofScript).not.toContain('curl -fL "$tdlib_url" -o');
   });
 
   it("does not pass the full workflow environment into the local Telegram SUT", () => {

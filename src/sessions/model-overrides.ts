@@ -34,6 +34,7 @@ export function applyModelOverrideToSessionEntry(params: {
   const selectionSource = params.selectionSource ?? "user";
   let updated = false;
   let selectionUpdated = false;
+  let profileUpdated = false;
 
   if (selection.isDefault) {
     if (entry.providerOverride) {
@@ -99,15 +100,24 @@ export function applyModelOverrideToSessionEntry(params: {
     delete entry.contextTokens;
     updated = true;
   }
+  if (
+    entry.contextBudgetStatus !== undefined &&
+    (selectionUpdated || (runtimePresent && !runtimeAligned))
+  ) {
+    delete entry.contextBudgetStatus;
+    updated = true;
+  }
 
   if (profileOverride) {
     if (entry.authProfileOverride !== profileOverride) {
       entry.authProfileOverride = profileOverride;
       updated = true;
+      profileUpdated = true;
     }
     if (entry.authProfileOverrideSource !== profileOverrideSource) {
       entry.authProfileOverrideSource = profileOverrideSource;
       updated = true;
+      profileUpdated = true;
     }
     if (entry.authProfileOverrideCompactionCount !== undefined) {
       delete entry.authProfileOverrideCompactionCount;
@@ -117,10 +127,12 @@ export function applyModelOverrideToSessionEntry(params: {
     if (entry.authProfileOverride) {
       delete entry.authProfileOverride;
       updated = true;
+      profileUpdated = true;
     }
     if (entry.authProfileOverrideSource) {
       delete entry.authProfileOverrideSource;
       updated = true;
+      profileUpdated = true;
     }
     if (entry.authProfileOverrideCompactionCount !== undefined) {
       delete entry.authProfileOverrideCompactionCount;
@@ -130,7 +142,7 @@ export function applyModelOverrideToSessionEntry(params: {
 
   // Clear stale fallback notice when the user explicitly switches models.
   if (updated) {
-    if (selectionUpdated && params.markLiveSwitchPending) {
+    if ((selectionUpdated || profileUpdated) && params.markLiveSwitchPending) {
       entry.liveModelSwitchPending = true;
     }
     delete entry.fallbackNoticeSelectedModel;

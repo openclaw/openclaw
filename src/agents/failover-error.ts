@@ -1,13 +1,14 @@
 import { readErrorName } from "../infra/errors.js";
+import { parseStrictNonNegativeInteger } from "../shared/number-coercion.js";
 import {
   classifyFailoverSignal,
   inferSignalStatus,
   isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
   type FailoverSignal,
-} from "./pi-embedded-helpers/errors.js";
-import { isTimeoutErrorMessage } from "./pi-embedded-helpers/errors.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+} from "./embedded-agent-helpers/errors.js";
+import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -132,8 +133,8 @@ function readDirectStatusCode(err: unknown): number | undefined {
   if (typeof candidate === "number") {
     return candidate;
   }
-  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
-    return Number(candidate);
+  if (typeof candidate === "string") {
+    return parseStrictNonNegativeInteger(candidate);
   }
   return undefined;
 }
@@ -149,6 +150,11 @@ function readDirectErrorCode(err: unknown): string | undefined {
   const directCode = (err as { code?: unknown }).code;
   if (typeof directCode === "string") {
     const trimmed = directCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  const detailCode = (err as { detail?: { code?: unknown } }).detail?.code;
+  if (typeof detailCode === "string") {
+    const trimmed = detailCode.trim();
     return trimmed ? trimmed : undefined;
   }
   const status = (err as { status?: unknown }).status;
@@ -235,7 +241,7 @@ function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set())
 }
 
 function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
-  // Match by name to avoid importing pi-embedded-runner here (would create a cycle).
+  // Match by name to avoid importing embedded-agent-runner here (would create a cycle).
   return Boolean(
     err && typeof err === "object" && readErrorName(err) === "EmbeddedAttemptSessionTakeoverError",
   );
@@ -273,6 +279,9 @@ export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
   }
   if (isFailoverError(err)) {
     return false;
+  }
+  if (isEmbeddedAttemptSessionTakeover(err)) {
+    return true;
   }
   return resolveFailoverClassificationFromError(err) === null;
 }

@@ -1,8 +1,9 @@
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
+import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -50,6 +51,7 @@ import {
 } from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
+import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 import { createMatrixMonitorStatusController } from "./status.js";
 import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
@@ -213,9 +215,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   const auth = await resolveMatrixAuth({ cfg, accountId: effectiveAccountId });
   const resolvedInitialSyncLimit =
-    typeof opts.initialSyncLimit === "number"
-      ? Math.max(0, Math.floor(opts.initialSyncLimit))
-      : auth.initialSyncLimit;
+    resolveOptionalIntegerOption(opts.initialSyncLimit, { min: 0 }) ?? auth.initialSyncLimit;
   const authWithLimit =
     resolvedInitialSyncLimit === auth.initialSyncLimit
       ? auth
@@ -345,8 +345,24 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     // /sync cursor we want restart backlogs to replay just like other channels.
     const dropPreStartupMessages = !client.hasPersistedSyncState();
     const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
+    const isExplicitlyConfiguredRoom = async (roomId: string): Promise<boolean> => {
+      const roomInfoForConfig = needsRoomAliasesForConfig
+        ? await getRoomInfo(roomId, { includeAliases: true })
+        : undefined;
+      const aliases = roomInfoForConfig
+        ? [roomInfoForConfig.canonicalAlias ?? "", ...roomInfoForConfig.altAliases].filter(Boolean)
+        : [];
+      return (
+        resolveMatrixRoomConfig({
+          rooms: roomsConfig,
+          roomId,
+          aliases,
+        }).matchSource === "direct"
+      );
+    };
     const directTracker = createDirectRoomTracker(client, {
       log: logVerboseMessage,
+      isExplicitlyConfiguredRoom,
       canPromoteRecentInvite: async (roomId) =>
         shouldPromoteRecentInviteRoom({
           roomId,

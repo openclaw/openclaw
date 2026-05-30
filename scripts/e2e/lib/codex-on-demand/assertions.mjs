@@ -1,50 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-
-function stateDir() {
-  return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
-}
-
-function configPath() {
-  return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
-
-function realPathMaybe(filePath) {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return path.resolve(filePath);
-  }
-}
-
-function assertPathInside(parentPath, childPath, label) {
-  const parent = realPathMaybe(parentPath);
-  const child = realPathMaybe(childPath);
-  const relative = path.relative(parent, child);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`${label} resolved outside ${parentPath}: ${child}`);
-  }
-}
-
-function installRecords() {
-  const indexPath = path.join(stateDir(), "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
-  return index.installRecords || index.records || cfg.plugins?.installs || {};
-}
-
-function findPackageJson(packageName, roots) {
-  const packagePath = packageName.startsWith("@")
-    ? path.join(...packageName.split("/"), "package.json")
-    : path.join(packageName, "package.json");
-  const candidates = roots.map((root) => path.join(root, "node_modules", packagePath));
-  return candidates.find((candidate) => fs.existsSync(candidate));
-}
+import {
+  assertPathInside,
+  configPath,
+  findPackageJson,
+  managedNpmRoot,
+  npmProjectRootForInstalledPackage,
+  readInstallRecords,
+  readJson,
+  stateDir,
+} from "../codex-install-utils.mjs";
 
 const cfg = readJson(configPath());
 const inspect = readJson("/tmp/openclaw-codex-inspect.json");
-const records = installRecords();
+const records = readInstallRecords(cfg.plugins?.installs);
 const codexRecord = records.codex || inspect.install;
 if (!codexRecord) {
   throw new Error(`missing codex install record: ${JSON.stringify(records)}`);
@@ -56,7 +25,7 @@ if (!String(codexRecord.spec || "").includes("@openclaw/codex")) {
   throw new Error(`expected @openclaw/codex install spec, got ${codexRecord.spec}`);
 }
 
-const npmRoot = path.join(stateDir(), "npm");
+const npmRoot = managedNpmRoot();
 const installPath = String(codexRecord.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
 if (!installPath) {
   throw new Error(`missing codex installPath: ${JSON.stringify(codexRecord)}`);
@@ -72,7 +41,12 @@ if (codexPackage.name !== "@openclaw/codex") {
   throw new Error(`unexpected codex package name: ${codexPackage.name}`);
 }
 
-const openAiCodexPackageJson = findPackageJson("@openai/codex", [installPath, npmRoot]);
+const npmProjectRoot = npmProjectRootForInstalledPackage(installPath, "@openclaw/codex");
+const openAiCodexPackageJson = findPackageJson("@openai/codex", [
+  installPath,
+  npmProjectRoot,
+  npmRoot,
+]);
 if (!openAiCodexPackageJson) {
   throw new Error("missing @openai/codex dependency under managed npm root");
 }

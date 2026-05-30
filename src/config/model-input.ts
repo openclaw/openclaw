@@ -1,5 +1,9 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import {
+  normalizeGooglePreviewModelId,
+  normalizeTogetherModelId,
+} from "../plugin-sdk/provider-model-id-normalize.js";
+import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,10 +15,6 @@ type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
 };
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function modelKeyForConfig(provider: string, model: string): string {
   const providerId = provider.trim();
@@ -67,6 +67,8 @@ export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLi
   return model;
 }
 
+const GOOGLE_PROVIDER_IDS = new Set(["google", "google-gemini-cli", "google-vertex"]);
+
 export function normalizeAgentModelRefForConfig(model: string): string {
   const trimmed = model.trim();
   const slash = trimmed.indexOf("/");
@@ -75,7 +77,13 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   }
 
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const normalizedModel = normalizeGooglePreviewModelId(trimmed.slice(slash + 1));
+  const modelSuffix = trimmed.slice(slash + 1);
+  const normalizedModel =
+    GOOGLE_PROVIDER_IDS.has(provider) || modelSuffix.startsWith("google/")
+      ? normalizeGooglePreviewModelId(modelSuffix)
+      : provider === "together"
+        ? normalizeTogetherModelId(modelSuffix)
+        : modelSuffix;
   return modelKeyForConfig(provider, normalizedModel);
 }
 

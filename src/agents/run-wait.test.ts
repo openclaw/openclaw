@@ -220,6 +220,22 @@ describe("waitForAgentRun", () => {
     expect(result).toEqual({ status: "pending" });
   });
 
+  it("preserves pending error diagnostics on wait timeouts", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "timeout",
+      error: "429 RESOURCE_EXHAUSTED",
+      pendingError: true,
+    });
+
+    const result = await waitForAgentRun({ runId: "run-pending-error", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "timeout",
+      error: "429 RESOURCE_EXHAUSTED",
+      pendingError: true,
+    });
+  });
+
   it("normalizes wait timeouts before sending agent.wait", async () => {
     callGatewayMock.mockResolvedValue({ status: "ok" });
 
@@ -236,19 +252,98 @@ describe("waitForAgentRun", () => {
     });
   });
 
-  it("preserves timing metadata from agent.wait", async () => {
+  it("defaults non-finite wait timeouts before sending agent.wait", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+
+    const result = await waitForAgentRun({ runId: "run-nan", timeoutMs: Number.NaN });
+
+    expect(result).toEqual({ status: "ok" });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "agent.wait",
+      params: {
+        runId: "run-nan",
+        timeoutMs: 1,
+      },
+      timeoutMs: 2_001,
+    });
+  });
+
+  it("preserves timing metadata on provider-attributed wait timeouts", async () => {
     callGatewayMock.mockResolvedValue({
       status: "ok",
       startedAt: 100,
       endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
 
     const result = await waitForAgentRun({ runId: "run-2", timeoutMs: 500 });
 
     expect(result).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
+  it("keeps hard wait timeouts stronger than blocked liveness", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "error",
+      error: "model timed out",
+      livenessState: "blocked",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const result = await waitForAgentRun({ runId: "run-blocked-timeout", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "timeout",
+      error: "model timed out",
+      livenessState: "blocked",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
+  it("normalizes blocked ok waits to errors", async () => {
+    callGatewayMock.mockResolvedValue({
       status: "ok",
       startedAt: 100,
       endedAt: 200,
+      livenessState: "blocked",
+      error: "Context overflow: prompt too large for the model.",
+    });
+
+    const result = await waitForAgentRun({ runId: "run-blocked", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "Context overflow: prompt too large for the model.",
+      startedAt: 100,
+      endedAt: 200,
+      livenessState: "blocked",
+    });
+  });
+
+  it("normalizes aborted stop reasons to errors even when gateway reports ok", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "aborted",
+    });
+
+    const result = await waitForAgentRun({ runId: "run-aborted", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "agent run aborted",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "aborted",
     });
   });
 });
@@ -397,5 +492,23 @@ describe("waitForAgentRunsToDrain", () => {
     expect(requests).toHaveLength(2);
     expectAgentWaitRequest(requireRequestAt(requests, 0), "run-1", 1_000);
     expectAgentWaitRequest(requireRequestAt(requests, 1), "run-2", 1_000);
+  });
+
+  it("defaults non-finite drain timeouts before computing the deadline", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+    let activeRunIds = ["run-1"];
+
+    const result = await waitForAgentRunsToDrain({
+      timeoutMs: Number.NaN,
+      getPendingRunIds: () => {
+        const current = activeRunIds;
+        activeRunIds = [];
+        return current;
+      },
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
+    expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 1);
   });
 });

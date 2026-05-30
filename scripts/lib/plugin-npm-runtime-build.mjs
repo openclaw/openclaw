@@ -6,6 +6,10 @@ import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
 } from "./bundled-plugin-build-entries.mjs";
+import {
+  listMissingPackageStaticAssetSources,
+  runPackageAssetBuild,
+} from "./plugin-npm-runtime-assets.mjs";
 import { copyStaticExtensionAssetsForPackage } from "./static-extension-assets.mjs";
 
 const env = {
@@ -118,6 +122,9 @@ export function resolvePluginNpmRuntimePackageFiles(plan) {
   merged.add("dist/**");
   if (packageRelativePathExists(plan.packageDir, "openclaw.plugin.json")) {
     merged.add("openclaw.plugin.json");
+  }
+  if (packageRelativePathExists(plan.packageDir, "npm-shrinkwrap.json")) {
+    merged.add("npm-shrinkwrap.json");
   }
   if (packageRelativePathExists(plan.packageDir, "README.md")) {
     merged.add("README.md");
@@ -261,12 +268,20 @@ export async function buildPluginNpmRuntime(params) {
     outDir: plan.outDir,
     platform: "node",
   });
+  const assetBuildCommand = runPackageAssetBuild(plan);
+  const missingStaticAssets = listMissingPackageStaticAssetSources(plan);
+  if (missingStaticAssets.length > 0) {
+    throw new Error(
+      `${plan.pluginDir} missing static asset source(s): ${missingStaticAssets.join(", ")}`,
+    );
+  }
   const copiedStaticAssets = copyStaticExtensionAssetsForPackage({
     rootDir: plan.repoRoot,
     pluginDir: plan.pluginDir,
   });
   return {
     ...plan,
+    assetBuildCommand,
     copiedStaticAssets,
   };
 }

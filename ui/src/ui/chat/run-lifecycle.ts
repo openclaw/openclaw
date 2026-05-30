@@ -13,7 +13,7 @@ export type ChatRunUiStatus = {
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Partial<Parameters<typeof resetToolStream>[0]> & {
+type RunLifecycleHost = Omit<Partial<Parameters<typeof resetToolStream>[0]>, "hello"> & {
   sessionKey: string;
   chatRunId?: string | null;
   chatStream?: string | null;
@@ -41,6 +41,7 @@ type ReconcileOptions = {
   clearToolStream?: boolean;
   clearSideResultTerminalRuns?: boolean;
   clearRunStatus?: boolean;
+  publishRunStatus?: boolean;
 };
 
 function toSessionKey(value: string | null | undefined): string | null {
@@ -183,8 +184,10 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
       occurredAt,
     };
     reconcileSessionRows(host, options, occurredAt);
-    host.chatRunStatus = status;
-    scheduleRunStatusClear(host, status);
+    if (options.publishRunStatus !== false) {
+      host.chatRunStatus = status;
+      scheduleRunStatusClear(host, status);
+    }
   } else if (options.clearRunStatus) {
     clearChatRunStatus(host);
   }
@@ -195,7 +198,10 @@ function currentSessionRow(host: RunLifecycleHost) {
   return host.sessionsResult?.sessions.find((row) => row.key === host.sessionKey);
 }
 
-export function reconcileChatRunFromCurrentSessionRow(host: RunLifecycleHost): boolean {
+export function reconcileChatRunFromCurrentSessionRow(
+  host: RunLifecycleHost,
+  options: { publishRunStatus?: boolean } = {},
+): boolean {
   if (!host.chatRunId && host.chatStream == null) {
     return false;
   }
@@ -217,6 +223,7 @@ export function reconcileChatRunFromCurrentSessionRow(host: RunLifecycleHost): b
     sessionKey: host.sessionKey,
     clearLocalRun: true,
     clearChatStream: true,
+    publishRunStatus: options.publishRunStatus,
   });
   return true;
 }

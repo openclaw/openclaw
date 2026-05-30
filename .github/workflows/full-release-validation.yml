@@ -58,6 +58,7 @@ on:
           - qa-parity
           - qa-live
           - npm-telegram
+          - performance
       live_suite_filter:
         description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram; blank runs all selected live suites
         required: false
@@ -79,12 +80,17 @@ on:
         default: ""
         type: string
       evidence_package_spec:
-        description: Optional published package spec to prove in the private release evidence report
+        description: Optional published package spec to prove in the release evidence report
         required: false
         default: ""
         type: string
       package_acceptance_package_spec:
         description: Optional published package spec for Package Acceptance; blank uses the SHA-built release artifact
+        required: false
+        default: ""
+        type: string
+      codex_plugin_spec:
+        description: Optional Codex plugin install spec for live Docker package checks; blank derives from release_package_spec or packs the selected ref
         required: false
         default: ""
         type: string
@@ -108,13 +114,12 @@ permissions:
 
 concurrency:
   group: full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}
-  cancel-in-progress: ${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}
+  cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
 
 jobs:
   resolve_target:
@@ -130,7 +135,7 @@ jobs:
           ref: ${{ github.ref_name }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Resolve target SHA
@@ -151,6 +156,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -175,6 +181,11 @@ jobs:
               echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
             else
               echo "- Normal CI: skipped by rerun group"
+            fi
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "performance" ]]; then
+              echo "- Product performance: \`OpenClaw Performance\` with \`target_ref=${TARGET_SHA}\`"
+            else
+              echo "- Product performance: skipped by rerun group"
             fi
             if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "plugin-prerelease" ]]; then
               echo "- Plugin prerelease: \`Plugin Prerelease\` with \`target_ref=${TARGET_SHA}\`"
@@ -208,14 +219,86 @@ jobs:
             else
               echo "- Package Acceptance package spec: SHA-built release artifact"
             fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  docker_runtime_assets_preflight:
+    name: Verify Docker runtime image assets
+    needs: [resolve_target]
+    if: inputs.rerun_group == 'all'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout target SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: true
+
+      - name: Verify Docker runtime-assets prune path
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          set -euo pipefail
+          timeout --kill-after=30s 35m docker build \
+            --target runtime-assets \
+            --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
+            .
+
+      - name: Build and smoke test final Docker runtime image
+        env:
+          DOCKER_BUILDKIT: "1"
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          image_ref="openclaw-release-runtime-smoke:${TARGET_SHA}"
+          timeout --kill-after=30s 35m docker build \
+            --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
+            -t "${image_ref}" \
+            .
+          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
+            set -eu
+            test -f /app/src/agents/templates/HEARTBEAT.md
+            temp_root="$(mktemp -d)"
+            trap "rm -rf \"${temp_root}\"" EXIT
+            mkdir -p "${temp_root}/home" "${temp_root}/cwd"
+            cd "${temp_root}/cwd"
+            set +e
+            HOME="${temp_root}/home" \
+            USERPROFILE="${temp_root}/home" \
+            OPENCLAW_HOME="${temp_root}/home" \
+            OPENCLAW_NO_ONBOARD=1 \
+            OPENCLAW_SUPPRESS_NOTES=1 \
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 \
+            OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK=1 \
+            AWS_EC2_METADATA_DISABLED=true \
+            AWS_SHARED_CREDENTIALS_FILE="${temp_root}/home/.aws/credentials" \
+            AWS_CONFIG_FILE="${temp_root}/home/.aws/config" \
+              node /app/openclaw.mjs agent --message "workspace bootstrap smoke" --session-id "workspace-bootstrap-smoke" --local --timeout 1 --json \
+              >"${temp_root}/out.log" 2>&1
+            status="$?"
+            set -e
+            if grep -F "Missing workspace template:" "${temp_root}/out.log"; then
+              cat "${temp_root}/out.log"
+              exit 1
+            fi
+            test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"
+            if [ "${status}" -ne 0 ]; then
+              cat "${temp_root}/out.log"
+            fi
+          '
 
   normal_ci:
     name: Run normal full CI
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -236,9 +319,31 @@ jobs:
             shift
 
             local before_json dispatch_output run_id status conclusion url poll_count
-            before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+            gh_with_retry() {
+              local output status attempt
+              for attempt in 1 2 3 4 5 6; do
+                set +e
+                output="$(gh "$@" 2>&1)"
+                status=$?
+                set -e
+                if [[ "$status" -eq 0 ]]; then
+                  printf '%s\n' "$output"
+                  return 0
+                fi
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                  echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                  sleep $((attempt * 10))
+                  continue
+                fi
+                printf '%s\n' "$output" >&2
+                return "$status"
+              done
+              printf '%s\n' "$output" >&2
+              return "$status"
+            }
+            before_json="$(gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
-            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
             printf '%s\n' "$dispatch_output"
             run_id="$(
               printf '%s\n' "$dispatch_output" |
@@ -249,7 +354,7 @@ jobs:
             if [[ -z "$run_id" ]]; then
               for _ in $(seq 1 60); do
                 run_id="$(
-                  BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                  BEFORE_IDS="$before_json" gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
                     --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
                 )"
                 if [[ -n "$run_id" ]]; then
@@ -267,6 +372,14 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            fetch_child_run_json() {
+              gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            }
+
+            fetch_child_jobs() {
+              gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
+            }
+
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
@@ -277,26 +390,26 @@ jobs:
 
             poll_count=0
             while true; do
-              status="$(gh run view "$run_id" --json status --jq '.status')"
+              status="$(fetch_child_run_json | jq -r '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
               fi
               poll_count=$((poll_count + 1))
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+                fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
               sleep 30
             done
             trap - EXIT INT TERM
 
-            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view "$run_id" --json url --jq '.url')"
+            conclusion="$(fetch_child_run_json | jq -r '.conclusion // ""')"
+            url="$(fetch_child_run_json | jq -r '.html_url')"
             echo "${workflow} finished with ${conclusion}: ${url}"
             echo "url=${url}" >> "$GITHUB_OUTPUT"
             echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              fetch_child_jobs | jq 'select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url: .html_url}' || true
               exit 1
             fi
           }
@@ -312,10 +425,10 @@ jobs:
 
   plugin_prerelease:
     name: Run plugin prerelease validation
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -336,9 +449,31 @@ jobs:
             shift
 
             local before_json dispatch_output run_id status conclusion url poll_count
-            before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+            gh_with_retry() {
+              local output status attempt
+              for attempt in 1 2 3 4 5 6; do
+                set +e
+                output="$(gh "$@" 2>&1)"
+                status=$?
+                set -e
+                if [[ "$status" -eq 0 ]]; then
+                  printf '%s\n' "$output"
+                  return 0
+                fi
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                  echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                  sleep $((attempt * 10))
+                  continue
+                fi
+                printf '%s\n' "$output" >&2
+                return "$status"
+              done
+              printf '%s\n' "$output" >&2
+              return "$status"
+            }
+            before_json="$(gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
-            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
             printf '%s\n' "$dispatch_output"
             run_id="$(
               printf '%s\n' "$dispatch_output" |
@@ -349,7 +484,7 @@ jobs:
             if [[ -z "$run_id" ]]; then
               for _ in $(seq 1 60); do
                 run_id="$(
-                  BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                  BEFORE_IDS="$before_json" gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
                     --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
                 )"
                 if [[ -n "$run_id" ]]; then
@@ -367,6 +502,14 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            fetch_child_run_json() {
+              gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            }
+
+            fetch_child_jobs() {
+              gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
+            }
+
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
@@ -377,26 +520,26 @@ jobs:
 
             poll_count=0
             while true; do
-              status="$(gh run view "$run_id" --json status --jq '.status')"
+              status="$(fetch_child_run_json | jq -r '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
               fi
               poll_count=$((poll_count + 1))
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+                fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
               sleep 30
             done
             trap - EXIT INT TERM
 
-            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view "$run_id" --json url --jq '.url')"
+            conclusion="$(fetch_child_run_json | jq -r '.conclusion // ""')"
+            url="$(fetch_child_run_json | jq -r '.html_url')"
             echo "${workflow} finished with ${conclusion}: ${url}"
             echo "url=${url}" >> "$GITHUB_OUTPUT"
             echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              fetch_child_jobs | jq 'select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url: .html_url}' || true
               exit 1
             fi
           }
@@ -412,10 +555,10 @@ jobs:
 
   release_checks:
     name: Run release/live/Docker/QA validation
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -437,6 +580,7 @@ jobs:
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
         run: |
           set -euo pipefail
 
@@ -444,10 +588,32 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url poll_count
-            before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+            local before_json dispatch_output run_id status conclusion url poll_count run_json
+            gh_with_retry() {
+              local output status attempt
+              for attempt in 1 2 3 4 5 6; do
+                set +e
+                output="$(gh "$@" 2>&1)"
+                status=$?
+                set -e
+                if [[ "$status" -eq 0 ]]; then
+                  printf '%s\n' "$output"
+                  return 0
+                fi
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                  echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                  sleep $((attempt * 10))
+                  continue
+                fi
+                printf '%s\n' "$output" >&2
+                return "$status"
+              done
+              printf '%s\n' "$output" >&2
+              return "$status"
+            }
+            before_json="$(gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
-            dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
+            dispatch_output="$(gh_with_retry workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@")"
             printf '%s\n' "$dispatch_output"
             run_id="$(
               printf '%s\n' "$dispatch_output" |
@@ -458,7 +624,7 @@ jobs:
             if [[ -z "$run_id" ]]; then
               for _ in $(seq 1 60); do
                 run_id="$(
-                  BEFORE_IDS="$before_json" gh run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                  BEFORE_IDS="$before_json" gh_with_retry run list --workflow "$workflow" --event workflow_dispatch --limit 50 --json databaseId,createdAt \
                     --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
                 )"
                 if [[ -n "$run_id" ]]; then
@@ -476,6 +642,54 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            fetch_child_run_json() {
+              gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+            }
+
+            fetch_child_jobs() {
+              gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq '.jobs[]'
+            }
+
+            release_check_blocking_job() {
+              case "$1" in
+                "resolve_target" | \
+                "Prepare release package artifact" | \
+                "install_smoke_release_checks / "* | \
+                "Run package acceptance" | \
+                "Run package acceptance / "*)
+                  return 0
+                  ;;
+              esac
+              return 1
+            }
+
+            release_checks_advisory_only() {
+              local run_json="$1"
+              local verifier_conclusion name saw_advisory failed
+
+              verifier_conclusion="$(
+                jq -r '.jobs[] | select(.name == "Verify release checks") | .conclusion' <<< "$run_json" |
+                  tail -n 1
+              )"
+              if [[ "$verifier_conclusion" != "success" ]]; then
+                return 1
+              fi
+
+              saw_advisory=0
+              failed=0
+              while IFS= read -r name; do
+                [[ -z "${name// }" ]] && continue
+                if release_check_blocking_job "$name"; then
+                  echo "::error::${name} is a package-safety Tideclaw alpha release-check lane."
+                  failed=1
+                else
+                  saw_advisory=1
+                fi
+              done < <(jq -r '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | .name' <<< "$run_json")
+
+              [[ "$saw_advisory" == "1" && "$failed" == "0" ]]
+            }
+
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
@@ -486,26 +700,38 @@ jobs:
 
             poll_count=0
             while true; do
-              status="$(gh run view "$run_id" --json status --jq '.status')"
+              status="$(fetch_child_run_json | jq -r '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
               fi
               poll_count=$((poll_count + 1))
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+                fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
               sleep 30
             done
             trap - EXIT INT TERM
 
-            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view "$run_id" --json url --jq '.url')"
+            jobs_json="$(fetch_child_jobs | jq -s '{jobs: [.[] | {name, conclusion, url: .html_url}]}')"
+            run_json="$(
+              jq -s '.[0] + .[1]' \
+                <(fetch_child_run_json | jq '{conclusion: (.conclusion // ""), url: .html_url}') \
+                <(printf '%s\n' "$jobs_json")
+            )"
+            conclusion="$(jq -r '.conclusion' <<< "$run_json")"
+            url="$(jq -r '.url' <<< "$run_json")"
             echo "${workflow} finished with ${conclusion}: ${url}"
             echo "url=${url}" >> "$GITHUB_OUTPUT"
             echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' <<< "$run_json" || true
+              if [[ "$workflow" == "openclaw-release-checks.yml" && "$CHILD_WORKFLOW_REF" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+                if release_checks_advisory_only "$run_json"; then
+                  echo "::warning::${workflow} ended with ${conclusion}, but Verify release checks accepted Tideclaw alpha advisory lanes."
+                  return 0
+                fi
+              fi
               exit 1
             fi
           }
@@ -531,6 +757,9 @@ jobs:
             fi
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
+            fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -560,13 +789,16 @@ jobs:
           if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")
           fi
+          if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+            args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
+          fi
 
           dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
 
   prepare_release_package:
     name: Prepare release package artifact
-    needs: [resolve_target]
-    if: ${{ inputs.npm_telegram_package_spec == '' && inputs.release_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' }}
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && inputs.npm_telegram_package_spec == '' && inputs.release_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' && needs.docker_runtime_assets_preflight.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -581,7 +813,7 @@ jobs:
       - name: Checkout trusted workflow ref
         uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          persist-credentials: true
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
@@ -593,7 +825,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
           install-deps: "false"
 
@@ -660,7 +891,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          before_json="$(gh run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+          gh_with_retry() {
+            local output status attempt
+            for attempt in 1 2 3 4 5 6; do
+              set +e
+              output="$(gh "$@" 2>&1)"
+              status=$?
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                sleep $((attempt * 10))
+                continue
+              fi
+              printf '%s\n' "$output" >&2
+              return "$status"
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+
+          before_json="$(gh_with_retry run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
           args=(-f package_spec="${PACKAGE_SPEC:-openclaw@beta}" -f harness_ref="$TARGET_SHA" -f provider_mode="$PROVIDER_MODE")
           if [[ -z "${PACKAGE_SPEC// }" ]]; then
@@ -678,12 +932,12 @@ jobs:
             args+=(-f scenario="$SCENARIO")
           fi
 
-          gh workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"
+          gh_with_retry workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"
 
           run_id=""
           for _ in $(seq 1 60); do
             run_id="$(
-              BEFORE_IDS="$before_json" gh run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+              BEFORE_IDS="$before_json" gh_with_retry run list --workflow npm-telegram-beta-e2e.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
                 --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
             )"
             if [[ -n "$run_id" ]]; then
@@ -710,32 +964,150 @@ jobs:
 
           poll_count=0
           while true; do
-            status="$(gh run view "$run_id" --json status --jq '.status')"
+            status="$(gh_with_retry run view "$run_id" --json status --jq '.status')"
             if [[ "$status" == "completed" ]]; then
               break
             fi
             poll_count=$((poll_count + 1))
             if (( poll_count % 10 == 0 )); then
               echo "Still waiting on npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+              gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
             fi
             sleep 30
           done
           trap - EXIT INT TERM
 
-          conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-          url="$(gh run view "$run_id" --json url --jq '.url')"
+          conclusion="$(gh_with_retry run view "$run_id" --json conclusion --jq '.conclusion')"
+          url="$(gh_with_retry run view "$run_id" --json url --jq '.url')"
           echo "npm-telegram-beta-e2e.yml finished with ${conclusion}: ${url}"
           echo "url=${url}" >> "$GITHUB_OUTPUT"
           echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
           if [[ "$conclusion" != "success" ]]; then
-            gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+            gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
             exit 1
+          fi
+
+  performance:
+    name: Run product performance evidence
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      url: ${{ steps.dispatch.outputs.url }}
+      conclusion: ${{ steps.dispatch.outputs.conclusion }}
+    steps:
+      - name: Dispatch and monitor OpenClaw Performance
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          gh_with_retry() {
+            local output status attempt
+            for attempt in 1 2 3 4 5 6; do
+              set +e
+              output="$(gh "$@" 2>&1)"
+              status=$?
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                sleep $((attempt * 10))
+                continue
+              fi
+              printf '%s\n' "$output" >&2
+              return "$status"
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+
+          {
+            echo "### Product performance"
+            echo
+            echo "- Target SHA: \`${TARGET_SHA}\`"
+            echo "- Profile: \`release\`"
+            echo "- Repeat: \`3\`"
+            echo "- Deep profile: \`false\`"
+            echo "- Live OpenAI candidate: \`false\`"
+            echo "- Release impact: advisory"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          before_json="$(gh_with_retry run list --workflow openclaw-performance.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+
+          gh_with_retry workflow run openclaw-performance.yml \
+            --ref "$CHILD_WORKFLOW_REF" \
+            -f target_ref="$TARGET_SHA" \
+            -f profile=release \
+            -f repeat=3 \
+            -f deep_profile=false \
+            -f live_openai_candidate=false \
+            -f fail_on_regression=false
+
+          run_id=""
+          for _ in $(seq 1 60); do
+            run_id="$(
+              BEFORE_IDS="$before_json" gh_with_retry run list --workflow openclaw-performance.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+            )"
+            if [[ -n "$run_id" ]]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [[ -z "$run_id" ]]; then
+            echo "::warning::Could not find dispatched run for openclaw-performance.yml."
+            exit 0
+          fi
+
+          echo "Dispatched openclaw-performance.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+          cancel_child() {
+            if [[ -n "${run_id:-}" ]]; then
+              echo "Cancelling child workflow openclaw-performance.yml: ${run_id}" >&2
+              gh run cancel "$run_id" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cancel_child EXIT INT TERM
+
+          poll_count=0
+          while true; do
+            status="$(gh_with_retry run view "$run_id" --json status --jq '.status')"
+            if [[ "$status" == "completed" ]]; then
+              break
+            fi
+            poll_count=$((poll_count + 1))
+            if (( poll_count % 10 == 0 )); then
+              echo "Still waiting on openclaw-performance.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+            fi
+            sleep 30
+          done
+          trap - EXIT INT TERM
+
+          conclusion="$(gh_with_retry run view "$run_id" --json conclusion --jq '.conclusion')"
+          url="$(gh_with_retry run view "$run_id" --json url --jq '.url')"
+          echo "openclaw-performance.yml finished with ${conclusion}: ${url}"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
+          if [[ "$conclusion" != "success" ]]; then
+            echo "::warning::OpenClaw Performance is advisory and ended with ${conclusion}: ${url}"
+            gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
           fi
 
   summary:
     name: Verify full validation
-    needs: [resolve_target, normal_ci, plugin_prerelease, release_checks, npm_telegram]
+    needs: [resolve_target, docker_runtime_assets_preflight, normal_ci, plugin_prerelease, release_checks, npm_telegram, performance]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -747,19 +1119,87 @@ jobs:
           PLUGIN_PRERELEASE_RUN_ID: ${{ needs.plugin_prerelease.outputs.run_id }}
           RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
+          PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
           NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}
           PLUGIN_PRERELEASE_RESULT: ${{ needs.plugin_prerelease.result }}
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
+          PERFORMANCE_RESULT: ${{ needs.performance.result }}
+          DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
+          gh_with_retry() {
+            local output status attempt
+            for attempt in 1 2 3 4 5 6; do
+              set +e
+              output="$(gh "$@" 2>&1)"
+              status=$?
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                sleep $((attempt * 10))
+                continue
+              fi
+              printf '%s\n' "$output" >&2
+              return "$status"
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+
+          release_check_blocking_job() {
+            case "$1" in
+              "resolve_target" | \
+              "Prepare release package artifact" | \
+              "install_smoke_release_checks / "* | \
+              "Run package acceptance" | \
+              "Run package acceptance / "*)
+                return 0
+                ;;
+            esac
+            return 1
+          }
+
+          release_checks_advisory_only() {
+            local run_json="$1"
+            local verifier_conclusion name saw_advisory failed
+
+            verifier_conclusion="$(
+              jq -r '.jobs[] | select(.name == "Verify release checks") | .conclusion' <<< "$run_json" |
+                tail -n 1
+            )"
+            if [[ "$verifier_conclusion" != "success" ]]; then
+              return 1
+            fi
+
+            saw_advisory=0
+            failed=0
+            while IFS= read -r name; do
+              [[ -z "${name// }" ]] && continue
+              if release_check_blocking_job "$name"; then
+                echo "::error::${name} is a package-safety Tideclaw alpha release-check lane."
+                failed=1
+              else
+                saw_advisory=1
+              fi
+            done < <(jq -r '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | .name' <<< "$run_json")
+
+            [[ "$saw_advisory" == "1" && "$failed" == "0" ]]
+          }
+
           check_child() {
             local label="$1"
             local run_id="$2"
             local required="$3"
+            local advisory_ok="${4:-0}"
 
             if [[ -z "${run_id// }" ]]; then
               if [[ "$required" == "0" ]]; then
@@ -771,7 +1211,7 @@ jobs:
             fi
 
             local run_json status conclusion url attempt head_sha
-            run_json="$(gh run view "$run_id" --json status,conclusion,url,attempt,headSha,jobs)"
+            run_json="$(gh_with_retry run view "$run_id" --json status,conclusion,url,attempt,headSha,jobs)"
             status="$(jq -r '.status' <<< "$run_json")"
             conclusion="$(jq -r '.conclusion' <<< "$run_json")"
             url="$(jq -r '.url' <<< "$run_json")"
@@ -785,6 +1225,12 @@ jobs:
             fi
 
             if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+              if [[ "$advisory_ok" == "1" && "$label" == "release_checks" ]]; then
+                if release_checks_advisory_only "$run_json"; then
+                  echo "::warning::${label} child run ended with ${status}/${conclusion}, but Verify release checks accepted Tideclaw alpha advisory lanes: ${url}"
+                  return 0
+                fi
+              fi
               echo "::error::${label} child run ended with ${status}/${conclusion}: ${url}"
               jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, status, conclusion, url}' <<< "$run_json" || true
               return 1
@@ -798,6 +1244,7 @@ jobs:
               echo
               echo "| Child | Result | Minutes | Head SHA | Run |"
               echo "| --- | --- | ---: | --- | --- |"
+              echo "| \`docker_runtime_assets_preflight\` | \`${DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT}\` |  | current workflow |  |"
             } >> "$GITHUB_STEP_SUMMARY"
 
             append_child_row() {
@@ -811,7 +1258,7 @@ jobs:
               fi
 
               local run_json row
-              run_json="$(gh run view "$run_id" --json status,conclusion,url,createdAt,updatedAt,headSha)"
+              run_json="$(gh_with_retry run view "$run_id" --json status,conclusion,url,createdAt,updatedAt,headSha)"
               row="$(
                 jq -r --arg label "$label" '
                   def ts: fromdateiso8601;
@@ -833,6 +1280,7 @@ jobs:
             append_child_row "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID" "$PLUGIN_PRERELEASE_RESULT"
             append_child_row "release_checks" "$RELEASE_CHECKS_RUN_ID" "$RELEASE_CHECKS_RESULT"
             append_child_row "npm_telegram" "$NPM_TELEGRAM_RUN_ID" "$NPM_TELEGRAM_RESULT"
+            append_child_row "product_performance" "$PERFORMANCE_RUN_ID" "$PERFORMANCE_RESULT"
           }
 
           summarize_child_timing() {
@@ -846,7 +1294,7 @@ jobs:
               echo
               echo "### Slowest jobs: ${label}"
               echo
-              gh run view "$run_id" --json jobs --jq '
+              gh_with_retry run view "$run_id" --json jobs --jq '
                 def ts: fromdateiso8601;
                 "| Job | Result | Minutes |",
                 "| --- | --- | ---: |",
@@ -863,7 +1311,7 @@ jobs:
               echo
               echo "### Longest queues: ${label}"
               echo
-              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq ".jobs[] | @json" | jq -sr '
+              gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq ".jobs[] | @json" | jq -sr '
                 def ts: fromdateiso8601;
                 "| Job | Result | Queue minutes | Run minutes |",
                 "| --- | --- | ---: | ---: |",
@@ -892,7 +1340,7 @@ jobs:
             fi
 
             local run_json status conclusion artifacts_json
-            run_json="$(gh run view "$run_id" --json status,conclusion,url,jobs)"
+            run_json="$(gh_with_retry run view "$run_id" --json status,conclusion,url,jobs)"
             status="$(jq -r '.status' <<< "$run_json")"
             conclusion="$(jq -r '.conclusion' <<< "$run_json")"
             if [[ "$status" == "completed" && "$conclusion" == "success" ]]; then
@@ -915,7 +1363,7 @@ jobs:
               echo
               echo "Artifacts:"
               artifacts_json="$(
-                gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" 2>/dev/null || true
+                gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" 2>/dev/null || true
               )"
               if [[ -n "${artifacts_json// }" ]]; then
                 jq -r '
@@ -933,23 +1381,48 @@ jobs:
           }
 
           failed=0
+          normal_ci_required=0
+          plugin_prerelease_required=0
+          release_checks_required=0
+          if [[ "$RERUN_GROUP" == "all" && "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success" ]]; then
+            echo "::error::Docker runtime-assets preflight ended with ${DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT}."
+            failed=1
+          elif [[ "$RERUN_GROUP" == "all" ]]; then
+            normal_ci_required=1
+            plugin_prerelease_required=1
+            release_checks_required=1
+          else
+            case "$RERUN_GROUP" in
+              ci)
+                normal_ci_required=1
+                ;;
+              plugin-prerelease)
+                plugin_prerelease_required=1
+                ;;
+              release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)
+                release_checks_required=1
+                ;;
+            esac
+          fi
 
           append_child_overview
 
           if [[ "$NORMAL_CI_RESULT" == "skipped" && -z "${NORMAL_CI_RUN_ID// }" ]]; then
-            check_child "normal_ci" "" 0 || failed=1
+            check_child "normal_ci" "" "$normal_ci_required" || failed=1
           else
             check_child "normal_ci" "$NORMAL_CI_RUN_ID" 1 || failed=1
           fi
 
           if [[ "$PLUGIN_PRERELEASE_RESULT" == "skipped" && -z "${PLUGIN_PRERELEASE_RUN_ID// }" ]]; then
-            check_child "plugin_prerelease" "" 0 || failed=1
+            check_child "plugin_prerelease" "" "$plugin_prerelease_required" || failed=1
           else
             check_child "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID" 1 || failed=1
           fi
 
           if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
-            check_child "release_checks" "" 0 || failed=1
+            check_child "release_checks" "" "$release_checks_required" || failed=1
+          elif [[ "$CHILD_WORKFLOW_REF" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 1 || failed=1
           else
             check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 || failed=1
           fi
@@ -966,6 +1439,7 @@ jobs:
           summarize_child_timing "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID"
           summarize_child_timing "release_checks" "$RELEASE_CHECKS_RUN_ID"
           summarize_child_timing "npm_telegram" "$NPM_TELEGRAM_RUN_ID"
+          summarize_child_timing "product_performance" "$PERFORMANCE_RUN_ID"
 
           if [[ "$failed" != "0" ]]; then
             summarize_failed_child "normal_ci" "$NORMAL_CI_RUN_ID"
@@ -976,9 +1450,9 @@ jobs:
 
           exit "$failed"
 
-      - name: Request private evidence update
+      - name: Request release evidence update
         env:
-          RELEASE_PRIVATE_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN }}
+          RELEASES_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_DISPATCH_TOKEN }}
           TARGET_REF: ${{ inputs.ref }}
           PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
           GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
@@ -986,22 +1460,30 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$RELEASE_CHECKS_RESULT" == "skipped" ]]; then
-            echo "Release checks were skipped by rerun group; skipping automatic private evidence update."
+            echo "Release checks were skipped by rerun group; skipping automatic release evidence update."
             exit 0
           fi
-          if [[ -z "${RELEASE_PRIVATE_DISPATCH_TOKEN// }" ]]; then
-            echo "OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN is not configured; skipping automatic private evidence update."
+          if [[ -z "${RELEASES_DISPATCH_TOKEN// }" ]]; then
+            echo "OPENCLAW_RELEASES_DISPATCH_TOKEN is not configured; skipping automatic release evidence update."
             exit 0
+          fi
+
+          evidence_package_spec="$PACKAGE_SPEC"
+          if [[ -z "${evidence_package_spec// }" ]]; then
+            tag_ref="${TARGET_REF#refs/tags/}"
+            if [[ "$tag_ref" =~ ^v([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?)$ ]]; then
+              evidence_package_spec="openclaw@${BASH_REMATCH[1]}"
+            fi
           fi
 
           release_id="${TARGET_REF#refs/tags/}"
           release_id="${release_id#v}"
-          if [[ "$PACKAGE_SPEC" =~ ^openclaw@(.+)$ ]]; then
+          if [[ "$evidence_package_spec" =~ ^openclaw@(.+)$ ]]; then
             release_id="${BASH_REMATCH[1]}"
           fi
           release_id="$(printf '%s' "$release_id" | tr '/:@ ' '----' | tr -cd 'A-Za-z0-9._-')"
           if [[ -z "$release_id" ]]; then
-            echo "::warning::Could not derive release evidence id from target ref '${TARGET_REF}'; skipping automatic private evidence update."
+            echo "::warning::Could not derive release evidence id from target ref '${TARGET_REF}'; skipping automatic release evidence update."
             exit 0
           fi
 
@@ -1010,7 +1492,7 @@ jobs:
               --arg full_validation_run_id "$GITHUB_RUN_ID_VALUE" \
               --arg release_id "$release_id" \
               --arg release_ref "$TARGET_REF" \
-              --arg package_spec "$PACKAGE_SPEC" \
+              --arg package_spec "$evidence_package_spec" \
               --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions." \
               '{
                 event_type: "openclaw_full_release_validation_completed",
@@ -1027,11 +1509,20 @@ jobs:
           if ! curl --fail-with-body \
             -X POST \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${RELEASE_PRIVATE_DISPATCH_TOKEN}" \
+            -H "Authorization: Bearer ${RELEASES_DISPATCH_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/openclaw/releases-private/dispatches \
+            https://api.github.com/repos/openclaw/releases/dispatches \
             -d "$payload"; then
-            echo "::warning::Automatic private release evidence dispatch failed; child workflow validation remains authoritative."
+            echo "::warning::Automatic release evidence dispatch failed; child workflow validation remains authoritative."
+            {
+              echo "### Release evidence dispatch failed"
+              echo
+              echo "Child workflow validation remains authoritative. Backfill durable evidence from \`openclaw/releases\`:"
+              echo
+              echo "\`\`\`bash"
+              echo "gh workflow run openclaw-release-evidence-from-full-validation.yml --repo openclaw/releases --ref main -f full_validation_run_id=${GITHUB_RUN_ID_VALUE} -f release_id=${release_id} -f release_ref=${TARGET_REF} -f package_spec=${evidence_package_spec}"
+              echo "\`\`\`"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Write release validation manifest
@@ -1046,6 +1537,7 @@ jobs:
           PLUGIN_PRERELEASE_RUN_ID: ${{ needs.plugin_prerelease.outputs.run_id }}
           RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
+          PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"
@@ -1064,6 +1556,7 @@ jobs:
             --arg pluginPrereleaseRunId "$PLUGIN_PRERELEASE_RUN_ID" \
             --arg releaseChecksRunId "$RELEASE_CHECKS_RUN_ID" \
             --arg npmTelegramRunId "$NPM_TELEGRAM_RUN_ID" \
+            --arg performanceRunId "$PERFORMANCE_RUN_ID" \
             '{
               version: 1,
               workflowName: $workflowName,
@@ -1079,7 +1572,8 @@ jobs:
                 normalCi: $normalCiRunId,
                 pluginPrerelease: $pluginPrereleaseRunId,
                 releaseChecks: $releaseChecksRunId,
-                npmTelegram: $npmTelegramRunId
+                npmTelegram: $npmTelegramRunId,
+                productPerformance: $performanceRunId
               }
             }' > "${manifest_dir}/full-release-validation-manifest.json"
 

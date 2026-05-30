@@ -7,6 +7,7 @@ const {
   loadChatHistoryMock,
   createSessionAndRefreshMock,
   loadSessionsMock,
+  syncSelectedSessionMessageSubscriptionMock,
 } = vi.hoisted(() => ({
   refreshChatMock: vi.fn(),
   refreshChatAvatarMock: vi.fn(),
@@ -14,11 +15,19 @@ const {
   loadChatHistoryMock: vi.fn(),
   createSessionAndRefreshMock: vi.fn(),
   loadSessionsMock: vi.fn(),
+  syncSelectedSessionMessageSubscriptionMock: vi.fn(),
 }));
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 120,
-  CHAT_SESSIONS_REFRESH_LIMIT: 100,
+  CHAT_SESSIONS_REFRESH_LIMIT: 50,
+  createChatSessionsLoadOverrides: () => ({
+    activeMinutes: 120,
+    limit: 50,
+    includeGlobal: true,
+    includeUnknown: true,
+    showArchived: false,
+  }),
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -34,6 +43,7 @@ vi.mock("./controllers/chat.ts", () => ({
 vi.mock("./controllers/sessions.ts", () => ({
   createSessionAndRefresh: createSessionAndRefreshMock,
   loadSessions: loadSessionsMock,
+  syncSelectedSessionMessageSubscription: syncSelectedSessionMessageSubscriptionMock,
 }));
 
 import {
@@ -60,6 +70,7 @@ beforeEach(() => {
   loadChatHistoryMock.mockReset();
   createSessionAndRefreshMock.mockReset();
   loadSessionsMock.mockReset();
+  syncSelectedSessionMessageSubscriptionMock.mockReset();
 });
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
@@ -771,11 +782,10 @@ describe("createChatSession", () => {
       },
       {
         activeMinutes: 120,
-        limit: 100,
+        limit: 50,
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
-        agentId: "ops",
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
@@ -971,13 +981,13 @@ describe("switchChatSession", () => {
       agentId: "main",
     });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(syncSelectedSessionMessageSubscriptionMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
       activeMinutes: 120,
-      limit: 100,
+      limit: 50,
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,
-      agentId: "main",
     });
     expect(
       (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })

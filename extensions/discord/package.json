@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.5.19",
-  "description": "OpenClaw Discord channel plugin",
+  "version": "2026.5.28",
+  "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
@@ -9,19 +9,18 @@
   "type": "module",
   "dependencies": {
     "@discordjs/voice": "0.19.2",
-    "discord-api-types": "0.38.47",
-    "https-proxy-agent": "9.0.0",
-    "opusscript": "0.1.1",
+    "discord-api-types": "0.38.48",
+    "libopus-wasm": "0.1.0",
     "typebox": "1.1.38",
     "undici": "8.3.0",
-    "ws": "8.20.1"
+    "ws": "8.21.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.19"
+    "openclaw": ">=2026.5.28"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -33,6 +32,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "legacyStateMigrations": true
+    },
     "channel": {
       "id": "discord",
       "label": "Discord",
@@ -61,14 +63,14 @@
     "install": {
       "npmSpec": "@openclaw/discord",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10",
+      "minHostVersion": ">=2026.5.26",
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.5.19"
+      "pluginApi": ">=2026.5.28"
     },
     "build": {
-      "openclawVersion": "2026.5.19"
+      "openclawVersion": "2026.5.28"
     },
     "release": {
       "publishToClawHub": true,

@@ -41,6 +41,10 @@ const ensureSupportedNodeVersion = () => {
 
 ensureSupportedNodeVersion();
 
+if (tryOutputLauncherVersion(process.argv)) {
+  process.exit(0);
+}
+
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));
@@ -90,6 +94,7 @@ const respawnSignals =
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalExitGraceMs = 1_000;
 const respawnSignalForceKillGraceMs = 1_000;
+const respawnSignalHardExitGraceMs = 1_000;
 
 const runRespawnedChild = (command, args, env) => {
   const child = spawn(command, args, {
@@ -103,6 +108,7 @@ const runRespawnedChild = (command, args, env) => {
   // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
+  let signalHardExitTimer = null;
   const detach = () => {
     for (const [signal, listener] of listeners) {
       process.off(signal, listener);
@@ -115,6 +121,10 @@ const runRespawnedChild = (command, args, env) => {
     if (signalForceKillTimer) {
       clearTimeout(signalForceKillTimer);
       signalForceKillTimer = null;
+    }
+    if (signalHardExitTimer) {
+      clearTimeout(signalHardExitTimer);
+      signalHardExitTimer = null;
     }
   };
   const forceKillChild = () => {
@@ -132,7 +142,10 @@ const runRespawnedChild = (command, args, env) => {
     }
     signalForceKillTimer = setTimeout(() => {
       forceKillChild();
-      process.exit(1);
+      signalHardExitTimer = setTimeout(() => {
+        process.exit(1);
+      }, respawnSignalHardExitGraceMs);
+      signalHardExitTimer.unref?.();
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };
@@ -247,25 +260,37 @@ if (
   }
 }
 
+const getErrorMessage = (err) =>
+  err && typeof err === "object" && "message" in err && typeof err.message === "string"
+    ? err.message
+    : "";
+
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
 
 const isDirectModuleNotFoundError = (err, specifier) => {
-  if (!isModuleNotFoundError(err)) {
-    return false;
-  }
+  const message = getErrorMessage(err);
+  const bunSpecifierMiss =
+    message.includes(`Cannot find module '${specifier}'`) ||
+    message.includes(`Cannot find module "${specifier}"`);
+  const launcherPath = fileURLToPath(import.meta.url);
+  const bunLauncherImporterMiss =
+    message.includes(` from '${launcherPath}'`) || message.includes(` from "${launcherPath}"`);
 
   const expectedUrl = new URL(specifier, import.meta.url);
-  if ("url" in err && err.url === expectedUrl.href) {
-    return true;
+  const expectedPath = fileURLToPath(expectedUrl);
+  const nodePathMiss =
+    message.includes(`Cannot find module '${expectedPath}'`) ||
+    message.includes(`Cannot find module "${expectedPath}"`);
+
+  if (isModuleNotFoundError(err)) {
+    if (err && typeof err === "object" && "url" in err && err.url === expectedUrl.href) {
+      return true;
+    }
+    return nodePathMiss || (bunSpecifierMiss && bunLauncherImporterMiss);
   }
 
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  const expectedPath = fileURLToPath(expectedUrl);
-  return (
-    message.includes(`Cannot find module '${expectedPath}'`) ||
-    message.includes(`Cannot find module "${expectedPath}"`)
-  );
+  return bunSpecifierMiss && bunLauncherImporterMiss;
 };
 
 const installProcessWarningFilter = async () => {
@@ -328,8 +353,21 @@ const buildMissingEntryErrorMessage = async () => {
 const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
-const isBrowserHelpInvocation = (argv) =>
-  argv.length === 4 && argv[2] === "browser" && (argv[3] === "--help" || argv[3] === "-h");
+const resolvePrecomputedCommandHelp = (argv) => {
+  if (argv.length !== 4 || (argv[3] !== "--help" && argv[3] !== "-h")) {
+    return null;
+  }
+  if (argv[2] === "browser") {
+    return { command: "browser", metadataKey: "browserHelpText" };
+  }
+  if (argv[2] === "secrets") {
+    return { command: "secrets", metadataKey: "secretsHelpText" };
+  }
+  if (argv[2] === "nodes") {
+    return { command: "nodes", metadataKey: "nodesHelpText" };
+  }
+  return null;
+};
 
 const isHelpFastPathDisabled = () =>
   process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1";
@@ -411,6 +449,155 @@ const loadPrecomputedHelpText = (key) => {
   }
 };
 
+function tryOutputLauncherVersion(argv) {
+  try {
+    if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+      return false;
+    }
+    if (!isLauncherVersionFastPathArgv(argv)) {
+      return false;
+    }
+    const version = resolveLauncherVersion();
+    const commit = resolveLauncherCommit();
+    process.stdout.write(commit ? `OpenClaw ${version} (${commit})\n` : `OpenClaw ${version}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLauncherVersionFastPathArgv(argv) {
+  return argv.length === 3 && (argv[2] === "--version" || argv[2] === "-V" || argv[2] === "-v");
+}
+
+function normalizeLauncherMetadataValue(value) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+}
+
+function readLauncherJson(relativePath) {
+  try {
+    return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherVersion() {
+  const packageJson = readLauncherJson("./package.json");
+  const packageVersion = normalizeLauncherMetadataValue(packageJson?.version);
+  if (packageVersion) {
+    return packageVersion;
+  }
+  const buildInfo = readLauncherJson("./dist/build-info.json");
+  const buildVersion = normalizeLauncherMetadataValue(buildInfo?.version);
+  if (buildVersion) {
+    return buildVersion;
+  }
+  return normalizeLauncherMetadataValue(process.env.OPENCLAW_BUNDLED_VERSION) ?? "0.0.0";
+}
+
+function resolveLauncherCommit() {
+  const envCommit = formatLauncherCommit(process.env.GIT_COMMIT ?? process.env.GIT_SHA);
+  if (envCommit) {
+    return envCommit;
+  }
+  return (
+    readLauncherGitCommit() ??
+    formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.githead)
+  );
+}
+
+function formatLauncherCommit(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = value.trim().match(/[0-9a-fA-F]{7,40}/);
+  return match ? match[0].slice(0, 7).toLowerCase() : null;
+}
+
+function readLauncherGitCommit() {
+  try {
+    const gitPath = fileURLToPath(new URL("./.git", import.meta.url));
+    const headPath = resolveLauncherGitHeadPath(gitPath);
+    if (!headPath) {
+      return null;
+    }
+    const head = readFileSync(headPath, "utf8").trim();
+    if (!head) {
+      return null;
+    }
+    if (!head.startsWith("ref:")) {
+      return formatLauncherCommit(head);
+    }
+    const ref = head.replace(/^ref:\s*/i, "").trim();
+    if (!ref.startsWith("refs/") || path.isAbsolute(ref) || ref.split("/").includes("..")) {
+      return null;
+    }
+    const refsBase = resolveLauncherGitRefsBase(headPath);
+    const refPath = path.resolve(refsBase, ref);
+    const rel = path.relative(refsBase, refPath);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      return null;
+    }
+    try {
+      return formatLauncherCommit(readFileSync(refPath, "utf8"));
+    } catch {
+      return readLauncherPackedRef(refsBase, ref);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitHeadPath(gitPath) {
+  try {
+    if (statSync(gitPath).isDirectory()) {
+      return path.join(gitPath, "HEAD");
+    }
+    const raw = readFileSync(gitPath, "utf8").trim();
+    if (!raw.startsWith("gitdir:")) {
+      return null;
+    }
+    return path.join(
+      path.resolve(path.dirname(gitPath), raw.slice("gitdir:".length).trim()),
+      "HEAD",
+    );
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitRefsBase(headPath) {
+  const gitDir = path.dirname(headPath);
+  try {
+    const commonDir = readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    return commonDir ? path.resolve(gitDir, commonDir) : gitDir;
+  } catch {
+    return gitDir;
+  }
+}
+
+function readLauncherPackedRef(refsBase, ref) {
+  try {
+    const packedRefs = readFileSync(path.join(refsBase, "packed-refs"), "utf8");
+    for (const line of packedRefs.split("\n")) {
+      if (!line || line.startsWith("#") || line.startsWith("^")) {
+        continue;
+      }
+      const [commit, packedRef] = line.trim().split(/\s+/, 2);
+      if (packedRef === ref) {
+        return formatLauncherCommit(commit);
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
 const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {
     return false;
@@ -440,11 +627,15 @@ const tryOutputBareRootHelp = async () => {
   return false;
 };
 
-const tryOutputBrowserHelp = () => {
-  if (!isBrowserHelpInvocation(process.argv)) {
+const tryOutputPrecomputedCommandHelp = () => {
+  const commandHelp = resolvePrecomputedCommandHelp(process.argv);
+  if (!commandHelp) {
     return false;
   }
-  const precomputed = loadPrecomputedHelpText("browserHelpText");
+  if (commandHelp.command === "nodes" && shouldDeferRootHelpToRuntimeEntry()) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey);
   if (!precomputed) {
     return false;
   }
@@ -455,7 +646,7 @@ const tryOutputBrowserHelp = () => {
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
     // OK
-  } else if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
+  } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
     // OK
   } else {
     await installProcessWarningFilter();

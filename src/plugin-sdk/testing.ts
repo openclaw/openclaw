@@ -107,7 +107,7 @@ export {
   isLiveTestEnabled,
 } from "../agents/live-test-helpers.js";
 export { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
-export { writeSkill } from "../agents/skills.e2e-test-helpers.js";
+export { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 export {
   castAgentMessage,
   makeAgentAssistantMessage,
@@ -121,7 +121,7 @@ export {
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "../agents/pi-embedded-helpers/failover-matches.js";
+} from "../agents/embedded-agent-helpers/failover-matches.js";
 export { maybeLoadShellEnvForGenerationProviders } from "../test-utils/generation-live-test-helpers.js";
 export { testing, testing as __testing } from "../acp/control-plane/manager.js";
 export { testing as acpManagerTesting } from "../acp/control-plane/manager.js";

@@ -995,6 +995,45 @@ describe("spawnAcpDirect", () => {
     expectGatewayMethodNotCalled("agent");
   });
 
+  it("forwards prepared image attachments through the gateway agent call", async () => {
+    const imageBase64 = Buffer.from("png-bytes").toString("base64");
+    const result = await spawnAcpDirect(
+      {
+        task: "describe the image",
+        agentId: "codex",
+        attachments: [{ mediaType: "image/png", data: imageBase64 }],
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.attachments).toEqual([
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: imageBase64 },
+      },
+    ]);
+  });
+
+  it("omits attachments from gateway call when none are provided", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params).not.toHaveProperty("attachments");
+  });
+
   it("maps OpenClaw ACP runtime agent aliases to their configured harness id", async () => {
     replaceSpawnConfig({
       ...createDefaultSpawnConfig(),
@@ -1228,6 +1267,78 @@ describe("spawnAcpDirect", () => {
     );
 
     expectAcceptedSpawn(result);
+  });
+
+  it("allows configured ACP harness ids when subagent allowlist contains wildcard", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: ["codex", "writer"],
+      },
+      agents: {
+        ...hoisted.state.cfg.agents,
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: {
+              allowAgents: ["*"],
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        agentId: "writer",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+  });
+
+  it("rejects unconfigured ACP harness ids when subagent allowlist contains wildcard", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        ...hoisted.state.cfg.acp,
+        allowedAgents: [],
+      },
+      agents: {
+        ...hoisted.state.cfg.agents,
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: {
+              allowAgents: ["*"],
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({
+        agentId: "writer",
+      }),
+      {
+        ...createRequesterContext(),
+        agentSessionKey: "agent:main:subagent:parent",
+      },
+    );
+
+    const failed = expectFailedSpawn(result, "forbidden");
+    expect(failed.errorCode).toBe("subagent_policy");
+    expect(failed.error).toBe(
+      'agentId "writer" is not in the configured agent registry (allowed: main)',
+    );
   });
 
   it("rejects ACP spawns to agents outside the subagent allowlist", async () => {

@@ -1,4 +1,4 @@
-import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-outbound";
 import type { ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -81,7 +81,7 @@ export function createDiscordMessageRunQueue(
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
     onError: (error) => {
-      params.runtime.error?.(danger(`discord message run failed: ${String(error)}`));
+      params.runtime.error(danger(`discord message run failed: ${String(error)}`));
     },
   });
 

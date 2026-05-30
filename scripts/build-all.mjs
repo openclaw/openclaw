@@ -4,12 +4,22 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
-const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
+const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 8192;
 const BUILD_CACHE_VERSION = 2;
+const PNPM_STEP_NODE_FALLBACKS = new Map([
+  ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
+  [
+    "build:plugin-sdk:dts",
+    ["scripts/run-tsgo.mjs", "-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"],
+  ],
+  ["plugins:assets:copy", ["scripts/bundled-plugin-assets.mjs", "--phase", "copy"]],
+  ["ui:build", ["scripts/ui.js", "build"]],
+]);
 export const BUILD_ALL_STEPS = [
   { label: "plugins:assets:build", kind: "pnpm", pnpmArgs: ["plugins:assets:build"] },
   { label: "tsdown", kind: "node", args: ["scripts/tsdown-build.mjs"] },
@@ -32,6 +42,11 @@ export const BUILD_ALL_STEPS = [
     windowsNodeOptions: `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`,
     cache: {
       inputs: [
+        "package.json",
+        "pnpm-lock.yaml",
+        "npm-shrinkwrap.json",
+        "packages/plugin-sdk/package.json",
+        "packages/memory-host-sdk/package.json",
         "tsconfig.json",
         "tsconfig.plugin-sdk.dts.json",
         "src/plugin-sdk",
@@ -73,8 +88,18 @@ export const BUILD_ALL_STEPS = [
         "scripts/lib/copy-assets.ts",
         "src/auto-reply/reply/export-html",
       ],
-      outputs: ["dist/export-html"],
+      outputs: ["dist/auto-reply/reply/export-html"],
     },
+  },
+  {
+    label: "ui:build",
+    kind: "pnpm",
+    pnpmArgs: ["ui:build"],
+    // No build-all cache: ui/vite.config.ts derives the Control UI build ID
+    // from package.json, git HEAD, and OPENCLAW_CONTROL_UI_BUILD_ID env, so a
+    // file-input signature cannot exactly invalidate generated assets and a
+    // warm hit could restore stale service-worker/app cache metadata.
+    cache: undefined,
   },
   {
     label: "write-build-info",
@@ -108,6 +133,7 @@ export const BUILD_ALL_PROFILES = {
     "plugins:assets:copy",
     "copy-hook-metadata",
     "copy-export-html-templates",
+    "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
     "write-cli-compat",
@@ -130,6 +156,14 @@ export const BUILD_ALL_PROFILES = {
   ],
 };
 
+export const BUILD_ALL_PROFILE_STEP_ENV = {
+  ciArtifacts: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
+};
+
 export function resolveBuildAllSteps(profile = "full") {
   const labels = BUILD_ALL_PROFILES[profile];
   if (!labels) {
@@ -140,19 +174,28 @@ export function resolveBuildAllSteps(profile = "full") {
     const missing = labels.filter((label) => !BUILD_ALL_STEPS.some((step) => step.label === label));
     throw new Error(`Build profile ${profile} references unknown steps: ${missing.join(", ")}`);
   }
-  return selected;
+  const envOverrides = BUILD_ALL_PROFILE_STEP_ENV[profile] ?? {};
+  return selected.map((step) => {
+    const env = envOverrides[step.label];
+    if (!env) {
+      return step;
+    }
+    const mergedEnv = Object.assign({}, step.env, env);
+    return Object.assign({}, step, { env: mergedEnv });
+  });
 }
 
 function resolveStepEnv(step, env, platform) {
+  const stepEnv = step.env ? Object.assign({}, env, step.env) : env;
   if (platform !== "win32" || !step.windowsNodeOptions) {
-    return env;
+    return stepEnv;
   }
-  const currentNodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  const currentNodeOptions = stepEnv.NODE_OPTIONS?.trim() ?? "";
   if (currentNodeOptions.includes(step.windowsNodeOptions)) {
-    return env;
+    return stepEnv;
   }
   return {
-    ...env,
+    ...stepEnv,
     NODE_OPTIONS: currentNodeOptions
       ? `${currentNodeOptions} ${step.windowsNodeOptions}`
       : step.windowsNodeOptions,
@@ -163,6 +206,18 @@ export function resolveBuildAllStep(step, params = {}) {
   const platform = params.platform ?? process.platform;
   const env = resolveStepEnv(step, params.env ?? process.env, platform);
   if (step.kind === "pnpm") {
+    const nodeFallbackArgs =
+      env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" ? PNPM_STEP_NODE_FALLBACKS.get(step.label) : undefined;
+    if (nodeFallbackArgs) {
+      return {
+        command: params.nodeExecPath ?? nodeBin,
+        args: nodeFallbackArgs,
+        options: {
+          stdio: "inherit",
+          env,
+        },
+      };
+    }
     const runner = resolvePnpmRunner({
       pnpmArgs: step.pnpmArgs,
       nodeExecPath: params.nodeExecPath ?? nodeBin,
@@ -226,6 +281,14 @@ function listCacheFiles(rootDir, entries, fsImpl) {
     .toSorted();
 }
 
+function portableRelativePath(rootDir, filePath) {
+  return path.relative(rootDir, filePath).split(path.sep).join("/");
+}
+
+function normalizePortablePath(filePath) {
+  return filePath.replaceAll("\\", "/");
+}
+
 function resolveCachePaths(rootDir, step) {
   const safeLabel = step.label.replace(/[^a-zA-Z0-9._-]+/g, "_");
   const cacheDir = path.resolve(rootDir, ".artifacts/build-all-cache", safeLabel);
@@ -240,7 +303,7 @@ function hashInputFiles(rootDir, files, fsImpl) {
   const hash = createHash("sha256");
   hash.update(`v${BUILD_CACHE_VERSION}\0`);
   for (const file of files) {
-    hash.update(path.relative(rootDir, file));
+    hash.update(portableRelativePath(rootDir, file));
     hash.update("\0");
     hash.update(fsImpl.readFileSync(file));
     hash.update("\0");
@@ -285,8 +348,10 @@ export function resolveBuildAllStepCacheState(step, params = {}) {
   const { outputRoot, stampPath } = resolveCachePaths(rootDir, step);
   const stamp = readCacheStamp(stampPath, fsImpl);
   const outputFiles = listCacheFiles(rootDir, step.cache.outputs, fsImpl);
-  const relativeOutputFiles = outputFiles.map((file) => path.relative(rootDir, file));
-  const stampedOutputs = Array.isArray(stamp?.outputs) ? stamp.outputs : [];
+  const relativeOutputFiles = outputFiles.map((file) => portableRelativePath(rootDir, file));
+  const stampedOutputs = Array.isArray(stamp?.outputs)
+    ? stamp.outputs.map((entry) => normalizePortablePath(entry))
+    : [];
   const stampMatches = stamp?.version === BUILD_CACHE_VERSION && stamp.signature === signature;
   const actualOutputsPresent =
     stampedOutputs.length > 0 && hasAllFiles(rootDir, stampedOutputs, fsImpl);
@@ -356,6 +421,32 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
   return true;
 }
 
+export function formatBuildAllDuration(durationMs) {
+  const clampedMs = Math.max(0, durationMs);
+  if (clampedMs < 1000) {
+    return `${Math.round(clampedMs)}ms`;
+  }
+  if (clampedMs < 10000) {
+    return `${(clampedMs / 1000).toFixed(2)}s`;
+  }
+  return `${(clampedMs / 1000).toFixed(1)}s`;
+}
+
+export function formatBuildAllTimingSummary(timings) {
+  if (timings.length === 0) {
+    return "[build-all] phase timings: no phases ran";
+  }
+  const totalMs = timings.reduce((sum, timing) => sum + timing.durationMs, 0);
+  const phases = timings
+    .toSorted((left, right) => right.durationMs - left.durationMs)
+    .map((timing) => {
+      const status = timing.status === "ran" ? "" : ` (${timing.status})`;
+      return `${timing.label}${status} ${formatBuildAllDuration(timing.durationMs)}`;
+    })
+    .join("; ");
+  return `[build-all] phase timings: total ${formatBuildAllDuration(totalMs)}; slowest ${phases}`;
+}
+
 function isMainModule() {
   const argv1 = process.argv[1];
   if (!argv1) {
@@ -366,23 +457,43 @@ function isMainModule() {
 
 if (isMainModule()) {
   const profile = process.argv[2] ?? "full";
+  const timings = [];
+  let exitCode = 0;
   for (const step of resolveBuildAllSteps(profile)) {
+    const startedAt = performance.now();
     const cacheState = resolveBuildAllStepCacheState(step);
     if (process.env.OPENCLAW_BUILD_CACHE !== "0" && cacheState.fresh) {
       restoreBuildAllStepCacheOutputs(cacheState);
-      console.error(`[build-all] ${step.label} (cached)`);
+      const durationMs = performance.now() - startedAt;
+      timings.push({ label: step.label, status: "cached", durationMs });
+      console.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
       continue;
     }
     console.error(`[build-all] ${step.label}`);
     const invocation = resolveBuildAllStep(step);
     const result = spawnSync(invocation.command, invocation.args, invocation.options);
+    const durationMs = performance.now() - startedAt;
     if (typeof result.status === "number") {
       if (result.status !== 0) {
-        process.exit(result.status);
+        timings.push({ label: step.label, status: "failed", durationMs });
+        console.error(
+          `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
+        );
+        exitCode = result.status;
+        break;
       }
       writeBuildAllStepCacheStamp(step, resolveBuildAllStepCacheState(step));
+      timings.push({ label: step.label, status: "ran", durationMs });
+      console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
       continue;
     }
-    process.exit(1);
+    timings.push({ label: step.label, status: "failed", durationMs });
+    console.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
+    exitCode = 1;
+    break;
+  }
+  console.error(formatBuildAllTimingSummary(timings));
+  if (exitCode !== 0) {
+    process.exit(exitCode);
   }
 }

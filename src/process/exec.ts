@@ -236,6 +236,8 @@ export type SpawnResult = {
   pid?: number;
   stdout: string;
   stderr: string;
+  stdoutTruncatedBytes?: number;
+  stderrTruncatedBytes?: number;
   code: number | null;
   signal: NodeJS.Signals | null;
   killed: boolean;
@@ -247,14 +249,60 @@ export type CommandOptions = {
   timeoutMs: number;
   cwd?: string;
   input?: string;
+  baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   noOutputTimeoutMs?: number;
   signal?: AbortSignal;
+  maxOutputBytes?: number;
 };
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
+const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
+
+type CapturedOutputBuffers = {
+  chunks: Buffer[];
+  bytes: number;
+  truncatedBytes: number;
+};
+
+function normalizeMaxOutputBytes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_COMMAND_OUTPUT_MAX_BYTES;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function appendCapturedOutput(
+  capture: CapturedOutputBuffers,
+  chunk: Buffer | string,
+  maxBytes: number,
+): void {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  if (buffer.byteLength >= maxBytes) {
+    capture.chunks = [Buffer.from(buffer.subarray(buffer.byteLength - maxBytes))];
+    capture.truncatedBytes += capture.bytes + buffer.byteLength - maxBytes;
+    capture.bytes = maxBytes;
+    return;
+  }
+
+  capture.chunks.push(buffer);
+  capture.bytes += buffer.byteLength;
+  while (capture.bytes > maxBytes && capture.chunks.length > 0) {
+    const first = capture.chunks[0];
+    const overflow = capture.bytes - maxBytes;
+    if (first.byteLength <= overflow) {
+      capture.chunks.shift();
+      capture.bytes -= first.byteLength;
+      capture.truncatedBytes += first.byteLength;
+    } else {
+      capture.chunks[0] = Buffer.from(first.subarray(overflow));
+      capture.bytes -= overflow;
+      capture.truncatedBytes += overflow;
+    }
+  }
+}
 
 export function resolveProcessExitCode(params: {
   explicitCode: number | null | undefined;
@@ -319,9 +367,9 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env, noOutputTimeoutMs, signal } = options;
+  const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal } = options;
   const hasInput = input !== undefined;
-  const resolvedEnv = resolveCommandEnv({ argv, env });
+  const resolvedEnv = resolveCommandEnv({ argv, baseEnv, env });
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const invocation = resolveChildProcessInvocation({
     argv,
@@ -350,10 +398,11 @@ export async function runCommandWithTimeout(
       ? { shell: true }
       : {}),
   });
-  // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
+  // Spawn with inherited stdin (TTY) so interactive tools stay usable when needed.
   return await new Promise((resolve, reject) => {
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
+    const stdoutCapture: CapturedOutputBuffers = { chunks: [], bytes: 0, truncatedBytes: 0 };
+    const stderrCapture: CapturedOutputBuffers = { chunks: [], bytes: 0, truncatedBytes: 0 };
+    const maxOutputBytes = normalizeMaxOutputBytes(options.maxOutputBytes);
     const windowsEncoding = resolveWindowsConsoleEncoding();
     let settled = false;
     let timedOut = false;
@@ -442,11 +491,11 @@ export async function runCommandWithTimeout(
     }
 
     child.stdout?.on("data", (d) => {
-      stdoutChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
+      appendCapturedOutput(stdoutCapture, d, maxOutputBytes);
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
-      stderrChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
+      appendCapturedOutput(stderrCapture, d, maxOutputBytes);
       armNoOutputTimer();
     });
     child.on("error", (err) => {
@@ -511,13 +560,15 @@ export async function runCommandWithTimeout(
       resolve({
         pid: child.pid ?? undefined,
         stdout: decodeWindowsOutputBuffer({
-          buffer: Buffer.concat(stdoutChunks),
+          buffer: Buffer.concat(stdoutCapture.chunks, stdoutCapture.bytes),
           windowsEncoding,
         }),
         stderr: decodeWindowsOutputBuffer({
-          buffer: Buffer.concat(stderrChunks),
+          buffer: Buffer.concat(stderrCapture.chunks, stderrCapture.bytes),
           windowsEncoding,
         }),
+        stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
+        stderrTruncatedBytes: stderrCapture.truncatedBytes || undefined,
         code: normalizedCode,
         signal: resolvedSignal,
         killed: child.killed,

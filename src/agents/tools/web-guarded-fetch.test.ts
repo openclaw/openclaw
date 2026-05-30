@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
@@ -88,5 +89,67 @@ describe("web-guarded-fetch", () => {
     expect(call?.url).toBe("https://example.com");
     expect(call?.policy).toBeUndefined();
     expect(call?.mode).toBe(GUARDED_FETCH_MODE.STRICT);
+  });
+
+  it("normalizes string timeouts before guarded fetch dispatch", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await withStrictWebToolsEndpoint(
+      { url: "https://example.com", timeoutSeconds: "7" as never },
+      async () => undefined,
+    );
+    expect(firstFetchCall().timeoutMs).toBe(7000);
+
+    vi.clearAllMocks();
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await withStrictWebToolsEndpoint(
+      {
+        url: "https://example.com",
+        timeoutMs: "2500" as never,
+        timeoutSeconds: "7" as never,
+      },
+      async () => undefined,
+    );
+    expect(firstFetchCall().timeoutMs).toBe(2500);
+  });
+
+  it("caps oversized timeoutSeconds before guarded fetch dispatch", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await withStrictWebToolsEndpoint(
+      { url: "https://example.com", timeoutSeconds: Number.MAX_SAFE_INTEGER },
+      async () => undefined,
+    );
+
+    expect(firstFetchCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("rejects malformed timeouts before guarded fetch dispatch", async () => {
+    await expect(
+      withStrictWebToolsEndpoint(
+        { url: "https://example.com", timeoutMs: "2.5" as never },
+        async () => undefined,
+      ),
+    ).rejects.toThrow("timeoutMs must be a positive integer");
+    await expect(
+      withStrictWebToolsEndpoint(
+        { url: "https://example.com", timeoutSeconds: -1 },
+        async () => undefined,
+      ),
+    ).rejects.toThrow("timeoutSeconds must be a positive integer");
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 });

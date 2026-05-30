@@ -1,3 +1,4 @@
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
@@ -223,6 +224,7 @@ export function createCronRunDiagnosticsFromExecDetails(
   opts?: {
     nowMs?: () => number;
     toolName?: string;
+    finalStatus?: "ok" | "error" | "skipped";
   },
 ): CronRunDiagnostics | undefined {
   if (!isRecord(details)) {
@@ -247,7 +249,7 @@ export function createCronRunDiagnosticsFromExecDetails(
         {
           ts: opts?.nowMs?.() ?? Date.now(),
           source: "exec",
-          severity: status === "failed" ? "error" : "warn",
+          severity: opts?.finalStatus === "ok" ? "warn" : status === "failed" ? "error" : "warn",
           message,
           toolName: opts?.toolName,
           exitCode,
@@ -269,13 +271,17 @@ export function createCronRunDiagnosticsFromToolPayload(
   const detailsDiagnostics = createCronRunDiagnosticsFromExecDetails(payload.details, {
     nowMs: opts?.nowMs,
     toolName,
+    finalStatus: opts?.finalStatus,
   });
   const isError = payload.isError === true;
   const text = typeof payload.text === "string" ? payload.text : undefined;
+  const isNonTerminalToolWarning =
+    opts?.finalStatus === "ok" &&
+    getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
   const textDiagnostics =
     isError && text
       ? createCronRunDiagnosticsFromError("tool", text, {
-          severity: "error",
+          severity: isNonTerminalToolWarning || opts?.finalStatus === "ok" ? "warn" : "error",
           nowMs: opts?.nowMs,
           toolName,
         })
