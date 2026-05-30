@@ -180,6 +180,26 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow();
   });
 
+  it("rebuilds the listing manifest when the fast manifest is corrupt", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Manifest Repair",
+      description: "Repair corrupt manifests",
+      content: "# Manifest Repair\n",
+    });
+    await fs.writeFile(
+      path.join(workspaceDir, ".openclaw", "skill-workshop", "proposals.json"),
+      "{not-json",
+      "utf8",
+    );
+
+    const manifest = await listSkillProposals(workspaceDir);
+
+    expect(manifest.proposals).toHaveLength(1);
+    expect(manifest.proposals[0]?.id).toBe(proposal.record.id);
+  });
+
   it("quarantines unsafe proposals during apply", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({

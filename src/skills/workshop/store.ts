@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { pathExists, readFileWithinRoot, root } from "../../infra/fs-safe.js";
-import { readJsonIfExists } from "../../infra/json-files.js";
+import { tryReadJson } from "../../infra/json-files.js";
 import { isPathInside } from "../../infra/path-safety.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
@@ -93,7 +93,7 @@ export async function readSkillProposalRecord(
   workspaceDir: string,
   proposalId: string,
 ): Promise<SkillProposalRecord | null> {
-  const raw = await readJsonIfExists<unknown>(resolveProposalRecordPath(workspaceDir, proposalId));
+  const raw = await tryReadJson<unknown>(resolveProposalRecordPath(workspaceDir, proposalId));
   return parseSkillProposalRecord(raw);
 }
 
@@ -146,7 +146,7 @@ export async function readSkillProposalManifest(
   workspaceDir: string,
 ): Promise<SkillProposalManifest> {
   const manifestPath = path.resolve(workspaceDir, MANIFEST_REL_PATH);
-  const parsed = parseSkillProposalManifest(await readJsonIfExists<unknown>(manifestPath));
+  const parsed = parseSkillProposalManifest(await tryReadJson<unknown>(manifestPath));
   if (parsed) {
     return parsed;
   }
