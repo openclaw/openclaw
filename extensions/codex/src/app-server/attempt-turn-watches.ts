@@ -54,6 +54,7 @@ export function createCodexAttemptTurnWatchController(params: {
   let completionLastActivityAt = Date.now();
   let completionLastActivityReason = "startup";
   let completionLastActivityDetails: Record<string, unknown> | undefined;
+  let attemptIdleTimeoutOverrideMs: number | undefined;
   let attemptLastProgressAt = Date.now();
   let attemptLastProgressReason = "startup";
   let attemptLastProgressDetails: Record<string, unknown> | undefined;
@@ -127,7 +128,8 @@ export function createCodexAttemptTurnWatchController(params: {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - attemptLastProgressAt);
-    const delayMs = Math.max(1, params.turnAttemptIdleTimeoutMs - elapsedMs);
+    const timeoutMs = attemptIdleTimeoutOverrideMs ?? params.turnAttemptIdleTimeoutMs;
+    const delayMs = Math.max(1, timeoutMs - elapsedMs);
     attemptIdleTimer = setTimeout(fireAttemptIdleTimeout, delayMs);
     attemptIdleTimer.unref?.();
   }
@@ -204,14 +206,15 @@ export function createCodexAttemptTurnWatchController(params: {
       return;
     }
     const idleMs = Math.max(0, Date.now() - attemptLastProgressAt);
-    if (idleMs < params.turnAttemptIdleTimeoutMs) {
+    const timeoutMs = attemptIdleTimeoutOverrideMs ?? params.turnAttemptIdleTimeoutMs;
+    if (idleMs < timeoutMs) {
       scheduleAttemptIdleWatch();
       return;
     }
     const timeout = {
       kind: "progress" as const,
       idleMs,
-      timeoutMs: params.turnAttemptIdleTimeoutMs,
+      timeoutMs,
       lastActivityReason: attemptLastProgressReason,
       details: attemptLastProgressDetails,
     };
@@ -361,13 +364,22 @@ export function createCodexAttemptTurnWatchController(params: {
     },
     touchActivity: (
       reason: string,
-      options?: { arm?: boolean; details?: Record<string, unknown>; attemptProgress?: boolean },
+      options?: {
+        arm?: boolean;
+        details?: Record<string, unknown>;
+        attemptProgress?: boolean;
+        attemptTimeoutMs?: number;
+      },
     ) => {
       completionLastActivityAt = Date.now();
       completionLastActivityReason = reason;
       completionLastActivityDetails = options?.details;
       completionIdleTimeoutOverrideMs = undefined;
       if (options?.attemptProgress) {
+        attemptIdleTimeoutOverrideMs =
+          options.attemptTimeoutMs !== undefined
+            ? Math.max(1, Math.floor(options.attemptTimeoutMs))
+            : undefined;
         attemptLastProgressAt = completionLastActivityAt;
         attemptLastProgressReason = reason;
         attemptLastProgressDetails = options.details;
@@ -382,7 +394,11 @@ export function createCodexAttemptTurnWatchController(params: {
     },
     noteNotificationReceived: (
       method: string,
-      options?: { details?: Record<string, unknown>; attemptProgress?: boolean },
+      options?: {
+        details?: Record<string, unknown>;
+        attemptProgress?: boolean;
+        attemptTimeoutMs?: number;
+      },
     ) => {
       completionLastActivityAt = Date.now();
       completionLastActivityReason = `notification:${method}`;
@@ -390,11 +406,19 @@ export function createCodexAttemptTurnWatchController(params: {
         completionLastActivityDetails = options.details;
       }
       if (options?.attemptProgress) {
+        attemptIdleTimeoutOverrideMs =
+          options.attemptTimeoutMs !== undefined
+            ? Math.max(1, Math.floor(options.attemptTimeoutMs))
+            : undefined;
         attemptLastProgressAt = completionLastActivityAt;
         attemptLastProgressReason = completionLastActivityReason;
         attemptLastProgressDetails = options.details;
         params.onAttemptProgress(completionLastActivityReason, options.details);
       }
+    },
+    extendAttemptIdleWatch: (timeoutMs: number) => {
+      attemptIdleTimeoutOverrideMs = Math.max(1, Math.floor(timeoutMs));
+      scheduleAttemptIdleWatch();
     },
     scheduleProgressWatches,
     clearCompletionIdleTimer,

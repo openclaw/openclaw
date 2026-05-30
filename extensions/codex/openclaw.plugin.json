@@ -361,7 +361,7 @@
     },
     "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {
       "label": "Post-Tool Raw Assistant Completion Idle Timeout",
-      "help": "Completion-idle guard after a tool handoff when Codex emits raw assistant completion or progress without turn/completed. Defaults to 300000 ms when unset.",
+      "help": "Completion-idle and progress guard after a tool handoff, native tool completion, or post-tool raw assistant progress while waiting for turn/completed. Defaults to 300000 ms when unset.",
       "advanced": true
     },
     "appServer.approvalPolicy": {
