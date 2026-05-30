@@ -205,6 +205,25 @@ describe("exec security floor", () => {
     ).rejects.toThrow(/exec denied: allowlist miss/i);
   });
 
+  it("enforces configured deny security before sandbox execution", async () => {
+    const tool = createExecTool({
+      host: "sandbox",
+      security: "deny",
+      ask: "off",
+      sandbox: {
+        containerName: "sandbox",
+        workspaceDir: tempRoot ?? process.cwd(),
+        containerWorkdir: "/workspace",
+      },
+    });
+
+    await expect(
+      tool.execute("call-sandbox-deny", {
+        command: "echo hello",
+      }),
+    ).rejects.toThrow(/exec denied: host=sandbox security=deny/i);
+  });
+
   it("keeps fallback denylist active when host ask policy blocks elevated full bypass", async () => {
     saveExecApprovals({
       version: 1,

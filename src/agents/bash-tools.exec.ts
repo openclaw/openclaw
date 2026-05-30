@@ -1511,6 +1511,12 @@ export function createExecTool(
         ask = "off";
       }
       const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
+      if (
+        security === "deny" &&
+        (host !== "sandbox" || defaults?.mode === "deny" || defaults?.security === "deny")
+      ) {
+        throw new Error(`exec denied: host=${host} security=deny`);
+      }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
       if (target.selectedTarget === "sandbox" && !sandbox) {
@@ -1624,7 +1630,7 @@ export function createExecTool(
       }
 
       let denylistFallbackPrechecked = false;
-      let denylistFallbackDenylist: readonly ExecDenylistEntry[] = [];
+      let denylistFallbackDenylist: readonly ExecDenylistEntry[] | undefined;
       if (host !== "node") {
         const resolvedApprovalsForDenylist = resolveExecApprovalsReadOnly(agentId, {
           security: configuredSecurity,
