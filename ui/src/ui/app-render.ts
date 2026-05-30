@@ -256,9 +256,15 @@ function isSidebarSessionBusy(state: AppViewState) {
 
 function resolveSidebarSelectedAgentId(state: AppViewState): string {
   const parsed = parseAgentSessionKey(state.sessionKey);
-  return normalizeAgentId(
-    parsed?.agentId ?? state.assistantAgentId ?? state.agentsList?.defaultId ?? "main",
-  );
+  if (parsed) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const sessionKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
+  const fallbackAgentId =
+    sessionKey === "global" || sessionKey === "unknown"
+      ? (state.assistantAgentId ?? state.agentsList?.defaultId ?? "main")
+      : (state.agentsList?.defaultId ?? "main");
+  return normalizeAgentId(fallbackAgentId);
 }
 
 function isSidebarSessionForSelectedAgent(
