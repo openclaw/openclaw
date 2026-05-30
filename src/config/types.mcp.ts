@@ -9,6 +9,12 @@ export type McpServerCodexConfig = {
   default_tools_approval_mode?: McpCodexToolApprovalMode;
 };
 
+export type McpServerOAuthConfig = {
+  /** Optional OAuth client identifier for MCP login. */
+  client_id?: string;
+  [key: string]: unknown;
+};
+
 export type McpServerConfig = {
   /** Stdio transport: command to spawn. */
   command?: string;
@@ -28,6 +34,10 @@ export type McpServerConfig = {
   headers?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
+  /** Optional OAuth settings for remote MCP servers. */
+  oauth?: McpServerOAuthConfig;
+  /** Optional OAuth resource parameter for MCP login. */
+  oauth_resource?: string;
   /** Codex-specific projection controls for Codex app-server/runtime config. */
   codex?: McpServerCodexConfig;
   [key: string]: unknown;

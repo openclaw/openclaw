@@ -73,6 +73,52 @@ describe("buildCodexMcpServersConfig", () => {
       },
     });
   });
+
+  it("projects OAuth settings for Codex remote MCP servers", () => {
+    expect(
+      buildCodexMcpServersConfig({
+        mcpServers: {
+          composio: {
+            url: "https://connect.composio.dev/mcp",
+            oauth_resource: "https://connect.composio.dev/mcp",
+            oauth: {
+              client_id: "test-client-id",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      composio: {
+        url: "https://connect.composio.dev/mcp",
+        oauth_resource: "https://connect.composio.dev/mcp",
+        oauth: {
+          client_id: "test-client-id",
+        },
+      },
+    });
+  });
+
+  it("omits OAuth settings for Codex stdio MCP servers", () => {
+    expect(
+      buildCodexMcpServersConfig({
+        mcpServers: {
+          local: {
+            command: "node",
+            args: ["local-mcp.js"],
+            oauth_resource: "https://mcp.example.com/mcp",
+            oauth: {
+              client_id: "test-client-id",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      local: {
+        command: "node",
+        args: ["local-mcp.js"],
+      },
+    });
+  });
 });
 
 describe("loadCodexBundleMcpThreadConfig", () => {

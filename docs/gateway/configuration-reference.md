@@ -106,6 +106,10 @@ target server during config edits.
       remote: {
         url: "https://example.com/mcp",
         transport: "streamable-http", // streamable-http | sse
+        oauth_resource: "https://example.com/mcp",
+        oauth: {
+          client_id: "example-client-id",
+        },
         headers: {
           Authorization: "Bearer ${MCP_REMOTE_TOKEN}",
         },
@@ -125,6 +129,8 @@ target server during config edits.
   Remote entries use `transport: "streamable-http"` or `transport: "sse"`;
   `type: "http"` is a CLI-native alias that `openclaw mcp set` and
   `openclaw doctor --fix` normalize into the canonical `transport` field.
+  Remote entries may include `oauth_resource` and `oauth.client_id` for
+  OAuth-capable downstream MCP clients that support those fields.
 - `mcp.servers.<name>.codex`: optional Codex app-server projection controls.
   This block is OpenClaw metadata for Codex app-server threads only; it does not
   affect ACP sessions, generic Codex harness config, or other runtime adapters.

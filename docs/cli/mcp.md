@@ -368,6 +368,11 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
 
+Remote server entries can also include OAuth descriptors such as
+`oauth_resource` and `oauth.client_id`. OpenClaw stores these with the shared MCP
+definition so OAuth-capable downstream clients can receive them in their native
+runtime config.
+
 Codex app-server also honors an optional `codex` block on each server. This is
 OpenClaw projection metadata for Codex app-server threads only; it does not
 change ACP sessions, generic Codex harness config, or other runtime adapters.

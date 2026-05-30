@@ -144,6 +144,77 @@ describe("config schema", () => {
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("oauth");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("oauth_resource");
+  });
+
+  it("accepts OAuth descriptors on MCP server entries", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            composio: {
+              url: "https://connect.composio.dev/mcp",
+              transport: "streamable-http",
+              oauth_resource: "https://connect.composio.dev/mcp",
+              oauth: {
+                client_id: "test-client-id",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts additional OAuth metadata on MCP server entries", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            custom: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              oauth: {
+                clientId: "legacy-client-id",
+                provider: "legacy-provider",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects blank OAuth descriptor strings on MCP server entries", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            blankResource: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              oauth_resource: "  ",
+            },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            blankClient: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              oauth: {
+                client_id: "  ",
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("rejects empty Codex MCP agent scopes", () => {

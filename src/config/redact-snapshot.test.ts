@@ -251,6 +251,46 @@ describe("redactConfigSnapshot", () => {
     );
   });
 
+  it("redacts sensitive auth material from MCP OAuth resource URLs", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  mcp: {
+    servers: {
+      remote: {
+        url: "https://example.com/mcp",
+        oauth_resource: "https://client:secret@example.com/resource?access_token=secret123&safe=value",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        mcp: {
+          servers: {
+            remote: {
+              url: "https://example.com/mcp",
+              oauth_resource:
+                "https://client:secret@example.com/resource?access_token=secret123&safe=value",
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.mcp.servers.remote.oauth_resource).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("client:secret@");
+    expect(result.raw).not.toContain("secret123");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.mcp.servers.remote.oauth_resource).toBe(
+      "https://client:secret@example.com/resource?access_token=secret123&safe=value",
+    );
+  });
+
   it("redacts media request auth and proxy transport secrets from config snapshots", () => {
     const hints = buildConfigSchema().uiHints;
     const raw = `{

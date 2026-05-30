@@ -198,6 +198,7 @@ describe("collectMatchingSchemaPaths", () => {
     const paths = collectMatchingSchemaPaths(OpenClawSchema, "", isSensitiveUrlConfigPath);
 
     expect(paths.has("mcp.servers.*.url")).toBe(true);
+    expect(paths.has("mcp.servers.*.oauth_resource")).toBe(true);
     expect(paths.has("models.providers.*.baseUrl")).toBe(true);
     expect(paths.has("models.providers.*.request.proxy.url")).toBe(true);
     expect(paths.has("tools.media.audio.request.proxy.url")).toBe(true);

@@ -373,6 +373,13 @@ const McpServerSchema = z
       })
       .strict()
       .optional(),
+    oauth: z
+      .object({
+        client_id: z.string().trim().min(1).optional(),
+      })
+      .catchall(z.unknown())
+      .optional(),
+    oauth_resource: z.string().trim().min(1).optional(),
   })
   .catchall(z.unknown());
 
