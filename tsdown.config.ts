@@ -521,6 +521,12 @@ function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
     ...dockerE2eHarnessEntries,
+    ...Object.fromEntries(
+      Object.entries(buildTerminalCoreDistEntries()).map(([entry, source]) => [
+        `terminal-core/${entry}`,
+        source,
+      ]),
+    ),
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server user MCP config projection.

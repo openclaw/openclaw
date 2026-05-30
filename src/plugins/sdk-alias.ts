@@ -1025,15 +1025,27 @@ function resolveWorkspacePackageAliasMap(params: {
   for (const entry of WORKSPACE_PACKAGE_ALIAS_ENTRIES) {
     const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
     for (const kind of orderedKinds) {
-      const candidate =
+      const candidates =
         kind === "dist"
-          ? path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile)
-          : path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile);
-      if (!fs.existsSync(candidate)) {
-        continue;
+          ? [
+              ...(entry.packageName === "@openclaw/terminal-core"
+                ? [
+                    path.join(
+                      packageRoot,
+                      "dist",
+                      "terminal-core",
+                      entry.distFile.replace(/\.mjs$/u, ".js"),
+                    ),
+                  ]
+                : []),
+              path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile),
+            ]
+          : [path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile)];
+      const candidate = candidates.find((candidatePath) => fs.existsSync(candidatePath));
+      if (candidate) {
+        aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
+        break;
       }
-      aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
-      break;
     }
   }
   return aliasMap;
