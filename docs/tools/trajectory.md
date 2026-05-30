@@ -199,7 +199,12 @@ The exporter also bounds input size:
 - session files: 50 MiB
 - runtime events: 200,000
 - total exported events: 250,000
-- individual runtime event lines are truncated above 256 KiB
+- individual runtime event lines are truncated above 256 KiB (configurable via `OPENCLAW_TRAJECTORY_RUNTIME_EVENT_MAX_BYTES`)
+
+`OPENCLAW_TRAJECTORY_RUNTIME_EVENT_MAX_BYTES` accepts raw byte counts such as
+`1048576` and `k`/`kb`, `m`/`mb`, or `g`/`gb` suffixes such as `512kb` or `2mb`.
+Invalid, empty, or non-positive values fall back to the 256 KiB default, and the
+effective cap is still clamped below the runtime sidecar file budget.
 
 Review bundles before sharing them outside your team. Redaction is best-effort
 and cannot know every application-specific secret.

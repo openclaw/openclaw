@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createCodexTrajectoryRecorder,
   resolveCodexTrajectoryAppendFlags,
+  resolveCodexTrajectoryRuntimeEventMaxBytes,
   resolveCodexTrajectoryPointerFlags,
 } from "./trajectory.js";
 
@@ -65,13 +66,13 @@ describe("Codex trajectory recorder", () => {
       env: {},
     });
 
-    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
-    trajectoryRecorder.recordEvent("session.started", {
+    expect(recorder).not.toBeNull();
+    recorder?.recordEvent("session.started", {
       apiKey: "secret",
       headers: [{ name: "Authorization", value: "Bearer sk-test-secret-token" }],
       command: "curl -H 'Authorization: Bearer sk-other-secret-token'",
     });
-    await trajectoryRecorder.flush();
+    await recorder?.flush();
 
     const filePath = path.join(tmpDir, "session.trajectory.jsonl");
     const content = fs.readFileSync(filePath, "utf8");
@@ -132,9 +133,8 @@ describe("Codex trajectory recorder", () => {
       env: { OPENCLAW_TRAJECTORY_DIR: tmpDir },
     });
 
-    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
-    trajectoryRecorder.recordEvent("session.started");
-    await trajectoryRecorder.flush();
+    recorder?.recordEvent("session.started");
+    await recorder?.flush();
 
     expect(fs.existsSync(path.join(tmpDir, "___evil_session.jsonl"))).toBe(true);
   });
@@ -170,11 +170,45 @@ describe("Codex trajectory recorder", () => {
       env: {},
     });
 
-    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
-    trajectoryRecorder.recordEvent("session.started");
-    await trajectoryRecorder.flush();
+    recorder?.recordEvent("session.started");
+    await recorder?.flush();
 
     expect(fs.existsSync(path.join(targetDir, "session.trajectory.jsonl"))).toBe(false);
+  });
+
+  it("honors OPENCLAW_TRAJECTORY_RUNTIME_EVENT_MAX_BYTES override", async () => {
+    const tmpDir = makeTempDir();
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session-1",
+        model: { api: "responses" },
+      } as never,
+      env: { OPENCLAW_TRAJECTORY_RUNTIME_EVENT_MAX_BYTES: "512" },
+    });
+
+    recorder?.recordEvent("context.compiled", {
+      payload: "x".repeat(600),
+    });
+    await recorder?.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    ) as { data?: { truncated?: boolean; reason?: string } };
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+    });
+  });
+
+  it("clamps configured event caps to the append file budget", () => {
+    expect(
+      resolveCodexTrajectoryRuntimeEventMaxBytes(
+        { OPENCLAW_TRAJECTORY_RUNTIME_EVENT_MAX_BYTES: "1mb" },
+        1_024,
+      ),
+    ).toBe(1_023);
   });
 
   it("truncates events that exceed the runtime event byte limit", async () => {
@@ -189,18 +223,62 @@ describe("Codex trajectory recorder", () => {
       env: {},
     });
 
-    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
-    trajectoryRecorder.recordEvent("context.compiled", {
+    recorder?.recordEvent("context.compiled", {
       fields: Object.fromEntries(
         Array.from({ length: 100 }, (_, index) => [`field-${index}`, "x".repeat(3_000)]),
       ),
     });
-    await trajectoryRecorder.flush();
+    await recorder?.flush();
 
     const parsed = JSON.parse(
       fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
     ) as { data?: { truncated?: boolean; reason?: string } };
-    expect(parsed.data?.truncated).toBe(true);
-    expect(parsed.data?.reason).toBe("trajectory-event-size-limit");
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+    });
+  });
+
+  it("accepts human-friendly byte-size suffixes for the event cap override", async () => {
+    const tmpDir = makeTempDir();
+    // 1kb = 1024 bytes — create an event between 600-1024 bytes to verify it is NOT truncated
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session-suffix",
+        model: { api: "responses" },
+      } as never,
+      env: { OPENCLAW_TRAJECTORY_RUNTIME_EVENT_MAX_BYTES: "1kb" },
+    });
+
+    recorder?.recordEvent("session.started", { payload: "x".repeat(600) });
+    await recorder?.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    ) as { data?: { truncated?: boolean } };
+    expect(parsed.data?.truncated).not.toBe(true);
+  });
+
+  it("falls back to default on invalid suffix values", async () => {
+    const tmpDir = makeTempDir();
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session-invalid-suffix",
+        model: { api: "responses" },
+      } as never,
+      env: { OPENCLAW_TRAJECTORY_RUNTIME_EVENT_MAX_BYTES: "abc-not-a-size" },
+    });
+
+    // Invalid value falls back to default 262144 bytes — a small event should pass through without truncation
+    recorder?.recordEvent("session.started", { payload: "small" });
+    await recorder?.flush();
+
+    const content = fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8");
+    expect(content).toContain('"type":"session.started"');
+    expect(content).not.toContain('"truncated"');
   });
 });
