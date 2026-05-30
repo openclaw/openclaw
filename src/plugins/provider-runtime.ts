@@ -631,11 +631,7 @@ export function matchesProviderContextOverflowWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderFailoverErrorContext;
 }): boolean {
-  const plugins = params.provider
-    ? [resolveProviderHookPlugin({ ...params, provider: params.provider })].filter(
-        (plugin): plugin is ProviderPlugin => Boolean(plugin),
-      )
-    : resolveProviderPluginsForHooks(params);
+  const plugins = resolveProviderPluginsForScopedHook(params);
   for (const plugin of plugins) {
     if (plugin.matchesContextOverflowError?.(params.context)) {
       return true;
@@ -651,11 +647,7 @@ export function classifyProviderFailoverReasonWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderFailoverErrorContext;
 }) {
-  const plugins = params.provider
-    ? [resolveProviderHookPlugin({ ...params, provider: params.provider })].filter(
-        (plugin): plugin is ProviderPlugin => Boolean(plugin),
-      )
-    : resolveProviderPluginsForHooks(params);
+  const plugins = resolveProviderPluginsForScopedHook(params);
   for (const plugin of plugins) {
     const reason = plugin.classifyFailoverReason?.(params.context);
     if (reason) {
@@ -663,6 +655,25 @@ export function classifyProviderFailoverReasonWithPlugin(params: {
     }
   }
   return undefined;
+}
+
+function resolveProviderPluginsForScopedHook(params: {
+  provider?: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderPlugin[] {
+  if (!params.provider) {
+    return resolveProviderPluginsForHooks(params);
+  }
+  const plugin = resolveProviderHookPlugin({ ...params, provider: params.provider });
+  if (plugin) {
+    return [plugin];
+  }
+  // Custom provider ids may only name their canonical API in config, and some
+  // callers only have the runtime id here. Preserve the old broad hook scan
+  // when owner lookup cannot resolve that id.
+  return resolveProviderPluginsForHooks(params);
 }
 
 export function formatProviderAuthProfileApiKeyWithPlugin(params: {
