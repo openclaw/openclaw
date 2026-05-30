@@ -1471,17 +1471,46 @@ export function createExecTool(
             ask: configuredAsk,
           })
         : null;
-      let security = configuredModePolicy?.security ?? configuredSecurity;
-      if (elevatedRequested && elevatedMode === "full") {
+      const modePolicy =
+        configuredModePolicy ??
+        resolveExecModePolicy({
+          security: configuredSecurity,
+          ask: configuredAsk,
+        });
+      const approvalPolicy =
+        host === "sandbox"
+          ? undefined
+          : resolveExecApprovalsReadOnly(agentId, {
+              security: "full",
+              ask: "off",
+            }).agent;
+      const hostPolicyAllowsFullBypass =
+        (approvalPolicy?.security ?? "full") === "full" && (approvalPolicy?.ask ?? "off") === "off";
+      const modePolicyAllowsFullBypass = modePolicy.security === "full" && modePolicy.ask === "off";
+      let security = minSecurity(
+        modePolicy.security,
+        approvalPolicy?.security ?? modePolicy.security,
+      );
+      if (
+        elevatedRequested &&
+        elevatedMode === "full" &&
+        modePolicyAllowsFullBypass &&
+        hostPolicyAllowsFullBypass
+      ) {
         security = "full";
       }
       const requestedAsk = normalizeExecAsk(params.ask);
-      let ask = configuredModePolicy?.ask ?? maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
-      const autoReview = configuredModePolicy?.autoReview ?? false;
-      const bypassApprovals = elevatedRequested && elevatedMode === "full";
+      const hostAsk = maxAsk(modePolicy.ask, approvalPolicy?.ask ?? modePolicy.ask);
+      let ask = maxAsk(hostAsk, requestedAsk ?? hostAsk);
+      const bypassApprovals =
+        elevatedRequested &&
+        elevatedMode === "full" &&
+        modePolicyAllowsFullBypass &&
+        hostPolicyAllowsFullBypass;
       if (bypassApprovals) {
         ask = "off";
       }
+      const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
       if (target.selectedTarget === "sandbox" && !sandbox) {

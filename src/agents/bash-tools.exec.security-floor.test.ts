@@ -174,7 +174,38 @@ describe("exec security floor", () => {
     expect(result.details).toMatchObject({ status: "denied", reason: "denylist" });
   });
 
-  it("does not apply fallback denylist during elevated full approval bypass", async () => {
+  it("does not let elevated full bypass configured deny security", async () => {
+    const tool = createExecTool({
+      security: "deny",
+      ask: "off",
+      elevated: { enabled: true, allowed: true, defaultLevel: "full" },
+    });
+
+    await expect(
+      tool.execute("call-elevated-full-deny", {
+        command: "echo hello",
+        elevated: true,
+      }),
+    ).rejects.toThrow(/exec denied/i);
+  });
+
+  it("does not let elevated full bypass configured allowlist security", async () => {
+    const tool = createExecTool({
+      security: "allowlist",
+      ask: "off",
+      safeBins: [],
+      elevated: { enabled: true, allowed: true, defaultLevel: "full" },
+    });
+
+    await expect(
+      tool.execute("call-elevated-full-allowlist", {
+        command: "echo hello",
+        elevated: true,
+      }),
+    ).rejects.toThrow(/exec denied: allowlist miss/i);
+  });
+
+  it("keeps fallback denylist active when host ask policy blocks elevated full bypass", async () => {
     saveExecApprovals({
       version: 1,
       defaults: { security: "full", ask: "always", askFallback: "denylist" },
@@ -196,9 +227,7 @@ describe("exec security floor", () => {
       elevated: true,
     });
 
-    expect(result.details).toMatchObject({ status: "completed" });
-    const text = (result.content[0] as { text?: string }).text ?? "";
-    expect(text).toContain("hello");
+    expect(result.details).toMatchObject({ status: "denied", reason: "denylist" });
   });
 
   it("does not create approvals state during elevated full approval bypass", async () => {
