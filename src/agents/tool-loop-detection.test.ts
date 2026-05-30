@@ -434,7 +434,7 @@ describe("tool-loop-detection", () => {
       const tools = ["web_search", "searxng_search"] as const;
 
       for (let i = 0; i < 5; i += 1) {
-        const toolName = tools[i % tools.length]!;
+        const toolName = tools[i % tools.length];
         recordSuccessfulCall(
           state,
           toolName,
@@ -479,7 +479,7 @@ describe("tool-loop-detection", () => {
       for (let i = 0; i < 5; i += 1) {
         recordSuccessfulCall(
           state,
-          tools[i % tools.length]!,
+          tools[i % tools.length],
           { query: `gold spot price today ${i}` },
           { content: [{ type: "text", text: `result variant ${i}` }], details: { ok: true } },
           i,
