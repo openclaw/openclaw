@@ -21,6 +21,13 @@ describe("provider failover hook structured signals", () => {
 
   it("lets provider hooks refine ambiguous auth statuses from stable codes", () => {
     providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
+      if (
+        context.provider === "demo-provider" &&
+        context.status === 403 &&
+        context.code === "PROVIDER_RATE_LIMITED"
+      ) {
+        return "rate_limit";
+      }
       return context.provider === "demo-provider" &&
         context.status === 403 &&
         context.code === "PROVIDER_QUOTA_EXHAUSTED"
@@ -38,12 +45,30 @@ describe("provider failover hook structured signals", () => {
     ).toEqual({ kind: "reason", reason: "billing" });
     expect(
       classifyFailoverSignal({
+        provider: "demo-provider",
+        status: 403,
+        code: "PROVIDER_RATE_LIMITED",
+        message: "Forbidden",
+      }),
+    ).toEqual({ kind: "reason", reason: "rate_limit" });
+    expect(
+      classifyFailoverSignal({
         provider: "other-provider",
         status: 403,
         code: "PROVIDER_QUOTA_EXHAUSTED",
         message: "Forbidden",
       }),
     ).toEqual({ kind: "reason", reason: "auth" });
+  });
+
+  it("does not call the direct provider hook for unstructured classified messages", () => {
+    expect(
+      classifyFailoverSignal({
+        provider: "demo-provider",
+        message: "invalid_api_key",
+      }),
+    ).toEqual({ kind: "reason", reason: "auth" });
+    expect(providerRuntimeMocks.classifyProviderPluginError).not.toHaveBeenCalled();
   });
 
   it("passes nested provider error types through failover error normalization", () => {

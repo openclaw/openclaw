@@ -658,6 +658,7 @@ export function classifyFailoverReasonFromHttpStatus(
       effectiveMessageClassification,
       status,
       opts?.provider,
+      { preserveProviderSignalClassification: providerPluginReason !== null },
     ),
   );
 }
@@ -668,6 +669,7 @@ function classifyFailoverClassificationFromHttpStatus(
   messageClassification: FailoverClassification | null,
   explicitStatus: number | undefined,
   provider?: string,
+  opts?: { preserveProviderSignalClassification?: boolean },
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
   if (typeof status !== "number" || !Number.isFinite(status)) {
@@ -700,6 +702,9 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
+    if (opts?.preserveProviderSignalClassification && messageClassification) {
+      return messageClassification;
+    }
     if (message && isAuthPermanentErrorMessage(message)) {
       return toReasonClassification("auth_permanent");
     }
@@ -1007,8 +1012,8 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
       })
     : null;
   const providerPluginReason =
+    hasStructuredProviderSignal &&
     signal.provider &&
-    (messageClassification?.kind !== "context_overflow" || hasStructuredProviderSignal) &&
     (signal.message || signal.code || signal.errorType || typeof inferredStatus === "number")
       ? classifyProviderPluginError({
           errorMessage: signal.message ?? "",
@@ -1031,6 +1036,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     effectiveMessageClassification,
     signal.status,
     signal.provider,
+    { preserveProviderSignalClassification: providerPluginReason !== null },
   );
   if (statusClassification) {
     return statusClassification;
