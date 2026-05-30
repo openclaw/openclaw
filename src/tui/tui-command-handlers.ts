@@ -738,7 +738,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         noteLocalBtwRunId?.(runId);
       }
       tui.requestRender();
-      await client.sendChat({
+      const sendResult = await client.sendChat({
         sessionKey: state.currentSessionKey,
         ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
         sessionId: state.currentSessionId,
@@ -749,9 +749,16 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
-        state.pendingChatRunId = runId;
-        setActivityStatus("waiting");
-        tui.requestRender();
+        const acceptedRunId = sendResult.runId || runId;
+        if (acceptedRunId !== runId) {
+          forgetLocalRunId?.(runId);
+          noteLocalRunId?.(acceptedRunId);
+        }
+        if (state.pendingOptimisticUserMessage) {
+          state.pendingChatRunId = acceptedRunId;
+          setActivityStatus("waiting");
+          tui.requestRender();
+        }
       }
     } catch (err) {
       if (isBtw) {

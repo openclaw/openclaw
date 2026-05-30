@@ -440,6 +440,38 @@ describe("tui session actions", () => {
     expect(state.activeChatRunId).toBeNull();
   });
 
+  it("clears optimistic pending state when switching sessions", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: {},
+      sessions: [],
+    });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-b",
+      messages: [],
+    });
+    const state = createBaseState({
+      activeChatRunId: null,
+      pendingChatRunId: null,
+      pendingOptimisticUserMessage: true,
+    });
+
+    const { setSession } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+    });
+
+    await setSession("agent:main:other");
+
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingChatRunId).toBeNull();
+  });
+
   it("aborts the in-flight runId when only pendingChatRunId is set", async () => {
     const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
     const addSystem = vi.fn();

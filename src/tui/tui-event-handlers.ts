@@ -96,7 +96,12 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamingWatchdogRunId: string | null = null;
 
   const flushPendingHistoryRefreshIfIdle = () => {
-    if (!pendingHistoryRefresh || state.activeChatRunId) {
+    if (
+      !pendingHistoryRefresh ||
+      state.activeChatRunId ||
+      state.pendingChatRunId ||
+      state.pendingOptimisticUserMessage
+    ) {
       return;
     }
     pendingHistoryRefresh = false;
@@ -432,6 +437,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (opts?.hasDisplayableFinal) {
       return;
     }
+    if (state.pendingChatRunId || state.pendingOptimisticUserMessage) {
+      pendingHistoryRefresh = true;
+      return;
+    }
     if (hasConcurrentActiveRun(runId)) {
       return;
     }
@@ -552,22 +561,19 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearPendingTerminalLifecycleError(evt.runId);
     chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
-    const activeRunId = state.activeChatRunId;
     const isPendingChatRun = state.pendingChatRunId === evt.runId;
+    const isLocalChatRun = isLocalRunId?.(evt.runId) ?? false;
+    const isLocalBtwRun = isLocalBtwRunId?.(evt.runId) ?? false;
     const isNewOptimisticRun =
       state.pendingOptimisticUserMessage &&
-      !isLocalBtwRunId?.(evt.runId) &&
-      (isPendingChatRun || !activeRunId || activeRunId !== evt.runId);
+      !isLocalBtwRun &&
+      (isPendingChatRun || (isLocalChatRun && evt.runId !== state.activeChatRunId));
     if (isNewOptimisticRun) {
       noteLocalRunId?.(evt.runId);
       state.pendingOptimisticUserMessage = false;
     }
-    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
+    if (!state.activeChatRunId && !isLocalBtwRun) {
       state.activeChatRunId = evt.runId;
-      if (state.pendingOptimisticUserMessage) {
-        noteLocalRunId?.(evt.runId);
-        state.pendingOptimisticUserMessage = false;
-      }
     }
     if (isPendingChatRun) {
       state.pendingChatRunId = null;
