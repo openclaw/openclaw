@@ -438,7 +438,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const entries = readCronRunLogEntriesSync(runLogPath);
+    const entries = readCronRunLogEntriesSync({ storePath, jobId: "sqlite-job" });
     expect(entries).toHaveLength(1);
     expect(entries[0]?.jobId).toBe("sqlite-job");
     expect(entries[0]?.summary).toBe("done");
