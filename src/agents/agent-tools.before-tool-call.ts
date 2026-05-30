@@ -839,12 +839,12 @@ export async function runBeforeToolCallHook(args: {
     const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
     const shouldRunTrustedPolicies = hasTrustedToolPolicies();
     const normalizedParams = isPlainObject(params) ? params : {};
-    const corePolicyResult = resolveSkillWorkshopToolApproval({
+    const initialCorePolicyResult = resolveSkillWorkshopToolApproval({
       toolName,
       toolParams: normalizedParams,
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
     });
-    if (!corePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
+    if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return { blocked: false, params };
     }
     const deriveOptions =
@@ -875,18 +875,6 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
     });
     const toolContext = buildToolContext(toolIdentity);
-    const coreApprovalOutcome = await resolveBeforeToolCallApprovalOutcome({
-      result: corePolicyResult,
-      approvalMode: args.approvalMode,
-      toolName,
-      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
-      ...(args.ctx ? { ctx: args.ctx } : {}),
-      signal: args.signal,
-      baseParams: params,
-    });
-    if (coreApprovalOutcome) {
-      return coreApprovalOutcome;
-    }
     const trustedPolicyResult = shouldRunTrustedPolicies
       ? await runTrustedToolPolicies(
           {
@@ -934,6 +922,8 @@ export async function runBeforeToolCallHook(args: {
         params,
       };
     }
+    let trustedApprovalParams: unknown | undefined;
+    let trustedApprovalResolution: PluginApprovalResolution | undefined;
     if (trustedPolicyResult?.requireApproval) {
       const approvalOutcome = await resolveBeforeToolCallApprovalOutcome({
         result: trustedPolicyResult,
@@ -945,10 +935,17 @@ export async function runBeforeToolCallHook(args: {
         baseParams: params,
       });
       if (approvalOutcome) {
-        return approvalOutcome;
+        if (approvalOutcome.blocked) {
+          return approvalOutcome;
+        }
+        if (approvalOutcome.deferredApproval) {
+          return approvalOutcome;
+        }
+        trustedApprovalParams = approvalOutcome.params;
+        trustedApprovalResolution = approvalOutcome.approvalResolution;
       }
     }
-    const rawPolicyAdjustedParams = trustedPolicyResult?.params ?? params;
+    const rawPolicyAdjustedParams = trustedApprovalParams ?? trustedPolicyResult?.params ?? params;
     const policyAdjustedParams = normalizeCodeModeExecBeforeHookParamsForToolKind({
       toolKind: args.toolKind,
       params: rawPolicyAdjustedParams,
@@ -963,8 +960,29 @@ export async function runBeforeToolCallHook(args: {
       trustedPolicyResult?.params && isPlainObject(policyAdjustedParams)
         ? deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
         : derivedToolParams;
+    const corePolicyResult = resolveSkillWorkshopToolApproval({
+      toolName,
+      toolParams: isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {},
+      ...(args.ctx?.config ? { config: args.ctx.config } : {}),
+    });
+    const coreApprovalOutcome = await resolveBeforeToolCallApprovalOutcome({
+      result: corePolicyResult,
+      approvalMode: args.approvalMode,
+      toolName,
+      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+      ...(args.ctx ? { ctx: args.ctx } : {}),
+      signal: args.signal,
+      baseParams: policyAdjustedParams,
+    });
+    if (coreApprovalOutcome) {
+      return coreApprovalOutcome;
+    }
     if (!hasBeforeToolCallHooks) {
-      return { blocked: false, params: policyAdjustedParams };
+      return {
+        blocked: false,
+        params: policyAdjustedParams,
+        ...(trustedApprovalResolution ? { approvalResolution: trustedApprovalResolution } : {}),
+      };
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
     const hookResult = await hookRunner.runBeforeToolCall(

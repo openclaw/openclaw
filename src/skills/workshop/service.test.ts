@@ -179,6 +179,22 @@ describe("skill workshop proposals", () => {
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("user-invocable: false");
   });
 
+  it("rejects create proposals when the target skill file already exists", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillFile = path.join(workspaceDir, "skills", "empty-skill", "SKILL.md");
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.writeFile(skillFile, "", "utf8");
+
+    await expect(
+      proposeCreateSkill({
+        workspaceDir,
+        name: "Empty Skill",
+        description: "Existing empty skill file",
+        content: "# Empty Skill\n",
+      }),
+    ).rejects.toThrow("Skill already exists");
+  });
+
   it("revises pending proposals in place before approval", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({

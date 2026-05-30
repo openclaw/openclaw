@@ -227,7 +227,7 @@ export async function proposeCreateSkill(
   assertProposalDescriptionWithinLimit(description);
   assertProposalContentWithinLimit(input.content, config.maxSkillBytes);
   const target = resolveSkillProposalTarget({ workspaceDir: input.workspaceDir, skillName: name });
-  if (await readWorkspaceSkillFile(target.skillFile)) {
+  if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
     throw new Error(`Skill already exists at ${target.skillFile}.`);
   }
 
