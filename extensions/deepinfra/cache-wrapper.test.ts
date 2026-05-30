@@ -1,12 +1,12 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { createDeepInfraAnthropicCacheWrapper } from "./cache-wrapper.js";
 
-function capturePayload(params: {
-  modelId: string;
-  initialPayload: Record<string, unknown>;
-}): { captured: Record<string, unknown>; baseCalls: number } {
+type StreamFn = Parameters<typeof createDeepInfraAnthropicCacheWrapper>[0];
+
+function capturePayload(params: { modelId: string; initialPayload: Record<string, unknown> }): {
+  captured: Record<string, unknown>;
+  baseCalls: number;
+} {
   let captured: Record<string, unknown> = {};
   let baseCalls = 0;
   const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -24,8 +24,8 @@ function capturePayload(params: {
       provider: "deepinfra",
       id: params.modelId,
       reasoning: false,
-    } as Model<"openai-completions">,
-    { messages: [] } as Context,
+    } as Parameters<StreamFn>[0],
+    { messages: [] } as Parameters<StreamFn>[1],
     {} as never,
   );
 

@@ -1,9 +1,9 @@
 import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 import {
   noteImplicitFallbackClobberWarnings,
   noteOpencodeProviderOverrides,
@@ -178,15 +178,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  const { collectBundledProviderAllowlistPolicyWarnings, collectPluginToolAllowlistWarnings } =
+  const { collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
-  const pluginToolAllowlistWarnings = [
-    ...collectPluginToolAllowlistWarnings({
-      cfg: candidate,
-      env: process.env,
-    }),
-    ...collectBundledProviderAllowlistPolicyWarnings({ cfg: candidate }),
-  ];
+  const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
+    cfg: candidate,
+    env: process.env,
+  });
   if (pluginToolAllowlistWarnings.length > 0) {
     note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }

@@ -5,6 +5,11 @@ import path from "node:path";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+  timestampMsToIsoString,
+} from "../shared/number-coercion.js";
 import { resolveUserPath } from "../utils.js";
 import type { OAuthCredentials, OAuthProvider } from "./auth-profiles/types.js";
 
@@ -14,6 +19,7 @@ const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
 const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 const GEMINI_CLI_CREDENTIALS_RELATIVE_PATH = ".gemini/oauth_creds.json";
+const CODEX_CLI_FALLBACK_EXPIRY_MS = 60 * 60 * 1000;
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
@@ -221,9 +227,10 @@ function decodeJwtExpiryMs(token: string): number | null {
   try {
     const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
     const payload = JSON.parse(payloadRaw) as { exp?: unknown };
-    return typeof payload.exp === "number" && Number.isFinite(payload.exp) && payload.exp > 0
-      ? payload.exp * 1000
-      : null;
+    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0) {
+      return null;
+    }
+    return asDateTimestampMs(payload.exp * 1000) ?? null;
   } catch {
     return null;
   }
@@ -274,6 +281,11 @@ function readCodexKeychainAuthRecord(options?: {
   }
 }
 
+function resolveCodexFallbackExpiryMs(nowMs?: number): number | undefined {
+  const baseMs = nowMs === undefined ? undefined : Math.floor(nowMs);
+  return resolveExpiresAtMsFromDurationMs(CODEX_CLI_FALLBACK_EXPIRY_MS, { nowMs: baseMs });
+}
+
 function readCodexKeychainCredentials(options?: {
   codexHome?: string;
   platform?: NodeJS.Platform;
@@ -301,16 +313,18 @@ function readCodexKeychainCredentials(options?: {
       typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
         ? new Date(lastRefreshRaw).getTime()
         : Date.now();
-    const fallbackExpiry = Number.isFinite(lastRefresh)
-      ? lastRefresh + 60 * 60 * 1000
-      : Date.now() + 60 * 60 * 1000;
+    const fallbackExpiry =
+      resolveCodexFallbackExpiryMs(lastRefresh) ?? resolveCodexFallbackExpiryMs();
     const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
+    if (expires === undefined) {
+      return null;
+    }
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
     const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
 
     log.info("read codex credentials from keychain", {
       source: "keychain",
-      expires: new Date(expires).toISOString(),
+      expires: timestampMsToIsoString(expires),
     });
 
     return {
@@ -525,7 +539,7 @@ export function writeClaudeCliKeychainCredentials(
     );
 
     log.info("wrote refreshed credentials to claude cli keychain", {
-      expires: new Date(newCredentials.expires).toISOString(),
+      expires: timestampMsToIsoString(newCredentials.expires),
     });
     return true;
   } catch (error) {
@@ -567,7 +581,7 @@ export function writeClaudeCliFileCredentials(
 
     saveJsonFile(credPath, data);
     log.info("wrote refreshed credentials to claude cli file", {
-      expires: new Date(newCredentials.expires).toISOString(),
+      expires: timestampMsToIsoString(newCredentials.expires),
     });
     return true;
   } catch (error) {
@@ -636,14 +650,17 @@ export function readCodexCliCredentials(options?: {
     return null;
   }
 
-  let fallbackExpiry: number;
+  let fallbackExpiry: number | undefined;
   try {
     const stat = fs.statSync(authPath);
-    fallbackExpiry = stat.mtimeMs + 60 * 60 * 1000;
+    fallbackExpiry = resolveCodexFallbackExpiryMs(stat.mtimeMs);
   } catch {
-    fallbackExpiry = Date.now() + 60 * 60 * 1000;
+    fallbackExpiry = resolveCodexFallbackExpiryMs();
   }
   const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;
+  if (expires === undefined) {
+    return null;
+  }
 
   return {
     type: "oauth",

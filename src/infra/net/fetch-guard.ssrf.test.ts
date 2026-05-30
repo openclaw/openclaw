@@ -946,6 +946,32 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("does not restore authorization across HTTPS-to-HTTP redirects", async () => {
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("http://cdn.example.com/asset"))
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn,
+      init: {
+        headers: {
+          Authorization: "Bearer secret",
+          Accept: "application/json",
+        },
+      },
+      retainAuthorizationRedirectHostnameAllowlist: ["cdn.example.com"],
+    });
+
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("accept")).toBe("application/json");
+    await result.release();
+  });
+
   it("handles symbol-bearing header dictionaries while rewriting cross-origin redirects", async () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi
@@ -1998,6 +2024,31 @@ describe("fetchWithSsrFGuard hardening", () => {
         policy: { hostnameAllowlist: ["*.permitted.example"] },
       }),
     ).rejects.toThrow(/allowlist/i);
+
+    expect(lookupFn).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "http://localhost.../resource",
+    "http://metadata.google.internal.../computeMetadata/v1/",
+    "http://api.localhost.../resource",
+    "http://svc.local.../resource",
+    "http://db.internal.../resource",
+  ])("blocks reserved repeated-dot hostname in trusted env proxy mode %s", async (url) => {
+    clearProxyEnv();
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    const lookupFn = createPublicLookup();
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url,
+        fetchImpl,
+        lookupFn,
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      }),
+    ).rejects.toThrow(/blocked/i);
 
     expect(lookupFn).not.toHaveBeenCalled();
     expect(fetchImpl).not.toHaveBeenCalled();

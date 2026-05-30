@@ -81,7 +81,7 @@ export type PluginRuntimeChannel = {
     resolveTextChunkLimit: typeof import("../../auto-reply/chunk.js").resolveTextChunkLimit;
     hasControlCommand: typeof import("../../auto-reply/command-detection.js").hasControlCommand;
     resolveMarkdownTableMode: import("../../config/markdown-tables.types.js").ResolveMarkdownTableMode;
-    convertMarkdownTables: typeof import("../../markdown/tables.js").convertMarkdownTables;
+    convertMarkdownTables: typeof import("../../../packages/markdown-core/src/tables.js").convertMarkdownTables;
   };
   reply: {
     dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
@@ -183,17 +183,6 @@ export type PluginRuntimeChannel = {
     /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
     runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
     dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
-  };
-  /** @deprecated Use `inbound`. */
-  turn: {
-    run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
-    runAssembled: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
-    /** @deprecated Prefer `inbound.run(...)`. */
-    runResolved: typeof import("../../channels/turn/kernel.js").runResolvedChannelTurn;
-    buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
-    runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
-    /** @deprecated Prefer `inbound.dispatchReply(...)`. */
-    dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

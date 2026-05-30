@@ -3,7 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
-import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import { loadJsonFile, repairJsonFilePermissions, saveJsonFile } from "../../infra/json-file.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import {
@@ -35,7 +35,7 @@ import {
 } from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
-  getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreSnapshot as getRuntimeAuthProfileStoreSnapshotImpl,
   hasRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots as replaceRuntimeAuthProfileStoreSnapshotsImpl,
   setRuntimeAuthProfileStoreSnapshot,
@@ -150,8 +150,8 @@ function resolveRuntimeAuthProfileStore(
 ): AuthProfileStore | null {
   const mainKey = resolveAuthStorePath(undefined);
   const requestedKey = resolveAuthStorePath(agentDir);
-  const mainStore = getRuntimeAuthProfileStoreSnapshot(undefined);
-  const requestedStore = getRuntimeAuthProfileStoreSnapshot(agentDir);
+  const mainStore = getRuntimeAuthProfileStoreSnapshotImpl(undefined);
+  const requestedStore = getRuntimeAuthProfileStoreSnapshotImpl(agentDir);
 
   if (!agentDir || requestedKey === mainKey) {
     if (!mainStore) {
@@ -899,6 +899,8 @@ export function ensureAuthProfileStore(
     externalCli?: ExternalCliAuthDiscovery;
     externalCliProviderIds?: Iterable<string>;
     externalCliProfileIds?: Iterable<string>;
+    readOnly?: boolean;
+    syncExternalCli?: boolean;
   },
 ): AuthProfileStore {
   const externalCli = resolveExternalCliOverlayOptions(options);
@@ -921,7 +923,12 @@ export function ensureAuthProfileStore(
 
 export function ensureAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean; resolveLegacyOAuthSidecars?: boolean },
+  options?: {
+    allowKeychainPrompt?: boolean;
+    readOnly?: boolean;
+    resolveLegacyOAuthSidecars?: boolean;
+    syncExternalCli?: boolean;
+  },
 ): AuthProfileStore {
   const effectiveOptions: LoadAuthProfileStoreOptions = {
     ...options,
@@ -1015,6 +1022,12 @@ export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthPro
 
 export { hasAnyAuthProfileStoreSource } from "./source-check.js";
 
+export function getRuntimeAuthProfileStoreSnapshot(
+  agentDir?: string,
+): AuthProfileStore | undefined {
+  return getRuntimeAuthProfileStoreSnapshotImpl(agentDir);
+}
+
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
 ): void {
@@ -1043,11 +1056,16 @@ export function saveAuthProfileStore(
       .map(([profileId]) => profileId),
   );
   const localStore = buildLocalAuthProfileStoreForSave({ store, agentDir, options });
+  const existingRaw = loadJsonFile(authPath);
   const payload = buildPersistedAuthProfileSecretsStore(localStore, undefined, {
-    existingRaw: loadJsonFile(authPath),
+    existingRaw,
     runtimeLegacyOAuthSidecarProfileIds,
   });
-  saveJsonFile(authPath, payload);
+  if (isDeepStrictEqual(existingRaw, payload)) {
+    repairJsonFilePermissions(authPath);
+  } else {
+    saveJsonFile(authPath, payload);
+  }
   savePersistedAuthProfileState(localStore, agentDir);
   writeCachedAuthProfileStore({
     authPath,

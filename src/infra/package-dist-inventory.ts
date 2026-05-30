@@ -33,6 +33,9 @@ const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
   `dist/plugin-sdk/src/plugin-sdk/${LEGACY_QA_LAB_DIR}.d.ts`,
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
 ]);
+// The build keeps source-shaped SDK declarations for local boundary projects,
+// but the npm package ships flat declarations and must not inventory the old tree.
+const OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX = "dist/plugin-sdk/src/";
 const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_PLUGIN_SDK_TEST_FILES = new Set([
   "dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
@@ -72,6 +75,7 @@ const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/qa-matrix(?:\/|$)/u,
+  /^dist\/plugin-sdk\/src(?:\/|$)/u,
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}(?:/|$)`, "u"),
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
 ] as const;
@@ -275,10 +279,7 @@ function isPackageFilesExcludedDistPath(
   );
 }
 
-function isPackagedDistPath(
-  relativePath: string,
-  rules: PackageDistInventoryRules,
-): boolean {
+function isPackagedDistPath(relativePath: string, rules: PackageDistInventoryRules): boolean {
   if (!relativePath.startsWith("dist/")) {
     return false;
   }
@@ -306,6 +307,9 @@ function isPackagedDistPath(
   if (isOmittedPluginSdkTestPath(relativePath)) {
     return false;
   }
+  if (relativePath.startsWith(OMITTED_DEEP_PLUGIN_SDK_DECLARATION_PREFIX)) {
+    return false;
+  }
   if (
     OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
     OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath) ||
@@ -319,10 +323,7 @@ function isPackagedDistPath(
   return true;
 }
 
-function isOmittedDistSubtree(
-  relativePath: string,
-  rules: PackageDistInventoryRules,
-): boolean {
+function isOmittedDistSubtree(relativePath: string, rules: PackageDistInventoryRules): boolean {
   return (
     isExternalizedBundledExtensionDistPath(relativePath, rules.externalizedExtensionIds) ||
     isLegacyPluginDependencyDirPath(relativePath) ||

@@ -5,7 +5,7 @@ import { createServer as createNetServer, type Server as NetServer, type Socket 
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
 const probePath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs");
@@ -95,6 +95,31 @@ function runRuntimeSmoke(root: string, args: string[]) {
   });
 }
 
+async function importRuntimeSmokeWithEnv(env: Record<string, string | undefined>) {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await import(
+      `${pathToFileURL(runtimeSmokePath).href}?case=${Date.now()}-${Math.random()}`
+    );
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 async function listenOnLoopback(server: HttpServer | NetServer): Promise<number> {
   return new Promise((resolve, reject) => {
     const onError = (error: Error) => {
@@ -127,6 +152,7 @@ async function closeServer(server: HttpServer | NetServer): Promise<void> {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
@@ -148,6 +174,127 @@ describe("bundled plugin install/uninstall probe", () => {
 
     const second = runtimeSmoke.appendBoundedOutput(first, "ghij", 5);
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  it("rejects loose runtime output limit env values instead of parsing prefixes", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",
+    });
+
+    expect(runtimeSmoke.appendBoundedOutput({ text: "", truncatedChars: 0 }, "abcdef")).toEqual({
+      text: "abcdef",
+      truncatedChars: 0,
+    });
+  });
+
+  it("keeps runtime log tail reads bounded", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(logPath, `${"old log line\n".repeat(1000)}[gateway] ready\n`, "utf8");
+
+    const fullRead = vi.spyOn(fs, "readFileSync");
+    const tail = runtimeSmoke.readFileTail(logPath, 64);
+
+    expect(tail).toContain("[gateway] ready");
+    expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(64);
+    expect(fullRead).not.toHaveBeenCalled();
+  });
+
+  it("rejects loose runtime log scan byte env values instead of parsing prefixes", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES: "64bytes",
+    });
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(logPath, `${"old log line\n".repeat(20)}[gateway] ready\n`, "utf8");
+
+    const tail = runtimeSmoke.readFileTail(logPath);
+
+    expect(Buffer.byteLength(tail)).toBeGreaterThan(64);
+    expect(tail).toContain("old log line");
+    expect(tail).toContain("[gateway] ready");
+  });
+
+  it("remembers runtime ready logs after they fall outside the tail", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    const readyLogSeen = runtimeSmoke.createReadyLogScanner(logPath);
+
+    fs.writeFileSync(logPath, `[gateway] ready\n${"x".repeat(300_000)}`, "utf8");
+
+    expect(readyLogSeen()).toBe(true);
+
+    fs.appendFileSync(logPath, "more log output".repeat(30_000), "utf8");
+
+    expect(readyLogSeen()).toBe(true);
+  });
+
+  it("treats signaled gateway children as already stopped", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const child = {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: "SIGTERM",
+    };
+
+    expect(runtimeSmoke.hasChildExited(child)).toBe(true);
+    await runtimeSmoke.stopGateway(child);
+
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("does not treat shallow HTTP listen logs as runtime readiness", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    const readyLogSeen = runtimeSmoke.createReadyLogScanner(logPath);
+
+    fs.writeFileSync(logPath, "[gateway] http server listening\n", "utf8");
+
+    expect(readyLogSeen()).toBe(false);
+  });
+
+  it("scans only post-ready runtime logs for dependency work", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(
+      logPath,
+      `pre-ready npm install is allowed here\n${"x".repeat(300_000)}\n[gateway] ready\nruntime ok\n`,
+      "utf8",
+    );
+
+    const fullRead = vi.spyOn(fs, "readFileSync");
+    const readyOffset = runtimeSmoke.findReadyLogOffset(logPath);
+
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).not.toThrow();
+    expect(fullRead).not.toHaveBeenCalled();
+
+    fs.appendFileSync(logPath, "post-ready pnpm install should fail\n", "utf8");
+
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).toThrow(
+      /post-ready runtime dependency work/u,
+    );
+  });
+
+  it("keeps post-ready scans anchored when ready logs fall outside the tail", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(
+      logPath,
+      `startup\n[gateway] ready\npost-ready yarn install should fail\n${"x".repeat(300_000)}`,
+      "utf8",
+    );
+
+    const readyOffset = runtimeSmoke.findReadyLogOffset(logPath);
+
+    expect(readyOffset).toBe("startup\n".length);
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).toThrow(
+      /post-ready runtime dependency work/u,
+    );
   });
 
   it("bounds runtime smoke child commands and preserves captured output", async () => {
@@ -201,6 +348,43 @@ describe("bundled plugin install/uninstall probe", () => {
       await expect(runtimeSmoke.httpOk(port, "/healthz", { timeoutMs: 100 })).resolves.toBe(false);
 
       expect(Date.now() - startedAt).toBeLessThan(2_500);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closeServer(server);
+    }
+  });
+
+  it("keeps stalled runtime readiness probes inside the ready deadline", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "1000",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: "50",
+    });
+    const sockets = new Set<Socket>();
+    const server = createNetServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => {
+        sockets.delete(socket);
+      });
+    });
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(logPath, "booting\n", "utf8");
+
+    try {
+      const port = await listenOnLoopback(server);
+      const startedAt = Date.now();
+
+      await expect(
+        runtimeSmoke.waitForReady({
+          child: { exitCode: null, signalCode: null },
+          logPath,
+          port,
+        }),
+      ).rejects.toThrow("gateway did not become ready");
+
+      expect(Date.now() - startedAt).toBeLessThan(500);
     } finally {
       for (const socket of sockets) {
         socket.destroy();
@@ -304,6 +488,68 @@ describe("bundled plugin install/uninstall probe", () => {
       "OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS entry is not an installable bundled plugin in this package: qa-channel",
     );
     expect(result.stderr).toContain("Available: admin-http-rpc");
+  });
+
+  it("rejects loose packaged plugin list limit env values", () => {
+    const root = makePackageRoot();
+
+    const timeout = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS: "100ms",
+    });
+    expect(timeout.status).toBe(1);
+    expect(timeout.stderr).toContain("invalid OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS: 100ms");
+
+    const maxBuffer = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES: "64bytes",
+    });
+    expect(maxBuffer.status).toBe(1);
+    expect(maxBuffer.stderr).toContain(
+      "invalid OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES: 64bytes",
+    );
+  });
+
+  it("rejects loose bundled plugin sweep shard env values", () => {
+    const root = makePackageRoot();
+    writePluginManifest(root, "dist-runtime/extensions/admin-http-rpc", {
+      id: "admin-http-rpc",
+    });
+    writePluginsList(root, [
+      {
+        id: "admin-http-rpc",
+        origin: "bundled",
+        rootDir: path.join(root, "dist-runtime", "extensions", "admin-http-rpc"),
+      },
+    ]);
+
+    const total = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL: "2shards",
+    });
+    expect(total.status).toBe(1);
+    expect(total.stderr).toContain("invalid OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL: 2shards");
+
+    const index = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX: "0of2",
+    });
+    expect(index.status).toBe(1);
+    expect(index.stderr).toContain("invalid OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX: 0of2");
+  });
+
+  it("bounds plugin list selection when the CLI hangs", () => {
+    const root = makePackageRoot();
+    fs.writeFileSync(
+      path.join(root, "dist", "index.js"),
+      "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\n",
+      "utf8",
+    );
+
+    const startedAt = Date.now();
+    const result = runProbe(root, {
+      OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS: "100",
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(2_500);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Timed out listing packaged bundled plugins after 100ms");
   });
 
   it("loads runtime smoke manifests from the selected packaged root", () => {

@@ -459,6 +459,34 @@ describe("modelsStatusCommand auth overview", () => {
     expect(payload.auth.storePath).toBe("/tmp/openclaw-isolated-agent/auth-profiles.json");
   });
 
+  it("honors deprecated PI_CODING_AGENT_DIR when OPENCLAW_AGENT_DIR is unset", async () => {
+    const localRuntime = createRuntime();
+    const previousOpenClaw = process.env.OPENCLAW_AGENT_DIR;
+    const previousPi = process.env.PI_CODING_AGENT_DIR;
+    delete process.env.OPENCLAW_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = "/tmp/openclaw-legacy-agent";
+    mocks.resolveAgentDir.mockClear();
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+    } finally {
+      if (previousOpenClaw === undefined) {
+        delete process.env.OPENCLAW_AGENT_DIR;
+      } else {
+        process.env.OPENCLAW_AGENT_DIR = previousOpenClaw;
+      }
+      if (previousPi === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPi;
+      }
+    }
+
+    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-legacy-agent");
+    const payload = parseFirstJsonLog(localRuntime);
+    expect(payload.agentDir).toBe("/tmp/openclaw-legacy-agent");
+  });
+
   it("uses agent overrides and reports sources", async () => {
     const localRuntime = createRuntime();
     await withAgentScopeOverrides(
@@ -583,11 +611,11 @@ describe("modelsStatusCommand auth overview", () => {
         {
           provider: "openai",
           runtime: "codex",
-          authProvider: "openai-codex",
+          authProvider: "openai",
           status: "missing",
           effective: {
-            kind: "missing",
-            detail: "missing",
+            kind: "models.json",
+            detail: "marker(oauth:openai-codex)",
           },
         },
       ]);
@@ -664,7 +692,7 @@ describe("modelsStatusCommand auth overview", () => {
         {
           provider: "openai",
           runtime: "codex",
-          authProvider: "openai-codex",
+          authProvider: "openai",
           status: "usable",
           effective: {
             kind: "synthetic",
@@ -735,7 +763,7 @@ describe("modelsStatusCommand auth overview", () => {
         {
           provider: "openai",
           runtime: "codex",
-          authProvider: "openai-codex",
+          authProvider: "openai",
           status: "usable",
           effective: {
             kind: "profiles",
@@ -1285,7 +1313,7 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
-  it("handles cli backend and aliased provider auth summaries", async () => {
+  it("handles cli backend and exact provider auth summaries", async () => {
     const localRuntime = createRuntime();
     const originalLoadConfig = mocks.loadConfig.getMockImplementation();
     const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
@@ -1332,9 +1360,9 @@ describe("modelsStatusCommand auth overview", () => {
       const aliasPayload = parseFirstJsonLog(aliasRuntime);
       const providers = aliasPayload.auth.providers as Array<{ provider: string }>;
       expect(
-        providers.reduce((count, provider) => count + (provider.provider === "zai" ? 1 : 0), 0),
+        providers.reduce((count, provider) => count + (provider.provider === "z.ai" ? 1 : 0), 0),
       ).toBe(1);
-      expect(providers.map((provider) => provider.provider)).not.toContain("z.ai");
+      expect(providers.map((provider) => provider.provider)).not.toContain("zai");
     } finally {
       if (originalLoadConfig) {
         mocks.loadConfig.mockImplementation(originalLoadConfig);

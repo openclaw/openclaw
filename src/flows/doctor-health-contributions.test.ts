@@ -59,7 +59,7 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 
@@ -296,6 +296,15 @@ describe("doctor health contributions", () => {
     await contribution.run(ctx);
 
     expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
+  });
+
+  it("repairs heartbeat templates before final config writes", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+
+    expect(ids.indexOf("doctor:heartbeat-template-repair")).toBeGreaterThan(-1);
+    expect(ids.indexOf("doctor:heartbeat-template-repair")).toBeLessThan(
+      ids.indexOf("doctor:write-config"),
+    );
   });
 
   it("runs structured repairs before legacy skill repairs and config writes", () => {

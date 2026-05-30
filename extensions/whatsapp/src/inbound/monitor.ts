@@ -10,6 +10,11 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
+import {
+  asDateTimestampMs,
+  parseStrictFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -79,11 +84,33 @@ type LocalGroupMetadataCacheEntry = WhatsAppGroupMetadataCacheEntry & {
   mentionParticipants?: WhatsAppOutboundMentionParticipant[];
 };
 
+function resolveGroupMetadataExpiresAt(nowRaw = Date.now()): number | undefined {
+  const now = asDateTimestampMs(nowRaw);
+  return now === undefined
+    ? undefined
+    : resolveExpiresAtMsFromDurationMs(GROUP_META_TTL_MS, { nowMs: now });
+}
+
+function parseWhatsAppTimestampSeconds(value: unknown): number | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return parseStrictFiniteNumber(value);
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function rememberGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
   cache: Map<string, T>,
   jid: string,
   entry: T,
 ): void {
+  if (asDateTimestampMs(entry.expires) === undefined) {
+    cache.delete(jid);
+    return;
+  }
   if (cache.has(jid)) {
     cache.delete(jid);
   }
@@ -106,7 +133,9 @@ function readGroupMetadataCacheEntry<T extends WhatsAppGroupMetadataCacheEntry>(
   if (!entry) {
     return null;
   }
-  if (entry.expires <= Date.now()) {
+  const now = asDateTimestampMs(Date.now());
+  const expires = asDateTimestampMs(entry.expires);
+  if (now === undefined || expires === undefined || expires <= now) {
     cache.delete(jid);
     return null;
   }
@@ -460,7 +489,7 @@ export async function attachWebInboxToSocket(
       subject: meta.subject,
       participants,
       mentionParticipants,
-      expires: Date.now() + GROUP_META_TTL_MS,
+      expires: resolveGroupMetadataExpiresAt() ?? 0,
     };
   };
 
@@ -468,7 +497,7 @@ export async function attachWebInboxToSocket(
     meta: GroupMetadata,
   ): WhatsAppGroupMetadataCacheEntry => ({
     subject: meta.subject,
-    expires: Date.now() + GROUP_META_TTL_MS,
+    expires: resolveGroupMetadataExpiresAt() ?? Number.NaN,
   });
 
   const getGroupMeta = async (jid: string) => {
@@ -499,7 +528,7 @@ export async function attachWebInboxToSocket(
         options.verbose,
         `Failed to fetch group metadata for ${jid}: ${String(err)}`,
       );
-      return { expires: Date.now() + GROUP_META_TTL_MS };
+      return { expires: resolveGroupMetadataExpiresAt() ?? 0 };
     }
   };
 
@@ -614,9 +643,9 @@ export async function attachWebInboxToSocket(
       groupSubject = meta.subject;
       groupParticipants = meta.participants;
     }
-    const messageTimestampMs = msg.messageTimestamp
-      ? Number(msg.messageTimestamp) * 1000
-      : undefined;
+    const messageTimestampSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
+    const messageTimestampMs =
+      messageTimestampSeconds !== undefined ? messageTimestampSeconds * 1000 : undefined;
 
     const accessCfg = options.loadConfig?.() ?? options.cfg;
     const access = await checkInboundAccessControl({
@@ -740,9 +769,8 @@ export async function attachWebInboxToSocket(
       return false;
     }
     const APPEND_RECENT_GRACE_MS = 60_000;
-    const msgTsRaw = msg.messageTimestamp;
-    const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
-    const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
+    const msgTsSeconds = parseWhatsAppTimestampSeconds(msg.messageTimestamp);
+    const msgTsMs = msgTsSeconds !== undefined ? msgTsSeconds * 1000 : 0;
     return msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS;
   };
 

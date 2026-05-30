@@ -57,18 +57,14 @@ prefer message adapters and durable message helpers.
 
 ## Migration
 
-- `runtime.channel.turn.run(...)` -> `runtime.channel.inbound.run(...)`
-- `runtime.channel.turn.runPrepared(...)` ->
-  `runtime.channel.inbound.runPreparedReply(...)`
-- `runtime.channel.turn.runAssembled(...)` ->
-  `runtime.channel.inbound.dispatchReply(...)`
-- `runtime.channel.turn.buildContext(...)` ->
-  `runtime.channel.inbound.buildContext(...)`
+The old `runtime.channel.turn.*` runtime aliases were removed. Use:
+
+- `runtime.channel.inbound.run(...)` for raw inbound events.
+- `runtime.channel.inbound.dispatchReply(...)` for assembled reply contexts.
+- `runtime.channel.inbound.buildContext(...)` for inbound context payloads.
+- `runtime.channel.inbound.runPreparedReply(...)` only for channel-owned prepared
+  dispatch paths that already assemble their own dispatch closure.
 
 New plugin code should not introduce `turn`-named channel APIs. Keep model or
 agent turn vocabulary inside agent/provider code; channel plugins use inbound,
 message, delivery, and reply terms.
-
-The `runtime.channel.turn.*` aliases remain only as deprecated compatibility
-for already published plugins. They can be removed in the next major SDK cleanup
-after external plugins have had a migration window.

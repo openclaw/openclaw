@@ -1,5 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { canonicalizeBase64 } from "../media/base64.js";
 import {
@@ -9,11 +8,13 @@ import {
   isImageProcessorUnavailableError,
   resizeToJpeg,
 } from "../media/media-services.js";
+import { resolveIntegerOption } from "../shared/number-coercion.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
   DEFAULT_IMAGE_MAX_DIMENSION_PX,
   type ImageSanitizationLimits,
 } from "./image-sanitization.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
@@ -289,8 +290,10 @@ export async function sanitizeContentBlocksImages(
   label: string,
   opts: ImageSanitizationLimits = {},
 ): Promise<ToolContentBlock[]> {
-  const maxDimensionPx = Math.max(opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX, 1);
-  const maxBytes = Math.max(opts.maxBytes ?? MAX_IMAGE_BYTES, 1);
+  const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, MAX_IMAGE_DIMENSION_PX, {
+    min: 1,
+  });
+  const maxBytes = resolveIntegerOption(opts.maxBytes, MAX_IMAGE_BYTES, { min: 1 });
   const out: ToolContentBlock[] = [];
   let mediaPathHint: string | undefined;
 

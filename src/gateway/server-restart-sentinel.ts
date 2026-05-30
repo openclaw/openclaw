@@ -201,19 +201,6 @@ function resolveRestartContinuationRoute(params: {
   };
 }
 
-function resolveRestartContinuationOutboundPayload(params: {
-  payload: OutboundReplyPayload;
-  messageId: string;
-  replyToId?: string;
-}): OutboundReplyPayload {
-  if (params.payload.replyToId !== params.messageId) {
-    return params.payload;
-  }
-  const payload: OutboundReplyPayload = { ...params.payload };
-  delete payload.replyToId;
-  return params.replyToId ? { ...payload, replyToId: params.replyToId } : payload;
-}
-
 function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
   return (
     typeof payload.text === "string" && payload.text.trim() === REPLY_RUN_STILL_SHUTTING_DOWN_TEXT
@@ -254,46 +241,30 @@ async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
 }) {
-  const { cfg, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
+  const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
-    enqueueSystemEvent(params.entry.text, {
+    enqueueRestartSentinelWake(params.entry.text, canonicalKey, queuedDeliveryContext);
+    return;
+  }
+
+  if (
+    params.entry.expectedSessionId &&
+    (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
+  ) {
+    log.warn("restart continuation skipped: session changed", {
       sessionKey: canonicalKey,
-      ...(queuedDeliveryContext
-        ? {
-            deliveryContext: {
-              ...queuedDeliveryContext,
-            },
-          }
-        : {}),
+      queueId: params.entry.id,
+      expectedSessionId: params.entry.expectedSessionId,
+      actualSessionId: entry?.sessionId ?? null,
     });
-    requestHeartbeat({
-      source: "restart-sentinel",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: canonicalKey,
-    });
+    enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
     return;
   }
 
   if (!params.entry.route) {
-    enqueueSystemEvent(params.entry.message, {
-      sessionKey: canonicalKey,
-      ...(queuedDeliveryContext
-        ? {
-            deliveryContext: {
-              ...queuedDeliveryContext,
-            },
-          }
-        : {}),
-    });
-    requestHeartbeat({
-      source: "restart-sentinel",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey: canonicalKey,
-    });
+    enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
     return;
   }
 
@@ -329,7 +300,7 @@ async function deliverQueuedSessionDelivery(params: {
       ReplyToId: route.replyToId,
       OriginatingChannel: route.channel,
       OriginatingTo: route.to,
-      ExplicitDeliverRoute: true,
+      ExplicitDeliverRoute: false,
       MessageThreadId: route.threadId,
     },
     {
@@ -347,50 +318,20 @@ async function deliverQueuedSessionDelivery(params: {
     ctxPayload,
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
+    replyOptions: {
+      sourceReplyDeliveryMode: "message_tool_only",
+    },
     delivery: {
       preparePayload: (payload) => {
         if (isRestartContinuationBusyPayload(payload)) {
           throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
         }
-        return resolveRestartContinuationOutboundPayload({
-          payload,
-          messageId,
-          replyToId: route.replyToId,
-        });
+        return payload;
       },
-      durable: (_payload, info) =>
-        info.kind === "final"
-          ? {
-              to: route.to,
-              replyToId: route.replyToId,
-              threadId: route.threadId,
-              deps: params.deps,
-            }
-          : false,
-      deliver: async (payload) => {
-        const send = await sendDurableMessageBatch({
-          cfg,
-          channel: route.channel,
-          to: route.to,
-          accountId: route.accountId,
-          replyToId: route.replyToId,
-          threadId: route.threadId,
-          payloads: [payload],
-          session: buildOutboundSessionContext({
-            cfg,
-            sessionKey: canonicalKey,
-          }),
-          deps: params.deps,
-          bestEffort: false,
-        });
-        if (send.status === "failed" || send.status === "partial_failed") {
-          throw send.error;
-        }
-        const results = send.status === "sent" ? send.results : [];
-        if (results.length === 0) {
-          throw new Error("restart continuation delivery returned no results");
-        }
-      },
+      durable: false,
+      // Restart continuations are internal lifecycle turns. Visible follow-up
+      // must go through the message tool; automatic final delivery stays off.
+      deliver: async () => ({ visibleReplySent: false }),
       onError: (err, info) => {
         dispatchError ??= err;
         log.warn(`restart continuation dispatch failed during ${info.kind}: ${String(err)}`, {
@@ -415,6 +356,7 @@ function buildQueuedRestartContinuation(params: {
   sessionKey: string;
   continuation: RestartSentinelContinuation;
   route?: SessionDeliveryRoute;
+  expectedSessionId?: string | undefined;
   ts: number;
   deliveryContext?: {
     channel?: string;
@@ -443,6 +385,7 @@ function buildQueuedRestartContinuation(params: {
     sessionKey: params.sessionKey,
     message: params.continuation.message,
     messageId: idempotencyKey,
+    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
     maxRetries: RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS,
     ...(params.route ? { route: params.route } : {}),
     ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
@@ -623,6 +566,7 @@ async function loadRestartSentinelStartupTask(params: {
           continuation: payload.continuation,
           ts: payload.ts,
           route: continuationRoute,
+          expectedSessionId: entry?.sessionId,
           deliveryContext:
             resolvedTo && channel
               ? {

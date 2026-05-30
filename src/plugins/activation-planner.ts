@@ -1,4 +1,4 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";

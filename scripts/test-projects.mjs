@@ -49,6 +49,25 @@ const releaseLockOnce = () => {
   releaseLock();
 };
 
+function isWrapperMetadataRequest(args) {
+  for (const arg of args) {
+    if (arg === "--") {
+      return false;
+    }
+    if (arg === "--help" || arg === "-h") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function printHelp() {
+  console.log(`Usage: node scripts/test-projects.mjs [--changed <base>] [--watch] [targets...] [-- vitest-args...]
+
+Runs the Vitest project shards that own the requested targets. With no targets,
+this runs the full local suite. Use explicit targets for local edit loops.`);
+}
+
 function cleanupVitestRunSpec(spec) {
   if (!spec.includeFilePath) {
     return;
@@ -192,6 +211,10 @@ async function runVitestSpecsParallel(specs, concurrency) {
 async function main() {
   const suiteStartedAt = performance.now();
   const args = process.argv.slice(2);
+  if (isWrapperMetadataRequest(args)) {
+    printHelp();
+    return;
+  }
   const baseEnv = resolveLocalVitestEnv(process.env);
   const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
   const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
@@ -265,6 +288,11 @@ async function main() {
     isFullSuiteRun || isFullExtensionsProjectRun(runSpecs) || isExplicitParallelMultiConfigRun;
   if (isParallelShardRun) {
     const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, baseEnv);
+    if (!isCiLikeEnv(baseEnv) && runSpecs.length > 1) {
+      console.warn(
+        `[test] warning: broad local run will start ${runSpecs.length} Vitest shards; use \`pnpm test:changed\` for routine checks.`,
+      );
+    }
     if (concurrency > 1) {
       const localFullSuiteProfile = resolveLocalFullSuiteProfile(baseEnv);
       const shardTimings = readShardTimings(process.cwd(), baseEnv);

@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
@@ -6,7 +7,6 @@ import {
   OPENAI_PROVIDER_ID,
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-codex-routing.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -134,6 +134,7 @@ function resolveManualCompactContextTokenBudget(params: {
   const contextConfigProvider = resolveContextConfigProviderForRuntime({
     provider,
     runtimeId: harnessPolicy.runtime,
+    config: params.cfg,
   });
   const configuredContextTokens = resolveContextTokensForModel({
     cfg: params.cfg,
@@ -217,9 +218,9 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   }
   const runtime = await loadCompactRuntime();
   const sessionId = targetSessionEntry.sessionId;
-  if (runtime.isEmbeddedPiRunActive(sessionId)) {
-    runtime.abortEmbeddedPiRun(sessionId);
-    await runtime.waitForEmbeddedPiRunEnd(sessionId, 15_000);
+  if (runtime.isEmbeddedAgentRunActive(sessionId)) {
+    runtime.abortEmbeddedAgentRun(sessionId);
+    await runtime.waitForEmbeddedAgentRunEnd(sessionId, 15_000);
   }
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
@@ -245,7 +246,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
-  const result = await runtime.compactEmbeddedPiSession({
+  const result = await runtime.compactEmbeddedAgentSession({
     sessionId,
     sessionKey: params.sessionKey,
     allowGatewaySubagentBinding: true,

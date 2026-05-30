@@ -27,6 +27,10 @@ import {
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import {
@@ -153,6 +157,15 @@ function loadMatrixReactionEvents(): Promise<typeof import("./reaction-events.js
 function loadMatrixDraftStream(): Promise<typeof import("../draft-stream.js")> {
   matrixDraftStreamPromise ??= import("../draft-stream.js");
   return matrixDraftStreamPromise;
+}
+
+async function matrixTextWouldActivateMentions(
+  client: MatrixClient,
+  text: string,
+): Promise<boolean> {
+  const { resolveMatrixMentionsForBody } = await loadMatrixSendModule();
+  const mentions = await resolveMatrixMentionsForBody({ client, body: text });
+  return mentions.room === true || (mentions.user_ids?.length ?? 0) > 0;
 }
 
 const MAX_TRACKED_PAIRING_REPLY_SENDERS = 512;
@@ -501,9 +514,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
   const readStoreAllowFrom = async (): Promise<string[]> => {
     const now = Date.now();
-    if (cachedStoreAllowFrom && now < cachedStoreAllowFrom.expiresAtMs) {
+    if (
+      cachedStoreAllowFrom &&
+      isFutureDateTimestampMs(cachedStoreAllowFrom.expiresAtMs, { nowMs: now })
+    ) {
       return cachedStoreAllowFrom.value;
     }
+    cachedStoreAllowFrom = null;
     const value = await core.channel.pairing
       .readAllowFromStore({
         channel: "matrix",
@@ -511,10 +528,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         accountId,
       })
       .catch(() => []);
-    cachedStoreAllowFrom = {
-      value,
-      expiresAtMs: now + ALLOW_FROM_STORE_CACHE_TTL_MS,
-    };
+    const expiresAtMs = resolveExpiresAtMsFromDurationMs(ALLOW_FROM_STORE_CACHE_TTL_MS, {
+      nowMs: now,
+    });
+    cachedStoreAllowFrom = expiresAtMs === undefined ? null : { value, expiresAtMs };
     return value;
   };
 
@@ -1867,6 +1884,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 await draftStream.discardPending();
               }
               const draftEventId = draftStream.eventId();
+              const draftFinalTextNeedsNormalMentionDelivery =
+                Boolean(draftEventId) &&
+                typeof payload.text === "string" &&
+                Boolean(payload.text.trim()) &&
+                !payload.isError &&
+                !payloadReplyMismatch &&
+                !mustDeliverFinalNormally &&
+                (await matrixTextWouldActivateMentions(client, payload.text));
 
               if (
                 draftEventId &&
@@ -1874,7 +1899,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 !payload.isError &&
                 !hasMedia &&
                 !payloadReplyMismatch &&
-                !mustDeliverFinalNormally
+                !mustDeliverFinalNormally &&
+                !draftFinalTextNeedsNormalMentionDelivery
               ) {
                 const finalPreviewText = payload.text;
                 await deliverWithFinalizableLivePreviewAdapter<
@@ -1957,10 +1983,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   typeof payloadText === "string" &&
                   Boolean(payloadText.trim()) &&
                   payloadTextMatchesDraft;
+                const mediaTextNeedsNormalMentionDelivery =
+                  typeof payloadText === "string" &&
+                  Boolean(payloadText.trim()) &&
+                  (await matrixTextWouldActivateMentions(client, payloadText));
                 const requiresFinalTextEdit =
                   quietDraftStreaming ||
                   (typeof payloadText === "string" && !payloadTextMatchesDraft);
-                if (textEditOk && payloadText && requiresFinalTextEdit) {
+                if (textEditOk && mediaTextNeedsNormalMentionDelivery) {
+                  textEditOk = false;
+                } else if (textEditOk && payloadText && requiresFinalTextEdit) {
                   const { editMessageMatrix } = await loadMatrixSendModule();
                   textEditOk = await editMessageMatrix(roomId, draftEventId, payloadText, {
                     client,
@@ -2010,7 +2042,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               } else {
                 const draftRedacted =
                   Boolean(draftEventId) &&
-                  (payload.isError || payloadReplyMismatch || mustDeliverFinalNormally);
+                  (payload.isError ||
+                    payloadReplyMismatch ||
+                    mustDeliverFinalNormally ||
+                    draftFinalTextNeedsNormalMentionDelivery);
                 if (draftRedacted && draftEventId) {
                   await redactMatrixDraftEvent(client, roomId, draftEventId);
                 }
@@ -2174,16 +2209,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 sharedDmContextNotice &&
                 markTrackedRoomIfFirst(sharedDmContextNoticeRooms, roomId)
               ) {
-                client
-                  .sendMessage(roomId, {
+                try {
+                  await client.sendMessage(roomId, {
                     msgtype: "m.notice",
                     body: sharedDmContextNotice,
-                  })
-                  .catch((err) => {
-                    logVerboseMessage(
-                      `matrix: failed sending shared DM session notice room=${roomId}: ${String(err)}`,
-                    );
                   });
+                } catch (err) {
+                  logVerboseMessage(
+                    `matrix: failed sending shared DM session notice room=${roomId}: ${String(err)}`,
+                  );
+                }
               }
 
               return await core.channel.reply.withReplyDispatcher({

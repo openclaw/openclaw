@@ -39,7 +39,7 @@ import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
 const embeddedRunnerModuleLoader = createLazyImportLoader(
-  () => import("../../agents/pi-embedded.js"),
+  () => import("../../agents/embedded-agent.js"),
 );
 
 function loadEmbeddedRunnerModule() {
@@ -509,8 +509,8 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
-    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
-    await runEmbeddedPiAgent({
+    const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
+    await runEmbeddedAgent({
       sessionId,
       sessionFile,
       agentId,
@@ -530,6 +530,7 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
       disableTools: true,
+      modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
     });
     return buildResult("ok");

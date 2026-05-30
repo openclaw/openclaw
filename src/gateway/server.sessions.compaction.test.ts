@@ -6,9 +6,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
   onceMessage,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
   startConnectedServerWithClient,
+  testState,
   writeSessionStore,
 } from "./test-helpers.js";
 import {
@@ -17,6 +18,7 @@ import {
   getGatewayConfigModule,
   sessionStoreEntry,
   createCheckpointFixture,
+  directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -274,6 +276,102 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   ws.close();
 });
 
+test("sessions.compaction.* scopes selected global checkpoints to the requested agent", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  const workDir = path.dirname(workStorePath);
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(workDir, { recursive: true });
+  const mainSessionFile = path.join(path.dirname(mainStorePath), "sess-main-global.jsonl");
+  await fs.writeFile(mainSessionFile, `${JSON.stringify({ role: "user", content: "main" })}\n`);
+  const fixture = await createCheckpointFixture(workDir, { legacyPreCompactionSnapshot: false });
+  const checkpointCreatedAt = Date.now();
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify(
+      { global: sessionStoreEntry("sess-main-global", { sessionFile: mainSessionFile }) },
+      null,
+      2,
+    ),
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify(
+      {
+        global: sessionStoreEntry(fixture.sessionId, {
+          sessionFile: fixture.sessionFile,
+          compactionCheckpoints: [
+            {
+              checkpointId: "checkpoint-work",
+              sessionKey: "global",
+              sessionId: fixture.sessionId,
+              createdAt: checkpointCreatedAt,
+              reason: "manual",
+              summary: "work checkpoint",
+              firstKeptEntryId: fixture.preCompactionLeafId,
+              preCompaction: {
+                sessionId: fixture.sessionId,
+                leafId: fixture.preCompactionLeafId,
+              },
+              postCompaction: {
+                sessionId: fixture.sessionId,
+                sessionFile: fixture.sessionFile,
+                leafId: fixture.postCompactionLeafId,
+                entryId: fixture.postCompactionLeafId,
+              },
+            },
+          ],
+        }),
+      },
+      null,
+      2,
+    ),
+  );
+
+  const listed = await directSessionReq<{
+    checkpoints: Array<{ checkpointId: string; summary?: string }>;
+  }>("sessions.compaction.list", { key: "global", agentId: "work" });
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.checkpoints).toHaveLength(1);
+  expect(listed.payload?.checkpoints[0]).toMatchObject({
+    checkpointId: "checkpoint-work",
+    summary: "work checkpoint",
+  });
+
+  const branched = await directSessionReq<{ key?: string; sourceKey?: string }>(
+    "sessions.compaction.branch",
+    { key: "global", agentId: "work", checkpointId: "checkpoint-work" },
+  );
+  expect(branched.ok).toBe(true);
+  expect(branched.payload?.sourceKey).toBe("global");
+  expect(branched.payload?.key).toMatch(/^agent:work:dashboard:/);
+
+  const restored = await directSessionReq<{ key?: string; sessionId?: string }>(
+    "sessions.compaction.restore",
+    { key: "global", agentId: "work", checkpointId: "checkpoint-work" },
+  );
+  expect(restored.ok).toBe(true);
+  expect(restored.payload?.key).toBe("global");
+  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
+  const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
+  expect(mainStore.global?.sessionId).toBe("sess-main-global");
+  expect(workStore.global?.sessionId).toBe(restored.payload?.sessionId);
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = undefined;
+  testState.agentsConfig = undefined;
+});
+
 test("sessions.compact without maxLines runs embedded manual compaction for checkpoint-capable flows", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await fs.writeFile(
@@ -284,6 +382,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main", {
+        spawnedCwd: "/tmp/task-repo",
         thinkingLevel: "medium",
         reasoningLevel: "stream",
         contextBudgetStatus: {
@@ -367,8 +466,8 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   expect(endPayload.operationId).toBe(startPayload.operationId);
   expect(typeof startPayload.ts).toBe("number");
   expect(typeof endPayload.ts).toBe("number");
-  expect(embeddedRunMock.compactEmbeddedPiSession).toHaveBeenCalledTimes(1);
-  const compactionCall = embeddedRunMock.compactEmbeddedPiSession.mock.calls.at(0)?.[0] as
+  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledTimes(1);
+  const compactionCall = embeddedRunMock.compactEmbeddedAgentSession.mock.calls.at(0)?.[0] as
     | {
         agentHarnessId?: string;
         allowGatewaySubagentBinding?: boolean;
@@ -383,6 +482,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         thinkLevel?: string;
         trigger?: string;
         workspaceDir?: string;
+        cwd?: string;
       }
     | undefined;
   if (!compactionCall) {
@@ -398,6 +498,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   }
   expect(path.basename(compactionCall.sessionFile)).toBe("sess-main.jsonl");
   expect(compactionCall.workspaceDir).toBe(path.join(os.tmpdir(), "openclaw-gateway-test"));
+  expect(compactionCall.cwd).toBe("/tmp/task-repo");
   expect(callConfig.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-6");
   expect(callConfig.agents?.defaults?.workspace).toBe(
     path.join(os.tmpdir(), "openclaw-gateway-test"),
@@ -449,7 +550,7 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
       }),
     },
   });
-  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValueOnce({
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
     ok: true,
     compacted: false,
     result: {
@@ -548,8 +649,8 @@ test("sessions.patch preserves nested model ids under provider overrides", async
       const started = await startConnectedServerWithClient();
       const { server, ws } = started;
       try {
-        piSdkMock.enabled = true;
-        piSdkMock.models = [
+        agentDiscoveryMock.enabled = true;
+        agentDiscoveryMock.models = [
           { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
         ];
 

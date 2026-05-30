@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import { asBoolean } from "../utils/boolean.js";
 import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
@@ -222,6 +223,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
 ): OpenAIResponsesPayloadCapabilities {
   const provider = normalizeLowercaseString(model.provider);
   const api = normalizeLowercaseString(model.api);
+  const isOpenAIProvider = provider === "openai" || provider === "openai-codex";
   const endpointClass = resolveBundledOpenAIResponsesEndpointClass(model.baseUrl);
   const isResponsesApi = isOpenAIResponsesApi(api);
   const usesConfiguredBaseUrl = endpointClass !== "default";
@@ -247,13 +249,14 @@ function resolveOpenAIResponsesPayloadCapabilities(
       (provider === "openai" &&
         (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
         endpointClass === "openai-public") ||
-      (provider === "openai-codex" &&
+      (isOpenAIProvider &&
         (api === "openai-codex-responses" ||
           api === "openai-responses" ||
           api === "openclaw-openai-responses-transport") &&
         endpointClass === "openai-codex"),
     allowsResponsesStore:
       supportsResponsesStoreField &&
+      api !== "openai-codex-responses" &&
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
@@ -268,10 +271,7 @@ function parsePositiveInteger(value: unknown): number | undefined {
     return Math.floor(value);
   }
   if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
+    return parseStrictPositiveInteger(value);
   }
   return undefined;
 }

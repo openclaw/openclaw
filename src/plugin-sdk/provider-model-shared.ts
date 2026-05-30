@@ -3,6 +3,11 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
+import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
+  normalizeGooglePreviewModelId as normalizeGooglePreviewModelIdCore,
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -21,10 +26,6 @@ import type {
   ProviderSanitizeReplayHistoryContext,
   ProviderThinkingProfile,
 } from "./plugin-entry.js";
-import {
-  normalizeAntigravityPreviewModelId,
-  normalizeGooglePreviewModelId,
-} from "./provider-model-id-normalize.js";
 
 export type {
   ModelApi,
@@ -72,7 +73,6 @@ export {
   resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,
 } from "../plugins/provider-model-compat.js";
-export { normalizeProviderId } from "../agents/provider-id.js";
 export {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -84,16 +84,21 @@ export {
   sanitizeGoogleGeminiReplayHistory,
   buildStrictAnthropicReplayPolicy,
 };
+
+export function normalizeProviderId(provider: string): string {
+  return normalizeProviderIdCore(provider);
+}
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
+const CLAUDE_OPUS_48_MODEL_PREFIXES = ["claude-opus-4-8", "claude-opus-4.8"] as const;
 const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
 const CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES = [
   "claude-opus-4-6",
@@ -135,6 +140,10 @@ function isClaudeOpus47ModelId(modelId: string): boolean {
   return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_47_MODEL_PREFIXES);
 }
 
+function isClaudeOpus48ModelId(modelId: string): boolean {
+  return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_48_MODEL_PREFIXES);
+}
+
 /** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
 export function isClaudeAdaptiveThinkingDefaultModelId(modelId: string): boolean {
   return matchesClaudeModelPrefix(modelId, CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES);
@@ -142,6 +151,12 @@ export function isClaudeAdaptiveThinkingDefaultModelId(modelId: string): boolean
 
 /** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
 export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingProfile {
+  if (isClaudeOpus48ModelId(modelId)) {
+    return {
+      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
+      defaultLevel: "off",
+    };
+  }
   if (isClaudeOpus47ModelId(modelId)) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
@@ -157,7 +172,13 @@ export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingP
   return { levels: BASE_CLAUDE_THINKING_LEVELS };
 }
 
-export { normalizeAntigravityPreviewModelId, normalizeGooglePreviewModelId };
+export function normalizeAntigravityPreviewModelId(id: string): string {
+  return normalizeAntigravityPreviewModelIdCore(id);
+}
+
+export function normalizeGooglePreviewModelId(id: string): string {
+  return normalizeGooglePreviewModelIdCore(id);
+}
 
 export type ProviderReplayFamily =
   | "openai-compatible"

@@ -1,9 +1,8 @@
+import { formatEmbeddedAgentExecutionPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
-import { formatEmbeddedAgentExecutionPhase } from "../../agents/pi-embedded-runner/execution-phase.js";
-import { resolveCronMaxConcurrentRuns } from "../../config/cron-limits.js";
 import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { CronConfig } from "../../config/types.cron.js";
+import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
@@ -33,6 +32,7 @@ import {
   summarizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
+import { computeNextRunAtMs } from "../schedule.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronAgentExecutionPhase,
@@ -57,6 +57,7 @@ import {
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
   recordScheduleComputeError,
+  resolveJobErrorBackoffUntilMs,
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
@@ -366,7 +367,11 @@ async function cleanupTimedOutCronAgentRun(
 }
 
 function resolveRunConcurrency(state: CronServiceState): number {
-  return resolveCronMaxConcurrentRuns(state.deps.cronConfig);
+  const raw = state.deps.cronConfig?.maxConcurrentRuns;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return 1;
+  }
+  return Math.max(1, Math.floor(raw));
 }
 function timeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
   const phase = formatCronAgentExecutionPhase(execution);
@@ -557,8 +562,16 @@ function tryFinishCronTaskRun(
     );
   }
 }
-/** Default max retries for one-shot jobs on transient errors (#24355). */
+/** Default max retries for cron jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
+
+type TransientCronRetryDecision = {
+  retryable: boolean;
+  consecutiveErrors: number;
+  retryCategory?: CronRetryOn;
+  backoffMs?: number;
+  reason: "transient retry" | "max retries exhausted" | "permanent error";
+};
 
 function resolveCronNextRunWithLowerBound(params: {
   state: CronServiceState;
@@ -591,6 +604,44 @@ function resolveRetryConfig(cronConfig?: CronConfig) {
         ? retry.backoffMs
         : DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, 3),
     retryOn: Array.isArray(retry?.retryOn) && retry.retryOn.length > 0 ? retry.retryOn : undefined,
+  };
+}
+
+function resolveTransientCronRetryDecision(params: {
+  cronConfig?: CronConfig;
+  error: string | undefined;
+  lastErrorReason?: string;
+  consecutiveErrors: number | undefined;
+}): TransientCronRetryDecision {
+  const retryConfig = resolveRetryConfig(params.cronConfig);
+  const retryHint = resolveCronExecutionRetryHint(
+    params.error,
+    retryConfig.retryOn,
+    params.lastErrorReason,
+  );
+  const consecutiveErrors = params.consecutiveErrors ?? 0;
+  if (!retryHint.retryable) {
+    return {
+      retryable: false,
+      consecutiveErrors,
+      retryCategory: retryHint.category,
+      reason: "permanent error",
+    };
+  }
+  if (consecutiveErrors > retryConfig.maxAttempts) {
+    return {
+      retryable: false,
+      consecutiveErrors,
+      retryCategory: retryHint.category,
+      reason: "max retries exhausted",
+    };
+  }
+  return {
+    retryable: true,
+    consecutiveErrors,
+    retryCategory: retryHint.category,
+    backoffMs: errorBackoffMs(consecutiveErrors, retryConfig.backoffMs),
+    reason: "transient retry",
   };
 }
 
@@ -915,6 +966,7 @@ export function applyJobResult(
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
   // separate counter so opt-in skip alerts do not affect retry behavior.
+  const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
   const alertConfig = resolveFailureAlert(state, job);
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
@@ -958,25 +1010,23 @@ export function applyJobResult(
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
       } else if (result.status === "error") {
-        const retryConfig = resolveRetryConfig(state.deps.cronConfig);
-        const retryHint = resolveCronExecutionRetryHint(
-          result.error,
-          retryConfig.retryOn,
-          job.state.lastErrorReason,
-        );
-        // consecutiveErrors is always set to ≥1 by the increment block above.
-        const consecutive = job.state.consecutiveErrors;
-        if (retryHint.retryable && consecutive <= retryConfig.maxAttempts) {
+        const retryDecision = resolveTransientCronRetryDecision({
+          cronConfig: state.deps.cronConfig,
+          error: result.error,
+          lastErrorReason: job.state.lastErrorReason,
+          consecutiveErrors: job.state.consecutiveErrors,
+        });
+        if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
           // Schedule retry with backoff (#24355).
-          const backoff = errorBackoffMs(consecutive, retryConfig.backoffMs);
-          job.state.nextRunAtMs = result.endedAt + backoff;
+          job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
           state.deps.log.info(
             {
               jobId: job.id,
               jobName: job.name,
-              consecutiveErrors: consecutive,
-              backoffMs: backoff,
+              consecutiveErrors: retryDecision.consecutiveErrors,
+              backoffMs: retryDecision.backoffMs,
               nextRunAtMs: job.state.nextRunAtMs,
+              retryCategory: retryDecision.retryCategory,
             },
             "cron: scheduling one-shot retry after transient error",
           );
@@ -991,30 +1041,74 @@ export function applyJobResult(
             {
               jobId: job.id,
               jobName: job.name,
-              consecutiveErrors: consecutive,
+              consecutiveErrors: retryDecision.consecutiveErrors,
               error: result.error,
-              reason: retryHint.retryable ? "max retries exhausted" : "permanent error",
-              retryCategory: retryHint.category,
+              reason: retryDecision.reason,
+              retryCategory: retryDecision.retryCategory,
             },
             "cron: disabling one-shot job after error",
           );
         }
       }
     } else if (result.status === "error" && isJobEnabled(job)) {
+      const retryDecision = resolveTransientCronRetryDecision({
+        cronConfig: state.deps.cronConfig,
+        error: result.error,
+        lastErrorReason: job.state.lastErrorReason,
+        consecutiveErrors: job.state.consecutiveErrors,
+      });
+      let normalNext: number | undefined;
+      let normalNextComputed = false;
+      const computeNormalNext = () => {
+        if (!normalNextComputed) {
+          try {
+            normalNext =
+              opts?.preserveSchedule && job.schedule.kind === "every"
+                ? computeNextWithPreservedLastRun(result.endedAt)
+                : (retryDecision.retryable || previousConsecutiveErrors > 0) &&
+                    job.schedule.kind === "every"
+                  ? computeNextRunAtMs(job.schedule, result.endedAt)
+                  : computeJobNextRunAtMs(job, result.endedAt);
+          } catch (err) {
+            // If the schedule expression/timezone throws (croner edge cases),
+            // record the schedule error (auto-disables after repeated failures)
+            // and fall back to backoff-only schedule so the state update is not lost.
+            recordScheduleComputeError({ state, job, err });
+          }
+          normalNextComputed = true;
+        }
+        return normalNext;
+      };
+      if (
+        !opts?.preserveSchedule &&
+        retryDecision.retryable &&
+        retryDecision.backoffMs !== undefined
+      ) {
+        normalNext = computeNormalNext();
+        const retryNextRunAtMs = result.endedAt + retryDecision.backoffMs;
+        if (normalNext === undefined) {
+          // Preserve the unresolved-cron guard (#66019): do not synthesize a
+          // retry when the schedule cannot produce a next scheduled slot.
+        } else if (retryNextRunAtMs < normalNext) {
+          job.state.nextRunAtMs = retryNextRunAtMs;
+          state.deps.log.info(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              consecutiveErrors: retryDecision.consecutiveErrors,
+              backoffMs: retryDecision.backoffMs,
+              nextRunAtMs: job.state.nextRunAtMs,
+              normalNextRunAtMs: normalNext,
+              retryCategory: retryDecision.retryCategory,
+            },
+            "cron: scheduling recurring retry after transient error",
+          );
+          return shouldDelete;
+        }
+      }
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
-      let normalNext: number | undefined;
-      try {
-        normalNext =
-          opts?.preserveSchedule && job.schedule.kind === "every"
-            ? computeNextWithPreservedLastRun(result.endedAt)
-            : computeJobNextRunAtMs(job, result.endedAt);
-      } catch (err) {
-        // If the schedule expression/timezone throws (croner edge cases),
-        // record the schedule error (auto-disables after repeated failures)
-        // and fall back to backoff-only schedule so the state update is not lost.
-        recordScheduleComputeError({ state, job, err });
-      }
+      normalNext = computeNormalNext();
       const backoffNext = result.endedAt + backoff;
       // Use whichever is later: the natural next run or the backoff delay.
       job.state.nextRunAtMs =
@@ -1044,7 +1138,9 @@ export function applyJobResult(
         naturalNext =
           opts?.preserveSchedule && job.schedule.kind === "every"
             ? computeNextWithPreservedLastRun(result.endedAt)
-            : computeJobNextRunAtMs(job, result.endedAt);
+            : previousConsecutiveErrors > 0 && job.schedule.kind === "every"
+              ? computeNextRunAtMs(job.schedule, result.endedAt)
+              : computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
         // record the schedule error (auto-disables after repeated failures)
@@ -1372,6 +1468,7 @@ export async function onTimer(state: CronServiceState) {
 }
 
 function isRunnableJob(params: {
+  state: CronServiceState;
   job: CronJob;
   nowMs: number;
   skipJobIds?: ReadonlySet<string>;
@@ -1409,13 +1506,13 @@ function isRunnableJob(params: {
     return false;
   }
   const next = job.state.nextRunAtMs;
+  if (isErrorBackoffPending(params.state, job, nowMs)) {
+    // Error retry windows are anchored at run end; persisted start-based
+    // retry timestamps from older state must not bypass active backoff.
+    return false;
+  }
   if (hasScheduledNextRunAtMs(next) && nowMs >= next) {
     return true;
-  }
-  if (hasScheduledNextRunAtMs(next) && next > nowMs && isErrorBackoffPending(job, nowMs)) {
-    // Respect active retry backoff windows on restart, but allow missed-slot
-    // replay once the backoff window has elapsed.
-    return false;
   }
   if (!params.allowCronMissedRunByLastRun || job.schedule.kind !== "cron") {
     return false;
@@ -1437,20 +1534,15 @@ function isRunnableJob(params: {
   return previousRunAtMs > lastRunAtMs;
 }
 
-function isErrorBackoffPending(job: CronJob, nowMs: number): boolean {
+function isErrorBackoffPending(state: CronServiceState, job: CronJob, nowMs: number): boolean {
   if (job.schedule.kind === "at" || job.state.lastStatus !== "error") {
     return false;
   }
-  const lastRunAtMs = job.state.lastRunAtMs;
-  if (typeof lastRunAtMs !== "number" || !Number.isFinite(lastRunAtMs)) {
-    return false;
-  }
-  const consecutiveErrorsRaw = job.state.consecutiveErrors;
-  const consecutiveErrors =
-    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
-      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
-      : 1;
-  return nowMs < lastRunAtMs + errorBackoffMs(consecutiveErrors);
+  const backoffUntilMs = resolveJobErrorBackoffUntilMs(
+    job,
+    state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+  );
+  return backoffUntilMs !== undefined && nowMs < backoffUntilMs;
 }
 
 function collectRunnableJobs(
@@ -1467,6 +1559,7 @@ function collectRunnableJobs(
   }
   return state.store.jobs.filter((job) =>
     isRunnableJob({
+      state,
       job,
       nowMs,
       skipJobIds: opts?.skipJobIds,
@@ -1474,6 +1567,55 @@ function collectRunnableJobs(
       allowCronMissedRunByLastRun: opts?.allowCronMissedRunByLastRun,
     }),
   );
+}
+
+function deferPendingBackoffMissedCronSlots(
+  state: CronServiceState,
+  nowMs: number,
+  opts?: { skipJobIds?: ReadonlySet<string> },
+): boolean {
+  if (!state.store) {
+    return false;
+  }
+  let changed = false;
+  for (const job of state.store.jobs) {
+    if (
+      !isJobEnabled(job) ||
+      job.schedule.kind !== "cron" ||
+      opts?.skipJobIds?.has(job.id) ||
+      typeof job.state.runningAtMs === "number"
+    ) {
+      continue;
+    }
+    const backoffUntilMs = resolveJobErrorBackoffUntilMs(
+      job,
+      state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+    );
+    if (backoffUntilMs === undefined || nowMs >= backoffUntilMs) {
+      continue;
+    }
+    let previousRunAtMs: number | undefined;
+    try {
+      previousRunAtMs = computeJobPreviousRunAtMs(job, nowMs);
+    } catch {
+      continue;
+    }
+    const lastRunAtMs = job.state.lastRunAtMs;
+    if (
+      typeof previousRunAtMs !== "number" ||
+      !Number.isFinite(previousRunAtMs) ||
+      typeof lastRunAtMs !== "number" ||
+      !Number.isFinite(lastRunAtMs) ||
+      previousRunAtMs <= lastRunAtMs
+    ) {
+      continue;
+    }
+    if (job.state.nextRunAtMs !== backoffUntilMs) {
+      job.state.nextRunAtMs = backoffUntilMs;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 export async function runMissedJobs(
@@ -1504,12 +1646,18 @@ async function planStartupCatchup(
     }
 
     const now = state.deps.nowMs();
+    const deferredBackoffMissedSlot = deferPendingBackoffMissedCronSlots(state, now, {
+      skipJobIds: opts?.skipJobIds,
+    });
     const missed = collectRunnableJobs(state, now, {
       skipJobIds: opts?.skipJobIds,
       skipAtIfAlreadyRan: true,
       allowCronMissedRunByLastRun: true,
     });
     if (missed.length === 0) {
+      if (deferredBackoffMissedSlot) {
+        await persist(state);
+      }
       return { candidates: [], deferredJobs: [] };
     }
     const sorted = missed.toSorted(

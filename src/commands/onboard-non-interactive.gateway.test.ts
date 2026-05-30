@@ -99,7 +99,7 @@ vi.mock("../config/io.js", () => ({
 
 const capturedReplaceConfigFileCalls: Array<{
   nextConfig: OpenClawConfig;
-  writeOptions?: { allowConfigSizeDrop?: boolean };
+  writeOptions?: { allowConfigSizeDrop?: boolean; unsetPaths?: string[][] };
 }> = [];
 
 vi.mock("../config/config.js", () => ({
@@ -108,7 +108,7 @@ vi.mock("../config/config.js", () => ({
     writeOptions,
   }: {
     nextConfig: OpenClawConfig;
-    writeOptions?: { allowConfigSizeDrop?: boolean };
+    writeOptions?: { allowConfigSizeDrop?: boolean; unsetPaths?: string[][] };
   }) => {
     capturedReplaceConfigFileCalls.push({ nextConfig, ...(writeOptions ? { writeOptions } : {}) });
     testConfigStore.set(resolveTestConfigPath(), nextConfig);
@@ -455,6 +455,48 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("allows local onboard plugin install-record migration size drops", async () => {
+    await withStateDir("state-local-plugin-installs-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+      testConfigStore.set(resolveTestConfigPath(), {
+        plugins: {
+          installs: {
+            demo: {
+              source: "path",
+              installPath: path.join(stateDir, "plugins", "demo"),
+            },
+          },
+        },
+      } as OpenClawConfig);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+          gatewayAuth: "token",
+          gatewayToken: "tok_plugin_installs",
+        },
+        runtime,
+      );
+
+      const migrationWrite = capturedReplaceConfigFileCalls.at(-2);
+      expect(migrationWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(migrationWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
+      expect(migrationWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
+
+      const onboardWrite = capturedReplaceConfigFileCalls.at(-1);
+      expect(onboardWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(onboardWrite?.writeOptions?.unsetPaths).toBeUndefined();
+      expect(onboardWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
+    });
+  }, 60_000);
+
   it("writes gateway token auth into config", async () => {
     await withStateDir("state-noninteractive-", async (stateDir) => {
       const token = "tok_test_123";
@@ -671,6 +713,49 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.bindings).toEqual(seededBindings);
 
       const remoteWrite = capturedReplaceConfigFileCalls.at(-1);
+      expect(remoteWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
+    });
+  }, 60_000);
+
+  it("allows remote onboard plugin install-record migration size drops", async () => {
+    await withStateDir("state-remote-plugin-installs-", async (stateDir) => {
+      const port = getPseudoPort(30_000);
+      const token = "tok_remote_seed";
+      testConfigStore.set(resolveTestConfigPath(), {
+        plugins: {
+          installs: {
+            demo: {
+              source: "path",
+              installPath: path.join(stateDir, "plugins", "demo"),
+            },
+          },
+        },
+        gateway: {
+          mode: "remote",
+          remote: { url: `ws://127.0.0.1:${port}`, token },
+        },
+      } as OpenClawConfig);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "remote",
+          remoteUrl: `ws://127.0.0.1:${port}`,
+          remoteToken: token,
+          authChoice: "skip",
+          json: true,
+        },
+        runtime,
+      );
+
+      const migrationWrite = capturedReplaceConfigFileCalls.at(-2);
+      expect(migrationWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(migrationWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
+      expect(migrationWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
+
+      const remoteWrite = capturedReplaceConfigFileCalls.at(-1);
+      expect(remoteWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(remoteWrite?.writeOptions?.unsetPaths).toBeUndefined();
       expect(remoteWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
     });
   }, 60_000);

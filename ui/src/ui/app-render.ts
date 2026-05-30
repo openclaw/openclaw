@@ -6,6 +6,7 @@ import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
+  scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
@@ -22,7 +23,7 @@ import {
   dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
-import { warnQueryToken } from "./app-settings.ts";
+import { hasOperatorWriteAccess, warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
@@ -113,6 +114,7 @@ import {
   branchSessionFromCheckpoint,
   deleteSessionsAndRefresh,
   loadSessions,
+  parseSessionsFilterInteger,
   patchSession,
   restoreSessionFromCheckpoint,
   toggleSessionCompactionCheckpoints,
@@ -120,6 +122,7 @@ import {
 import {
   closeClawHubDetail,
   installFromClawHub,
+  loadSkillCard,
   installSkill,
   loadClawHubDetail,
   loadSkills,
@@ -129,8 +132,10 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import { captureSessionToWorkboard, getWorkboardState } from "./controllers/workboard.ts";
 import { getCronJobPayload } from "./cron-payload.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
+import { formatTimeMs } from "./format.ts";
 import { formatRelativeTimestamp } from "./format.ts";
 import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
@@ -301,8 +306,28 @@ function renderSidebarSessions(state: AppViewState) {
       ${collapsed || recent.length === 0
         ? nothing
         : html`
-            <div class="sidebar-recent-sessions" aria-label=${t("overview.cards.recentSessions")}>
-              <div class="sidebar-recent-sessions__label">${t("usage.sessions.recentShort")}</div>
+            <div
+              class="sidebar-recent-sessions ${state.settings.recentSessionsCollapsed
+                ? "sidebar-recent-sessions--collapsed"
+                : ""}"
+              aria-label=${t("overview.cards.recentSessions")}
+            >
+              <button
+                class="sidebar-recent-sessions__label"
+                type="button"
+                aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
+                @click=${() => {
+                  state.applySettings({
+                    ...state.settings,
+                    recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
+                  });
+                }}
+              >
+                <span class="sidebar-recent-sessions__label-text"
+                  >${t("usage.sessions.recentShort")}</span
+                >
+                <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
+              </button>
               <div class="sidebar-recent-sessions__list">
                 ${recent.map((row) => renderSidebarRecentSession(state, row))}
               </div>
@@ -367,15 +392,19 @@ const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewC
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
+const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
-function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
-  if (typeof nextRunAtMs !== "number" || !Number.isFinite(nextRunAtMs)) {
-    return null;
-  }
-  return new Date(nextRunAtMs).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
+export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
+  return (
+    formatTimeMs(
+      nextRunAtMs,
+      {
+        hour: "numeric",
+        minute: "2-digit",
+      },
+      "",
+    ) || null
+  );
 }
 
 function resolveDreamingNextCycle(
@@ -1845,7 +1874,7 @@ export function renderApp(state: AppViewState) {
       <main
         class="content ${isChat ? "content--chat" : ""} ${state.tab === "logs"
           ? "content--logs"
-          : ""}"
+          : ""} ${state.tab === "workboard" ? "content--workboard" : ""}"
       >
         ${state.updateStatusBanner
           ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
@@ -2031,8 +2060,20 @@ export function renderApp(state: AppViewState) {
             )
           : nothing}
         ${state.tab === "sessions"
-          ? renderLazyView(lazySessions, (m) =>
-              m.renderSessions({
+          ? renderLazyView(lazySessions, (m) => {
+              const workboardState = getWorkboardState(state);
+              const workboardEnabled = isPluginEnabledInConfigSnapshot(
+                state.configSnapshot,
+                "workboard",
+                {
+                  enabledByDefault: false,
+                },
+              );
+              const operatorCanWrite = hasOperatorWriteAccess(
+                (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                  null,
+              );
+              return m.renderSessions({
                 loading: state.sessionsLoading,
                 result: state.sessionsResult,
                 error: state.sessionsError,
@@ -2050,6 +2091,12 @@ export function renderApp(state: AppViewState) {
                 page: state.sessionsPage,
                 pageSize: state.sessionsPageSize,
                 selectedKeys: state.sessionsSelectedKeys,
+                workboardSessionKeys: new Set(
+                  workboardState.cards
+                    .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
+                    .filter((key): key is string => typeof key === "string" && key.length > 0),
+                ),
+                workboardBusySessionKey: [...workboardState.capturingSessionKeys][0] ?? null,
                 expandedCheckpointKey: state.sessionsExpandedCheckpointKey,
                 checkpointItemsByKey: state.sessionsCheckpointItemsByKey,
                 checkpointLoadingKey: state.sessionsCheckpointLoadingKey,
@@ -2064,8 +2111,8 @@ export function renderApp(state: AppViewState) {
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
                   void loadSessions(state, {
-                    activeMinutes: Number(next.activeMinutes) || 0,
-                    limit: Number(next.limit) || 0,
+                    activeMinutes: parseSessionsFilterInteger(next.activeMinutes),
+                    limit: parseSessionsFilterInteger(next.limit),
                     includeGlobal: next.includeGlobal,
                     includeUnknown: next.includeUnknown,
                     showArchived: next.showArchived,
@@ -2150,6 +2197,18 @@ export function renderApp(state: AppViewState) {
                   switchChatSession(state, sessionKey);
                   state.setTab("chat" as import("./navigation.ts").Tab);
                 },
+                onAddToWorkboard:
+                  workboardEnabled && operatorCanWrite
+                    ? async (session) => {
+                        await captureSessionToWorkboard({
+                          host: state,
+                          client: state.client,
+                          session,
+                          requestUpdate: requestHostUpdate,
+                        });
+                        state.setTab("workboard" as import("./navigation.ts").Tab);
+                      }
+                    : undefined,
                 onToggleCheckpointDetails: (sessionKey) =>
                   toggleSessionCompactionCheckpoints(state, sessionKey),
                 onBranchFromCheckpoint: async (sessionKey, checkpointId) => {
@@ -2165,6 +2224,29 @@ export function renderApp(state: AppViewState) {
                 },
                 onRestoreCheckpoint: (sessionKey, checkpointId) =>
                   restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
+              });
+            })
+          : nothing}
+        ${state.tab === "workboard"
+          ? renderLazyView(lazyWorkboard, (m) =>
+              m.renderWorkboard({
+                host: state,
+                client: state.client,
+                connected: state.connected,
+                canWrite: hasOperatorWriteAccess(
+                  (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ??
+                    null,
+                ),
+                pluginEnabled: isPluginEnabledInConfigSnapshot(state.configSnapshot, "workboard", {
+                  enabledByDefault: false,
+                }),
+                agentsList: state.agentsList,
+                sessions: state.sessionsResult?.sessions ?? [],
+                onOpenSession: (sessionKey) => {
+                  switchChatSession(state, sessionKey);
+                  state.setTab("chat" as import("./navigation.ts").Tab);
+                },
+                onRequestUpdate: requestHostUpdate,
               }),
             )
           : nothing}
@@ -2259,16 +2341,18 @@ export function renderApp(state: AppViewState) {
                   updateCronRunsFilter(state, { cronRunsScope: "job" });
                   await loadCronRuns(state, jobId);
                 },
-                onLoadMoreJobs: () => loadCronJobsPage(state, { append: true }),
+                onLoadMoreJobs: () => loadCronJobsPage(state, { append: true, tableFilters: true }),
                 onJobsFiltersChange: async (patch) => {
                   updateCronJobsFilter(state, patch);
                   const shouldReload =
                     typeof patch.cronJobsQuery === "string" ||
                     Boolean(patch.cronJobsEnabledFilter) ||
+                    Boolean(patch.cronJobsScheduleKindFilter) ||
+                    Boolean(patch.cronJobsLastStatusFilter) ||
                     Boolean(patch.cronJobsSortBy) ||
                     Boolean(patch.cronJobsSortDir);
                   if (shouldReload) {
-                    await loadCronJobsPage(state, { append: false });
+                    await loadCronJobsPage(state, { append: false, tableFilters: true });
                   }
                 },
                 onJobsFiltersReset: async () => {
@@ -2280,7 +2364,7 @@ export function renderApp(state: AppViewState) {
                     cronJobsSortBy: "nextRunAtMs",
                     cronJobsSortDir: "asc",
                   });
-                  await loadCronJobsPage(state, { append: false });
+                  await loadCronJobsPage(state, { append: false, tableFilters: true });
                 },
                 onLoadMoreRuns: () => loadMoreCronRuns(state),
                 onRunsFiltersChange: async (patch) => {
@@ -2623,6 +2707,13 @@ export function renderApp(state: AppViewState) {
                 messages: state.skillMessages,
                 busyKey: state.skillsBusyKey,
                 detailKey: state.skillsDetailKey,
+                detailTab: state.skillsDetailTab,
+                clawhubVerdicts: state.clawhubVerdicts,
+                clawhubVerdictsLoading: state.clawhubVerdictsLoading,
+                clawhubVerdictsError: state.clawhubVerdictsError,
+                skillCardContents: state.skillCardContents,
+                skillCardLoadingKey: state.skillCardLoadingKey,
+                skillCardErrors: state.skillCardErrors,
                 clawhubQuery: state.clawhubSearchQuery,
                 clawhubResults: state.clawhubSearchResults,
                 clawhubSearchLoading: state.clawhubSearchLoading,
@@ -2641,8 +2732,17 @@ export function renderApp(state: AppViewState) {
                 onSaveKey: (key) => saveSkillApiKey(state, key),
                 onInstall: (skillKey, name, installId) =>
                   installSkill(state, skillKey, name, installId),
-                onDetailOpen: (key) => (state.skillsDetailKey = key),
+                onDetailOpen: (key) => {
+                  state.skillsDetailKey = key;
+                  state.skillsDetailTab = "overview";
+                },
                 onDetailClose: () => (state.skillsDetailKey = null),
+                onDetailTabChange: (tab) => {
+                  state.skillsDetailTab = tab;
+                  if (tab === "card" && state.skillsDetailKey) {
+                    void loadSkillCard(state, state.skillsDetailKey);
+                  }
+                },
                 onClawHubQueryChange: (query) => {
                   setClawHubSearchQuery(state, query);
                   if (clawhubSearchTimer) {
@@ -2820,6 +2920,7 @@ export function renderApp(state: AppViewState) {
                   canAbort: hasAbortableSessionRun(state),
                   onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
                   onQueueRemove: (id) => state.removeQueuedMessage(id),
+                  onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
                   onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
@@ -2831,7 +2932,10 @@ export function renderApp(state: AppViewState) {
                     }
                     const hadActiveRun = hasAbortableSessionRun(state);
                     try {
-                      await state.client.request("sessions.reset", { key: state.sessionKey });
+                      await state.client.request("sessions.reset", {
+                        key: state.sessionKey,
+                        ...scopedAgentParamsForSession(state, state.sessionKey),
+                      });
                       state.chatMessages = [];
                       state.chatSideResult = null;
                       reconcileChatRunLifecycle(

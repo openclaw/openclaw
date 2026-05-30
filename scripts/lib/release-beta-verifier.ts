@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { readBoundedResponseText } from "./bounded-response.ts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
@@ -45,6 +46,8 @@ type WorkflowRunSummary = {
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
+const CLAWHUB_REQUEST_TIMEOUT_MS = 20_000;
+const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -209,7 +212,10 @@ async function fetchWithRetry(
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(url, {
+        ...options,
+        signal: AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS),
+      });
       if (response.status !== 429 && response.status < 500) {
         return response;
       }
@@ -230,7 +236,15 @@ async function fetchJsonWithRetry(url: string): Promise<unknown> {
   if (!response.ok) {
     throw new Error(`${url} returned HTTP ${response.status}.`);
   }
-  return response.json() as Promise<unknown>;
+  return await readBoundedJsonResponse(response, url);
+}
+
+export async function readBoundedJsonResponse(
+  response: Response,
+  label: string,
+  maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+): Promise<unknown> {
+  return parseJson(await readBoundedResponseText(response, label, maxBytes), label);
 }
 
 async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
@@ -342,6 +356,7 @@ function verifyWorkflowRun(params: {
   repo: string;
   expectedWorkflowName: string;
   expectedHeadBranch?: string;
+  allowedHeadBranches?: string[];
   rerunFailed: boolean;
 }): WorkflowRunSummary {
   const raw = runCommand("gh", [
@@ -370,9 +385,12 @@ function verifyWorkflowRun(params: {
     );
   }
   const headBranch = readString(run.headBranch);
-  if (params.expectedHeadBranch !== undefined && headBranch !== params.expectedHeadBranch) {
+  const allowedHeadBranches =
+    params.allowedHeadBranches ??
+    (params.expectedHeadBranch !== undefined ? [params.expectedHeadBranch] : []);
+  if (allowedHeadBranches.length > 0 && !allowedHeadBranches.includes(headBranch ?? "")) {
     throw new Error(
-      `${params.label}: run ${params.id} branch is ${headBranch ?? "<missing>"}, expected ${params.expectedHeadBranch}.`,
+      `${params.label}: run ${params.id} branch is ${headBranch ?? "<missing>"}, expected ${allowedHeadBranches.join(" or ")}.`,
     );
   }
   const status = readString(run.status);
@@ -519,7 +537,7 @@ export async function verifyBetaRelease(
         label: "Full Release Validation",
         repo: args.repo,
         expectedWorkflowName: "Full Release Validation",
-        expectedHeadBranch: args.workflowRef,
+        allowedHeadBranches: ["main", args.workflowRef],
         rerunFailed: false,
       }),
     );

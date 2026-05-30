@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -30,6 +31,34 @@ const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
+
+function setFastModelsCliBackendDeps(): void {
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+      {
+        id: "google-gemini-cli",
+        pluginId: "google-gemini-cli",
+        modelProvider: "google",
+        config: { command: "gemini" },
+        bundleMcp: false,
+      },
+    ],
+  });
+}
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: modelCatalogMocks.loadModelCatalog,
@@ -108,6 +137,7 @@ const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id)
 }));
 
 beforeAll(async () => {
+  setFastModelsCliBackendDeps();
   modelCatalogMocks.loadModelCatalog.mockResolvedValue([
     { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
   ]);
@@ -117,6 +147,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setFastModelsCliBackendDeps();
   modelCatalogMocks.loadModelCatalog.mockReset();
   modelCatalogMocks.loadModelCatalog.mockResolvedValue([
     { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
@@ -130,21 +161,44 @@ beforeEach(() => {
   normalizeProviderModelIdWithRuntimeMock.mockReset();
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
-  setActivePluginRegistry(
-    createTestRegistry([
-      ...textSurfaceModelsTestPlugins,
-      {
-        pluginId: "telegram",
-        plugin: telegramModelsTestPlugin,
-        source: "test",
+  const registry = createTestRegistry([
+    ...textSurfaceModelsTestPlugins,
+    {
+      pluginId: "telegram",
+      plugin: telegramModelsTestPlugin,
+      source: "test",
+    },
+    {
+      pluginId: "menuonly",
+      plugin: menuOnlyModelsTestPlugin,
+      source: "test",
+    },
+  ]);
+  registry.cliBackends = [
+    {
+      pluginId: "anthropic",
+      backend: {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
       },
-      {
-        pluginId: "menuonly",
-        plugin: menuOnlyModelsTestPlugin,
-        source: "test",
+      source: "test",
+    },
+    {
+      pluginId: "google",
+      backend: {
+        id: "google-gemini-cli",
+        modelProvider: "google",
+        config: { command: "gemini" },
       },
-    ]),
-  );
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+});
+
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
 });
 
 function buildParams(
@@ -480,13 +534,13 @@ describe("handleModelsCommand", () => {
       description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
     });
     expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
-  it("keeps custom OpenAI-compatible providers on the Pi default runtime choice", async () => {
+  it("keeps custom OpenAI-compatible providers on the OpenClaw default runtime choice", async () => {
     const data = await buildModelsProviderData({
       models: {
         providers: {
@@ -504,9 +558,9 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
@@ -516,7 +570,7 @@ describe("handleModelsCommand", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "pi" },
+            agentRuntime: { id: "openclaw" },
             models: [],
           },
         },
@@ -537,9 +591,9 @@ describe("handleModelsCommand", () => {
       description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
     });
     expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
@@ -562,9 +616,9 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
@@ -592,9 +646,9 @@ describe("handleModelsCommand", () => {
       description: "Use the Claude CLI runtime selected by the effective harness policy.",
     });
     expect(data.runtimeChoicesByProvider?.get("anthropic")?.[1]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
@@ -673,6 +727,21 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
   });
 
+  it("does not coerce partial list page or limit tokens", async () => {
+    const result = await handleModelsCommand(
+      buildParams("/models openai page=2next limit=1x"),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
+  });
+
+  it("ignores unsafe bare list page tokens", async () => {
+    const result = await handleModelsCommand(buildParams("/models openai 9007199254740992"), true);
+
+    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
+  });
+
   it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
@@ -734,7 +803,7 @@ describe("handleModelsCommand", () => {
     expect(authLabelParams.workspaceDir).toBe("/tmp");
   });
 
-  it("labels OpenAI provider pages with the effective Codex auth provider set", async () => {
+  it("labels OpenAI provider pages with canonical and legacy auth provider ids", async () => {
     modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(
       "oauth (openai-codex:user@example.com)",
     );
@@ -758,7 +827,7 @@ describe("handleModelsCommand", () => {
     );
     expect(openaiAuthCall?.[0]).toMatchObject({
       provider: "openai",
-      acceptedProviderIds: ["openai-codex"],
+      acceptedProviderIds: ["openai-codex", "openai"],
     });
   });
 

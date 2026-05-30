@@ -7,12 +7,21 @@ const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
+const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
+const ROOT_SHIMS_NODE_OPTIONS =
+  `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=4096`.trim();
 
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
   "src/auto-reply",
+  "packages/llm-core/src",
+  "packages/markdown-core/src",
+  "packages/model-catalog-core/src",
   "packages/memory-host-sdk/src",
+  "packages/media-generation-core/src",
+  "packages/media-understanding-common/src",
+  "packages/terminal-core/src",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
   "src/types",
@@ -23,14 +32,97 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/memory-host-sdk/src/engine-embeddings.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/secret.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/status.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/plugin-entry.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/video-generation.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/types.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/utils/event-stream.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/validation.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/code-spans.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/fences.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/frontmatter.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/ir.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/render-aware-chunking.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/render.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/tables.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/types.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/capability-model-ref.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/catalog.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/model-ref.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/normalization.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/decorative-emoji.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/health-style.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/links.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/note.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/osc-progress.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/palette.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/progress-line.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled-params.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/prompt-style.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/restore.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/safe-text.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/stream-writer.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/table.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/terminal-link.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/theme.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/configured-model-refs.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-refs.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-types.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
+  "dist/plugin-sdk/error-runtime.d.ts",
+  "dist/plugin-sdk/plugin-entry.d.ts",
+  "dist/plugin-sdk/provider-auth.d.ts",
+  "dist/plugin-sdk/video-generation.d.ts",
 ];
 const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
+  "packages/plugin-sdk/dist/packages/markdown-core/src/code-spans.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/fences.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/frontmatter.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/ir.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/render-aware-chunking.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/render.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/tables.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/types.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/capability-model-ref.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/catalog.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/model-ref.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/configured-model-refs.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-refs.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-types.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-id.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/ansi.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/decorative-emoji.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/health-style.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/links.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/note.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/osc-progress.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/palette.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/progress-line.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/prompt-select-styled-params.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/prompt-select-styled.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/prompt-style.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/restore.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/safe-text.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/stream-writer.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/table.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/terminal-link.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/theme.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/plugin-entry.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",
@@ -67,6 +159,7 @@ const WHATSAPP_DTS_INPUTS = [
 const WHATSAPP_DTS_STAMP = "dist/plugin-sdk/extensions/whatsapp/.boundary-dts.stamp";
 const WHATSAPP_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/whatsapp/api.d.ts"];
 const ENTRY_SHIMS_INPUTS = [
+  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
@@ -87,6 +180,15 @@ export function parseMode(argv = process.argv.slice(2)) {
     throw new Error(`Unknown mode: ${mode}`);
   }
   return mode;
+}
+
+export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
+  const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") {
+    return 300_000;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 && String(parsed) === raw.trim() ? parsed : 300_000;
 }
 
 function collectNewestMtime(paths, params = {}) {
@@ -192,10 +294,11 @@ function abortSiblingSteps(abortController) {
   }
 }
 
-function runNodeStep(label, args, timeoutMs, params = {}) {
+export function runNodeStep(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
+  const spawnImpl = params.spawnImpl ?? spawn;
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawnImpl(process.execPath, args, {
       cwd: repoRoot,
       env: params.env ? { ...process.env, ...params.env } : process.env,
       signal: abortController?.signal,
@@ -209,8 +312,8 @@ function runNodeStep(label, args, timeoutMs, params = {}) {
       if (settled) {
         return;
       }
-      child.kill("SIGTERM");
       settled = true;
+      child.kill("SIGKILL");
       stdoutWriter.flush();
       stderrWriter.flush();
       abortSiblingSteps(abortController);
@@ -504,7 +607,8 @@ async function main(argv = process.argv.slice(2)) {
       await runNodeStep(
         "plugin-sdk boundary root shims",
         ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
-        120_000,
+        ROOT_SHIMS_TIMEOUT_MS,
+        { env: { NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS } },
       );
     } else if (mode === "all") {
       process.stdout.write("[plugin-sdk boundary root shims] fresh; skipping\n");

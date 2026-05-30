@@ -164,7 +164,7 @@ function resolveStatusRuntimeProvider(params: {
 }): string {
   const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
   const provider = normalizeOptionalLowercaseString(params.provider);
-  if (harness === "codex" && provider === "openai") {
+  if (harness === "codex" && (provider === "openai" || provider === "codex")) {
     return "openai-codex";
   }
   if (harness === "claude-cli" && provider === "anthropic") {
@@ -281,6 +281,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label,
     modelRefs.active.label,
+    { config: cfg },
   );
   if (
     shouldPreferActiveRuntimeAliasAuthLabel({

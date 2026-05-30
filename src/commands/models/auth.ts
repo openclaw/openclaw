@@ -7,6 +7,10 @@ import {
   text as clackText,
 } from "@clack/prompts";
 import {
+  stylePromptHint,
+  stylePromptMessage,
+} from "../../../packages/terminal-core/src/prompt-style.js";
+import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -47,19 +51,33 @@ import type {
   ProviderPlugin,
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { resolveExpiresAtMsFromDurationMs } from "../../shared/number-coercion.js";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../../shared/string-coerce.js";
-import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
+import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
+  const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
+  if (!normalizedExpiresIn) {
+    return undefined;
+  }
+  const durationMs = parseDurationMs(normalizedExpiresIn, { defaultUnit: "d" });
+  const expires = resolveExpiresAtMsFromDurationMs(durationMs);
+  if (expires === undefined) {
+    throw new Error("Invalid expiry duration: resulting token expiry is outside Date range.");
+  }
+  return expires;
+}
 
 function guardCancel<T>(value: T | symbol): T {
   if (typeof value === "symbol" || isCancel(value)) {
@@ -131,8 +149,13 @@ function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
 }
 
-function isOpenAICodexProvider(provider: string): boolean {
-  return normalizeProviderId(provider) === "openai-codex";
+function normalizeManualAuthProvider(provider: string): string {
+  const normalized = normalizeProviderId(provider);
+  return normalized === "openai-codex" ? "openai" : normalized;
+}
+
+function isOpenAIProvider(provider: string): boolean {
+  return normalizeProviderId(provider) === "openai";
 }
 
 function stripBearerPrefix(value: string): string {
@@ -166,7 +189,7 @@ function validateOpenAICodexApiKeyInput(value: string): string | undefined {
     return undefined;
   }
   if (looksLikeJwtToken(trimmed) || looksLikeStructuredCredential(trimmed)) {
-    return `That looks like token or OAuth material, not an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-token --provider openai-codex")} for token auth material.`;
+    return `That looks like token or OAuth material, not an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-token --provider openai")} for token auth material.`;
   }
   return "That does not look like an OpenAI API key.";
 }
@@ -246,15 +269,18 @@ async function resolveModelsAuthContext(params?: {
   const agentDir = resolveAgentDir(config, agentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const requestedProvider = params?.requestedProvider?.trim();
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
-    ...(params?.requestedProvider?.trim()
-      ? { providerRefs: [params.requestedProvider], activate: true }
+    ...(requestedProvider
+      ? {
+          providerRefs: [requestedProvider],
+          activate: true,
+        }
       : {}),
   });
   const authProviders = preferSetupAuthProviders({
@@ -433,7 +459,11 @@ async function persistProviderAuthResult(params: {
       cfg: updated,
       model: defaultModel,
     });
-    for (const warning of repaired.warnings) {
+    const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
+      cfg: updated,
+      model: defaultModel,
+    });
+    for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
       params.runtime.error?.(warning);
     }
   }
@@ -583,38 +613,34 @@ export async function modelsAuthPasteTokenCommand(
       `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
     );
   }
-  const provider = normalizeProviderId(rawProvider);
+  const provider = normalizeManualAuthProvider(rawProvider);
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
+  const validateTokenInput = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return "Required";
+    }
+    if (provider === "anthropic") {
+      return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
+    }
+    if (isOpenAIProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
+      return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai")} for API-key auth.`;
+    }
+    return undefined;
+  };
   const tokenInput = await readPastedSecret({
     message: `Paste token for ${provider}`,
     masked: false,
-    validate: (value) => {
-      const trimmed = value?.trim();
-      if (!trimmed) {
-        return "Required";
-      }
-      if (provider === "anthropic") {
-        return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
-      }
-      if (isOpenAICodexProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
-        return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai-codex")} for API-key auth.`;
-      }
-      return undefined;
-    },
+    validate: validateTokenInput,
   });
   const token =
     provider === "anthropic"
       ? tokenInput.replaceAll(/\s+/g, "").trim()
       : (normalizeOptionalString(tokenInput) ?? "");
 
-  const expires = normalizeStringifiedOptionalString(opts.expiresIn)
-    ? Date.now() +
-      parseDurationMs(normalizeStringifiedOptionalString(opts.expiresIn) ?? "", {
-        defaultUnit: "d",
-      })
-    : undefined;
+  const expires = resolveManualTokenExpiryMs(opts.expiresIn);
 
   await upsertAuthProfileWithLockOrThrow({
     profileId,
@@ -653,7 +679,7 @@ export async function modelsAuthPasteApiKeyCommand(
       `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
     );
   }
-  const provider = normalizeProviderId(rawProvider);
+  const provider = normalizeManualAuthProvider(rawProvider);
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
@@ -665,7 +691,7 @@ export async function modelsAuthPasteApiKeyCommand(
       if (!trimmed) {
         return "Required";
       }
-      if (isOpenAICodexProvider(provider)) {
+      if (isOpenAIProvider(provider)) {
         return validateOpenAICodexApiKeyInput(trimmed);
       }
       return undefined;
@@ -868,7 +894,7 @@ export function resolveLoginProfiles(params: {
 }
 
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
-  if (providerId !== "openai-codex") {
+  if (providerId !== "openai") {
     return;
   }
   runtime.log(

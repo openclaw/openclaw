@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
+
+const require = createRequire(import.meta.url);
+const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
+let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
 
 type CodeModeBridgeMethod = "search" | "describe" | "call" | "yield";
 
@@ -109,6 +115,13 @@ type VmRun = {
   vm: QuickJS;
   didTimeout: () => boolean;
 };
+
+function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
+  quickJsWasmModulePromise ??= readFile(QUICKJS_WASM_PATH).then((bytes) =>
+    WebAssembly.compile(bytes),
+  );
+  return quickJsWasmModulePromise;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -282,12 +295,14 @@ async function createVm(params: {
 }): Promise<VmRun> {
   const startedAt = Date.now();
   let timedOut = false;
+  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
   const vm = await QuickJS.create({
+    wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
-      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      timedOut = deadlineReached();
       return timedOut;
     },
   });
@@ -311,7 +326,7 @@ async function createVm(params: {
     hostRequest.dispose();
   }
   vm.evalCode(CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
-  return { vm, didTimeout: () => timedOut };
+  return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
 
 async function restoreVm(params: {
@@ -321,13 +336,15 @@ async function restoreVm(params: {
 }): Promise<VmRun> {
   const startedAt = Date.now();
   let timedOut = false;
+  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
+    wasm: await getQuickJsWasmModule(),
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
     interruptHandler: () => {
-      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      timedOut = deadlineReached();
       return timedOut;
     },
   });
@@ -339,7 +356,7 @@ async function restoreVm(params: {
       config: params.config,
     }),
   );
-  return { vm, didTimeout: () => timedOut };
+  return { vm, didTimeout: () => timedOut || deadlineReached() };
 }
 
 function takeOutput(vm: QuickJS): unknown[] {

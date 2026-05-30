@@ -1,4 +1,4 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   calculateCost,
   getEnvApiKey,
@@ -6,7 +6,8 @@ import {
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
@@ -192,13 +193,15 @@ function isJsonLikeThoughtSignature(value: string): boolean {
 }
 
 const GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
-const GEMINI_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
+const GEMINI_THOUGHT_SIGNATURE_BASE64_RE =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function hasGeminiThoughtSignatureTruncationFootprint(value: string): boolean {
-  return (
-    GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value) ||
-    (GEMINI_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length % 4 !== 0)
-  );
+  return GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value);
+}
+
+function isGeminiThoughtSignaturePayload(value: string): boolean {
+  return GEMINI_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length > 0;
 }
 
 function sanitizeGeminiThoughtSignature(thoughtSignature: string | undefined): string | undefined {
@@ -220,6 +223,9 @@ function sanitizeGeminiThoughtSignature(thoughtSignature: string | undefined): s
     return undefined;
   }
   if (hasGeminiThoughtSignatureTruncationFootprint(trimmed)) {
+    return undefined;
+  }
+  if (!isGeminiThoughtSignaturePayload(trimmed)) {
     return undefined;
   }
   return trimmed;
@@ -412,7 +418,7 @@ function getGoogleThinkingBudget(
   effort: ThinkingLevel,
   customBudgets?: GoogleTransportOptions["thinkingBudgets"],
 ): number | undefined {
-  const normalizedEffort = effort === "xhigh" ? "high" : effort;
+  const normalizedEffort = effort === "xhigh" || effort === "max" ? "high" : effort;
   if (customBudgets?.[normalizedEffort] !== undefined) {
     return customBudgets[normalizedEffort];
   }
@@ -802,16 +808,12 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
   }
 }
 
-function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
+export function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
   const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   if (raw === undefined || raw.trim() === "") {
     return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
-  }
-  return Math.floor(parsed);
+  return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
 function shouldRetryGoogleGemini3FirstResponse(params: {

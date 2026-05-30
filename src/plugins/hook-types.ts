@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
@@ -83,6 +83,7 @@ export type PluginHookName =
   | "inbound_claim"
   | "message_received"
   | "message_sending"
+  | "reply_payload_sending"
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
@@ -123,6 +124,7 @@ export const PLUGIN_HOOK_NAMES = [
   "inbound_claim",
   "message_received",
   "message_sending",
+  "reply_payload_sending",
   "message_sent",
   "before_tool_call",
   "after_tool_call",
@@ -428,6 +430,23 @@ export type PluginHookReplyDispatchResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+export type PluginHookReplyPayloadSendingEvent = {
+  payload: PluginHookReplyPayload;
+  kind: ReplyDispatchKind;
+  channel?: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type PluginHookReplyPayload = Omit<ReplyPayload, "trustedLocalMedia">;
+export type PluginHookReplyPayloadSendingContext = PluginHookMessageContext;
+
+export type PluginHookReplyPayloadSendingResult = {
+  payload?: PluginHookReplyPayload;
+  cancel?: boolean;
+  reason?: string;
+};
+
 export type PluginHookToolKind = "code_mode_exec";
 export type PluginHookToolInputKind = "javascript" | "typescript";
 
@@ -492,22 +511,6 @@ export type PluginHookBeforeToolCallResult = {
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
-    actions?: Array<
-      | {
-          kind: "decision";
-          label: string;
-          style: "primary" | "secondary" | "success" | "danger";
-          decision: "allow-once" | "allow-always" | "deny";
-          commandTemplate: string;
-        }
-      | {
-          kind: "command";
-          label: string;
-          style: "primary" | "secondary" | "success" | "danger";
-          commandTemplate: string;
-        }
-    >;
-    keepPendingWithoutRoute?: boolean;
     pluginId?: string;
     onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
   };
@@ -667,6 +670,10 @@ export type PluginHookSubagentDeliveryTargetResult = {
 
 export type PluginHookSubagentSpawnedEvent = PluginHookSubagentSpawnBase & {
   runId: string;
+  /** Fully resolved provider/model ref applied to the spawned child session. */
+  resolvedModel?: string;
+  /** Provider prefix parsed from resolvedModel when the ref includes one. */
+  resolvedProvider?: string;
 };
 
 export type PluginHookSubagentEndedEvent = {
@@ -990,6 +997,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookReplyDispatchEvent,
     ctx: PluginHookReplyDispatchContext,
   ) => Promise<PluginHookReplyDispatchResult | void> | PluginHookReplyDispatchResult | void;
+  reply_payload_sending: (
+    event: PluginHookReplyPayloadSendingEvent,
+    ctx: PluginHookReplyPayloadSendingContext,
+  ) =>
+    | Promise<PluginHookReplyPayloadSendingResult | void>
+    | PluginHookReplyPayloadSendingResult
+    | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,

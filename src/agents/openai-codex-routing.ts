@@ -1,8 +1,5 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeEmbeddedAgentRuntime } from "./pi-embedded-runner/runtime.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 export const OPENAI_PROVIDER_ID = "openai";
 export const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
@@ -30,8 +27,13 @@ function openAIProviderUsesCustomBaseUrl(config: OpenClawConfig | undefined): bo
   return !isOfficialOpenAIBaseUrl(config?.models?.providers?.openai?.baseUrl);
 }
 
+function hasProviderConfig(config: OpenClawConfig | undefined, provider: string): boolean {
+  return Boolean(config?.models?.providers?.[provider]);
+}
+
 export function isOpenAIProvider(provider: string | undefined): boolean {
-  return normalizeProviderId(provider ?? "") === OPENAI_PROVIDER_ID;
+  const normalized = normalizeProviderId(provider ?? "");
+  return normalized === OPENAI_PROVIDER_ID || normalized === OPENAI_CODEX_PROVIDER_ID;
 }
 
 export function isOpenAICodexProvider(provider: string | undefined): boolean {
@@ -71,77 +73,6 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
   return provider === OPENAI_PROVIDER_ID && !openAIProviderUsesCustomBaseUrl(params.config);
 }
 
-export function hasOpenAICodexAuthProfileOverride(value: unknown): boolean {
-  return (
-    typeof value === "string" &&
-    normalizeOptionalLowercaseString(value)?.startsWith(`${OPENAI_CODEX_PROVIDER_ID}:`) === true
-  );
-}
-
-function configuredOpenAIAuthOrderStartsWithCodexProfile(config: OpenClawConfig | undefined) {
-  if (!openAIProviderUsesCodexRuntimeByDefault({ provider: OPENAI_PROVIDER_ID, config })) {
-    return false;
-  }
-  const configuredOpenAIOrder = findNormalizedProviderValue(
-    config?.auth?.order,
-    OPENAI_PROVIDER_ID,
-  );
-  const firstProfile = configuredOpenAIOrder?.find(
-    (profileId) => typeof profileId === "string" && profileId.trim().length > 0,
-  );
-  return hasOpenAICodexAuthProfileOverride(firstProfile);
-}
-
-function configuredOpenAICodexAuthProfileExists(config: OpenClawConfig | undefined): boolean {
-  if (!openAIProviderUsesCodexRuntimeByDefault({ provider: OPENAI_PROVIDER_ID, config })) {
-    return false;
-  }
-  const configuredCodexOrder = findNormalizedProviderValue(
-    config?.auth?.order,
-    OPENAI_CODEX_PROVIDER_ID,
-  );
-  if (
-    configuredCodexOrder?.some(
-      (profileId) => typeof profileId === "string" && profileId.trim().length > 0,
-    ) === true
-  ) {
-    return true;
-  }
-  return Object.values(config?.auth?.profiles ?? {}).some(
-    (profile) => normalizeProviderId(profile?.provider ?? "") === OPENAI_CODEX_PROVIDER_ID,
-  );
-}
-
-export function shouldRouteOpenAIPiThroughCodexAuthProvider(params: {
-  provider: string;
-  harnessRuntime?: string;
-  agentHarnessId?: string;
-  authProfileProvider?: string;
-  authProfileId?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}): boolean {
-  if (!isOpenAIProvider(params.provider)) {
-    return false;
-  }
-  const runtime = normalizeEmbeddedAgentRuntime(params.agentHarnessId ?? params.harnessRuntime);
-  if (runtime !== "pi") {
-    return false;
-  }
-  if (!hasOpenAICodexAuthProfileOverride(params.authProfileId)) {
-    return false;
-  }
-  const aliasLookupParams = {
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  };
-  const authProfileProvider = resolveProviderIdForAuth(
-    params.authProfileProvider ?? params.authProfileId?.split(":", 1)[0] ?? "",
-    aliasLookupParams,
-  );
-  return authProfileProvider === OPENAI_CODEX_PROVIDER_ID;
-}
-
 export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
   provider: string;
   harnessRuntime?: string;
@@ -151,30 +82,15 @@ export function listOpenAIAuthProfileProvidersForAgentRuntime(params: {
   if (!isOpenAIProvider(params.provider)) {
     return [params.provider];
   }
-  const runtime = normalizeEmbeddedAgentRuntime(
-    normalizeExplicitRuntimePin(params.agentHarnessId) ?? params.harnessRuntime,
-  );
-  if (runtime === "codex") {
-    return [OPENAI_CODEX_PROVIDER_ID];
-  }
-  if (runtime === "pi") {
-    if (configuredOpenAIAuthOrderStartsWithCodexProfile(params.config)) {
-      return [OPENAI_CODEX_PROVIDER_ID, OPENAI_PROVIDER_ID];
-    }
-    return [OPENAI_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID];
-  }
-  return [params.provider];
+  return openAIProviderUsesCodexRuntimeByDefault({
+    provider: params.provider,
+    config: params.config,
+  })
+    ? [OPENAI_CODEX_PROVIDER_ID, OPENAI_PROVIDER_ID]
+    : [OPENAI_PROVIDER_ID];
 }
 
-function normalizeExplicitRuntimePin(value: unknown): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  const runtime = normalizeEmbeddedAgentRuntime(value);
-  return runtime === "auto" || runtime === "default" ? undefined : runtime;
-}
-
-export function resolveOpenAIRuntimeProviderForPi(params: {
+export function resolveOpenAIRuntimeProvider(params: {
   provider: string;
   harnessRuntime?: string;
   agentHarnessId?: string;
@@ -183,12 +99,10 @@ export function resolveOpenAIRuntimeProviderForPi(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): string {
-  return shouldRouteOpenAIPiThroughCodexAuthProvider(params)
-    ? OPENAI_CODEX_PROVIDER_ID
-    : params.provider;
+  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
 }
 
-export function resolveSelectedOpenAIPiRuntimeProvider(params: {
+export function resolveSelectedOpenAIRuntimeProvider(params: {
   provider: string;
   harnessRuntime?: string;
   agentHarnessId?: string;
@@ -197,62 +111,23 @@ export function resolveSelectedOpenAIPiRuntimeProvider(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): string {
-  if (shouldRouteOpenAIPiThroughCodexAuthProvider(params)) {
-    return OPENAI_CODEX_PROVIDER_ID;
-  }
-  const runtime = normalizeEmbeddedAgentRuntime(params.agentHarnessId ?? params.harnessRuntime);
-  if (!isOpenAIProvider(params.provider)) {
-    return params.provider;
-  }
-  if (runtime === "codex") {
-    return OPENAI_CODEX_PROVIDER_ID;
-  }
-  return runtime === "pi" &&
-    !params.authProfileId?.trim() &&
-    configuredOpenAIAuthOrderStartsWithCodexProfile(params.config)
-    ? OPENAI_CODEX_PROVIDER_ID
-    : params.provider;
-}
-
-export function resolveOpenAICompactionRuntimeProvider(params: {
-  provider: string;
-  harnessRuntime?: string;
-  agentHarnessId?: string;
-  authProfileProvider?: string;
-  authProfileId?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}): string {
-  if (shouldRouteOpenAIPiThroughCodexAuthProvider(params)) {
-    return OPENAI_CODEX_PROVIDER_ID;
-  }
-  const runtime = normalizeEmbeddedAgentRuntime(params.agentHarnessId ?? params.harnessRuntime);
-  if (!isOpenAIProvider(params.provider)) {
-    return params.provider;
-  }
-  if (
-    runtime === "codex" &&
-    (hasOpenAICodexAuthProfileOverride(params.authProfileId) ||
-      configuredOpenAIAuthOrderStartsWithCodexProfile(params.config) ||
-      configuredOpenAICodexAuthProfileExists(params.config))
-  ) {
-    return OPENAI_CODEX_PROVIDER_ID;
-  }
-  return runtime === "pi" &&
-    !params.authProfileId?.trim() &&
-    configuredOpenAIAuthOrderStartsWithCodexProfile(params.config)
-    ? OPENAI_CODEX_PROVIDER_ID
-    : params.provider;
+  return isOpenAIProvider(params.provider) ? OPENAI_PROVIDER_ID : params.provider;
 }
 
 export function resolveContextConfigProviderForRuntime(params: {
   provider: string;
   runtimeId?: string;
+  config?: OpenClawConfig;
 }): string {
-  const provider = normalizeProviderId(params.provider);
-  const runtimeId = normalizeEmbeddedAgentRuntime(params.runtimeId);
-  if (provider === OPENAI_PROVIDER_ID && runtimeId === "codex") {
+  if (!isOpenAIProvider(params.provider)) {
+    return params.provider;
+  }
+  if (
+    params.runtimeId === "codex" &&
+    !hasProviderConfig(params.config, OPENAI_PROVIDER_ID) &&
+    hasProviderConfig(params.config, OPENAI_CODEX_PROVIDER_ID)
+  ) {
     return OPENAI_CODEX_PROVIDER_ID;
   }
-  return params.provider;
+  return OPENAI_PROVIDER_ID;
 }

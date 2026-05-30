@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -44,7 +44,7 @@ async function expectVertexAdcEnvApiKey(params: {
   }
 }
 
-function testModelDefinition(id: string): Model<Api> {
+function testModelDefinition(id: string): Model {
   return {
     id,
     name: id,
@@ -235,6 +235,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProvider: ({ provider }: { provider: string }) =>
     provider === "openai" ? ["openai"] : [],
+  resolveOwningPluginIdsForProviderRef: ({ provider }: { provider: string }) =>
+    provider === "openai" ? ["openai"] : [],
 }));
 
 const cliCredentialMocks = vi.hoisted(() => ({
@@ -415,7 +417,7 @@ describe("getApiKeyForModel", () => {
           id: "codex-mini-latest",
           provider: "openai-codex",
           api: "openai-codex-responses",
-        } as Model<Api>;
+        } as Model;
 
         const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
           allowKeychainPrompt: false,
@@ -429,6 +431,78 @@ describe("getApiKeyForModel", () => {
         expect(apiKey.apiKey).toBe(oauthFixture.access);
       },
     );
+  });
+
+  it("keeps OpenAI OAuth profiles on the Codex transport and API keys on direct OpenAI", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+        "openai:api-key": {
+          type: "api_key" as const,
+          provider: "openai",
+          key: "direct-openai-key",
+        },
+      },
+    };
+
+    const directAuth = await getApiKeyForModel({
+      model: {
+        id: "chat-latest",
+        provider: "openai",
+        api: "openai-responses",
+      } as Model,
+      store,
+    });
+    const codexAuth = await getApiKeyForModel({
+      model: {
+        id: "gpt-5.5",
+        provider: "openai",
+        api: "openai-codex-responses",
+      } as Model,
+      store,
+    });
+
+    expect(directAuth).toMatchObject({
+      apiKey: "direct-openai-key",
+      mode: "api-key",
+      profileId: "openai:api-key",
+    });
+    expect(codexAuth).toMatchObject({
+      apiKey: oauthFixture.access,
+      mode: "oauth",
+      profileId: "openai:chatgpt",
+    });
+  });
+
+  it("rejects an explicit OpenAI OAuth profile for direct OpenAI Platform models", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+      },
+    };
+
+    await expect(
+      getApiKeyForModel({
+        model: {
+          id: "chat-latest",
+          provider: "openai",
+          api: "openai-responses",
+        } as Model,
+        profileId: "openai:chatgpt",
+        lockedProfile: true,
+        store,
+      }),
+    ).rejects.toThrow(/requires an OpenAI API key profile/);
   });
 
   it("uses the config default agent dir when resolving provider profiles", async () => {
@@ -578,7 +652,7 @@ describe("getApiKeyForModel", () => {
     );
 
     expect(cliCredentialMocks.readClaudeCliCredentialsCached).not.toHaveBeenCalled();
-    expect(cliCredentialMocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+    expect(cliCredentialMocks.readCodexCliCredentialsCached).toHaveBeenCalled();
     expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
@@ -809,7 +883,7 @@ describe("getApiKeyForModel", () => {
         env: {},
         store,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     await expect(
       hasAuthForModelProvider({
         provider: "vllm",

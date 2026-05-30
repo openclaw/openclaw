@@ -84,6 +84,11 @@ vi.mock("../agents/agent-scope.js", () => ({
     `${process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state"}/agents/${agentId}/agent`,
   resolveAgentWorkspaceDir: (configForTest: unknown, agentId: string) =>
     `/tmp/openclaw-workspaces/${agentId}`,
+  // Required by src/agents/model-runtime-policy.ts, which is transitively
+  // imported through provider-auth-choice -> copilot-runtime-plugin-install ->
+  // copilot-routing -> model-runtime-policy.
+  resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
+  listAgentEntries: () => [],
 }));
 
 vi.mock("../agents/workspace.js", () => ({
@@ -506,6 +511,7 @@ async function createDefaultProviderPlugins(): Promise<ProviderPlugin[]> {
       flagName: "--openai-api-key",
       envVar: "OPENAI_API_KEY",
       promptMessage: "Enter OpenAI API key",
+      profileId: "openai:api-key",
       defaultModel: "openai/gpt-5.5",
     }),
     await createApiKeyProvider({
@@ -568,7 +574,6 @@ describe("applyAuthChoice", () => {
   const lifecycle = createAuthTestLifecycle([
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
     "HF_TOKEN",
@@ -588,7 +593,6 @@ describe("applyAuthChoice", () => {
     const agentDir = path.join(stateDir, "agent");
     process.env.OPENCLAW_STATE_DIR = stateDir;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
   }
   function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
     return createWizardPrompter(overrides, { defaultSelect: "" });
@@ -1178,11 +1182,11 @@ describe("applyAuthChoice", () => {
     expect(providerResolveInput.mode).toBe("setup");
     expectPromptMessageContaining(confirm, "OPENAI_API_KEY");
     expect(text).not.toHaveBeenCalled();
-    expectAuthProfileConfig(result, "openai:default", {
+    expectAuthProfileConfig(result, "openai:api-key", {
       provider: "openai",
       mode: "api_key",
     });
-    expect((await readAuthProfile("openai:default"))?.key).toBe("sk-openai-explicit");
+    expect((await readAuthProfile("openai:api-key"))?.key).toBe("sk-openai-explicit");
   });
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {

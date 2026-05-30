@@ -1,7 +1,10 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../agents/provider-id.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,

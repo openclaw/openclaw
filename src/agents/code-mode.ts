@@ -2,21 +2,25 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "../shared/number-coercion.js";
 import { isRecord } from "../shared/record-coerce.js";
 import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
+import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
   isCodeModeControlTool,
   markCodeModeControlTool,
 } from "./code-mode-control-tools.js";
-import type { HookContext } from "./pi-tools.before-tool-call.js";
+import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { optionalStringEnum } from "./schema/typebox.js";
+import type { ToolDefinition } from "./sessions/index.js";
 import {
   addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
@@ -237,11 +241,15 @@ function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
 
 function removeExpiredRuns(now = Date.now()): void {
   for (const [runId, state] of activeRuns) {
-    if (state.expiresAt <= now) {
+    if (!isFutureDateTimestampMs(state.expiresAt, { nowMs: now })) {
       activeRuns.delete(runId);
       resumingRunIds.delete(runId);
     }
   }
+}
+
+function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): number | undefined {
+  return resolveExpiresAtMsFromDurationSeconds(ttlSeconds, { nowMs: now });
 }
 
 function enforceActiveRunLimit(): void {
@@ -470,7 +478,7 @@ async function runBridgeRequest(params: {
   parentToolCallId: string;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }): Promise<SettledBridgeRequest> {
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
@@ -546,6 +554,16 @@ function failedCodeModeWorkerResult(
   };
 }
 
+function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+  if (result.status === "failed" && result.code === "timeout" && result.error === "interrupted") {
+    return {
+      ...result,
+      error: "code mode timeout exceeded",
+    };
+  }
+  return result;
+}
+
 async function runCodeModeWorker(
   workerData: unknown,
   timeoutMs: number,
@@ -581,16 +599,15 @@ async function runCodeModeWorker(
       }, timeoutMs);
       worker.once("message", (message: unknown) => {
         void worker.terminate();
-        finish(
-          isRecord(message)
-            ? (message as CodeModeWorkerResult)
-            : {
-                status: "failed",
-                error: "invalid code mode worker response",
-                code: "internal_error",
-                output: [],
-              },
-        );
+        const result = isRecord(message)
+          ? (message as CodeModeWorkerResult)
+          : ({
+              status: "failed",
+              error: "invalid code mode worker response",
+              code: "internal_error",
+              output: [],
+            } satisfies CodeModeWorkerResult);
+        finish(normalizeCodeModeWorkerResult(result));
       });
       worker.once("error", (error) => {
         finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
@@ -622,7 +639,7 @@ function snapshotState(params: {
   runtime: ToolSearchRuntime;
   output: unknown[];
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   enforceActiveRunLimit();
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
@@ -645,6 +662,10 @@ function snapshotState(params: {
     return state;
   });
   const now = Date.now();
+  const expiresAt = resolveCodeModeSnapshotExpiresAt(now, params.config.snapshotTtlSeconds);
+  if (expiresAt === undefined) {
+    throw new ToolInputError("code mode run expiry is unavailable.");
+  }
   activeRuns.set(runId, {
     runId,
     parentToolCallId: params.parentToolCallId,
@@ -654,7 +675,7 @@ function snapshotState(params: {
     pending,
     output: params.output,
     createdAt: now,
-    expiresAt: now + params.config.snapshotTtlSeconds * 1000,
+    expiresAt,
     runtime: params.runtime,
   });
   return {
@@ -690,7 +711,7 @@ async function runExec(params: {
   code: string;
   language?: CodeModeLanguage;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   removeExpiredRuns();
   const config = resolveCodeModeConfig(
@@ -781,7 +802,7 @@ async function runWait(params: {
   ctx: CodeModeToolContext;
   runId: string;
   signal?: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 }) {
   removeExpiredRuns();
   const state = activeRuns.get(params.runId);
@@ -897,7 +918,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       toolCallId: string,
       args: unknown,
       signal?: AbortSignal,
-      onUpdate?: AgentToolUpdateCallback<unknown>,
+      onUpdate?: AgentToolUpdateCallback,
     ) => {
       const input = readCode(args);
       return jsonResult(
@@ -923,7 +944,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       toolCallId: string,
       args: unknown,
       signal?: AbortSignal,
-      onUpdate?: AgentToolUpdateCallback<unknown>,
+      onUpdate?: AgentToolUpdateCallback,
     ) =>
       jsonResult(
         await runWait({
@@ -992,6 +1013,7 @@ export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeWorkerUrl,
+  normalizeCodeModeWorkerResult,
   runCodeModeWorker,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,

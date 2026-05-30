@@ -1,3 +1,4 @@
+import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -8,7 +9,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
@@ -52,6 +52,17 @@ type ModelAliasCandidate = {
   keyRaw: string;
   alias: string;
 };
+
+type ExactConfiguredProviderRefParts = {
+  configuredProvider: string;
+  modelRaw: string;
+};
+
+function hasSlashFormModelRef(raw: string): boolean {
+  const trimmed = raw.trim();
+  const slash = trimmed.indexOf("/");
+  return slash > 0 && slash < trimmed.length - 1;
+}
 
 function resolveManifestPluginsForModelIdNormalization(params: {
   cfg: OpenClawConfig;
@@ -106,8 +117,7 @@ function createModelManifestPluginContext(params: {
 
 function listModelAliasCandidates(cfg: OpenClawConfig): ModelAliasCandidate[] {
   return Object.entries(cfg.agents?.defaults?.models ?? {}).flatMap(([keyRaw, entryRaw]) => {
-    const trimmedKey = keyRaw.trim();
-    if (trimmedKey.endsWith("/*") && normalizeProviderId(trimmedKey.slice(0, -2))) {
+    if (parseProviderWildcardModelRef(keyRaw)) {
       return [];
     }
     const alias =
@@ -385,14 +395,10 @@ function parseModelRefWithCompatAlias(
   );
 }
 
-function resolveExactConfiguredProviderRef(
-  params: {
-    cfg?: OpenClawConfig;
-    raw: string;
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
-): ModelRef | null {
+function findExactConfiguredProviderRefParts(params: {
+  cfg?: OpenClawConfig;
+  raw: string;
+}): ExactConfiguredProviderRefParts | null {
   const slash = params.raw.indexOf("/");
   if (slash <= 0 || !params.cfg?.models?.providers) {
     return null;
@@ -416,6 +422,16 @@ function resolveExactConfiguredProviderRef(
   if (!apiOwner || apiOwner === normalizedConfiguredProvider) {
     return null;
   }
+  return { configuredProvider, modelRaw };
+}
+
+function normalizeExactConfiguredProviderRef(
+  parts: ExactConfiguredProviderRefParts,
+  params: {
+    allowManifestNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelRef {
+  const { configuredProvider, modelRaw } = parts;
   const provider = normalizeLowercaseStringOrEmpty(configuredProvider);
   return {
     provider,
@@ -431,6 +447,24 @@ function resolveExactConfiguredProviderRef(
       },
     ),
   };
+}
+
+function resolveExactConfiguredProviderRef(
+  params: {
+    cfg?: OpenClawConfig;
+    raw: string;
+    allowManifestNormalization?: boolean;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelRef | null {
+  const exactConfigured = findExactConfiguredProviderRefParts({
+    cfg: params.cfg,
+    raw: params.raw,
+  });
+  if (!exactConfigured) {
+    return null;
+  }
+  return normalizeExactConfiguredProviderRef(exactConfigured, params);
 }
 
 export function resolveAllowlistModelKey(
@@ -559,11 +593,7 @@ function buildModelCatalogMetadata(
   const aliasByKey = new Map<string, string>();
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [rawKey, entryRaw] of Object.entries(configuredModels)) {
-    if (rawKey.trim().endsWith("/*")) {
-      continue;
-    }
-    const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) {
+    if (parseProviderWildcardModelRef(rawKey)) {
       continue;
     }
     const key = resolveAllowlistModelKey({
@@ -577,7 +607,10 @@ function buildModelCatalogMetadata(
     if (!key) {
       continue;
     }
-    aliasByKey.set(key, alias);
+    const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    if (alias) {
+      aliasByKey.set(key, alias);
+    }
   }
 
   return { configuredByKey, aliasByKey };
@@ -598,7 +631,10 @@ function applyModelCatalogMetadata(params: {
   const nextContextTokens = configuredEntry?.contextTokens ?? params.entry.contextTokens;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
-  const nextCompat = configuredEntry?.compat ?? params.entry.compat;
+  const nextCompat =
+    params.entry.compat || configuredEntry?.compat
+      ? { ...params.entry.compat, ...configuredEntry?.compat }
+      : undefined;
 
   return {
     ...params.entry,
@@ -685,12 +721,57 @@ export function resolveConfiguredModelRef(
     const trimmed = rawModel.trim();
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
     const manifestPluginContext = createModelManifestPluginContext(params);
-    const aliasCandidate =
-      findModelAliasCandidate(params.cfg, trimmed) ??
-      (modelWithoutProfile && modelWithoutProfile !== trimmed
-        ? findModelAliasCandidate(params.cfg, modelWithoutProfile)
-        : undefined);
+    const profileStripped = Boolean(modelWithoutProfile && modelWithoutProfile !== trimmed);
+    const exactAliasCandidate = findModelAliasCandidate(params.cfg, trimmed);
+    const strippedAliasCandidate = profileStripped
+      ? findModelAliasCandidate(params.cfg, modelWithoutProfile)
+      : undefined;
+    const profileAliasCandidate = profileStripped
+      ? (exactAliasCandidate ?? strippedAliasCandidate)
+      : undefined;
+    if (profileAliasCandidate) {
+      const aliasRef = parseModelRefWithCompatAlias({
+        cfg: params.cfg,
+        raw: profileAliasCandidate.keyRaw,
+        defaultProvider: params.defaultProvider,
+        allowManifestNormalization: params.allowManifestNormalization,
+        allowPluginNormalization: params.allowPluginNormalization,
+        manifestPlugins: manifestPluginContext.get(),
+      });
+      if (aliasRef) {
+        return aliasRef;
+      }
+    }
+    const primaryWithoutProfile = modelWithoutProfile || trimmed;
+    const exactConfiguredPrimary = findExactConfiguredProviderRefParts({
+      cfg: params.cfg,
+      raw: primaryWithoutProfile,
+    });
+    if (exactConfiguredPrimary) {
+      return normalizeExactConfiguredProviderRef(exactConfiguredPrimary, {
+        allowManifestNormalization: params.allowManifestNormalization,
+        manifestPlugins: manifestPluginContext.get(),
+      });
+    }
+    const aliasCandidate = profileStripped ? undefined : exactAliasCandidate;
     const manifestPlugins = manifestPluginContext.peek();
+    if (
+      aliasCandidate &&
+      hasSlashFormModelRef(primaryWithoutProfile) &&
+      !hasSlashFormModelRef(aliasCandidate.keyRaw)
+    ) {
+      const primaryRef = parseModelRefWithCompatAlias({
+        cfg: params.cfg,
+        raw: primaryWithoutProfile,
+        defaultProvider: params.defaultProvider,
+        allowManifestNormalization: params.allowManifestNormalization,
+        allowPluginNormalization: params.allowPluginNormalization,
+        manifestPlugins: manifestPluginContext.get(),
+      });
+      if (primaryRef) {
+        return primaryRef;
+      }
+    }
     if (aliasCandidate) {
       const aliasRef = parseModelRefWithCompatAlias({
         cfg: params.cfg,
@@ -1180,13 +1261,19 @@ export function buildConfiguredModelCatalog(params: {
         typeof model?.contextTokens === "number" && model.contextTokens > 0
           ? model.contextTokens
           : undefined;
-      const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
       const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
+      const reasoning =
+        typeof model?.reasoning === "boolean"
+          ? model.reasoning
+          : isVllmQwenThinkingCompat(providerId, compat)
+            ? true
+            : undefined;
       catalog.push({
         provider: providerId,
         id,
         name,
+        api: model.api ?? provider.api,
         contextWindow,
         contextTokens,
         reasoning,
@@ -1197,6 +1284,16 @@ export function buildConfiguredModelCatalog(params: {
   }
 
   return catalog;
+}
+
+function isVllmQwenThinkingCompat(
+  providerId: string,
+  compat?: { thinkingFormat?: unknown } | null,
+): boolean {
+  return (
+    providerId === "vllm" &&
+    (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
+  );
 }
 
 export function resolveHooksGmailModel(
@@ -1242,6 +1339,14 @@ export function normalizeModelSelection(value: unknown): string | undefined {
   return undefined;
 }
 
+function parseProviderWildcardModelRef(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed.endsWith("/*")) {
+    return null;
+  }
+  return normalizeProviderId(trimmed.slice(0, -2)) || null;
+}
+
 export function parseConfiguredModelVisibilityEntries(params: { cfg?: OpenClawConfig }): {
   exactModelRefs: string[];
   providerWildcards: Set<string>;
@@ -1256,12 +1361,10 @@ export function parseConfiguredModelVisibilityEntries(params: { cfg?: OpenClawCo
     if (!trimmed) {
       continue;
     }
-    if (trimmed.endsWith("/*")) {
-      const provider = normalizeProviderId(trimmed.slice(0, -2));
-      if (provider) {
-        providerWildcards.add(provider);
-        continue;
-      }
+    const wildcardProvider = parseProviderWildcardModelRef(trimmed);
+    if (wildcardProvider) {
+      providerWildcards.add(wildcardProvider);
+      continue;
     }
     exactModelRefs.push(raw);
   }

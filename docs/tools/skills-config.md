@@ -25,6 +25,14 @@ Most skills loader/install configuration lives under `skills` in
       nodeManager: "npm", // npm | pnpm | yarn | bun (Gateway runtime still Node; bun not recommended)
       allowUploadedArchives: false,
     },
+    workshop: {
+      autonomous: {
+        enabled: false,
+      },
+      approvalPolicy: "pending", // pending | auto
+      maxPending: 50,
+      maxSkillBytes: 40000,
+    },
     entries: {
       "image-lab": {
         enabled: true,
@@ -110,6 +118,18 @@ Rules:
   clients to install private zip archives staged through `skills.upload.*`
   (default: false). This only enables the uploaded-archive path; normal ClawHub
   installs do not require it.
+- `workshop.autonomous.enabled`: allow agents to create pending Skill Workshop
+  proposals from durable conversation signals after successful turns (default:
+  false). User-prompted skill creation still goes through Skill Workshop.
+- `workshop.approvalPolicy`: proposal lifecycle policy. `pending` requires
+  approval before agent-initiated apply/reject/quarantine actions; `auto`
+  allows those actions without approval.
+- `workshop.maxPending`: maximum pending/quarantined proposals retained per
+  workspace (default: 50).
+- `workshop.maxSkillBytes`: maximum generated proposal body size in bytes
+  (default: 40000).
+  Proposal descriptions are also hard-capped at 160 bytes because they can be
+  shown in skill discovery and proposal listings.
 - `entries.<skillKey>`: per-skill overrides.
 - `agents.defaults.skills`: optional default skill allowlist inherited by agents
   that omit `agents.list[].skills`.

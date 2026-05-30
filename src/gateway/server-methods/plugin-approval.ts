@@ -1,49 +1,31 @@
 import { randomUUID } from "node:crypto";
-import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
-import type {
-  PluginApprovalActionTemplate,
-  PluginApprovalRequestPayload,
-} from "../../infra/plugin-approvals.js";
-import {
-  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
-  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
-  expandPluginApprovalActionTemplates,
-  resolvePluginApprovalRequestAllowedDecisions,
-  validatePluginApprovalActionTemplates,
-} from "../../infra/plugin-approvals.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import {
+  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
+  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+  resolvePluginApprovalRequestAllowedDecisions,
+} from "../../infra/plugin-approvals.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import {
+  bindApprovalRequesterMetadata,
+  buildRequestedApprovalEvent,
   handleApprovalResolve,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
-  isApprovalDecision,
-  isApprovalRecordVisibleToClient,
+  listVisiblePendingApprovalRequests,
+  registerPendingApprovalRecord,
+  resolveApprovalDecisionParams,
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-function validateDecisionActionAvailability(params: {
-  actions?: readonly PluginApprovalActionTemplate[] | null;
-  allowedDecisions: readonly ExecApprovalDecision[];
-}): string | null {
-  if (!Array.isArray(params.actions)) {
-    return null;
-  }
-  for (const [index, action] of params.actions.entries()) {
-    if (action.kind === "decision" && !params.allowedDecisions.includes(action.decision)) {
-      return `actions[${index}] decision ${action.decision} is not in allowedDecisions`;
-    }
-  }
-  return null;
-}
 
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
@@ -51,19 +33,7 @@ export function createPluginApprovalHandlers(
 ): GatewayRequestHandlers {
   return {
     "plugin.approval.list": async ({ respond, client }) => {
-      respond(
-        true,
-        manager
-          .listPendingRecords()
-          .filter((record) => isApprovalRecordVisibleToClient({ record, client }))
-          .map((record) => ({
-            id: record.id,
-            request: record.request,
-            createdAtMs: record.createdAtMs,
-            expiresAtMs: record.expiresAtMs,
-          })),
-        undefined,
-      );
+      respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (!validatePluginApprovalRequestParams(params)) {
@@ -87,7 +57,6 @@ export function createPluginApprovalHandlers(
         toolName?: string | null;
         toolCallId?: string | null;
         allowedDecisions?: string[] | null;
-        actions?: PluginApprovalActionTemplate[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
         turnSourceChannel?: string | null;
@@ -96,26 +65,7 @@ export function createPluginApprovalHandlers(
         turnSourceThreadId?: string | number | null;
         timeoutMs?: number;
         twoPhase?: boolean;
-        keepPendingWithoutRoute?: boolean;
       };
-      const actionTemplateError = Array.isArray(p.actions)
-        ? validatePluginApprovalActionTemplates(p.actions)
-        : null;
-      if (actionTemplateError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, actionTemplateError));
-        return;
-      }
-      const allowedDecisions = resolvePluginApprovalRequestAllowedDecisions({
-        allowedDecisions: Array.isArray(p.allowedDecisions) ? p.allowedDecisions : null,
-      });
-      const decisionActionError = validateDecisionActionAvailability({
-        actions: p.actions,
-        allowedDecisions,
-      });
-      if (decisionActionError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, decisionActionError));
-        return;
-      }
       const twoPhase = p.twoPhase === true;
       const timeoutMs = Math.min(
         typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
@@ -125,9 +75,6 @@ export function createPluginApprovalHandlers(
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;
 
-      // Always server-generate the ID — never accept plugin-provided IDs.
-      // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
-      const approvalId = `plugin:${randomUUID()}`;
       const request: PluginApprovalRequestPayload = {
         pluginId: p.pluginId ?? null,
         title: p.title,
@@ -135,9 +82,12 @@ export function createPluginApprovalHandlers(
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: p.toolName ?? null,
         toolCallId: p.toolCallId ?? null,
-        ...(Array.isArray(p.allowedDecisions) ? { allowedDecisions } : {}),
-        ...(Array.isArray(p.actions)
-          ? { actions: expandPluginApprovalActionTemplates({ approvalId, actions: p.actions }) }
+        ...(Array.isArray(p.allowedDecisions)
+          ? {
+              allowedDecisions: resolvePluginApprovalRequestAllowedDecisions({
+                allowedDecisions: p.allowedDecisions,
+              }),
+            }
           : {}),
         agentId: p.agentId ?? null,
         sessionKey: p.sessionKey ?? null,
@@ -147,30 +97,22 @@ export function createPluginApprovalHandlers(
         turnSourceThreadId: p.turnSourceThreadId ?? null,
       };
 
-      const record = manager.create(request, timeoutMs, approvalId);
-      record.requestedByConnId = client?.connId ?? null;
-      record.requestedByDeviceId = client?.connect?.device?.id ?? null;
-      record.requestedByClientId = client?.connect?.client?.id ?? null;
-      record.requestedByDeviceTokenAuth = client?.isDeviceTokenAuth === true;
+      // Always server-generate the ID — never accept plugin-provided IDs.
+      // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
+      const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+      bindApprovalRequesterMetadata({ record, client });
 
-      let decisionPromise: Promise<ExecApprovalDecision | null>;
-      try {
-        decisionPromise = manager.register(record, timeoutMs);
-      } catch (err) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `registration failed: ${String(err)}`),
-        );
+      const decisionPromise = registerPendingApprovalRecord({
+        manager,
+        record,
+        timeoutMs,
+        respond,
+      });
+      if (!decisionPromise) {
         return;
       }
 
-      const requestEvent = {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      };
+      const requestEvent = buildRequestedApprovalEvent(record);
 
       await handlePendingApprovalRequest({
         manager,
@@ -183,7 +125,6 @@ export function createPluginApprovalHandlers(
         requestEvent,
         twoPhase,
         approvalKind: "plugin",
-        keepPendingWithoutRoute: p.keepPendingWithoutRoute === true,
         deliverRequest: () => {
           if (!opts?.forwarder?.handlePluginApprovalRequested) {
             return false;
@@ -206,28 +147,19 @@ export function createPluginApprovalHandlers(
     },
 
     "plugin.approval.resolve": async ({ params, respond, client, context }) => {
-      if (!validatePluginApprovalResolveParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid plugin.approval.resolve params: ${formatValidationErrors(
-              validatePluginApprovalResolveParams.errors,
-            )}`,
-          ),
-        );
+      const resolveParams = resolveApprovalDecisionParams({
+        rawParams: params,
+        validate: validatePluginApprovalResolveParams,
+        methodName: "plugin.approval.resolve",
+        respond,
+      });
+      if (!resolveParams) {
         return;
       }
-      const p = params as { id: string; decision: string };
-      if (!isApprovalDecision(p.decision)) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
-        return;
-      }
-      const decision = p.decision;
+      const { inputId, decision } = resolveParams;
       await handleApprovalResolve({
         manager,
-        inputId: p.id,
+        inputId,
         decision,
         respond,
         context,

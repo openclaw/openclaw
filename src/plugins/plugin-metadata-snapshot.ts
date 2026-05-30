@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -10,7 +11,7 @@ import { isRecord } from "../shared/record-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { resolveDefaultPluginNpmDir } from "./install-paths.js";
+import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
@@ -36,6 +37,7 @@ import {
 
 type PluginMetadataSnapshotMemo = {
   key: string;
+  lookupContextHash: string;
   registryState?: PersistedRegistryMemoState;
   snapshot: PluginMetadataSnapshot;
 };
@@ -90,6 +92,22 @@ function fileFingerprint(filePath: string): unknown {
   } catch {
     return [filePath, "missing"];
   }
+}
+
+function directoryChildPackageJsonFingerprint(directoryPath: string): unknown {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directoryPath, { withFileTypes: true });
+  } catch {
+    return [directoryPath, "missing"];
+  }
+  return [
+    directoryPath,
+    ...entries
+      .filter((entry) => entry.isDirectory())
+      .toSorted((a, b) => a.name.localeCompare(b.name))
+      .map((entry) => fileFingerprint(path.join(directoryPath, entry.name, "package.json"))),
+  ];
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | undefined {
@@ -194,6 +212,9 @@ function resolvePersistedRegistryFastMemoFingerprint(params: {
   return {
     index: fileFingerprint(indexPath),
     npmPackageJson: fileFingerprint(path.join(npmRoot, "package.json")),
+    npmProjectPackageJsons: directoryChildPackageJsonFingerprint(
+      resolvePluginNpmProjectsDir(npmRoot),
+    ),
   };
 }
 
@@ -206,6 +227,18 @@ function resolvePersistedRegistryMemoContextHash(params: {
   return hashJson({
     env: pickMemoRelevantEnv(params.env),
     fastFingerprint: params.fastFingerprint,
+    preferPersisted: params.preferPersisted ?? null,
+    stateDir: params.stateDir ?? null,
+  });
+}
+
+function resolvePersistedRegistryMemoLookupContextHash(params: {
+  env: NodeJS.ProcessEnv;
+  preferPersisted?: boolean;
+  stateDir?: string;
+}): string {
+  return hashJson({
+    env: pickMemoRelevantEnv(params.env),
     preferPersisted: params.preferPersisted ?? null,
     stateDir: params.stateDir ?? null,
   });
@@ -253,6 +286,15 @@ function resolvePersistedRegistryMemoStateForLookup(
   },
   memos: readonly PluginMetadataSnapshotMemo[],
 ): PersistedRegistryMemoState {
+  const lookupContextHash = resolvePersistedRegistryMemoLookupContextHash(params);
+  for (const memo of memos) {
+    if (memo.lookupContextHash === lookupContextHash && memo.registryState) {
+      // Gateway runtime metadata is process-stable. Installs/reloads clear the
+      // memo lifecycle explicitly, so hot lookups can reuse the prepared
+      // registry stamp instead of re-statting plugin roots on every turn.
+      return memo.registryState;
+    }
+  }
   const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
   const fastHash = hashJson(fastFingerprint);
   const contextHash = resolvePersistedRegistryMemoContextHash({
@@ -443,6 +485,19 @@ function buildPluginMetadataOwnerMaps(
     for (const providerId of plugin.providers ?? []) {
       appendOwner(providers, providerId, plugin.id);
     }
+    for (const [rawAlias, target] of Object.entries(plugin.providerAuthAliases ?? {})) {
+      const alias = normalizeProviderId(rawAlias);
+      const targetProvider = normalizeProviderId(target);
+      if (
+        alias &&
+        targetProvider &&
+        (plugin.providers ?? []).some(
+          (providerId) => normalizeProviderId(providerId) === targetProvider,
+        )
+      ) {
+        appendOwner(providers, alias, plugin.id);
+      }
+    }
     for (const providerId of Object.keys(plugin.modelCatalog?.providers ?? {})) {
       appendOwner(modelCatalogProviders, providerId, plugin.id);
     }
@@ -548,6 +603,13 @@ export function loadPluginMetadataSnapshot(
         : registryState;
     rememberPluginMetadataSnapshotMemo({
       key: computePluginMetadataSnapshotMemoKey({ params, registryState: cachedRegistryState }),
+      lookupContextHash: resolvePersistedRegistryMemoLookupContextHash({
+        env,
+        ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
+        ...(params.preferPersisted !== undefined
+          ? { preferPersisted: params.preferPersisted }
+          : {}),
+      }),
       registryState: cachedRegistryState,
       snapshot,
     });

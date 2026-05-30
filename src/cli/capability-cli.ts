@@ -5,6 +5,12 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Command } from "commander";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listProfilesForProvider,
@@ -32,7 +38,6 @@ import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
   ImageGenerationBackground,
@@ -57,6 +62,7 @@ import {
   createEmbeddingProvider,
   registerBuiltInMemoryEmbeddingProviders,
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
+import { listEmbeddingProviders } from "../plugins/embedding-provider-runtime.js";
 import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
@@ -68,8 +74,6 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
 import {
   getTtsProvider,
@@ -105,6 +109,7 @@ import {
   getModelsCommandSecretTargetIds,
   getTtsCommandSecretTargetIds,
 } from "./command-secret-targets.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -728,14 +733,14 @@ async function runModelRun(params: {
       modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
       ...(hasExplicitProviderModelOverride ? { allowBundledStaticCatalogFallback: true } : {}),
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
     });
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
     if (prepared.selection.provider === "codex") {
       throw new Error(
-        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with provider/model agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
       );
     }
     const localModelRunSystemPrompt =
@@ -1178,6 +1183,13 @@ function parseOptionalPositiveInteger(raw: unknown, label: string): number | und
   return value;
 }
 
+function parseOptionalTimeoutMs(raw: string | number | undefined): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  return parseTimeoutMsWithFallback(raw, 0, { invalidType: "error" });
+}
+
 function normalizeImageOutputFormat(
   raw: string | undefined,
 ): ImageGenerationOutputFormat | undefined {
@@ -1211,14 +1223,16 @@ function normalizeVideoResolution(raw: string | undefined): VideoGenerationResol
     return undefined;
   }
   if (
+    normalized === "360P" ||
     normalized === "480P" ||
+    normalized === "540P" ||
     normalized === "720P" ||
     normalized === "768P" ||
     normalized === "1080P"
   ) {
     return normalized;
   }
-  throw new Error("video resolution must be one of 480P, 720P, 768P, or 1080P");
+  throw new Error("video resolution must be one of 360P, 480P, 540P, 720P, 768P, or 1080P");
 }
 
 async function runVideoGenerate(params: {
@@ -1958,7 +1972,7 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -1997,7 +2011,7 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
@@ -2019,7 +2033,7 @@ export function registerCapabilityCli(program: Command) {
           files: [String(opts.file)],
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2040,7 +2054,7 @@ export function registerCapabilityCli(program: Command) {
           files: opts.file as string[],
           model: opts.model as string | undefined,
           prompt: opts.prompt as string | undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2330,7 +2344,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--model <provider/model>", "Model override")
     .option("--size <size>", "Size hint like 1280x720")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
-    .option("--resolution <value>", "Resolution hint: 480P, 720P, 768P, or 1080P")
+    .option("--resolution <value>", "Resolution hint: 360P, 480P, 540P, 720P, 768P, or 1080P")
     .option("--duration <seconds>", "Target duration in seconds")
     .option("--audio", "Enable generated audio when supported")
     .option("--watermark", "Request provider watermark when supported")
@@ -2349,7 +2363,7 @@ export function registerCapabilityCli(program: Command) {
           durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,
-          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
+          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -2516,35 +2530,48 @@ export function registerCapabilityCli(program: Command) {
         const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
-        const selectedProvider =
-          resolvedMemory?.provider && resolvedMemory.provider !== "auto"
-            ? resolvedMemory.provider
-            : undefined;
-        const autoSelectedProvider =
-          resolvedMemory?.provider === "auto"
-            ? (
-                await createEmbeddingProvider({
-                  config: cfg,
-                  agentDir: resolveAgentDir(cfg, agentId),
-                  provider: "auto",
-                  fallback: "none",
-                  model: resolvedMemory.model,
-                  local: resolvedMemory.local,
-                  remote: resolvedMemory.remote,
-                  outputDimensionality: resolvedMemory.outputDimensionality,
-                }).catch(() => ({ provider: null }))
-              )?.provider?.id
-            : undefined;
-        const result = listMemoryEmbeddingProviders().map((provider) => ({
+        const selectedProvider = resolvedMemory?.provider;
+        const providers = new Map(
+          listMemoryEmbeddingProviders().map((provider) => [
+            provider.id,
+            {
+              id: provider.id,
+              defaultModel: provider.defaultModel,
+              transport: provider.transport,
+              autoSelectPriority: provider.autoSelectPriority,
+            },
+          ]),
+        );
+        for (const provider of listEmbeddingProviders(cfg)) {
+          if (providers.has(provider.id)) {
+            continue;
+          }
+          providers.set(provider.id, {
+            id: provider.id,
+            defaultModel: provider.defaultModel,
+            transport: provider.transport,
+            autoSelectPriority: undefined,
+          });
+        }
+        if (selectedProvider && !providers.has(selectedProvider)) {
+          providers.set(selectedProvider, {
+            id: selectedProvider,
+            defaultModel: resolvedMemory?.model || undefined,
+            transport: providerHasGenericConfig({ cfg, providerId: selectedProvider })
+              ? "remote"
+              : undefined,
+            autoSelectPriority: undefined,
+          });
+        }
+        const result = Array.from(providers.values()).map((provider) => ({
           available: true,
           configured:
             provider.id === selectedProvider ||
-            provider.id === autoSelectedProvider ||
             providerHasGenericConfig({
               cfg,
               providerId: provider.id,
             }),
-          selected: provider.id === selectedProvider || provider.id === autoSelectedProvider,
+          selected: provider.id === selectedProvider,
           id: provider.id,
           defaultModel: provider.defaultModel,
           transport: provider.transport,

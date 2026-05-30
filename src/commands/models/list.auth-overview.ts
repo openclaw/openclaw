@@ -1,3 +1,4 @@
+import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import { resolveAuthProfileDisplayLabel } from "../../agents/auth-profiles/display.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
@@ -11,7 +12,6 @@ import {
   resolveEnvApiKey,
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
-import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
 import {

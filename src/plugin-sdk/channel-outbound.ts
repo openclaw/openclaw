@@ -1,16 +1,18 @@
 // Shared outbound/message lifecycle helpers for channel plugins.
 import type {
-  ChannelMessageAdapter,
-  ChannelMessageAdapterShape,
-} from "../channels/message/index.js";
-import type { ChannelMessageReceiveAdapterShape } from "../channels/message/index.js";
-import type {
-  DurableMessageBatchSendParams,
   DurableMessageBatchSendResult,
   DurableMessageSendContext,
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
 type ChannelInboundKernelModule = typeof import("../channels/turn/kernel.js");
+type ChannelMessageRuntimeModule = typeof import("../channels/message/runtime.js");
+
+let channelMessageRuntimeModulePromise: Promise<ChannelMessageRuntimeModule> | null = null;
+
+const loadChannelMessageRuntimeModule = async () => {
+  channelMessageRuntimeModulePromise ??= import("../channels/message/runtime.js");
+  return await channelMessageRuntimeModulePromise;
+};
 
 export type {
   DurableInboundReplyDeliveryOptions,
@@ -24,12 +26,12 @@ export type {
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
 export {
-  createChannelReplyPipeline as createChannelMessageReplyPipeline,
   createReplyPrefixContext,
   createReplyPrefixOptions,
   createTypingCallbacks,
+  createChannelReplyPipeline as createChannelMessageReplyPipeline,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
-} from "./channel-reply-core.js";
+} from "../channels/message/index.js";
 
 export {
   createFinalizableDraftLifecycle,
@@ -90,6 +92,7 @@ export {
   listDeclaredReceiveAckPolicies,
   createLiveMessageState,
   createDurableMessageStateRecord,
+  defineChannelMessageAdapter,
   markLiveMessageCancelled,
   markLiveMessageFinalized,
   markLiveMessagePreviewUpdated,
@@ -190,9 +193,9 @@ export const deliverInboundReplyWithMessageSendContext: ChannelInboundKernelModu
   };
 
 export async function sendDurableMessageBatch(
-  params: DurableMessageBatchSendParams,
+  params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
-  const mod = await import("../channels/message/runtime.js");
+  const mod = await loadChannelMessageRuntimeModule();
   return await mod.sendDurableMessageBatch(params);
 }
 
@@ -200,27 +203,6 @@ export async function withDurableMessageSendContext<T>(
   params: DurableMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
-  const mod = await import("../channels/message/runtime.js");
+  const mod = await loadChannelMessageRuntimeModule();
   return await mod.withDurableMessageSendContext(params, run);
-}
-
-const defaultManualReceiveAdapter = {
-  defaultAckPolicy: "manual",
-  supportedAckPolicies: ["manual"],
-} as const satisfies ChannelMessageReceiveAdapterShape;
-
-type ChannelMessageAdapterWithDefaultReceive<TAdapter extends ChannelMessageAdapterShape> =
-  TAdapter & {
-    receive: TAdapter["receive"] extends undefined
-      ? typeof defaultManualReceiveAdapter
-      : NonNullable<TAdapter["receive"]>;
-  };
-
-export function defineChannelMessageAdapter<const TAdapter extends ChannelMessageAdapterShape>(
-  adapter: TAdapter,
-): ChannelMessageAdapter<ChannelMessageAdapterWithDefaultReceive<TAdapter>> {
-  return {
-    ...adapter,
-    receive: adapter.receive ?? defaultManualReceiveAdapter,
-  } as ChannelMessageAdapter<ChannelMessageAdapterWithDefaultReceive<TAdapter>>;
 }

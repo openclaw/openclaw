@@ -10,6 +10,11 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+"plugin: pixverse":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/pixverse/**"
+          - "docs/providers/pixverse.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -42,6 +47,12 @@
           - "extensions/meeting-notes/**"
           - "docs/plugins/meeting-notes.md"
           - "src/meeting-notes/**"
+"plugin: workboard":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/workboard/**"
+          - "docs/plugins/workboard.md"
+          - "docs/plugins/reference/workboard.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -183,7 +194,7 @@
           - "ui/**"
           - "src/gateway/control-ui.ts"
           - "src/gateway/control-ui-shared.ts"
-          - "src/gateway/protocol/**"
+          - "packages/gateway-protocol/src/**"
           - "src/gateway/server-methods/chat.ts"
           - "src/infra/control-ui-assets.ts"
 
@@ -191,6 +202,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "src/gateway/**"
+          - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
 
@@ -343,6 +355,11 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: gmi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gmi/**"
+          - "docs/providers/gmi.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:
@@ -393,6 +410,17 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
+"extensions: codex-supervisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/codex-supervisor/**"
+          - "docs/plugins/reference/codex-supervisor.md"
+          - "docs/specs/claw-supervisor.md"
+"extensions: copilot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/copilot/**"
+          - "docs/plugins/copilot.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
@@ -413,6 +441,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/nvidia/**"
+"extensions: novita":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/novita/**"
+          - "docs/providers/novita.md"
 "extensions: phone-control":
   - changed-files:
       - any-glob-to-any-file:
@@ -491,6 +524,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diffs/**"
+          - "extensions/diffs-language-pack/**"
 "extensions: elevenlabs":
   - changed-files:
       - any-glob-to-any-file:

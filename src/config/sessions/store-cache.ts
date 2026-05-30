@@ -1,4 +1,6 @@
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
+import { clearSessionSkillPromptRefCache } from "./skill-prompt-blobs.js";
 import type { SessionEntry } from "./types.js";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
@@ -49,6 +51,7 @@ const SESSION_STORE_SNAPSHOT_CACHE = createExpiringMapCache<string, SessionStore
     ttlMs: getSessionStoreTtl,
   },
 );
+const SESSION_STORE_CACHE_VERSION = new Map<string, number>();
 const SESSION_STORE_SERIALIZED_CACHE = new Map<string, SerializedSessionStoreCacheEntry>();
 const SESSION_STORE_STRING_INTERN_POOL = new Map<string, string>();
 const SESSION_STORE_STRING_INTERN_STATS = {
@@ -64,8 +67,7 @@ function parseNonNegativeInteger(value: string | undefined): number | null {
   if (!trimmed) {
     return null;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  return parseStrictNonNegativeInteger(trimmed) ?? null;
 }
 
 function getSerializedSessionStoreCacheMaxBytes(): number {
@@ -196,10 +198,22 @@ function cloneJsonLikeValue<T>(value: T): T {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((item) => cloneJsonLikeValue(item)) as T;
+    const cloned: unknown[] = [];
+    cloned.length = value.length;
+    for (let index = 0; index < value.length; index += 1) {
+      if (!(index in value)) {
+        continue;
+      }
+      cloned[index] = cloneJsonLikeValue(value[index]);
+    }
+    return cloned as T;
   }
   const cloned: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+  for (const key in value as Record<string, unknown>) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    const child = (value as Record<string, unknown>)[key];
     if (child === undefined) {
       continue;
     }
@@ -230,6 +244,10 @@ export function cloneSessionStoreSnapshot(
   return deepFreeze(cloned);
 }
 
+export function cloneSessionStoreSnapshotEntry(entry: SessionEntry): SessionStoreSnapshotEntry {
+  return deepFreeze(cloneSessionStoreRecord({ entry }).entry);
+}
+
 export function getSessionStoreTtl(): number {
   return resolveCacheTtlMs({
     envValue: process.env.OPENCLAW_SESSION_CACHE_TTL_MS,
@@ -241,16 +259,27 @@ export function isSessionStoreCacheEnabled(): boolean {
   return isCacheEnabled(getSessionStoreTtl());
 }
 
+function bumpSessionStoreCacheVersion(storePath: string): void {
+  SESSION_STORE_CACHE_VERSION.set(storePath, (SESSION_STORE_CACHE_VERSION.get(storePath) ?? 0) + 1);
+}
+
+export function getSessionStoreCacheVersion(storePath: string): number {
+  return SESSION_STORE_CACHE_VERSION.get(storePath) ?? 0;
+}
+
 export function clearSessionStoreCaches(): void {
   SESSION_STORE_CACHE.clear();
   SESSION_STORE_SNAPSHOT_CACHE.clear();
+  SESSION_STORE_CACHE_VERSION.clear();
   SESSION_STORE_SERIALIZED_CACHE.clear();
   sessionStoreSerializedCacheBytes = 0;
   SESSION_STORE_STRING_INTERN_POOL.clear();
+  clearSessionSkillPromptRefCache();
   resetSessionStoreStringInternStats();
 }
 
 export function invalidateSessionStoreCache(storePath: string): void {
+  bumpSessionStoreCacheVersion(storePath);
   SESSION_STORE_CACHE.delete(storePath);
   SESSION_STORE_SNAPSHOT_CACHE.delete(storePath);
   deleteSerializedSessionStore(storePath);
@@ -310,6 +339,7 @@ export function setSerializedSessionStore(
 }
 
 export function dropSessionStoreObjectCache(storePath: string): void {
+  bumpSessionStoreCacheVersion(storePath);
   SESSION_STORE_CACHE.delete(storePath);
 }
 
@@ -392,8 +422,10 @@ export function writeSessionStoreCache(params: {
   mtimeMs?: number;
   sizeBytes?: number;
   serialized?: string;
+  cloneSerialized?: string;
   takeOwnership?: boolean;
 }): void {
+  bumpSessionStoreCacheVersion(params.storePath);
   const store =
     params.takeOwnership === true ? params.store : cloneSessionStoreRecord(params.store);
   if (params.takeOwnership === true) {
@@ -403,7 +435,7 @@ export function writeSessionStoreCache(params: {
     store,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
-    serialized: params.serialized,
+    serialized: params.cloneSerialized,
   });
   setSerializedSessionStore(params.storePath, params.serialized, params.sizeBytes);
 }

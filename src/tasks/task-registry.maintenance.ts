@@ -18,6 +18,7 @@ import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
 import type { CronJob, CronStoreFile } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isPluginStateDatabaseOpen,
@@ -337,8 +338,8 @@ function parseCronExecutionId(task: TaskRecord): CronExecutionId | undefined {
   if (separator <= "cron:".length) {
     return undefined;
   }
-  const startedAt = Number(runId.slice(separator + 1));
-  if (!Number.isFinite(startedAt)) {
+  const startedAt = parseStrictNonNegativeInteger(runId.slice(separator + 1));
+  if (startedAt === undefined) {
     return undefined;
   }
   const jobId = runId.slice("cron:".length, separator).trim();
@@ -502,6 +503,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
   if (task.runtime === "acp") {
     const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
       sessionKey: childSessionKey,
+      clone: false,
     });
     if (!acpEntry || acpEntry.storeReadFailed) {
       return true;
@@ -647,7 +649,10 @@ function shouldCloseTerminalAcpSession(task: TaskRecord): boolean {
   ) {
     return false;
   }
-  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
+    sessionKey,
+    clone: false,
+  });
   if (!acpEntry || acpEntry.storeReadFailed || !acpEntry.acp) {
     return false;
   }
@@ -685,7 +690,10 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
   if (!sessionKey) {
     return;
   }
-  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
+    sessionKey,
+    clone: false,
+  });
   const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
   if (!acpEntry || !closeAcpSession) {
     return;
@@ -721,7 +729,7 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
 async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
   let acpSessions: AcpSessionStoreEntry[];
   try {
-    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({});
+    acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({ clone: false });
   } catch (error) {
     log.warn("Failed to list ACP sessions during task maintenance", { error });
     return;

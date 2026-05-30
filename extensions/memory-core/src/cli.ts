@@ -4,6 +4,10 @@ import {
   formatHelpExamples,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   MemoryCommandOptions,
   MemoryPromoteCommandOptions,
@@ -26,6 +30,8 @@ async function loadMemoryCliRuntime(): Promise<MemoryCliRuntime> {
   memoryCliRuntimePromise ??= import("./cli.runtime.js");
   return await memoryCliRuntimePromise;
 }
+
+const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const runtime = await loadMemoryCliRuntime();
@@ -75,9 +81,26 @@ function invalidCliArgument(message: string): Error & { code: string; exitCode: 
 }
 
 function parseMemoryCliNumberOption(value: string, flag: string): number {
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw invalidCliArgument(`${flag} must be a finite number.`);
+  }
+  return parsed;
+}
+
+function parseMemoryCliPositiveIntegerOption(value: string, flag: string): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw invalidCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseMemoryCliNonNegativeIntegerOption(value: string, flag: string): number {
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined) {
+    throw invalidCliArgument(`${flag} must be a non-negative integer.`);
   }
   return parsed;
 }
@@ -160,7 +183,7 @@ export function registerMemoryCli(program: Command) {
     .option("--query <text>", "Search query (alternative to positional argument)")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--max-results <n>", "Max results", (value: string) =>
-      parseMemoryCliNumberOption(value, "--max-results"),
+      parseMemoryCliPositiveIntegerOption(value, "--max-results"),
     )
     .option("--min-score <n>", "Minimum score", (value: string) =>
       parseMemoryCliNumberOption(value, "--min-score"),
@@ -175,7 +198,7 @@ export function registerMemoryCli(program: Command) {
     .description("Rank short-term recalls and optionally append top entries to MEMORY.md")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--limit <n>", "Max candidates", (value: string) =>
-      parseMemoryCliNumberOption(value, "--limit"),
+      parseMemoryCliPositiveIntegerOption(value, "--limit"),
     )
     .option(
       "--min-score <n>",
@@ -185,12 +208,12 @@ export function registerMemoryCli(program: Command) {
     .option(
       "--min-recall-count <n>",
       `Minimum recall count (default: ${DEFAULT_PROMOTION_MIN_RECALL_COUNT})`,
-      (value: string) => parseMemoryCliNumberOption(value, "--min-recall-count"),
+      (value: string) => parseMemoryCliNonNegativeIntegerOption(value, "--min-recall-count"),
     )
     .option(
       "--min-unique-queries <n>",
       `Minimum distinct query count (default: ${DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES})`,
-      (value: string) => parseMemoryCliNumberOption(value, "--min-unique-queries"),
+      (value: string) => parseMemoryCliNonNegativeIntegerOption(value, "--min-unique-queries"),
     )
     .option("--apply", "Append selected candidates to MEMORY.md", false)
     .option("--include-promoted", "Include already promoted candidates", false)
