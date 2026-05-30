@@ -2380,7 +2380,20 @@ export class QmdMemoryManager implements MemorySearchManager {
         [this.qmd.mcporter.serverName]: server,
       },
     };
-    await fs.writeFile(this.mcporterConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    await this.writeMcporterConfigIfChanged(`${JSON.stringify(config, null, 2)}\n`);
+  }
+
+  private async writeMcporterConfigIfChanged(contents: string): Promise<void> {
+    try {
+      if ((await fs.readFile(this.mcporterConfigPath, "utf8")) === contents) {
+        return;
+      }
+    } catch (err) {
+      if (!isFileMissingError(err)) {
+        throw err;
+      }
+    }
+    await fs.writeFile(this.mcporterConfigPath, contents, "utf8");
   }
 
   private buildDefaultMcporterQmdServer(): Record<string, unknown> {
@@ -2464,6 +2477,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       typeof server.url === "string" ||
       typeof server.serverUrl === "string";
     if (hasRemoteEndpoint) {
+      // The explicit generated mcporter config must contain the selected remote
+      // server entry, including its auth metadata, inside this agent's state dir.
       return server;
     }
 

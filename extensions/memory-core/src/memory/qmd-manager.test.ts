@@ -4332,7 +4332,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("preserves a configured remote mcporter server without injecting QMD env", async () => {
+  it("preserves a configured remote mcporter server, including headers, without injecting QMD env", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -4394,6 +4394,59 @@ describe("QmdMemoryManager", () => {
     expect(remote?.baseUrl).toBe("https://qmd.example.invalid/mcp");
     expect(remote?.headers).toEqual({ "x-qmd": "remote" });
     expect(remote?.env).toBeUndefined();
+
+    await manager.close();
+  });
+
+  it("does not rewrite unchanged generated mcporter config on repeated searches", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "daemon") {
+        emitAndClose(child, "stdout", "");
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("one", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const firstContents = await fs.readFile(configPath, "utf8");
+    const stableTimestamp = new Date("2026-01-02T03:04:05.123Z");
+    await fs.utimes(configPath, stableTimestamp, stableTimestamp);
+    const beforeSecondSearch = await fs.stat(configPath);
+
+    await manager.search("two", { sessionKey: "agent:main:slack:dm:u123" });
+
+    expect(await fs.readFile(configPath, "utf8")).toBe(firstContents);
+    expect((await fs.stat(configPath)).mtimeMs).toBe(beforeSecondSearch.mtimeMs);
+    const daemonStarts = spawnMock.mock.calls.filter(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "daemon",
+    );
+    expect(daemonStarts).toHaveLength(1);
 
     await manager.close();
   });
