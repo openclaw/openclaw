@@ -355,6 +355,33 @@ describe("refreshChat", () => {
     expect(sessionsListPayload.agentId).toBe("ops");
   });
 
+  it("keeps unknown chat refresh session rows unscoped", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "unknown",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "unknown",
+      limit: 100,
+      maxChars: 4000,
+    });
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "unknown sessions list payload",
+    );
+    expect(sessionsListPayload).not.toHaveProperty("agentId");
+    expect(sessionsListPayload.includeUnknown).toBe(true);
+  });
+
   it("can wait for history without waiting for secondary metadata refreshes", async () => {
     const history = createDeferred<unknown>();
     const requestUpdate = vi.fn();

@@ -305,9 +305,11 @@ export function scopedAgentListParamsForSession(
   const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
   const agentId =
     parsed?.agentId ??
-    (normalizedSessionKey === "global" || normalizedSessionKey === "unknown"
+    (normalizedSessionKey === "global"
       ? resolveSelectedGlobalAgentId(host)
-      : resolveDefaultAgentIdForList(host));
+      : normalizedSessionKey === "unknown"
+        ? undefined
+        : resolveDefaultAgentIdForList(host));
   return agentId ? { agentId: normalizeAgentId(agentId) } : {};
 }
 
