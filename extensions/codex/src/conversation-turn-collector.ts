@@ -11,16 +11,28 @@ import {
 } from "./app-server/protocol.js";
 
 const MAX_PENDING_NOTIFICATIONS_PER_TURN = 100;
+const MAX_PROGRESS_TEXT_CHARS = 1_200;
+const MIN_PROGRESS_INTERVAL_MS = 1_500;
 
-export function createCodexConversationTurnCollector(threadId: string) {
+export function createCodexConversationTurnCollector(
+  threadId: string,
+  options: {
+    onProgress?: (text: string) => void | Promise<void>;
+  } = {},
+) {
   let turnId: string | undefined;
   let completed = false;
   let failedError: string | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const assistantTextByItem = new Map<string, string>();
+  const planTextByItem = new Map<string, string>();
+  const itemPhaseById = new Map<string, string>();
   const assistantOrder: string[] = [];
+  const planOrder: string[] = [];
   const pendingNotificationsByTurnId = new Map<string, CodexServerNotification[]>();
-  let resolveCompletion: ((value: { replyText: string }) => void) | undefined;
+  const lastProgressTextByKey = new Map<string, string>();
+  const lastProgressAtByKey = new Map<string, number>();
+  let resolveCompletion: ((value: { replyText: string; planText: string }) => void) | undefined;
   let rejectCompletion: ((error: Error) => void) | undefined;
 
   const rememberItem = (itemId: string) => {
@@ -33,6 +45,17 @@ export function createCodexConversationTurnCollector(threadId: string) {
       .map((itemId) => assistantTextByItem.get(itemId)?.trim())
       .filter((text): text is string => Boolean(text));
     return texts.at(-1) ?? "";
+  };
+  const rememberPlanItem = (itemId: string) => {
+    if (!planOrder.includes(itemId)) {
+      planOrder.push(itemId);
+    }
+  };
+  const collectPlanText = (): string => {
+    return planOrder
+      .map((itemId) => planTextByItem.get(itemId)?.trim())
+      .filter((text): text is string => Boolean(text))
+      .join("\n\n");
   };
   const clearWaitState = () => {
     if (timeout) {
@@ -50,7 +73,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
     if (failedError) {
       rejectCompletion?.(new Error(failedError));
     } else {
-      resolveCompletion?.({ replyText: collectReplyText() });
+      resolveCompletion?.({ replyText: collectReplyText(), planText: collectPlanText() });
     }
     clearWaitState();
   };
@@ -82,17 +105,66 @@ export function createCodexConversationTurnCollector(threadId: string) {
       }
       rememberItem(itemId);
       assistantTextByItem.set(itemId, `${assistantTextByItem.get(itemId) ?? ""}${delta}`);
+      if (itemPhaseById.get(itemId) === "commentary") {
+        emitProgress(`Codex: ${assistantTextByItem.get(itemId) ?? ""}`, `assistant:${itemId}`);
+      }
+      return;
+    }
+    if (notification.method === "item/plan/delta") {
+      const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "plan";
+      const delta = readTextString(params, "delta");
+      if (!delta) {
+        return;
+      }
+      rememberPlanItem(itemId);
+      planTextByItem.set(itemId, `${planTextByItem.get(itemId) ?? ""}${delta}`);
+      emitProgress(`Codex plan:\n${planTextByItem.get(itemId) ?? ""}`, `plan:${itemId}`);
+      return;
+    }
+    if (notification.method === "turn/plan/updated") {
+      const text = formatTurnPlanUpdated(params);
+      if (text) {
+        emitProgress(text, "turn-plan");
+      }
+      return;
+    }
+    if (notification.method === "item/started") {
+      const item = isJsonObject(params.item) ? params.item : undefined;
+      const itemId = item ? (readString(item, "id") ?? readString(params, "itemId")) : undefined;
+      const itemType = item ? readString(item, "type") : undefined;
+      if (item && itemId && itemType) {
+        const phase = readString(item, "phase");
+        if (phase) {
+          itemPhaseById.set(itemId, phase);
+        }
+        const label = formatItemLabel(item);
+        if (label) {
+          emitProgress(`Codex started ${label}.`, `start:${itemId}`, { force: true });
+        }
+      }
       return;
     }
     if (notification.method === "item/completed") {
       const item = isJsonObject(params.item) ? params.item : undefined;
+      const itemId = readString(item, "id") ?? readString(params, "itemId");
       if (item?.type === "agentMessage") {
-        const itemId = readString(item, "id") ?? readString(params, "itemId") ?? "assistant";
+        const messageItemId = itemId ?? "assistant";
         const text = readTextString(item, "text");
         if (text) {
-          rememberItem(itemId);
-          assistantTextByItem.set(itemId, text);
+          rememberItem(messageItemId);
+          assistantTextByItem.set(messageItemId, text);
         }
+      } else if (item?.type === "plan") {
+        const planItemId = itemId ?? "plan";
+        const text = readTextString(item, "text");
+        if (text) {
+          rememberPlanItem(planItemId);
+          planTextByItem.set(planItemId, text);
+        }
+      }
+      const label = item ? formatItemLabel(item) : undefined;
+      if (item && itemId && label && item.type !== "agentMessage" && item.type !== "plan") {
+        emitProgress(`Codex completed ${label}.`, `done:${itemId}`, { force: true });
       }
       return;
     }
@@ -105,14 +177,23 @@ export function createCodexConversationTurnCollector(threadId: string) {
       }
       const items = Array.isArray(turn?.items) ? turn.items : [];
       for (const item of items) {
-        if (!isJsonObject(item) || item.type !== "agentMessage") {
+        if (!isJsonObject(item)) {
           continue;
         }
-        const itemId = readString(item, "id") ?? `assistant-${assistantOrder.length + 1}`;
-        const text = readTextString(item, "text");
-        if (text) {
-          rememberItem(itemId);
-          assistantTextByItem.set(itemId, text);
+        if (item.type === "agentMessage") {
+          const itemId = readString(item, "id") ?? `assistant-${assistantOrder.length + 1}`;
+          const text = readTextString(item, "text");
+          if (text) {
+            rememberItem(itemId);
+            assistantTextByItem.set(itemId, text);
+          }
+        } else if (item.type === "plan") {
+          const itemId = readString(item, "id") ?? `plan-${planOrder.length + 1}`;
+          const text = readTextString(item, "text");
+          if (text) {
+            rememberPlanItem(itemId);
+            planTextByItem.set(itemId, text);
+          }
         }
       }
       finish();
@@ -129,13 +210,13 @@ export function createCodexConversationTurnCollector(threadId: string) {
       }
     },
     handleNotification,
-    wait(params: { timeoutMs: number }): Promise<{ replyText: string }> {
+    wait(params: { timeoutMs: number }): Promise<{ replyText: string; planText: string }> {
       if (completed) {
         return failedError
           ? Promise.reject(new Error(failedError))
-          : Promise.resolve({ replyText: collectReplyText() });
+          : Promise.resolve({ replyText: collectReplyText(), planText: collectPlanText() });
       }
-      return new Promise<{ replyText: string }>((resolve, reject) => {
+      return new Promise<{ replyText: string; planText: string }>((resolve, reject) => {
         resolveCompletion = resolve;
         rejectCompletion = reject;
         timeout = setTimeout(
@@ -150,6 +231,66 @@ export function createCodexConversationTurnCollector(threadId: string) {
       });
     },
   };
+
+  function emitProgress(text: string, key: string, opts?: { force?: boolean }) {
+    const trimmed = truncateText(text.trim());
+    if (!trimmed) {
+      return;
+    }
+    if (!opts?.force && lastProgressTextByKey.get(key) === trimmed) {
+      return;
+    }
+    const now = Date.now();
+    if (!opts?.force && now - (lastProgressAtByKey.get(key) ?? 0) < MIN_PROGRESS_INTERVAL_MS) {
+      lastProgressTextByKey.set(key, trimmed);
+      return;
+    }
+    lastProgressTextByKey.set(key, trimmed);
+    lastProgressAtByKey.set(key, now);
+    void options.onProgress?.(trimmed);
+  }
+}
+
+function formatTurnPlanUpdated(params: JsonObject): string | undefined {
+  const plan = Array.isArray(params.plan) ? params.plan : [];
+  const steps = plan
+    .map((entry) => {
+      const record = readRecord(entry);
+      const step = record ? readTextString(record, "step") : undefined;
+      const status = record ? readString(record, "status") : undefined;
+      return step ? `- ${step}${status ? ` (${status})` : ""}` : undefined;
+    })
+    .filter((line): line is string => Boolean(line));
+  if (steps.length === 0) {
+    return undefined;
+  }
+  const explanation = readTextString(params, "explanation");
+  return ["Codex plan updated:", ...(explanation ? [explanation] : []), ...steps].join("\n");
+}
+
+function formatItemLabel(item: JsonObject): string | undefined {
+  const type = readString(item, "type");
+  if (!type) {
+    return undefined;
+  }
+  const tool = readString(item, "tool") ?? readString(item, "name");
+  const command = readString(item, "command");
+  if (tool) {
+    return `${tool} (${type})`;
+  }
+  if (command) {
+    return `${command} (${type})`;
+  }
+  if (type === "agentMessage" || type === "plan") {
+    return undefined;
+  }
+  return type;
+}
+
+function truncateText(text: string): string {
+  return text.length > MAX_PROGRESS_TEXT_CHARS
+    ? `${text.slice(0, MAX_PROGRESS_TEXT_CHARS - 1)}…`
+    : text;
 }
 
 function isNotificationForTurn(

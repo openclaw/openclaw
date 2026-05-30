@@ -118,8 +118,64 @@ export default definePluginEntry({
         config: resolveCurrentConfig(),
         resumeCodexCliSessionOnNode: (params) =>
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
+        sendProgressReply: async ({ event: replyEvent, ctx: replyCtx, payload }) => {
+          const adapter = await api.runtime.channel.outbound.loadAdapter(
+            replyEvent.channel as never,
+          );
+          const to = resolveProgressReplyTarget(replyEvent, replyCtx);
+          if (!adapter || !to) {
+            return;
+          }
+          const cfg = api.runtime.config?.current
+            ? (api.runtime.config.current() as OpenClawConfig)
+            : api.config;
+          const threadId = replyEvent.threadId;
+          const accountId =
+            replyEvent.accountId ?? replyCtx.accountId ?? replyCtx.pluginBinding?.accountId;
+          if (adapter.sendPayload) {
+            await adapter.sendPayload({
+              cfg,
+              to,
+              text: payload.text ?? "",
+              payload,
+              ...(accountId ? { accountId } : {}),
+              ...(threadId != null ? { threadId } : {}),
+            });
+            return;
+          }
+          if (payload.text && adapter.sendText) {
+            await adapter.sendText({
+              cfg,
+              to,
+              text: payload.text,
+              ...(accountId ? { accountId } : {}),
+              ...(threadId != null ? { threadId } : {}),
+            });
+          }
+        },
       }),
     );
     api.onConversationBindingResolved?.(handleCodexConversationBindingResolved);
   },
 });
+
+function resolveProgressReplyTarget(
+  event: {
+    conversationId?: string;
+    metadata?: Record<string, unknown>;
+  },
+  ctx?: {
+    pluginBinding?: {
+      conversationId?: string;
+    };
+  },
+) {
+  if (event.conversationId?.trim()) {
+    return event.conversationId.trim();
+  }
+  if (ctx?.pluginBinding?.conversationId?.trim()) {
+    return ctx.pluginBinding.conversationId.trim();
+  }
+  const to = event.metadata?.to;
+  return typeof to === "string" && to.trim() ? to.trim() : undefined;
+}

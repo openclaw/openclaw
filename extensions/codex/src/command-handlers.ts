@@ -52,21 +52,26 @@ import {
   type SafeValue,
 } from "./command-rpc.js";
 import {
+  createCodexConversationBindingData,
   createCodexCliNodeConversationBindingData,
   readCodexConversationBindingData,
   resolveCodexDefaultWorkspaceDir,
+  runCodexBoundConversationPrompt,
   startCodexConversationThread,
 } from "./conversation-binding.js";
+import { answerCodexUserInput, consumeCodexPlanDecision } from "./conversation-chat-controls.js";
 import {
   formatPlanMode,
   formatPermissionsMode,
   formatReasoningEffort,
   parseCodexFastModeArg,
+  parseCodexLiveProgressArg,
   parseCodexPermissionsModeArg,
   parseCodexPlanModeArg,
   parseCodexReasoningEffortArg,
   readCodexConversationActiveTurn,
   setCodexConversationFastMode,
+  setCodexConversationLiveProgress,
   setCodexConversationModel,
   setCodexConversationPermissions,
   setCodexConversationPlanMode,
@@ -93,8 +98,10 @@ export type CodexCommandDeps = {
   installCodexComputerUse: typeof installCodexComputerUse;
   resolveCodexDefaultWorkspaceDir: typeof resolveCodexDefaultWorkspaceDir;
   startCodexConversationThread: typeof startCodexConversationThread;
+  runCodexBoundConversationPrompt: typeof runCodexBoundConversationPrompt;
   readCodexConversationActiveTurn: typeof readCodexConversationActiveTurn;
   setCodexConversationFastMode: typeof setCodexConversationFastMode;
+  setCodexConversationLiveProgress: typeof setCodexConversationLiveProgress;
   setCodexConversationModel: typeof setCodexConversationModel;
   setCodexConversationPermissions: typeof setCodexConversationPermissions;
   setCodexConversationPlanMode: typeof setCodexConversationPlanMode;
@@ -141,8 +148,10 @@ const defaultCodexCommandDeps: CodexCommandDeps = {
   installCodexComputerUse,
   resolveCodexDefaultWorkspaceDir,
   startCodexConversationThread,
+  runCodexBoundConversationPrompt,
   readCodexConversationActiveTurn,
   setCodexConversationFastMode,
+  setCodexConversationLiveProgress,
   setCodexConversationModel,
   setCodexConversationPermissions,
   setCodexConversationPlanMode,
@@ -461,7 +470,10 @@ export async function handleCodexSubcommand(
     return { text: await setConversationModel(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "plan") {
-    return { text: await setConversationPlanMode(deps, ctx, options.pluginConfig, rest) };
+    return await handleConversationPlanCommand(deps, ctx, options.pluginConfig, rest);
+  }
+  if (normalized === "input") {
+    return { text: await answerConversationUserInput(deps, ctx, rest) };
   }
   if (normalized === "think") {
     return { text: await setConversationReasoningEffort(deps, ctx, options.pluginConfig, rest) };
@@ -471,6 +483,9 @@ export async function handleCodexSubcommand(
       return buildCodexFastMenuReply();
     }
     return { text: await setConversationFastMode(deps, ctx, options.pluginConfig, rest) };
+  }
+  if (normalized === "live") {
+    return { text: await setConversationLiveProgress(deps, ctx, rest) };
   }
   if (normalized === "permissions") {
     if (isMenuVerb(rest)) {
@@ -790,6 +805,7 @@ async function describeConversationBinding(
     `- Plan: ${formatPlanMode(threadBinding?.collaborationMode)}`,
     `- Think: ${formatReasoningEffort(threadBinding?.reasoningEffort)}`,
     `- Fast: ${isCodexFastServiceTier(threadBinding?.serviceTier) ? "on" : "off"}`,
+    `- Live progress: ${threadBinding?.liveProgress === true ? "on" : "off"}`,
     `- Permissions: ${threadBinding ? formatPermissionsMode(threadBinding) : "default"}`,
     `- Active run: ${formatCodexDisplayText(active ? active.turnId : "none")}`,
     `- Session: ${formatCodexDisplayText(data.sessionFile)}`,
@@ -1031,6 +1047,158 @@ async function setConversationPlanMode(
   });
 }
 
+async function handleConversationPlanCommand(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  args: string[],
+): Promise<PluginCommandResult> {
+  const [action, token, ...extra] = args;
+  if (action === "approve" || action === "approve-clean" || action === "stay") {
+    if (!token || extra.length > 0) {
+      return {
+        text: [
+          "Usage: /codex plan approve <token>",
+          "Usage: /codex plan approve-clean <token>",
+          "Usage: /codex plan stay <token>",
+        ].join("\n"),
+      };
+    }
+    return await handleConversationPlanDecision(deps, ctx, pluginConfig, action, token);
+  }
+  return { text: await setConversationPlanMode(deps, ctx, pluginConfig, args) };
+}
+
+async function handleConversationPlanDecision(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  action: "approve" | "approve-clean" | "stay",
+  token: string,
+): Promise<PluginCommandResult> {
+  const sessionFile = await resolveControlSessionFile(ctx);
+  const decision = consumeCodexPlanDecision({
+    token,
+    ctx,
+    sessionFile,
+  });
+  if (!decision.ok) {
+    return { text: decision.message };
+  }
+  if (action === "stay") {
+    return { text: "Codex will stay in plan mode." };
+  }
+  if (action === "approve-clean") {
+    return await approveConversationPlanWithCleanContext(deps, ctx, pluginConfig, decision);
+  }
+  await deps.setCodexConversationPlanMode({
+    sessionFile: decision.sessionFile,
+    mode: "default",
+    pluginConfig,
+  });
+  const binding = await deps.readCodexAppServerBinding(decision.sessionFile);
+  const data = createCodexConversationBindingData({
+    sessionFile: decision.sessionFile,
+    workspaceDir: binding?.cwd || deps.resolveCodexDefaultWorkspaceDir(pluginConfig),
+  });
+  return (
+    await deps.runCodexBoundConversationPrompt({
+      data,
+      prompt: "Approved. Execute the proposed plan now.",
+      event: buildCommandInboundEvent(ctx, "Approved. Execute the proposed plan now."),
+      ctx: buildCommandInboundContext(ctx),
+      pluginConfig,
+    })
+  ).reply;
+}
+
+async function approveConversationPlanWithCleanContext(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  decision: Extract<ReturnType<typeof consumeCodexPlanDecision>, { ok: true }>,
+): Promise<PluginCommandResult> {
+  const binding = await deps.readCodexAppServerBinding(decision.sessionFile);
+  const workspaceDir = binding?.cwd || deps.resolveCodexDefaultWorkspaceDir(pluginConfig);
+  const data = await deps.startCodexConversationThread({
+    pluginConfig,
+    sessionFile: decision.sessionFile,
+    workspaceDir,
+    ...(ctx.config ? { config: ctx.config } : {}),
+    ...(binding?.authProfileId ? { authProfileId: binding.authProfileId } : {}),
+    ...(binding?.model ? { model: binding.model } : {}),
+    ...(binding?.modelProvider ? { modelProvider: binding.modelProvider } : {}),
+    ...(binding?.approvalPolicy ? { approvalPolicy: binding.approvalPolicy } : {}),
+    ...(binding?.sandbox ? { sandbox: binding.sandbox } : {}),
+    ...(binding?.serviceTier ? { serviceTier: binding.serviceTier } : {}),
+    ...(binding?.liveProgress ? { liveProgress: binding.liveProgress } : {}),
+    collaborationMode: "default",
+    ...(binding?.reasoningEffort ? { reasoningEffort: binding.reasoningEffort } : {}),
+    ...(binding?.reasoningEffortDefaults
+      ? { reasoningEffortDefaults: binding.reasoningEffortDefaults }
+      : {}),
+  });
+  const prompt = buildCleanContextPlanApprovalPrompt(decision.planText);
+  return (
+    await deps.runCodexBoundConversationPrompt({
+      data,
+      prompt,
+      event: buildCommandInboundEvent(ctx, prompt),
+      ctx: buildCommandInboundContext(ctx),
+      pluginConfig,
+    })
+  ).reply;
+}
+
+function buildCleanContextPlanApprovalPrompt(planText: string): string {
+  return [
+    "A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.",
+    "",
+    planText.trim() ||
+      "The approved plan was empty; continue from the user's latest approved intent.",
+  ].join("\n");
+}
+
+async function setConversationLiveProgress(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  args: string[],
+): Promise<string> {
+  if (args.length > 1) {
+    return "Usage: /codex live [on|off|status]";
+  }
+  const sessionFile = await resolveControlSessionFile(ctx);
+  if (!sessionFile) {
+    return "Cannot set Codex live progress because this command did not include an OpenClaw session file.";
+  }
+  const value = args[0];
+  const parsed = parseCodexLiveProgressArg(value);
+  if (value && parsed == null && value.trim().toLowerCase() !== "status") {
+    return "Usage: /codex live [on|off|status]";
+  }
+  return await deps.setCodexConversationLiveProgress({
+    sessionFile,
+    enabled: parsed,
+  });
+}
+
+async function answerConversationUserInput(
+  _deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  args: string[],
+): Promise<string> {
+  const [token, ...answerParts] = args;
+  if (!token || answerParts.length === 0) {
+    return "Usage: /codex input <token> <answer>";
+  }
+  return answerCodexUserInput({
+    token,
+    answerText: answerParts.join(" "),
+    ctx,
+    sessionFile: await resolveControlSessionFile(ctx),
+  });
+}
+
 async function setConversationReasoningEffort(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
@@ -1113,6 +1281,35 @@ function resolveCodexConversationControlScope(ctx: PluginCommandContext): { agen
   });
   return {
     agentDir: resolveAgentDir(ctx.config, sessionAgentId),
+  };
+}
+
+function buildCommandInboundEvent(
+  ctx: PluginCommandContext,
+  content: string,
+): Parameters<typeof runCodexBoundConversationPrompt>[0]["event"] {
+  return {
+    content,
+    body: content,
+    bodyForAgent: content,
+    channel: ctx.channel,
+    ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
+    ...(ctx.senderId ? { senderId: ctx.senderId } : {}),
+    ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
+    ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
+    isGroup: false,
+    commandAuthorized: true,
+  };
+}
+
+function buildCommandInboundContext(
+  ctx: PluginCommandContext,
+): Parameters<typeof runCodexBoundConversationPrompt>[0]["ctx"] {
+  return {
+    channelId: ctx.channel,
+    ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
+    ...(ctx.senderId ? { senderId: ctx.senderId } : {}),
+    ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
   };
 }
 

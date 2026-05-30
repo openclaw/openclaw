@@ -49,6 +49,7 @@ export type CodexAppServerThreadBinding = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  liveProgress?: boolean;
   dynamicToolsFingerprint?: string;
   dynamicToolsContainDeferred?: boolean;
   userMcpServersFingerprint?: string;
@@ -129,6 +130,7 @@ export async function readCodexAppServerBinding(
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
+      liveProgress: parsed.liveProgress === true ? true : undefined,
       dynamicToolsFingerprint:
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
@@ -198,6 +200,7 @@ export async function writeCodexAppServerBinding(
     approvalPolicy: binding.approvalPolicy,
     sandbox: binding.sandbox,
     serviceTier: binding.serviceTier,
+    liveProgress: binding.liveProgress === true ? true : undefined,
     dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
     dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
     userMcpServersFingerprint: binding.userMcpServersFingerprint,

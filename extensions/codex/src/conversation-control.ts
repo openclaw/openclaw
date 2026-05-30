@@ -176,6 +176,7 @@ export async function setCodexConversationModel(params: {
       approvalPolicy: binding.approvalPolicy,
       sandbox: binding.sandbox,
       serviceTier: binding.serviceTier ?? runtime.serviceTier,
+      liveProgress: binding.liveProgress,
     },
     lookup,
   );
@@ -206,6 +207,28 @@ export async function setCodexConversationFastMode(params: {
     lookup,
   );
   return `Codex fast mode ${params.enabled ? "enabled" : "disabled"}.`;
+}
+
+export async function setCodexConversationLiveProgress(params: {
+  sessionFile: string;
+  enabled?: boolean;
+  agentDir?: string;
+  config?: CodexAppServerBindingLookup["config"];
+}): Promise<string> {
+  const lookup = buildBindingLookup(params);
+  const binding = await requireThreadBinding(params.sessionFile, lookup);
+  if (params.enabled == null) {
+    return `Codex live progress: ${binding.liveProgress === true ? "on" : "off"}.`;
+  }
+  await writeCodexAppServerBinding(
+    params.sessionFile,
+    {
+      ...binding,
+      liveProgress: params.enabled ? true : undefined,
+    },
+    lookup,
+  );
+  return `Codex live progress ${params.enabled ? "enabled" : "disabled"}.`;
 }
 
 export async function setCodexConversationPermissions(params: {
@@ -313,6 +336,20 @@ export function parseCodexFastModeArg(arg: string | undefined): boolean | undefi
     return true;
   }
   if (normalized === "off" || normalized === "false" || normalized === "flex") {
+    return false;
+  }
+  return undefined;
+}
+
+export function parseCodexLiveProgressArg(arg: string | undefined): boolean | undefined {
+  const normalized = arg?.trim().toLowerCase();
+  if (!normalized || normalized === "status") {
+    return undefined;
+  }
+  if (normalized === "on" || normalized === "true" || normalized === "live") {
+    return true;
+  }
+  if (normalized === "off" || normalized === "false") {
     return false;
   }
   return undefined;

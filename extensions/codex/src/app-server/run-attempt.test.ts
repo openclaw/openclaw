@@ -71,6 +71,7 @@ import * as sharedClientModule from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildTurnCollaborationMode,
+  buildThreadResumeParams,
   buildTurnStartParams,
   startOrResumeThread,
 } from "./thread-lifecycle.js";
@@ -4594,6 +4595,7 @@ describe("runCodexAppServerAttempt", () => {
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
       },
+      codeModeOnly: true,
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
       approvalPolicy: "on-request" as const,
@@ -4609,15 +4611,19 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       config: {
+        "features.apply_patch_streaming_events": true,
         "features.code_mode": true,
-        "features.code_mode_only": true,
+        "features.code_mode_only": false,
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",
+      personality: "none",
       developerInstructions: resumeParams.developerInstructions,
       persistExtendedHistory: true,
     });
-    expect(resumeParams.developerInstructions).toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    expect(resumeParams.developerInstructions).toContain(
+      "You are a personal agent running inside OpenClaw.",
+    );
     const turnParams = buildTurnStartParams(params, {
       threadId: "thread-1",
       cwd: "/tmp/workspace",
@@ -4672,6 +4678,7 @@ describe("runCodexAppServerAttempt", () => {
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
       },
+      codeModeOnly: true,
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
       approvalPolicy: "on-request" as const,
@@ -4746,6 +4753,7 @@ describe("runCodexAppServerAttempt", () => {
           args: ["app-server"],
           headers: {},
         },
+        codeModeOnly: true,
         requestTimeoutMs: 60_000,
         turnCompletionIdleTimeoutMs: 60_000,
         approvalPolicy: "never",

@@ -104,10 +104,33 @@ Supported `appServer` fields:
 | `defaultWorkspaceDir`                         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                           |
 | `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`.                                                                                                                    |
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                            |
-| `conversationReasoningDefaults` | unset                                                  | Optional default Codex think levels for `/codex bind` conversations. Set `execute` for plan-off turns and `plan` for plan-on turns, for example `{ execute: "medium", plan: "xhigh" }`.         |
+| `conversationReasoningDefaults`               | unset                                                  | Optional default Codex think levels for `/codex bind` conversations. Set `execute` for plan-off turns and `plan` for plan-on turns, for example `{ execute: "medium", plan: "xhigh" }`.                                                                                                                            |
 
 The plugin blocks older or unversioned app-server handshakes. Codex app-server
 must report stable version `0.125.0` or newer.
+
+## Bound chat controls
+
+`/codex bind` attaches the current channel conversation to a native Codex
+app-server thread. Binding preferences are stored beside the OpenClaw session
+file and are applied to later bound turns.
+
+- `/codex plan [on|off|status]` controls native Codex plan mode.
+- `/codex think [plan|execute] [default|minimal|low|medium|high|xhigh|status]`
+  stores mode-specific reasoning defaults.
+- `/codex fast [on|off|status]` stores the Codex service tier preference.
+- `/codex live [on|off|status]` stores whether OpenClaw should send best-effort
+  live progress messages while bound Codex turns run.
+- `/codex permissions [default|yolo|status]` stores the native approval and
+  sandbox preference for later turns.
+
+When a plan-mode bound turn returns `<proposed_plan>...</proposed_plan>`,
+OpenClaw adds approve, approve-with-clean-context, and stay buttons to the chat
+reply. Normal approval turns plan mode off and starts a follow-up Codex turn in
+the same native thread. Clean-context approval starts a new Codex thread, binds
+the chat to that new thread, and sends the approved plan as the first execution
+prompt. If Codex asks a single non-secret multiple-choice question, OpenClaw
+sends answer buttons; other question shapes remain text prompts.
 
 ## Approval and sandbox modes
 

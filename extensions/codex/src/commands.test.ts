@@ -28,6 +28,10 @@ import type {
   CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
 import { handleCodexCommand } from "./commands.js";
+import {
+  buildCodexPlanDecisionReply,
+  resetCodexConversationChatControlsForTests,
+} from "./conversation-chat-controls.js";
 
 let tempDir: string;
 
@@ -147,6 +151,18 @@ function requireResultText(result: PluginCommandResult): string {
   return result.text;
 }
 
+function readInteractiveButtons(result: {
+  interactive?: { blocks?: unknown[] };
+}): Array<{ label: string; value: string }> {
+  const block = result.interactive?.blocks?.find(
+    (entry): entry is { buttons: Array<{ label: string; value: string }> } =>
+      Boolean(entry) &&
+      typeof entry === "object" &&
+      Array.isArray((entry as { buttons?: unknown }).buttons),
+  );
+  return block?.buttons ?? [];
+}
+
 function expectResultTextContains(result: PluginCommandResult, expected: string): void {
   expect(requireResultText(result)).toContain(expected);
 }
@@ -247,6 +263,7 @@ describe("codex command", () => {
 
   afterEach(async () => {
     resetCodexDiagnosticsFeedbackStateForTests();
+    resetCodexConversationChatControlsForTests();
     resetCodexRateLimitCacheForTests();
     resetSharedCodexAppServerClientForTests();
     clearRuntimeAuthProfileStoreSnapshots();
@@ -3767,12 +3784,13 @@ describe("codex command", () => {
     });
   });
 
-  it("sets per-binding model, plan mode, Codex think, fast mode, and permissions", async () => {
+  it("sets per-binding model, plan mode, Codex think, fast mode, live progress, and permissions", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const setCodexConversationModel = vi.fn(async () => "Codex model set to gpt-5.4.");
     const setCodexConversationPlanMode = vi.fn(async () => "Codex plan mode enabled.");
     const setCodexConversationReasoningEffort = vi.fn(async () => "Codex think set to xhigh.");
     const setCodexConversationFastMode = vi.fn(async () => "Codex fast mode enabled.");
+    const setCodexConversationLiveProgress = vi.fn(async () => "Codex live progress enabled.");
     const setCodexConversationPermissions = vi.fn(
       async () => "Codex permissions set to full access.",
     );
@@ -3781,6 +3799,7 @@ describe("codex command", () => {
       setCodexConversationPlanMode,
       setCodexConversationReasoningEffort,
       setCodexConversationFastMode,
+      setCodexConversationLiveProgress,
       setCodexConversationPermissions,
     });
 
@@ -3799,6 +3818,9 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createContext("fast on", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Codex fast mode enabled." });
+    await expect(
+      handleCodexCommand(createContext("live on", sessionFile), { deps }),
+    ).resolves.toEqual({ text: "Codex live progress enabled." });
     await expect(
       handleCodexCommand(createContext("permissions yolo", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Codex permissions set to full access." });
@@ -3831,6 +3853,10 @@ describe("codex command", () => {
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       config: {},
     });
+    expect(setCodexConversationLiveProgress).toHaveBeenCalledWith({
+      sessionFile,
+      enabled: true,
+    });
     expect(setCodexConversationPermissions).toHaveBeenCalledWith({
       sessionFile,
       pluginConfig: undefined,
@@ -3838,6 +3864,90 @@ describe("codex command", () => {
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       config: {},
     });
+  });
+
+  it("approves a Codex plan in a clean replacement context", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const reply = buildCodexPlanDecisionReply({
+      text: "<proposed_plan>Run the focused tests.</proposed_plan>",
+      scope: {
+        sessionFile,
+        threadId: "thread-plan",
+        channel: "test",
+        senderId: "user-1",
+      },
+    });
+    const cleanButton = readInteractiveButtons(reply).find((button) =>
+      button.value.includes(" approve-clean "),
+    );
+    const token = cleanButton?.value.split(" ").at(-1) ?? "";
+    const startCodexConversationThread = vi.fn(async () => ({
+      kind: "codex-app-server-session" as const,
+      version: 1 as const,
+      sessionFile,
+      workspaceDir: "/repo",
+    }));
+    const runCodexBoundConversationPrompt = vi.fn(async () => ({
+      reply: { text: "implemented" },
+    }));
+    const readCodexAppServerBinding = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      threadId: "thread-plan",
+      sessionFile,
+      cwd: "/repo",
+      authProfileId: "work",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      approvalPolicy: "never" as const,
+      sandbox: "danger-full-access" as const,
+      serviceTier: "priority" as const,
+      liveProgress: true,
+      collaborationMode: "plan" as const,
+      reasoningEffortDefaults: { execute: "medium" as const, plan: "xhigh" as const },
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    }));
+
+    await expect(
+      handleCodexCommand(createContext(`plan approve-clean ${token}`, sessionFile), {
+        deps: createDeps({
+          readCodexAppServerBinding,
+          startCodexConversationThread,
+          runCodexBoundConversationPrompt,
+        }),
+      }),
+    ).resolves.toEqual({ text: "implemented" });
+
+    expect(startCodexConversationThread).toHaveBeenCalledWith({
+      pluginConfig: undefined,
+      config: {},
+      sessionFile,
+      workspaceDir: "/repo",
+      authProfileId: "work",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      serviceTier: "priority",
+      liveProgress: true,
+      collaborationMode: "default",
+      reasoningEffortDefaults: { execute: "medium", plan: "xhigh" },
+    });
+    expect(runCodexBoundConversationPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile,
+          workspaceDir: "/repo",
+        },
+        prompt: expect.stringContaining("Run the focused tests."),
+      }),
+    );
+    const runParams = mockArg(runCodexBoundConversationPrompt, 0, 0) as { prompt?: string };
+    const prompt = runParams.prompt ?? "";
+    expect(prompt).toContain("fresh context");
+    expect(prompt).not.toContain("<proposed_plan>");
   });
 
   it("escapes current bound model status before chat display", async () => {
@@ -3875,16 +3985,18 @@ describe("codex command", () => {
     expect(setCodexConversationModel).not.toHaveBeenCalled();
   });
 
-  it("rejects extra plan, think, fast, and permissions arguments", async () => {
+  it("rejects extra plan, think, fast, live, and permissions arguments", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const setCodexConversationPlanMode = vi.fn();
     const setCodexConversationReasoningEffort = vi.fn();
     const setCodexConversationFastMode = vi.fn();
+    const setCodexConversationLiveProgress = vi.fn();
     const setCodexConversationPermissions = vi.fn();
     const deps = createDeps({
       setCodexConversationPlanMode,
       setCodexConversationReasoningEffort,
       setCodexConversationFastMode,
+      setCodexConversationLiveProgress,
       setCodexConversationPermissions,
     });
 
@@ -3900,12 +4012,16 @@ describe("codex command", () => {
       handleCodexCommand(createContext("fast on now", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Usage: /codex fast [on|off|status]" });
     await expect(
+      handleCodexCommand(createContext("live on now", sessionFile), { deps }),
+    ).resolves.toEqual({ text: "Usage: /codex live [on|off|status]" });
+    await expect(
       handleCodexCommand(createContext("permissions yolo now", sessionFile), { deps }),
     ).resolves.toEqual({ text: "Usage: /codex permissions [default|yolo|status]" });
 
     expect(setCodexConversationPlanMode).not.toHaveBeenCalled();
     expect(setCodexConversationReasoningEffort).not.toHaveBeenCalled();
     expect(setCodexConversationFastMode).not.toHaveBeenCalled();
+    expect(setCodexConversationLiveProgress).not.toHaveBeenCalled();
     expect(setCodexConversationPermissions).not.toHaveBeenCalled();
   });
 
@@ -3915,6 +4031,7 @@ describe("codex command", () => {
       setCodexConversationPlanMode: vi.fn(),
       setCodexConversationReasoningEffort: vi.fn(),
       setCodexConversationFastMode: vi.fn(),
+      setCodexConversationLiveProgress: vi.fn(),
       setCodexConversationPermissions: vi.fn(),
     });
 
@@ -3925,6 +4042,9 @@ describe("codex command", () => {
     });
     await expect(handleCodexCommand(createContext("fast on now"), { deps })).resolves.toEqual({
       text: "Usage: /codex fast [on|off|status]",
+    });
+    await expect(handleCodexCommand(createContext("live on now"), { deps })).resolves.toEqual({
+      text: "Usage: /codex live [on|off|status]",
     });
     await expect(handleCodexCommand(createContext("plan on now"), { deps })).resolves.toEqual({
       text: "Usage: /codex plan [on|off|status]",
@@ -3943,6 +4063,7 @@ describe("codex command", () => {
     expect(deps.setCodexConversationPlanMode).not.toHaveBeenCalled();
     expect(deps.setCodexConversationReasoningEffort).not.toHaveBeenCalled();
     expect(deps.setCodexConversationFastMode).not.toHaveBeenCalled();
+    expect(deps.setCodexConversationLiveProgress).not.toHaveBeenCalled();
     expect(deps.setCodexConversationPermissions).not.toHaveBeenCalled();
   });
 
@@ -3999,6 +4120,7 @@ describe("codex command", () => {
         collaborationMode: "plan",
         reasoningEffort: "xhigh",
         serviceTier: "fast",
+        liveProgress: true,
         approvalPolicy: "never",
         sandbox: "danger-full-access",
       }),
@@ -4042,6 +4164,7 @@ describe("codex command", () => {
         "- Plan: on",
         "- Think: xhigh",
         "- Fast: on",
+        "- Live progress: on",
         "- Permissions: full access",
         "- Active run: turn-1",
         `- Session: ${sessionFile.replaceAll("_", "\uff3f")}`,

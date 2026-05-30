@@ -49,7 +49,7 @@ export function setCodexAppServerConversationReasoningDefault(
   mode: CodexAppServerReasoningMode,
   effort: CodexAppServerReasoningEffort | undefined,
 ): CodexAppServerConversationReasoningDefaults | undefined {
-  const next: CodexAppServerConversationReasoningDefaults = { ...(defaults ?? {}) };
+  const next: CodexAppServerConversationReasoningDefaults = { ...defaults };
   if (effort) {
     next[mode] = effort;
   } else {

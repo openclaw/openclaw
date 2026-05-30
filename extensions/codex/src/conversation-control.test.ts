@@ -10,6 +10,7 @@ import {
 } from "./app-server/session-binding.js";
 import {
   setCodexConversationFastMode,
+  setCodexConversationLiveProgress,
   setCodexConversationModel,
   setCodexConversationPermissions,
   setCodexConversationPlanMode,
@@ -64,6 +65,34 @@ describe("codex conversation controls", () => {
     expect(binding?.serviceTier).toBe("priority");
     expect(binding?.approvalPolicy).toBe("on-request");
     expect(binding?.sandbox).toBe("workspace-write");
+  });
+
+  it("persists live progress for later bound turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "gpt-5.4",
+    });
+
+    await expect(setCodexConversationLiveProgress({ sessionFile })).resolves.toBe(
+      "Codex live progress: off.",
+    );
+    await expect(setCodexConversationLiveProgress({ sessionFile, enabled: true })).resolves.toBe(
+      "Codex live progress enabled.",
+    );
+    await expect(setCodexConversationLiveProgress({ sessionFile })).resolves.toBe(
+      "Codex live progress: on.",
+    );
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.liveProgress).toBe(true);
+
+    await expect(setCodexConversationLiveProgress({ sessionFile, enabled: false })).resolves.toBe(
+      "Codex live progress disabled.",
+    );
+    const disabledBinding = await readCodexAppServerBinding(sessionFile);
+    expect(disabledBinding?.liveProgress).toBeUndefined();
   });
 
   it("persists mode-specific Codex think defaults for later bound turns", async () => {

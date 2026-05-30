@@ -57,6 +57,11 @@ import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveReasoningEffort,
 } from "./app-server/thread-lifecycle.js";
+import {
+  buildUserInputResponse,
+  emptyUserInputResponse,
+  readUserInputParams,
+} from "./app-server/user-input-bridge.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
@@ -65,6 +70,11 @@ import {
   resolveCodexDefaultWorkspaceDir,
   type CodexAppServerConversationBindingData,
 } from "./conversation-binding-data.js";
+import {
+  buildCodexPlanDecisionReply,
+  createCodexUserInputPrompt,
+  hasCodexProposedPlan,
+} from "./conversation-chat-controls.js";
 import { trackCodexConversationActiveTurn } from "./conversation-control.js";
 import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
@@ -75,6 +85,7 @@ const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
   "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
 
 export {
+  createCodexConversationBindingData,
   createCodexCliNodeConversationBindingData,
   readCodexConversationBindingData,
   resolveCodexDefaultWorkspaceDir,
@@ -85,7 +96,14 @@ type CodexConversationRunOptions = {
   config?: CodexConversationConfig;
   timeoutMs?: number;
   resumeCodexCliSessionOnNode?: ResumeCodexCliSessionOnNodeFn;
+  sendProgressReply?: SendCodexConversationProgressReply;
 };
+
+export type SendCodexConversationProgressReply = (params: {
+  event: PluginHookInboundClaimEvent;
+  ctx: PluginHookInboundClaimContext;
+  payload: ReplyPayload;
+}) => Promise<void>;
 
 type ResumeCodexCliSessionOnNodeFn = (
   params: Omit<Parameters<typeof resumeCodexCliSessionOnNode>[0], "runtime">,
@@ -105,6 +123,7 @@ type CodexConversationStartParams = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  liveProgress?: boolean;
   collaborationMode?: CodexAppServerCollaborationMode;
   reasoningEffort?: CodexAppServerReasoningEffort;
   reasoningEffortDefaults?: CodexAppServerConversationReasoningDefaults;
@@ -191,6 +210,7 @@ export async function startCodexConversationThread(
       approvalPolicy: params.approvalPolicy,
       sandbox: params.sandbox,
       serviceTier: params.serviceTier,
+      liveProgress: params.liveProgress ?? existingBinding?.liveProgress,
       collaborationMode: params.collaborationMode ?? existingBinding?.collaborationMode,
       reasoningEffort: params.reasoningEffort ?? existingBinding?.reasoningEffort,
       reasoningEffortDefaults:
@@ -210,6 +230,7 @@ export async function startCodexConversationThread(
       approvalPolicy: params.approvalPolicy,
       sandbox: params.sandbox,
       serviceTier: params.serviceTier,
+      liveProgress: params.liveProgress ?? existingBinding?.liveProgress,
       collaborationMode: params.collaborationMode ?? existingBinding?.collaborationMode,
       reasoningEffort: params.reasoningEffort ?? existingBinding?.reasoningEffort,
       reasoningEffortDefaults:
@@ -288,17 +309,17 @@ export async function handleCodexConversationInboundClaim(
     }
   }
   try {
-    const result = await enqueueBoundTurn(data.sessionFile, () =>
-      runBoundTurnWithMissingThreadRecovery({
-        data,
-        prompt,
-        event,
-        config: options.config,
-        sessionKey: event.sessionKey ?? ctx.sessionKey,
-        pluginConfig: options.pluginConfig,
-        timeoutMs: options.timeoutMs,
-      }),
-    );
+    const result = await runCodexBoundConversationPrompt({
+      data,
+      prompt,
+      event,
+      ctx,
+      config: options.config,
+      sessionKey: event.sessionKey ?? ctx.sessionKey,
+      pluginConfig: options.pluginConfig,
+      timeoutMs: options.timeoutMs,
+      sendProgressReply: options.sendProgressReply,
+    });
     return { handled: true, reply: result.reply };
   } catch (error) {
     return {
@@ -308,6 +329,22 @@ export async function handleCodexConversationInboundClaim(
       },
     };
   }
+}
+
+export async function runCodexBoundConversationPrompt(params: {
+  data: CodexAppServerConversationBindingData;
+  prompt: string;
+  event: PluginHookInboundClaimEvent;
+  ctx: PluginHookInboundClaimContext;
+  pluginConfig?: unknown;
+  config?: CodexConversationConfig;
+  sessionKey?: string;
+  timeoutMs?: number;
+  sendProgressReply?: SendCodexConversationProgressReply;
+}): Promise<BoundTurnResult> {
+  return await enqueueBoundTurn(params.data.sessionFile, () =>
+    runBoundTurnWithMissingThreadRecovery(params),
+  );
 }
 
 export async function handleCodexConversationBindingResolved(
@@ -334,6 +371,7 @@ type CodexThreadBindingParams = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  liveProgress?: boolean;
   collaborationMode?: CodexAppServerCollaborationMode;
   reasoningEffort?: CodexAppServerReasoningEffort;
   reasoningEffortDefaults?: CodexAppServerConversationReasoningDefaults;
@@ -428,6 +466,7 @@ async function writeThreadBindingFromResponse(
         ? resolved.runtime.sandbox
         : (params.sandbox ?? resolved.runtime.sandbox),
       serviceTier: params.serviceTier ?? resolved.runtime.serviceTier,
+      liveProgress: params.liveProgress,
     },
     {
       ...resolved.agentLookup,
@@ -488,10 +527,12 @@ async function runBoundTurn(params: {
   data: CodexAppServerConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
+  ctx: PluginHookInboundClaimContext;
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   sessionKey?: string;
   timeoutMs?: number;
+  sendProgressReply?: SendCodexConversationProgressReply;
 }): Promise<BoundTurnResult> {
   const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
   const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
@@ -514,7 +555,21 @@ async function runBoundTurn(params: {
     authProfileId: binding.authProfileId,
     ...agentLookup,
   });
-  const collector = createCodexConversationTurnCollector(threadId);
+  const sendProgressReply = async (payload: ReplyPayload): Promise<void> => {
+    await params.sendProgressReply?.({
+      event: params.event,
+      ctx: params.ctx,
+      payload,
+    });
+  };
+  const collector = createCodexConversationTurnCollector(threadId, {
+    onProgress: binding.liveProgress
+      ? (text) =>
+          sendProgressReply({
+            text,
+          }).catch(() => undefined)
+      : undefined,
+  });
   const notificationCleanup = client.addNotificationHandler((notification) =>
     collector.handleNotification(notification),
   );
@@ -531,6 +586,7 @@ async function runBoundTurn(params: {
     binding,
     normalizedReasoningEffort,
   );
+  let activeTurnId: string | undefined;
   const requestCleanup = client.addRequestHandler(
     async (request): Promise<JsonValue | undefined> => {
       if (request.method === "item/tool/call") {
@@ -543,6 +599,41 @@ async function runBoundTurn(params: {
           ],
           success: false,
         };
+      }
+      if (request.method === "item/tool/requestUserInput") {
+        const requestParams = readUserInputParams(request.params);
+        if (!requestParams) {
+          return undefined;
+        }
+        if (
+          requestParams.threadId !== threadId ||
+          !activeTurnId ||
+          requestParams.turnId !== activeTurnId
+        ) {
+          return undefined;
+        }
+        if (requestParams.questions.length === 0) {
+          return emptyUserInputResponse();
+        }
+        if (!params.sendProgressReply) {
+          return emptyUserInputResponse();
+        }
+        return await new Promise<JsonValue>((resolve) => {
+          const payload = createCodexUserInputPrompt({
+            questions: requestParams.questions,
+            scope: {
+              sessionFile: params.data.sessionFile,
+              threadId,
+              channel: params.event.channel,
+              senderId: params.event.senderId ?? params.ctx.senderId,
+              accountId: params.event.accountId ?? params.ctx.accountId,
+              sessionKey: params.event.sessionKey ?? params.ctx.sessionKey,
+              messageThreadId: params.event.threadId,
+            },
+            resolveText: (text) => resolve(buildUserInputResponse(requestParams.questions, text)),
+          });
+          void sendProgressReply(payload).catch(() => resolve(emptyUserInputResponse()));
+        });
       }
       if (
         request.method === "item/commandExecution/requestApproval" ||
@@ -596,6 +687,7 @@ async function runBoundTurn(params: {
       { timeoutMs: runtime.requestTimeoutMs },
     );
     const turnId = response.turn.id;
+    activeTurnId = turnId;
     const activeCleanup = trackCodexConversationActiveTurn({
       sessionFile: params.data.sessionFile,
       threadId,
@@ -608,6 +700,23 @@ async function runBoundTurn(params: {
       })
       .finally(activeCleanup);
     const replyText = completion.replyText.trim();
+    const planText = completion.planText.trim();
+    if (binding.collaborationMode === "plan" && hasCodexProposedPlan(replyText || planText)) {
+      return {
+        reply: buildCodexPlanDecisionReply({
+          text: replyText || planText,
+          scope: {
+            sessionFile: params.data.sessionFile,
+            threadId,
+            channel: params.event.channel,
+            senderId: params.event.senderId ?? params.ctx.senderId,
+            accountId: params.event.accountId ?? params.ctx.accountId,
+            sessionKey: params.event.sessionKey ?? params.ctx.sessionKey,
+            messageThreadId: params.event.threadId,
+          },
+        }),
+      };
+    }
     return {
       reply: {
         text: replyText || "Codex completed without a text reply.",
@@ -633,10 +742,12 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
   data: CodexAppServerConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
+  ctx: PluginHookInboundClaimContext;
   pluginConfig?: unknown;
   config?: CodexConversationConfig;
   sessionKey?: string;
   timeoutMs?: number;
+  sendProgressReply?: SendCodexConversationProgressReply;
 }): Promise<BoundTurnResult> {
   try {
     return await runBoundTurn(params);
@@ -662,6 +773,7 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
       approvalPolicy: useCurrentRuntimePolicy ? undefined : binding?.approvalPolicy,
       sandbox: useCurrentRuntimePolicy ? undefined : binding?.sandbox,
       serviceTier: binding?.serviceTier,
+      liveProgress: binding?.liveProgress,
       collaborationMode: binding?.collaborationMode,
       reasoningEffort: binding?.reasoningEffort,
       reasoningEffortDefaults: binding?.reasoningEffortDefaults,

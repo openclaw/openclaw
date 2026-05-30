@@ -216,6 +216,7 @@ Common command routing:
 | List native Codex plugins                             | `/codex plugins list`                                                                                 |
 | Enable or disable a configured native Codex plugin    | `/codex plugins enable <name>`, `/codex plugins disable <name>`                                       |
 | Attach an existing Codex CLI session on a paired node | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
+| Show live Codex progress in chat                      | `/codex live on`                                                                                      |
 | Send Codex feedback only                              | `/codex diagnostics [note]`                                                                           |
 | Start an ACP/acpx task                                | ACP/acpx session commands, not `/codex`                                                               |
 
@@ -421,6 +422,8 @@ Common forms:
   `plan` or `execute` scope, it updates the currently active mode.
 - `/codex fast [on|off|status]` toggles the Codex service tier preference for
   the attached thread.
+- `/codex live [on|off|status]` toggles best-effort progress messages for the
+  attached chat while a bound Codex turn is running.
 - `/codex permissions [default|yolo|status]` changes the native Codex approval
   and sandbox preference for the attached thread.
 - `/codex compact` asks Codex app-server to compact the attached thread.
@@ -440,6 +443,17 @@ chat behavior.
 Use `/codex diagnostics [note]` only when you specifically want the Codex
 feedback upload for the currently attached thread without the full Gateway
 diagnostics bundle.
+
+When `/codex plan on` is enabled for a bound chat, Codex plan-mode turns that
+finish with a `<proposed_plan>` reply include chat buttons for "Approve and
+execute", "Approve and execute with clean context", or "Stay in plan mode".
+Normal approval switches the binding back to execute mode and continues in the
+same Codex thread. Clean-context approval starts a new Codex thread, binds the
+chat to that thread, and sends the approved plan as the fresh thread's first
+execution prompt. Staying leaves the binding in plan mode. If Codex asks a
+single multiple-choice question during a bound turn, OpenClaw sends the question
+with answer buttons; freeform, secret, or multi-question prompts are delivered
+as text so the user can reply normally.
 
 ### Inspect Codex threads locally
 
@@ -560,7 +574,7 @@ Supported `appServer` fields:
 | `approvalsReviewer`                           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed, otherwise `guardian_subagent` or `user`. `guardian_subagent` remains a legacy alias.                                                                                                                                                 |
 | `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                                    |
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                            |
-| `conversationReasoningDefaults` | unset                                                  | Optional default Codex think levels for `/codex bind` conversations. Set `execute` for plan-off turns and `plan` for plan-on turns, for example `{ execute: "medium", plan: "xhigh" }`.                                                 |
+| `conversationReasoningDefaults`               | unset                                                  | Optional default Codex think levels for `/codex bind` conversations. Set `execute` for plan-off turns and `plan` for plan-on turns, for example `{ execute: "medium", plan: "xhigh" }`.                                                                                                                            |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90 second
