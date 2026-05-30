@@ -541,16 +541,7 @@ export function loadPluginMetadataSnapshot(
   const memoKey = computePluginMetadataSnapshotMemoKey({ params, registryState });
   const memo = findPluginMetadataSnapshotMemo(memoKey);
   if (memo?.key === memoKey) {
-    return measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => memo.snapshot, {
-      phase: activeTimelineSpan?.phase ?? "startup",
-      config: params.config,
-      env: params.env,
-      attributes: {
-        cacheHit: true,
-        hasWorkspaceDir: params.workspaceDir !== undefined,
-        hasInstalledIndex: params.index !== undefined,
-      },
-    });
+    return memo.snapshot;
   }
 
   const result = measureDiagnosticsTimelineSpanSync(
