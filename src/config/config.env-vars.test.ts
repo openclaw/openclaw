@@ -169,14 +169,28 @@ describe("config env vars", () => {
     });
   });
 
-  it("drops dangerous and empty values from the state-dir .env file", async () => {
+  it("drops dangerous, empty, and nested reference values from the state-dir .env file", async () => {
     await withTempHome(async (_home) => {
-      await writeStateDirDotEnv("NODE_OPTIONS=--require /tmp/evil.js\nEMPTY=\nVALID=ok\n", {
-        env: process.env,
-      });
+      await writeStateDirDotEnv(
+        [
+          "NODE_OPTIONS=--require /tmp/evil.js",
+          "EMPTY=",
+          "LITERAL_REF=$SUPERMEMORY_OPENCLAW_KEY",
+          "BRACED_REF=${SUPERMEMORY_OPENCLAW_KEY}",
+          'QUOTED_REF="$SUPERMEMORY_OPENCLAW_KEY"',
+          "ESCAPED_DOLLAR=$$SUPERMEMORY_OPENCLAW_KEY",
+          "VALID=ok",
+          "",
+        ].join("\n"),
+        { env: process.env },
+      );
       const vars = readStateDirDotEnvVars(process.env);
       expect(vars.NODE_OPTIONS).toBeUndefined();
       expect(vars.EMPTY).toBeUndefined();
+      expect(vars.LITERAL_REF).toBeUndefined();
+      expect(vars.BRACED_REF).toBeUndefined();
+      expect(vars.QUOTED_REF).toBeUndefined();
+      expect(vars.ESCAPED_DOLLAR).toBe("$$SUPERMEMORY_OPENCLAW_KEY");
       expect(vars.VALID).toBe("ok");
     });
   });

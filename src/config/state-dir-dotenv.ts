@@ -14,6 +14,12 @@ function isBlockedServiceEnvVar(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
 }
 
+const SHELL_ENV_VAR_REFERENCE_PATTERN = /(^|[^$])\$(?:\{[A-Z_][A-Z0-9_]*\}|[A-Z_][A-Z0-9_]*)/;
+
+function containsShellEnvVarReference(value: string): boolean {
+  return SHELL_ENV_VAR_REFERENCE_PATTERN.test(value);
+}
+
 function parseStateDirDotEnvContent(content: string): Record<string, string> {
   const parsed = dotenv.parse(content);
   const entries: Record<string, string> = {};
@@ -26,6 +32,9 @@ function parseStateDirDotEnvContent(content: string): Record<string, string> {
       continue;
     }
     if (isBlockedServiceEnvVar(key)) {
+      continue;
+    }
+    if (containsShellEnvVarReference(value)) {
       continue;
     }
     entries[key] = value;

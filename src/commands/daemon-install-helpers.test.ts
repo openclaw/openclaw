@@ -1134,6 +1134,33 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     );
   });
 
+  it("does not retain nested .env references for macOS LaunchAgent env files", async () => {
+    await writeStateDirDotEnv(
+      "SUPERMEMORY_OPENCLAW_API_KEY=$SUPERMEMORY_OPENCLAW_KEY\nTAVILY_API_KEY=dotenv-tavily\n",
+      {
+        stateDir: path.join(tmpDir, ".openclaw"),
+      },
+    );
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+    });
+
+    expect(plan.environment.SUPERMEMORY_OPENCLAW_API_KEY).toBeUndefined();
+    expect(plan.environment.TAVILY_API_KEY).toBe("dotenv-tavily");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("TAVILY_API_KEY");
+  });
+
   it("does not retain config env values for macOS LaunchAgent env files", async () => {
     await writeStateDirDotEnv("OPENROUTER_API_KEY=or-dotenv\nTAVILY_API_KEY=dotenv-tavily\n", {
       stateDir: path.join(tmpDir, ".openclaw"),
