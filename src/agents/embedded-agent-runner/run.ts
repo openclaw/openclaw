@@ -3048,9 +3048,10 @@ export async function runEmbeddedAgent(
           const finalAssistantRawText = resolveFinalAssistantRawText(sessionLastAssistant);
 
           if (attempt.terminalToolLoopBlock) {
-            const synthesizedSearchAnswer = extractLatestStructuredSearchResponse(
-              attempt.messagesSnapshot as unknown[],
-            );
+            const synthesizedSearchAnswer =
+              attempt.terminalToolLoopBlock.detector === "search_repeat"
+                ? extractLatestStructuredSearchResponse(attempt.messagesSnapshot as unknown[])
+                : undefined;
             const terminalText =
               synthesizedSearchAnswer ??
               `Stopped repeated ${attempt.terminalToolLoopBlock.toolName ?? "tool"} calls after the tool-loop guard fired: ${attempt.terminalToolLoopBlock.message}`;

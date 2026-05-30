@@ -2693,6 +2693,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         terminalToolLoopBlock: {
           message: "CRITICAL: Web search tools have been called 6 consecutive times.",
           toolName: "web_search",
+          detector: "search_repeat",
         },
         messagesSnapshot: [
           {
@@ -2732,6 +2733,51 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads[0]?.text).toContain('latest returned search results for "funny cats"');
     expect(result.payloads[0]?.text).toContain("Funny Cat Videos: https://example.test/cats");
     expect(result.payloads[0]?.text).toContain("Cat Memes: https://example.test/memes");
+    expect(result.meta?.error?.kind).toBe("tool_loop");
+    expect(result.meta?.livenessState).toBe("blocked");
+  });
+
+  it("does not synthesize stale search results for non-search terminal loops", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        terminalToolLoopBlock: {
+          message: "CRITICAL: Called read with identical arguments and no progress 20 times.",
+          toolName: "read",
+          detector: "generic_repeat",
+        },
+        messagesSnapshot: [
+          {
+            message: {
+              role: "toolResult",
+              toolName: "web_search",
+              details: {
+                summary: {
+                  kind: "search_results",
+                  query: "funny cats",
+                  topResults: [
+                    {
+                      title: "Funny Cat Videos",
+                      url: "https://example.test/cats",
+                      snippet: "A collection of funny cat clips.",
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-terminal-non-search-loop-no-stale-search-summary",
+    });
+
+    expect(result.payloads[0]?.isError).toBe(true);
+    expect(result.payloads[0]?.text).toContain("Stopped repeated read calls");
+    expect(result.payloads[0]?.text).not.toContain("Funny Cat Videos");
     expect(result.meta?.error?.kind).toBe("tool_loop");
     expect(result.meta?.livenessState).toBe("blocked");
   });
