@@ -33,6 +33,11 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",
   "dist/plugin-sdk/packages/llm-core/src/utils/event-stream.d.ts",
   "dist/plugin-sdk/packages/llm-core/src/validation.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/capability-model-ref.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/catalog.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/model-ref.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/normalization.d.ts",
   "dist/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/provider-auth.d.ts",
@@ -41,6 +46,11 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
 const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/capability-model-ref.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/catalog.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/model-ref.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/normalization.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/plugin-entry.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",

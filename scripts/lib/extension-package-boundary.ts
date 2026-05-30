@@ -59,6 +59,24 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/llm-core/types": ["../dist/plugin-sdk/packages/llm-core/src/types.d.ts"],
   "@openclaw/llm-core/validation": ["../dist/plugin-sdk/packages/llm-core/src/validation.d.ts"],
   "@openclaw/llm-core/*": ["../dist/plugin-sdk/packages/llm-core/src/*.d.ts"],
+  "@openclaw/media-generation-core": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/index.d.ts",
+  ],
+  "@openclaw/media-generation-core/capability-model-ref": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/capability-model-ref.d.ts",
+  ],
+  "@openclaw/media-generation-core/catalog": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/catalog.d.ts",
+  ],
+  "@openclaw/media-generation-core/model-ref": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/model-ref.d.ts",
+  ],
+  "@openclaw/media-generation-core/normalization": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/normalization.d.ts",
+  ],
+  "@openclaw/media-generation-core/*": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts",
+  ],
   "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
   "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
   "openclaw/plugin-sdk/qa-channel": ["../dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts"],
