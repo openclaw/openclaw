@@ -3,8 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
+  loadDesktopModelSetupComplete,
+  loadDesktopOnboardingSessionCreated,
   loadLocalUserIdentity,
   loadSettings,
+  saveDesktopModelSetupComplete,
+  saveDesktopOnboardingSessionCreated,
   saveLocalUserIdentity,
   saveSettings,
 } from "./storage.ts";
@@ -39,6 +43,27 @@ function setControlUiBasePath(value: string | undefined) {
   });
 }
 
+function setTauriDesktop(value: boolean) {
+  if (typeof window === "undefined") {
+    vi.stubGlobal(
+      "window",
+      value
+        ? ({ __TAURI__: { core: { invoke: vi.fn() } } } as unknown as Window & typeof globalThis)
+        : ({} as Window & typeof globalThis),
+    );
+    return;
+  }
+  if (!value) {
+    delete (window as typeof window & { __TAURI__?: unknown }).__TAURI__;
+    return;
+  }
+  Object.defineProperty(window, "__TAURI__", {
+    value: { core: { invoke: vi.fn() } },
+    writable: true,
+    configurable: true,
+  });
+}
+
 function expectedGatewayUrl(basePath: string): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${location.host}${basePath}`;
@@ -57,6 +82,7 @@ describe("loadSettings default gateway URL derivation", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     setControlUiBasePath(undefined);
+    setTauriDesktop(false);
     vi.unstubAllGlobals();
   });
 
@@ -89,6 +115,33 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
+  });
+
+  it("uses the local desktop gateway inside Tauri", () => {
+    setTestLocation({
+      protocol: "tauri:",
+      host: "",
+      pathname: "/index.html",
+    });
+    setTauriDesktop(true);
+
+    expect(loadSettings().gatewayUrl).toBe("ws://127.0.0.1:18789");
+  });
+
+  it("persists desktop model setup completion locally", () => {
+    expect(loadDesktopModelSetupComplete()).toBe(false);
+    saveDesktopModelSetupComplete(true);
+    expect(loadDesktopModelSetupComplete()).toBe(true);
+    saveDesktopModelSetupComplete(false);
+    expect(loadDesktopModelSetupComplete()).toBe(false);
+  });
+
+  it("persists desktop onboarding session creation locally", () => {
+    expect(loadDesktopOnboardingSessionCreated()).toBe(false);
+    saveDesktopOnboardingSessionCreated(true);
+    expect(loadDesktopOnboardingSessionCreated()).toBe(true);
+    saveDesktopOnboardingSessionCreated(false);
+    expect(loadDesktopOnboardingSessionCreated()).toBe(false);
   });
 
   it("skips node sessionStorage accessors that warn without a storage file", () => {

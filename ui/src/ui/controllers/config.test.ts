@@ -1123,4 +1123,24 @@ describe("runUpdate", () => {
     expect(state.pendingUpdateExpectedVersion).toBe("2.0.0");
     expect(state.updateStatusBanner).toBeNull();
   });
+
+  it("does not run gateway package updates from a packaged desktop runtime", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.desktopMode = true;
+    state.desktopStatus = {
+      runtime: { packaged_runtime: true, runtime_source: "packaged-runtime" },
+      capabilities: { gateway_update_supported: false },
+    };
+
+    await runUpdate(state);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.updateStatusBanner).toEqual({
+      tone: "info",
+      text: "Desktop is running a packaged OpenClaw runtime. Update the desktop app instead of running the Gateway package updater from inside the bundle.",
+    });
+  });
 });

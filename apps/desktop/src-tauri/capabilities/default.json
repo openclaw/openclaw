@@ -1,0 +1,9 @@
+{
+  "identifier": "main-capability",
+  "description": "Capability for the OpenClaw desktop window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default"
+  ]
+}

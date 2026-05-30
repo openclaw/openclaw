@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { i18n } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
@@ -15,6 +15,10 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     lastErrorCode: null,
     loginShowGatewayToken: false,
     loginShowGatewayPassword: false,
+    desktopMode: false,
+    desktopGatewayStarting: false,
+    desktopGatewayStarted: false,
+    desktopGatewayError: null,
     password: "",
     settings: {
       gatewayUrl: "ws://127.0.0.1:18789",
@@ -35,6 +39,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     },
     applySettings: () => undefined,
     connect: () => undefined,
+    startDesktopGateway: () => undefined,
     ...overrides,
   } as unknown as AppViewState;
 }
@@ -294,5 +299,28 @@ describe("renderLoginGate", () => {
     expect(docsLink?.getAttribute("href")).toBe(
       "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
     );
+  });
+
+  it("hides manual Gateway fields in the desktop startup gate", async () => {
+    const container = document.createElement("div");
+    const startDesktopGateway = vi.fn();
+    const state = createState({
+      desktopMode: true,
+      desktopGatewayStarting: false,
+      desktopGatewayStarted: true,
+      startDesktopGateway,
+    });
+
+    render(renderLoginGate(state), container);
+    await Promise.resolve();
+
+    expect(container.querySelectorAll("input")).toHaveLength(0);
+    expect(container.textContent).toContain("Opening OpenClaw");
+    expect(container.textContent).not.toContain("WebSocket URL");
+    expect(container.textContent).not.toContain("Gateway Token");
+
+    const retry = container.querySelector<HTMLButtonElement>(".login-gate__connect");
+    retry?.click();
+    expect(startDesktopGateway).toHaveBeenCalledOnce();
   });
 });

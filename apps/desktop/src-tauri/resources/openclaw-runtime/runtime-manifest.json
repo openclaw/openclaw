@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "openclaw": {
+    "source": "development-or-packaged-runtime",
+    "entrypoint": "openclaw/openclaw.mjs"
+  },
+  "plugins": [
+    {
+      "id": "lobster",
+      "artifact": "plugins/openclaw-lobster.tgz",
+      "required": false
+    }
+  ]
+}

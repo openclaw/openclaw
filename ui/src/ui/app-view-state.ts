@@ -1,6 +1,11 @@
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
+import type {
+  DesktopAppUpdateStatus,
+  DesktopCliStatus,
+  DesktopStatus,
+} from "./app-native-bridge.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
@@ -8,6 +13,7 @@ import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
+import type { DesktopModelSetupForm } from "./controllers/desktop-model-setup.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -38,6 +44,7 @@ import type {
   ChatModelOverride,
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  ModelsProbeResult,
   NostrProfile,
   PresenceEntry,
   SessionsUsageResult,
@@ -60,6 +67,44 @@ export type AppViewState = {
   loginShowGatewayPassword: boolean;
   tab: Tab;
   onboarding: boolean;
+  desktopMode: boolean;
+  desktopGatewayStarting: boolean;
+  desktopGatewayStarted: boolean;
+  desktopGatewayError: string | null;
+  desktopStatus: DesktopStatus | null;
+  desktopCliStatus: DesktopCliStatus | null;
+  desktopCliLoading: boolean;
+  desktopCliInstalling: boolean;
+  desktopCliMessage: { kind: "success" | "error"; text: string } | null;
+  desktopAppUpdateChecking: boolean;
+  desktopAppUpdateInstalling: boolean;
+  desktopAppUpdateStatus: DesktopAppUpdateStatus | null;
+  desktopAppUpdateMessage: { kind: "success" | "error"; text: string } | null;
+  desktopWizardSessionId: string | null;
+  desktopWizardBusy: boolean;
+  desktopWizardError: string | null;
+  desktopWizardStep: {
+    id: string;
+    type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
+    title?: string;
+    message?: string;
+    options?: Array<{ value: unknown; label: string; hint?: string }>;
+    initialValue?: unknown;
+    placeholder?: string;
+    sensitive?: boolean;
+  } | null;
+  desktopWizardDone: boolean;
+  desktopWizardAnswer: unknown;
+  desktopNotificationPermission: NotificationPermission | "unsupported";
+  desktopNotificationLoading: boolean;
+  desktopModelSetupChecked: boolean;
+  desktopModelSetupRequired: boolean;
+  desktopModelSetupLoading: boolean;
+  desktopModelSetupSaving: boolean;
+  desktopModelSetupError: string | null;
+  desktopModelSetupDismissed: boolean;
+  desktopModelSetupComplete: boolean;
+  desktopModelSetupForm: DesktopModelSetupForm;
   basePath: string;
   connected: boolean;
   theme: ThemeName;
@@ -124,6 +169,8 @@ export type AppViewState = {
   chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  modelProbeResults: Record<string, ModelsProbeResult>;
+  modelProbeLoadingKey: string | null;
   sessionSwitchNotice: { id: number; text: string } | null;
   sessionSwitchFlashKey: string | null;
   chatSessionPickerOpen: boolean;
@@ -134,6 +181,15 @@ export type AppViewState = {
   chatSessionPickerError: string | null;
   chatSessionPickerResult: SessionsListResult | null;
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
+  updateDesktopModelSetupForm?: (patch: Partial<DesktopModelSetupForm>) => void;
+  saveDesktopModelSetup?: () => Promise<void>;
+  loadDesktopModelSetupStatus?: () => Promise<void>;
+  openDesktopModelAdvancedSettings?: () => void;
+  probeProviderModel?: (
+    providerId: string,
+    modelId: string,
+    providerConfig?: Record<string, unknown>,
+  ) => Promise<void>;
   chatQueue: ChatQueueItem[];
   chatQueueBySession: Record<string, ChatQueueItem[]>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
@@ -159,6 +215,20 @@ export type AppViewState = {
   };
   resetRealtimeTalkConversation?: () => void;
   updateRealtimeTalkOptions: (next: Partial<AppViewState["realtimeTalkOptions"]>) => void;
+  startDesktopGateway?: () => void;
+  refreshDesktopStatus?: () => Promise<void>;
+  refreshDesktopCliStatus?: () => Promise<void>;
+  installDesktopCliHelper?: () => Promise<void>;
+  startDesktopSetupWizard?: () => Promise<void>;
+  submitDesktopSetupWizard?: () => Promise<void>;
+  cancelDesktopSetupWizard?: () => Promise<void>;
+  updateDesktopSetupWizardAnswer?: (answer: unknown) => void;
+  openDesktopAppUpdatePage?: () => Promise<void>;
+  checkDesktopAppUpdate?: () => Promise<void>;
+  installDesktopAppUpdate?: () => Promise<void>;
+  openDesktopPermissionSettings?: (permissionId: string) => Promise<void>;
+  handleDesktopNotificationEnable?: () => Promise<void>;
+  handleDesktopNotificationTest?: () => Promise<void>;
   chatManualRefreshInFlight: boolean;
   chatHeaderControlsHidden: boolean;
   chatMobileControlsOpen: boolean;
@@ -421,6 +491,10 @@ export type AppViewState = {
     skillCardContentKeys: Record<string, string>;
     skillCardLoadingKey: string | null;
     skillCardErrors: Record<string, string>;
+    desktopPluginInstallSource: string;
+    desktopPluginInstallBusy: boolean;
+    desktopPluginInstallMessage: { kind: "success" | "error"; text: string } | null;
+    installDesktopExternalPlugin?: () => Promise<void>;
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;

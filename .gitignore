@@ -190,6 +190,11 @@ apps/ios/LocalSigning.xcconfig
 apps/ios/build/
 apps/shared/OpenClawKit/build/
 apps/swabble/build/
+apps/desktop/src-tauri/binaries/openclaw-node-*
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/resources/openclaw-runtime/openclaw/
+apps/desktop/src-tauri/resources/openclaw-runtime/plugins/*.tgz
+apps/desktop/src-tauri/target/
 *.xcresult
 *.trace
 *.profraw

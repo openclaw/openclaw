@@ -10,7 +10,7 @@ import {
 } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
-import type { ConfigUiHints } from "../types.ts";
+import type { ConfigUiHints, ModelsProbeResult } from "../types.ts";
 import {
   countSensitiveConfigValues,
   hintForPath,
@@ -46,6 +46,19 @@ export type WebPushUiState = {
   loading: boolean;
 };
 
+export type DesktopNotificationsUiState = {
+  supported: boolean;
+  permission: NotificationPermission | "unsupported";
+  loading: boolean;
+  permissions?: Array<{
+    id: string;
+    label: string;
+    status: string;
+    settingsUrl?: string | null;
+    settings_url?: string | null;
+  }>;
+};
+
 export type ConfigProps = {
   raw: string;
   originalRaw: string;
@@ -70,6 +83,14 @@ export type ConfigProps = {
   onRawChange: (next: string) => void;
   onFormModeChange: (mode: "form" | "raw") => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
+  onProviderRemove?: (providerId: string) => void;
+  onProviderProbe?: (
+    providerId: string,
+    modelId: string,
+    providerConfig?: Record<string, unknown>,
+  ) => void;
+  providerProbeResults?: Record<string, ModelsProbeResult>;
+  providerProbeLoadingKey?: string | null;
   onSearchChange: (query: string) => void;
   onSectionChange: (section: string | null) => void;
   onSubsectionChange: (section: string | null) => void;
@@ -117,6 +138,51 @@ export type ConfigProps = {
   onWebPushUnsubscribe?: () => void;
   onWebPushTest?: () => void;
   onRequestUpdate?: () => void;
+  desktopMode?: boolean;
+  desktopGatewayUpdateSupported?: boolean;
+  desktopAppUpdateSupported?: boolean;
+  desktopPackagedRuntimeUpdateSupported?: boolean;
+  desktopRuntime?: {
+    packaged_runtime?: boolean;
+    runtime_source?: string;
+    openclaw_version?: string | null;
+    node_version?: string | null;
+    desktop_app_update_mode?: string | null;
+    desktop_app_update_url?: string | null;
+  } | null;
+  desktopAppUpdateChecking?: boolean;
+  desktopAppUpdateInstalling?: boolean;
+  desktopAppUpdateStatus?: {
+    configured?: boolean;
+    available?: boolean;
+    current_version?: string;
+    currentVersion?: string;
+    version?: string | null;
+    body?: string | null;
+    date?: string | null;
+    error?: string | null;
+  } | null;
+  desktopAppUpdateMessage?: { kind: "success" | "error"; text: string } | null;
+  onDesktopAppUpdate?: () => void;
+  onCheckDesktopAppUpdate?: () => void;
+  onInstallDesktopAppUpdate?: () => void;
+  desktopNotifications?: DesktopNotificationsUiState;
+  onDesktopNotificationEnable?: () => void;
+  onDesktopNotificationTest?: () => void;
+  onOpenDesktopPermissionSettings?: (permissionId: string) => void;
+};
+
+type ConfiguredProviderModel = {
+  id: string;
+  name?: string | null;
+};
+
+type ConfiguredProvider = {
+  id: string;
+  api?: string | null;
+  baseUrl?: string | null;
+  config: Record<string, unknown>;
+  models: ConfiguredProviderModel[];
 };
 
 // SVG Icons for sidebar (Lucide-style)
@@ -811,7 +877,253 @@ function focusCustomThemeImportInput() {
   });
 }
 
+function isConfigRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeConfigString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function extractConfiguredProviders(config: Record<string, unknown> | null): ConfiguredProvider[] {
+  const models = isConfigRecord(config?.models) ? config.models : null;
+  const providers = isConfigRecord(models?.providers) ? models.providers : null;
+  if (!providers) {
+    return [];
+  }
+  return Object.entries(providers)
+    .map(([id, rawProvider]) => {
+      const provider = isConfigRecord(rawProvider) ? rawProvider : {};
+      const models = Array.isArray(provider.models)
+        ? provider.models
+            .map((rawModel): ConfiguredProviderModel | null => {
+              if (!isConfigRecord(rawModel)) {
+                return null;
+              }
+              const modelId = normalizeConfigString(rawModel.id);
+              if (!modelId) {
+                return null;
+              }
+              return {
+                id: modelId,
+                name: normalizeConfigString(rawModel.name),
+              };
+            })
+            .filter((model): model is ConfiguredProviderModel => Boolean(model))
+        : [];
+      return {
+        id,
+        api: normalizeConfigString(provider.api),
+        baseUrl: normalizeConfigString(provider.baseUrl),
+        config: provider,
+        models,
+      };
+    })
+    .toSorted((a, b) => a.id.localeCompare(b.id));
+}
+
+function providerProbeKey(providerId: string, modelId: string): string {
+  return `${providerId}\u0000${modelId}`;
+}
+
+function formatProbeElapsed(result: ModelsProbeResult): string {
+  return result.elapsedMs >= 1000
+    ? `${(result.elapsedMs / 1000).toFixed(1)}s`
+    : `${result.elapsedMs}ms`;
+}
+
+function renderProviderManager(props: ConfigProps) {
+  const providers = extractConfiguredProviders(props.formValue);
+  if (providers.length === 0) {
+    return nothing;
+  }
+  return html`
+    <section class="settings-appearance config-provider-manager">
+      <div class="settings-appearance__section">
+        <div class="settings-appearance__header">
+          <div>
+            <h3 class="settings-appearance__heading">Model providers</h3>
+            <p class="settings-appearance__description">
+              Manage configured upstreams and run a live model call before saving it as the active
+              path.
+            </p>
+          </div>
+        </div>
+        <div class="settings-info-grid">
+          ${providers.map(
+            (provider) => html`
+              <div class="settings-info-row config-provider-row">
+                <span class="settings-info-row__label">
+                  <strong>${provider.id}</strong>
+                  ${provider.api ? html`<span class="muted"> · ${provider.api}</span>` : nothing}
+                </span>
+                <span class="settings-info-row__value">
+                  <span class="mono">${provider.baseUrl ?? "no baseUrl"}</span>
+                  ${props.onProviderRemove
+                    ? html`
+                        <button
+                          class="btn btn--sm"
+                          title=${`Remove ${provider.id}`}
+                          @click=${() => props.onProviderRemove?.(provider.id)}
+                        >
+                          ${icons.trash} Remove
+                        </button>
+                      `
+                    : nothing}
+                </span>
+                <div class="config-provider-row__models">
+                  ${provider.models.length > 0
+                    ? provider.models.map((model) => {
+                        const key = providerProbeKey(provider.id, model.id);
+                        const result = props.providerProbeResults?.[key];
+                        const loading = props.providerProbeLoadingKey === key;
+                        return html`
+                          <div class="config-provider-model">
+                            <span class="config-provider-model__name">
+                              <span class="mono">${model.id}</span>
+                              ${model.name && model.name !== model.id
+                                ? html`<span class="muted"> · ${model.name}</span>`
+                                : nothing}
+                            </span>
+                            <span class="config-provider-model__status">
+                              ${result
+                                ? html`
+                                    <span
+                                      class="settings-status-dot ${result.ok
+                                        ? "settings-status-dot--ok"
+                                        : ""}"
+                                    ></span>
+                                    ${result.ok ? "OK" : "Failed"} · ${formatProbeElapsed(result)}
+                                    ${result.status ? html` · HTTP ${result.status}` : nothing}
+                                  `
+                                : html`<span class="muted">Not tested</span>`}
+                            </span>
+                            <button
+                              class="btn btn--sm"
+                              ?disabled=${loading || !props.connected || !props.onProviderProbe}
+                              @click=${() =>
+                                props.onProviderProbe?.(provider.id, model.id, provider.config)}
+                            >
+                              ${loading ? icons.loader : icons.radio}
+                              ${loading ? "Testing" : "Test"}
+                            </button>
+                            ${result && !result.ok
+                              ? html`<div class="config-provider-model__message">
+                                  ${result.message}
+                                </div>`
+                              : nothing}
+                          </div>
+                        `;
+                      })
+                    : html`<span class="muted">No models configured</span>`}
+                </div>
+              </div>
+            `,
+          )}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
 function renderNotificationsSection(props: ConfigProps) {
+  if (props.desktopMode) {
+    const desktop = props.desktopNotifications;
+    const permission = desktop?.permission ?? "unsupported";
+    const permissionLabel =
+      permission === "granted"
+        ? "Granted"
+        : permission === "denied"
+          ? "Denied"
+          : permission === "default"
+            ? "Not requested"
+            : "Unsupported";
+    const permissionRows = desktop?.permissions ?? [];
+    return html`
+      <div class="settings-appearance">
+        <div class="settings-appearance__section">
+          <h3 class="settings-appearance__heading">Desktop Notifications</h3>
+          <p class="settings-appearance__hint">
+            Desktop uses native app notifications instead of browser service-worker push.
+          </p>
+
+          <div class="settings-info-grid">
+            <div class="settings-info-row">
+              <span class="settings-info-row__label">Native support</span>
+              <span class="settings-info-row__value"
+                >${desktop?.supported ? "Available" : "Not supported"}</span
+              >
+            </div>
+            <div class="settings-info-row">
+              <span class="settings-info-row__label">Notification permission</span>
+              <span class="settings-info-row__value">${permissionLabel}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-appearance__section">
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            ${permission === "granted"
+              ? html`
+                  <button
+                    class="config-bar__btn"
+                    ?disabled=${desktop?.loading || !props.connected}
+                    @click=${() => props.onDesktopNotificationTest?.()}
+                  >
+                    Send test
+                  </button>
+                `
+              : html`
+                  <button
+                    class="config-bar__btn config-bar__btn--primary"
+                    ?disabled=${desktop?.loading || !desktop?.supported}
+                    @click=${() => props.onDesktopNotificationEnable?.()}
+                  >
+                    ${desktop?.loading ? "Requesting..." : "Enable notifications"}
+                  </button>
+                `}
+          </div>
+        </div>
+
+        ${permissionRows.length > 0
+          ? html`
+              <div class="settings-appearance__section">
+                <h4 class="settings-appearance__heading">macOS Permissions</h4>
+                <p class="settings-appearance__hint">
+                  Open each system privacy panel and grant access for features you use. Live status
+                  is shown where macOS exposes a preflight check.
+                </p>
+                <div class="settings-info-grid">
+                  ${permissionRows.map((entry) => {
+                    const settingsUrl = entry.settingsUrl ?? entry.settings_url ?? null;
+                    return html`
+                      <div class="settings-info-row">
+                        <span class="settings-info-row__label">${entry.label}</span>
+                        <span class="settings-info-row__value">
+                          ${entry.status === "unknown" ? "Check in System Settings" : entry.status}
+                          ${settingsUrl
+                            ? html`
+                                <button
+                                  class="config-bar__btn"
+                                  style="margin-left: 8px;"
+                                  @click=${() => props.onOpenDesktopPermissionSettings?.(entry.id)}
+                                >
+                                  Open
+                                </button>
+                              `
+                            : nothing}
+                        </span>
+                      </div>
+                    `;
+                  })}
+                </div>
+              </div>
+            `
+          : nothing}
+      </div>
+    `;
+  }
+
   const push = props.webPush;
   if (!push) {
     return html`
@@ -906,6 +1218,130 @@ function renderNotificationsSection(props: ConfigProps) {
               </div>
             `
           : nothing}
+    </div>
+  `;
+}
+
+function renderDesktopRuntimeSection(props: ConfigProps) {
+  if (!props.desktopMode) {
+    return nothing;
+  }
+  const runtime = props.desktopRuntime;
+  const source = runtime?.runtime_source ?? "unknown";
+  const updateSupported = props.desktopGatewayUpdateSupported !== false;
+  const appUpdateSupported = props.desktopAppUpdateSupported === true;
+  const appUpdateStatus = props.desktopAppUpdateStatus;
+  const appUpdateAvailable = appUpdateStatus?.available === true;
+  const manualAppUpdateAvailable =
+    !appUpdateSupported &&
+    runtime?.desktop_app_update_mode === "manual-release-page" &&
+    typeof props.onDesktopAppUpdate === "function";
+  const packagedRuntimeUpdateSupported = props.desktopPackagedRuntimeUpdateSupported === true;
+  return html`
+    <div class="settings-appearance">
+      <div class="settings-appearance__header">
+        <div>
+          <h3 class="settings-appearance__heading">Desktop Runtime</h3>
+          <p class="settings-appearance__description">
+            Desktop manages the local Gateway as an app runtime. Packaged builds update through the
+            desktop app instead of the in-bundle Gateway updater.
+          </p>
+        </div>
+      </div>
+      <div class="notification-status-grid">
+        <div>
+          <span class="muted">Runtime source</span>
+          <strong>${source}</strong>
+        </div>
+        <div>
+          <span class="muted">OpenClaw</span>
+          <strong>${runtime?.openclaw_version ?? "unknown"}</strong>
+        </div>
+        <div>
+          <span class="muted">Node</span>
+          <strong>${runtime?.node_version ?? "unknown"}</strong>
+        </div>
+        <div>
+          <span class="muted">Gateway updater</span>
+          <strong>${updateSupported ? "Available" : "Use desktop app update"}</strong>
+        </div>
+        <div>
+          <span class="muted">Desktop app updater</span>
+          <strong>
+            ${appUpdateSupported
+              ? "Available"
+              : manualAppUpdateAvailable
+                ? "Manual release page"
+                : "Not configured"}
+          </strong>
+        </div>
+        <div>
+          <span class="muted">Packaged runtime updater</span>
+          <strong>${packagedRuntimeUpdateSupported ? "Available" : "Desktop release only"}</strong>
+        </div>
+      </div>
+      ${updateSupported
+        ? nothing
+        : html`
+            <div class="callout info">
+              This packaged desktop runtime is immutable while the app is running. Install the next
+              desktop app release to update the bundled Gateway.
+            </div>
+          `}
+      ${manualAppUpdateAvailable
+        ? html`
+            <div class="settings-actions">
+              <button type="button" class="button" @click=${props.onDesktopAppUpdate}>
+                ${icons.download}
+                <span>Open desktop releases</span>
+              </button>
+            </div>
+          `
+        : nothing}
+      ${appUpdateSupported
+        ? html`
+            ${props.desktopAppUpdateMessage
+              ? html`
+                  <div class="callout ${props.desktopAppUpdateMessage.kind}">
+                    ${props.desktopAppUpdateMessage.text}
+                  </div>
+                `
+              : nothing}
+            ${appUpdateAvailable && appUpdateStatus?.version
+              ? html`
+                  <div class="callout success">
+                    Desktop update ${appUpdateStatus.version} is available.
+                  </div>
+                `
+              : nothing}
+            <div class="settings-actions">
+              <button
+                type="button"
+                class="button"
+                ?disabled=${props.desktopAppUpdateChecking}
+                @click=${props.onCheckDesktopAppUpdate}
+              >
+                ${props.desktopAppUpdateChecking ? icons.loader : icons.refresh}
+                <span>${props.desktopAppUpdateChecking ? "Checking..." : "Check app update"}</span>
+              </button>
+              <button
+                type="button"
+                class="button"
+                ?disabled=${props.desktopAppUpdateInstalling ||
+                !appUpdateAvailable ||
+                Boolean(appUpdateStatus?.error)}
+                @click=${props.onInstallDesktopAppUpdate}
+              >
+                ${props.desktopAppUpdateInstalling ? icons.loader : icons.download}
+                <span
+                  >${props.desktopAppUpdateInstalling
+                    ? "Installing..."
+                    : "Install app update"}</span
+                >
+              </button>
+            </div>
+          `
+        : nothing}
     </div>
   `;
 }
@@ -1395,7 +1831,11 @@ export function renderConfig(props: ConfigProps) {
     !props.updating &&
     hasChanges &&
     (formMode === "raw" ? true : canSaveForm);
-  const canUpdate = props.connected && !props.applying && !props.updating;
+  const canUpdate =
+    props.connected &&
+    !props.applying &&
+    !props.updating &&
+    (!props.desktopMode || props.desktopGatewayUpdateSupported !== false);
   const renderActionButtonContent = (busy: boolean, label: string, busyLabel: string) =>
     busy
       ? html`<span class="config-action-spinner" aria-hidden="true">${icons.loader}</span
@@ -1493,6 +1933,9 @@ export function renderConfig(props: ConfigProps) {
                 class="btn btn--sm"
                 ?disabled=${!canUpdate}
                 aria-busy=${props.updating ? "true" : "false"}
+                title=${props.desktopMode && props.desktopGatewayUpdateSupported === false
+                  ? "Update the desktop app to update the packaged Gateway runtime."
+                  : "Update OpenClaw"}
                 @click=${props.onUpdate}
               >
                 ${renderActionButtonContent(props.updating, "Update", "Updating…")}
@@ -1604,6 +2047,11 @@ export function renderConfig(props: ConfigProps) {
                 </button>
               </div>
             `
+          : nothing}
+        ${formMode === "form" &&
+        (props.activeSection === null || props.activeSection === "models") &&
+        !props.searchQuery.trim()
+          ? renderProviderManager(props)
           : nothing}
 
         <!-- Diff panel -->
@@ -1770,6 +2218,9 @@ export function renderConfig(props: ConfigProps) {
               : formMode === "form"
                 ? html`
                     ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
+                    ${props.activeSection === "update"
+                      ? renderDesktopRuntimeSection(props)
+                      : nothing}
                     ${props.schemaLoading
                       ? html`
                           <div class="config-loading">
