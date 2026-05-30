@@ -530,7 +530,11 @@ function isValidSupportFileList(value: unknown): boolean {
       typeof file.sizeBytes !== "number" ||
       !Number.isSafeInteger(file.sizeBytes) ||
       file.sizeBytes < 0 ||
-      file.sizeBytes > MAX_PROPOSAL_SUPPORT_FILE_BYTES
+      file.sizeBytes > MAX_PROPOSAL_SUPPORT_FILE_BYTES ||
+      (file.targetExisted !== undefined && typeof file.targetExisted !== "boolean") ||
+      (file.targetContentHash !== undefined &&
+        (typeof file.targetContentHash !== "string" ||
+          !/^[a-f0-9]{64}$/i.test(file.targetContentHash)))
     ) {
       return false;
     }

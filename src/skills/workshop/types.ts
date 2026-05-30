@@ -32,6 +32,8 @@ export type SkillProposalSupportFile = {
   path: string;
   sizeBytes: number;
   hash: string;
+  targetExisted?: boolean;
+  targetContentHash?: string;
 };
 
 export type SkillProposalRecord = {

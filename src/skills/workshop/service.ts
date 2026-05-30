@@ -49,6 +49,7 @@ import {
   type SkillProposalRecord,
   type SkillProposalReviseInput,
   type SkillProposalScan,
+  type SkillProposalSupportFile,
   type SkillProposalSupportFileInput,
   type SkillProposalUpdateInput,
 } from "./types.js";
@@ -237,7 +238,9 @@ export async function proposeCreateSkill(
       source: "openclaw-workspace",
     },
     scan: scanProposalBundle(proposalContent, supportFiles),
-    ...(supportFiles.length > 0 ? { supportFiles: supportFileMetadata(supportFiles) } : {}),
+    ...(supportFiles.length > 0
+      ? { supportFiles: await buildSupportFileMetadata(supportFiles) }
+      : {}),
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
@@ -269,6 +272,7 @@ export async function proposeUpdateSkill(
     name: targetSkill.skillKey,
     description: targetSkill.description,
     content: input.content,
+    fallbackFrontmatterContent: currentContent,
     date: now,
   });
   const id = createSkillProposalId(targetSkill.skillKey || targetSkill.name);
@@ -296,7 +300,9 @@ export async function proposeUpdateSkill(
       currentContentHash: hashSkillProposalContent(currentContent),
     },
     scan: scanProposalBundle(proposalContent, supportFiles),
-    ...(supportFiles.length > 0 ? { supportFiles: supportFileMetadata(supportFiles) } : {}),
+    ...(supportFiles.length > 0
+      ? { supportFiles: await buildSupportFileMetadata(supportFiles, targetSkill.baseDir) }
+      : {}),
     ...(goal ? { goal } : {}),
     ...(evidence ? { evidence } : {}),
   };
@@ -339,6 +345,13 @@ export async function reviseSkillProposal(
     input.supportFiles === undefined
       ? await readProposalSupportFiles(record)
       : prepareSkillProposalSupportFiles(input.supportFiles);
+  const supportFileMetadata =
+    supportFiles.length > 0
+      ? await buildSupportFileMetadata(
+          supportFiles,
+          record.kind === "update" ? record.target.skillDir : undefined,
+        )
+      : [];
   const nextVersion = nextProposalVersion(record.proposedVersion);
   const description = normalizeOptionalString(input.description) ?? record.description;
   const now = new Date().toISOString();
@@ -346,6 +359,7 @@ export async function reviseSkillProposal(
     name: record.target.skillKey,
     description,
     content: input.content,
+    fallbackFrontmatterContent: read.content,
     version: nextVersion,
     date: now,
   });
@@ -367,7 +381,7 @@ export async function reviseSkillProposal(
     scan: scanProposalBundle(proposalContent, supportFiles),
   };
   if (supportFiles.length > 0) {
-    revised.supportFiles = supportFileMetadata(supportFiles);
+    revised.supportFiles = supportFileMetadata;
   } else {
     delete revised.supportFiles;
   }
@@ -400,6 +414,11 @@ export async function quarantineSkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalRecord> {
   const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
+  if (read.record.status !== "pending") {
+    throw new Error(
+      `Only pending proposals can be quarantined. Current status: ${read.record.status}.`,
+    );
+  }
   const now = new Date().toISOString();
   const record: SkillProposalRecord = {
     ...read.record,
@@ -455,6 +474,7 @@ export async function applySkillProposal(
   }
   const previousSupportFiles = [];
   for (const file of supportFiles) {
+    const supportRecord = record.supportFiles?.find((entry) => entry.path === file.path);
     const previousSupportContent = await readWorkspaceSupportFile({
       skillDir: record.target.skillDir,
       relativePath: file.path,
@@ -463,6 +483,13 @@ export async function applySkillProposal(
       throw new Error(
         `Target support file already exists: ${path.join(record.target.skillDir, file.path)}`,
       );
+    }
+    if (record.kind === "update" && supportRecord) {
+      await assertSupportTargetUnchanged({
+        record,
+        file: supportRecord,
+        currentContent: previousSupportContent,
+      });
     }
     previousSupportFiles.push(
       previousSupportContent === null
@@ -558,12 +585,30 @@ function scanProposalBundle(
   };
 }
 
-function supportFileMetadata(files: readonly PreparedSkillProposalSupportFile[]) {
-  return files.map((file) => ({
-    path: file.path,
-    sizeBytes: file.sizeBytes,
-    hash: file.hash,
-  }));
+async function buildSupportFileMetadata(
+  files: readonly PreparedSkillProposalSupportFile[],
+  targetSkillDir?: string,
+): Promise<SkillProposalSupportFile[]> {
+  const out: SkillProposalSupportFile[] = [];
+  for (const file of files) {
+    const metadata: SkillProposalSupportFile = {
+      path: file.path,
+      sizeBytes: file.sizeBytes,
+      hash: file.hash,
+    };
+    if (targetSkillDir) {
+      const targetContent = await readWorkspaceSupportFile({
+        skillDir: targetSkillDir,
+        relativePath: file.path,
+      });
+      metadata.targetExisted = targetContent !== null;
+      if (targetContent !== null) {
+        metadata.targetContentHash = hashSkillProposalContent(targetContent);
+      }
+    }
+    out.push(metadata);
+  }
+  return out;
 }
 
 function nextProposalVersion(version: string): string {
@@ -580,6 +625,11 @@ async function markProposal(
   status: "rejected",
 ): Promise<SkillProposalRecord> {
   const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
+  if (read.record.status !== "pending") {
+    throw new Error(
+      `Only pending proposals can be rejected. Current status: ${read.record.status}.`,
+    );
+  }
   const now = new Date().toISOString();
   const record: SkillProposalRecord = {
     ...read.record,
@@ -590,6 +640,34 @@ async function markProposal(
   };
   await updateSkillProposalRecord({ record });
   return record;
+}
+
+async function assertSupportTargetUnchanged(params: {
+  record: SkillProposalRecord;
+  file: SkillProposalSupportFile;
+  currentContent: string | null;
+}): Promise<void> {
+  const { record, file, currentContent } = params;
+  if (file.targetExisted === false && currentContent !== null) {
+    await markProposalStale(
+      record,
+      `Target support file changed after proposal creation: ${file.path}`,
+    );
+    throw new Error("Target support file changed after proposal creation; proposal marked stale.");
+  }
+  if (file.targetExisted === true) {
+    const currentHash =
+      currentContent === null ? undefined : hashSkillProposalContent(currentContent);
+    if (currentHash !== file.targetContentHash) {
+      await markProposalStale(
+        record,
+        `Target support file changed after proposal creation: ${file.path}`,
+      );
+      throw new Error(
+        "Target support file changed after proposal creation; proposal marked stale.",
+      );
+    }
+  }
 }
 
 async function readRequiredProposal(

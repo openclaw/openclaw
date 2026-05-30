@@ -116,6 +116,53 @@ describe("skill workshop proposals", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
   });
 
+  it("preserves non-proposal frontmatter when proposals become active skills", async () => {
+    const workspaceDir = await makeWorkspace();
+    const created = await proposeCreateSkill({
+      workspaceDir,
+      name: "Frontmatter Skill",
+      description: "Preserve metadata",
+      content:
+        "---\nuser-invocable: false\nmetadata:\n  openclaw:\n    requires:\n      env:\n        - API_TOKEN\n---\n\n# Frontmatter Skill\n",
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: created.record.id }),
+    ).resolves.toBeDefined();
+    const createdSkill = await fs.readFile(
+      path.join(workspaceDir, "skills", "frontmatter-skill", "SKILL.md"),
+      "utf8",
+    );
+    expect(createdSkill).toContain("user-invocable: false");
+    expect(createdSkill).toContain("metadata:\n  openclaw:");
+    expect(createdSkill).not.toContain("status: proposal");
+    expect(createdSkill).not.toContain("version: ");
+    expect(createdSkill).not.toContain("date: ");
+
+    const skillDir = path.join(workspaceDir, "skills", "metadata-update");
+    await writeSkill({
+      dir: skillDir,
+      name: "metadata-update",
+      description: "Update metadata",
+      body: "# Metadata Update\n\nOld body.\n",
+    });
+    const skillFile = path.join(skillDir, "SKILL.md");
+    await fs.writeFile(
+      skillFile,
+      "---\nname: metadata-update\ndescription: Update metadata\nuser-invocable: false\n---\n\n# Metadata Update\n\nOld body.\n",
+      "utf8",
+    );
+    const updated = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "metadata-update",
+      content: "# Metadata Update\n\nNew body.\n",
+    });
+
+    await applySkillProposal({ workspaceDir, proposalId: updated.record.id });
+
+    await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("user-invocable: false");
+  });
+
   it("revises pending proposals in place before approval", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
@@ -334,6 +381,40 @@ describe("skill workshop proposals", () => {
     );
   });
 
+  it("marks update proposals stale when target support files change before apply", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "support-stale");
+    await writeSkill({
+      dir: skillDir,
+      name: "support-stale",
+      description: "Detect stale support files",
+      body: "# Support Stale\n\nOld checklist.\n",
+    });
+    await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+    await fs.writeFile(path.join(skillDir, "references", "qa.md"), "Old support file.\n", "utf8");
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "support-stale",
+      content: "# Support Stale\n\nNew checklist.\n",
+      supportFiles: [
+        {
+          path: "references/qa.md",
+          content: "New support file.\n",
+        },
+      ],
+    });
+
+    await fs.writeFile(path.join(skillDir, "references", "qa.md"), "Changed elsewhere.\n", "utf8");
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("Target support file changed after proposal creation");
+    expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("stale");
+    await expect(fs.readFile(path.join(skillDir, "references", "qa.md"), "utf8")).resolves.toBe(
+      "Changed elsewhere.\n",
+    );
+  });
+
   it("rejects and quarantines proposals without touching active skills", async () => {
     const workspaceDir = await makeWorkspace();
     const rejected = await proposeCreateSkill({
@@ -348,6 +429,12 @@ describe("skill workshop proposals", () => {
       description: "Draft quarantined proposal",
       content: "# Draft\n",
     });
+    const applied = await proposeCreateSkill({
+      workspaceDir,
+      name: "Draft Three",
+      description: "Draft applied proposal",
+      content: "# Draft\n",
+    });
 
     await rejectSkillProposal({
       workspaceDir,
@@ -359,9 +446,14 @@ describe("skill workshop proposals", () => {
       proposalId: quarantined.record.id,
       reason: "needs review",
     });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: applied.record.id,
+    });
 
     const manifest = await readSkillProposalManifest();
     expect(manifest.proposals.map((entry) => [entry.skillKey, entry.status])).toEqual([
+      ["draft-three", "applied"],
       ["draft-two", "quarantined"],
       ["draft-one", "rejected"],
     ]);
@@ -371,6 +463,28 @@ describe("skill workshop proposals", () => {
     await expect(
       fs.access(path.join(workspaceDir, "skills", "draft-two", "SKILL.md")),
     ).rejects.toThrow();
+
+    await expect(
+      rejectSkillProposal({
+        workspaceDir,
+        proposalId: rejected.record.id,
+        reason: "already rejected",
+      }),
+    ).rejects.toThrow("Only pending proposals can be rejected");
+    await expect(
+      quarantineSkillProposal({
+        workspaceDir,
+        proposalId: quarantined.record.id,
+        reason: "already quarantined",
+      }),
+    ).rejects.toThrow("Only pending proposals can be quarantined");
+    await expect(
+      rejectSkillProposal({
+        workspaceDir,
+        proposalId: applied.record.id,
+        reason: "already applied",
+      }),
+    ).rejects.toThrow("Only pending proposals can be rejected");
   });
 
   it("rebuilds the listing manifest when the fast manifest is corrupt", async () => {
