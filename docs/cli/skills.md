@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check)"
+summary: "CLI reference for `openclaw skills` (search/install/update/verify/list/info/check/workshop)"
 read_when:
   - You want to see which skills are available and ready to run
   - You want to search ClawHub or install skills from ClawHub, Git, or local directories
@@ -53,6 +53,13 @@ openclaw skills info <name> --agent <id>
 openclaw skills check
 openclaw skills check --agent <id>
 openclaw skills check --json
+openclaw skills workshop propose-create --name "qa-check" --description "QA checklist" --proposal ./PROPOSAL.md
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+openclaw skills workshop list
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop apply <proposal-id>
+openclaw skills workshop reject <proposal-id> --reason "Not reusable"
+openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
 `search`, `update`, and `verify` use ClawHub directly. `install <slug>` installs
@@ -115,6 +122,48 @@ Notes:
 - `list`, `info`, and `check` write their rendered output to stdout. With
   `--json`, that means the machine-readable payload stays on stdout for pipes
   and scripts.
+
+## Skill Workshop proposals
+
+`openclaw skills workshop` manages pending skill proposals in the selected
+workspace. Proposals are durable drafts under
+`<workspace>/.openclaw/skill-workshop/proposals/`; they are not active skills
+until applied.
+
+Create a proposal from a draft markdown file:
+
+```bash
+openclaw skills workshop propose-create \
+  --name "qa-check" \
+  --description "Repeatable QA checklist" \
+  --proposal ./PROPOSAL.md
+```
+
+Update an existing workspace skill through the same pending path:
+
+```bash
+openclaw skills workshop propose-update qa-check --proposal ./PROPOSAL.md
+```
+
+The supplied draft is stored as `PROPOSAL.md` with proposal-only frontmatter:
+
+```markdown
+---
+name: qa-check
+description: Repeatable QA checklist
+status: proposal
+version: v1
+---
+```
+
+Applying a proposal writes the active `SKILL.md` into the workspace `skills/`
+root, strips `status` and proposal `version` from the frontmatter, scans the
+draft, writes rollback metadata, and refuses stale updates when the target skill
+changed after the proposal was created.
+
+Agents can create pending proposals through the `skill_research` tool when they
+identify reusable work, but applying, rejecting, or quarantining remains an
+explicit operator action through the CLI or Gateway.
 
 ## Related
 

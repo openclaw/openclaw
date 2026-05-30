@@ -118,22 +118,46 @@ workspace skill overrides them. You can gate them via
 See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for
 the tool surface those skills teach.
 
-## Skill Workshop
+## Skill Workshop proposals
 
-The optional, experimental **Skill Workshop** plugin can create or update
-workspace skills from reusable procedures observed during agent work. It
-is disabled by default and must be explicitly enabled via
-`plugins.entries.skill-workshop`.
+Skill Workshop proposals are durable drafts for creating or updating workspace
+skills without silently mutating active `SKILL.md` files. OpenClaw stores them
+under:
 
-Skill Workshop writes only to `<workspace>/skills`, scans generated
-content, supports pending approval or automatic safe writes, quarantines
-unsafe proposals, and refreshes the skill snapshot after successful
-writes so new skills become available without a Gateway restart.
+```text
+<workspace>/.openclaw/skill-workshop/
+  proposals.json
+  proposals/<proposal-id>/
+    proposal.json
+    PROPOSAL.md
+    rollback.json
+```
 
-Use it for corrections such as _"next time, verify GIF attribution"_ or
-hard-won workflows such as media QA checklists. Start with pending
-approval; use automatic writes only in trusted workspaces after reviewing
-its proposals. Full guide: [Skill Workshop plugin](/plugins/skill-workshop).
+`proposal.json` is the canonical proposal record. `proposals.json` is the fast
+listing manifest and can be rebuilt from proposal folders when missing or stale.
+`PROPOSAL.md` marks draft content explicitly with `status: proposal` and
+`version: v1`; those proposal-only fields are stripped when the proposal is
+applied as an active `SKILL.md`.
+
+Only pending proposals can be applied. Apply writes to the selected workspace
+`skills/` root, runs the skill scanner, writes rollback metadata, refuses to
+overwrite an existing create target, and marks update proposals stale when the
+target skill changed since proposal creation. Reject and quarantine update only
+proposal metadata; they do not touch active skills.
+
+Use the CLI for operator review:
+
+```bash
+openclaw skills workshop list
+openclaw skills workshop inspect <proposal-id>
+openclaw skills workshop apply <proposal-id>
+openclaw skills workshop reject <proposal-id>
+openclaw skills workshop quarantine <proposal-id>
+```
+
+Agents can draft proposals through the `skill_research` tool when they identify
+work worth reusing. The tool creates pending proposals only; it cannot apply or
+delete skills.
 
 ## ClawHub (install and sync)
 
