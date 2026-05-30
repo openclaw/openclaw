@@ -7,7 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
+import { __testing as agentViaGatewayTesting, agentCliCommand } from "./agent-via-gateway.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
 const loadConfig = vi.hoisted(() => vi.fn());
