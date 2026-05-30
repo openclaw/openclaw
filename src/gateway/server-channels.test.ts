@@ -405,6 +405,7 @@ describe("server-channels auto restart", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     await recoveryStopTask;
 
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
     rejectFirstTask.resolve();
     await waitForMicrotaskCondition(
       () => startAccount.mock.calls.length === 2,
@@ -416,6 +417,53 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
     expect(account?.lastError).toBeNull();
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("waits for an explicit start after recovery stop timeout", async () => {
+    const releaseFirstTask = createDeferred();
+    let startCount = 0;
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      startCount += 1;
+      abortSignal.addEventListener("abort", () => {}, { once: true });
+      if (startCount === 1) {
+        await releaseFirstTask.promise;
+        return;
+      }
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await recoveryStopTask;
+
+    releaseFirstTask.resolve();
+    await waitForMicrotaskCondition(() => {
+      const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+      return account?.running === false && account.restartPending === false;
+    }, "expected timed-out recovery stop to settle without restarting");
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
+
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected explicit post-timeout start to restart the channel",
+    );
+
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
@@ -453,6 +501,7 @@ describe("server-channels auto restart", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       await recoveryStopTask;
 
+      await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
       releaseFirstTask.resolve();
       await waitForMicrotaskCondition(
         () =>
