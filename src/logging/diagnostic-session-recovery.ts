@@ -16,6 +16,7 @@ export type DiagnosticSessionRecoverySkipReason =
   | "active_lane_task"
   | "already_in_flight"
   | "missing_session_ref"
+  | "shared_lane_backpressure"
   | "stale_session_state";
 
 export type DiagnosticSessionRecoveryNoopReason = "no_active_work";

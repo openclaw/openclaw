@@ -8,7 +8,11 @@ import {
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
-import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
+import {
+  getCommandLaneSnapshot,
+  getCommandLaneSnapshots,
+  resetCommandLane,
+} from "../process/command-queue.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
@@ -79,6 +83,28 @@ function formatRecoveryContext(
     fields.push(`laneQueued=${extra.queuedCount}`);
   }
   return fields.join(" ");
+}
+
+function isSessionLaneSnapshot(lane: string): boolean {
+  return lane.startsWith("session:");
+}
+
+function findSharedLaneBackpressure(
+  sessionLane: string,
+): { lane: string; activeCount: number; queuedCount: number } | undefined {
+  for (const snapshot of getCommandLaneSnapshots()) {
+    if (snapshot.lane === sessionLane || isSessionLaneSnapshot(snapshot.lane)) {
+      continue;
+    }
+    if (snapshot.activeCount > 0 || snapshot.queuedCount > 0) {
+      return {
+        lane: snapshot.lane,
+        activeCount: snapshot.activeCount,
+        queuedCount: snapshot.queuedCount,
+      };
+    }
+  }
+  return undefined;
 }
 
 export async function recoverStuckDiagnosticSession(
@@ -229,18 +255,41 @@ export async function recoverStuckDiagnosticSession(
     if (!activeSessionId && sessionLane) {
       const laneSnapshot = getCommandLaneSnapshot(sessionLane);
       if (laneSnapshot.activeCount > 0) {
-        const outcome: StuckSessionRecoveryOutcome = {
-          status: "skipped",
-          action: "keep_lane",
-          reason: "active_lane_task",
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          lane: sessionLane,
-          activeCount: laneSnapshot.activeCount,
-          queuedCount: laneSnapshot.queuedCount,
-        };
-        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
-        return outcome;
+        const sharedBackpressure = findSharedLaneBackpressure(sessionLane);
+        if (sharedBackpressure) {
+          const outcome: StuckSessionRecoveryOutcome = {
+            status: "skipped",
+            action: "keep_lane",
+            reason: "shared_lane_backpressure",
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            lane: sessionLane,
+          };
+          diag.warn(
+            `stuck session recovery skipped: reason=shared_lane_backpressure ${formatRecoveryContext(
+              params,
+              {
+                lane: sessionLane,
+                activeCount: laneSnapshot.activeCount,
+                queuedCount: laneSnapshot.queuedCount,
+              },
+            )} sharedLane=${sharedBackpressure.lane} sharedLaneActive=${
+              sharedBackpressure.activeCount
+            } sharedLaneQueued=${sharedBackpressure.queuedCount}`,
+          );
+          diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+          return outcome;
+        }
+        diag.warn(
+          `stuck session recovery releasing stale lane task: reason=stale_active_lane_task action=release_lane ${formatRecoveryContext(
+            params,
+            {
+              lane: sessionLane,
+              activeCount: laneSnapshot.activeCount,
+              queuedCount: laneSnapshot.queuedCount,
+            },
+          )}`,
+        );
       }
     }
 

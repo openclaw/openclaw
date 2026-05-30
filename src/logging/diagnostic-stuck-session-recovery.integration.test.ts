@@ -158,7 +158,7 @@ describe("stuck session recovery integration", () => {
     expect(getQueueSize(lane)).toBe(0);
   });
 
-  it("does not reset a blocked lane while unregistered lane work is still active", async () => {
+  it("resets a stale blocked lane when no active run is registered", async () => {
     const sessionKey = "agent:main:unregistered-work";
     const sessionId = "unregistered-work-session";
     const lane = resolveEmbeddedSessionLane(sessionKey);
@@ -179,10 +179,7 @@ describe("stuck session recovery integration", () => {
       queueDepth: 1,
     });
 
-    await expect(Promise.race([queued, delay(100)])).resolves.toBe("blocked");
-    expect(getQueueSize(lane)).toBe(2);
-
-    expect(resetCommandLane(lane)).toBe(1);
     await expect(queued).resolves.toBe("drained");
+    expect(getQueueSize(lane)).toBe(0);
   });
 });
