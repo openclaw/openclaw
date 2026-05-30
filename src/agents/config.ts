@@ -313,23 +313,6 @@ function isManagedByGlobalPackageManager(
   });
 }
 
-export function getSelfUpdateCommand(
-  packageName: string,
-  npmCommand?: string[],
-  updatePackageName = packageName,
-): SelfUpdateCommand | undefined {
-  const method = detectInstallMethod();
-  const command = getSelfUpdateCommandForMethod(method, packageName, updatePackageName, npmCommand);
-  if (
-    !command ||
-    !isManagedByGlobalPackageManager(method, packageName, npmCommand) ||
-    !isSelfUpdatePathWritable()
-  ) {
-    return undefined;
-  }
-  return command;
-}
-
 export function getSelfUpdateUnavailableInstruction(
   packageName: string,
   npmCommand?: string[],
@@ -350,15 +333,6 @@ export function getSelfUpdateUnavailableInstruction(
     return `This installation is not managed by a global ${method} install. Update it with the package manager, wrapper, or source checkout that provides it.`;
   }
   return `Update ${updatePackageName} using the package manager, wrapper, or source checkout that provides this installation.`;
-}
-
-export function getUpdateInstruction(packageName: string): string {
-  const method = detectInstallMethod();
-  const command = getSelfUpdateCommandForMethod(method, packageName);
-  if (command) {
-    return `Run: ${command.display}`;
-  }
-  return getSelfUpdateUnavailableInstruction(packageName);
 }
 
 // =============================================================================
@@ -439,29 +413,6 @@ export function getExamplesPath(): string {
   return resolve(join(getPackageDir(), "examples"));
 }
 
-/** Get path to CHANGELOG.md */
-export function getChangelogPath(): string {
-  return resolve(join(getPackageDir(), "CHANGELOG.md"));
-}
-
-/**
- * Get path to built-in interactive assets directory.
- * - For Bun binary: assets/ next to executable
- * - For Node.js (dist/): dist/agents/modes/interactive/assets/
- * - For tsx (src/): src/agents/modes/interactive/assets/
- */
-export function getInteractiveAssetsDir(): string {
-  if (isBunBinary) {
-    return join(getPackageDir(), "assets");
-  }
-  return join(getPackageSourceOrDistDir(), "agents", "modes", "interactive", "assets");
-}
-
-/** Get path to a bundled interactive asset */
-export function getBundledInteractiveAssetPath(name: string): string {
-  return join(getInteractiveAssetsDir(), name);
-}
-
 // =============================================================================
 // App Config (from package.json openclawConfig)
 // =============================================================================
@@ -478,14 +429,11 @@ interface PackageJson {
 const pkg = JSON.parse(readFileSync(getPackageJsonPath(), "utf-8")) as PackageJson;
 
 const openClawConfigName: string | undefined = pkg.openclawConfig?.name;
-export const PACKAGE_NAME: string = pkg.name || "openclaw/plugin-sdk/agent-sessions";
 export const APP_NAME: string = openClawConfigName || "openclaw";
-export const APP_TITLE: string = openClawConfigName ? APP_NAME : "OpenClaw";
 export const CONFIG_DIR_NAME: string = pkg.openclawConfig?.configDir || ".openclaw";
 export const VERSION: string = pkg.version || "0.0.0";
 
 export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_AGENT_DIR`;
-export const ENV_SESSION_DIR = `${APP_NAME.toUpperCase()}_AGENT_SESSION_DIR`;
 
 export function expandTildePath(path: string): string {
   if (path === "~") {
@@ -495,14 +443,6 @@ export function expandTildePath(path: string): string {
     return homedir() + path.slice(1);
   }
   return path;
-}
-
-const DEFAULT_SHARE_VIEWER_URL = "https://openclaw.ai/session/";
-
-/** Get the share viewer URL for a gist ID */
-export function getShareViewerUrl(gistId: string): string {
-  const baseUrl = process.env.OPENCLAW_SHARE_VIEWER_URL || DEFAULT_SHARE_VIEWER_URL;
-  return `${baseUrl}#${gistId}`;
 }
 
 // =============================================================================
@@ -523,42 +463,12 @@ export function getCustomThemesDir(): string {
   return join(getAgentDir(), "themes");
 }
 
-/** Get path to models.json */
-export function getModelsPath(): string {
-  return join(getAgentDir(), "models.json");
-}
-
-/** Get path to auth.json */
-export function getAuthPath(): string {
-  return join(getAgentDir(), "auth.json");
-}
-
-/** Get path to settings.json */
-export function getSettingsPath(): string {
-  return join(getAgentDir(), "settings.json");
-}
-
-/** Get path to tools directory */
-export function getToolsDir(): string {
-  return join(getAgentDir(), "tools");
-}
-
 /** Get path to managed binaries directory (fd, rg) */
 export function getBinDir(): string {
   return join(getAgentDir(), "bin");
 }
 
-/** Get path to prompt templates directory */
-export function getPromptsDir(): string {
-  return join(getAgentDir(), "prompts");
-}
-
 /** Get path to sessions directory */
 export function getSessionsDir(): string {
   return join(getAgentDir(), "sessions");
-}
-
-/** Get path to debug log file */
-export function getDebugLogPath(): string {
-  return join(getAgentDir(), `${APP_NAME}-debug.log`);
 }

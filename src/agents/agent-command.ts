@@ -468,6 +468,7 @@ function resolveExplicitAgentCommandSessionKey(params: {
 }): string | undefined {
   if (
     isUnscopedSessionKeySentinel(params.rawExplicitSessionKey) &&
+    !params.agentIdOverride &&
     !params.shouldScopeDefaultAgentKey
   ) {
     return params.rawExplicitSessionKey;

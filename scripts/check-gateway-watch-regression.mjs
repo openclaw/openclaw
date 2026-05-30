@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import {
   BUILD_STAMP_FILE,
   writeBuildStamp,
@@ -71,11 +72,12 @@ export function updateWatchBuildDetection(state, chunk) {
   };
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = { ...DEFAULTS };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    const next = argv[i + 1];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    const next = args[i + 1];
     const readValue = () => {
       if (!next) {
         throw new Error(`Missing value for ${arg}`);

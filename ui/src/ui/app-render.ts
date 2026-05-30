@@ -6,6 +6,7 @@ import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
@@ -155,7 +156,9 @@ import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.t
 import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
+  isSessionKeyTiedToAgent,
   isSubagentSessionKey,
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
@@ -252,7 +255,40 @@ function isSidebarSessionBusy(state: AppViewState) {
   );
 }
 
+function resolveSidebarDefaultAgentId(state: AppViewState): string {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  return normalizeAgentId(
+    state.agentsList?.defaultId ?? snapshot?.sessionDefaults?.defaultAgentId ?? "main",
+  );
+}
+
+function resolveSidebarSelectedAgentId(state: AppViewState): string {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const sessionKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
+  const fallbackAgentId =
+    sessionKey === "global" || sessionKey === "unknown"
+      ? (state.assistantAgentId ?? resolveSidebarDefaultAgentId(state))
+      : resolveSidebarDefaultAgentId(state);
+  return normalizeAgentId(fallbackAgentId);
+}
+
+function isSidebarSessionForSelectedAgent(
+  state: AppViewState,
+  row: GatewaySessionRow,
+  selectedAgentId: string,
+): boolean {
+  return isSessionKeyTiedToAgent(row.key, selectedAgentId, resolveSidebarDefaultAgentId(state));
+}
+
 function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
+  const selectedAgentId = resolveSidebarSelectedAgentId(state);
+  const shouldFilterByAgent =
+    normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
   return (state.sessionsResult?.sessions ?? [])
     .filter(
       (row) =>
@@ -262,7 +298,8 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
         row.kind !== "cron" &&
         !isCronSessionKey(row.key) &&
         !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy,
+        !row.spawnedBy &&
+        (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
     )
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 5);
@@ -2910,6 +2947,7 @@ export function renderApp(state: AppViewState) {
                     state.setTab("sessions" as import("./navigation.ts").Tab);
                     void loadSessions(state, {
                       ...createChatSessionsLoadOverrides(state),
+                      ...scopedAgentListParamsForSession(state, state.sessionKey),
                     });
                   },
                   onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),

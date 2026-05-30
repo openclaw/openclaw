@@ -129,6 +129,24 @@ function expectThreadedIsolatedRunner(config: {
   expect(testConfig.runner).toBeUndefined();
 }
 
+function expectForkedNonIsolatedRunner(config: {
+  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
+}) {
+  const testConfig = requireTestConfig(config);
+  expect(testConfig.pool).toBe("forks");
+  expect(testConfig.isolate).toBe(false);
+  expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+}
+
+function expectForkedIsolatedRunner(config: {
+  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
+}) {
+  const testConfig = requireTestConfig(config);
+  expect(testConfig.pool).toBe("forks");
+  expect(testConfig.isolate).toBe(true);
+  expect(testConfig.runner).toBeUndefined();
+}
+
 describe("resolveVitestIsolation", () => {
   it("aliases private QA plugin SDK subpaths for source tests only", () => {
     for (const subpath of PRIVATE_PLUGIN_SDK_SUBPATHS) {
@@ -384,10 +402,10 @@ describe("scoped vitest configs", () => {
       expectThreadedNonIsolatedRunner(config);
     }
 
-    expectThreadedNonIsolatedRunner(defaultCommandsConfig);
+    expectForkedNonIsolatedRunner(defaultCommandsConfig);
 
     expectThreadedNonIsolatedRunner(defaultUiConfig);
-    expectThreadedIsolatedRunner(defaultInfraConfig);
+    expectForkedIsolatedRunner(defaultInfraConfig);
   });
 
   it("keeps the process lane off the openclaw runtime setup", () => {

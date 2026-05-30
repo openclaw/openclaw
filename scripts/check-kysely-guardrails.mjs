@@ -127,8 +127,7 @@ function collectImports(sourceFile) {
           const importedName = element.propertyName?.text ?? element.name.text;
           if (
             importedName === "executeSqliteQuerySync" ||
-            importedName === "executeSqliteQueryTakeFirstSync" ||
-            importedName === "executeSqliteQueryTakeFirstOrThrowSync"
+            importedName === "executeSqliteQueryTakeFirstSync"
           ) {
             syncHelperNames.add(element.name.text);
           }

@@ -1453,8 +1453,12 @@ describe("provider-runtime", () => {
         auth: [],
         matchesContextOverflowError: ({ errorMessage }) =>
           /\bcontent_filter\b.*\btoo long\b/i.test(errorMessage),
-        classifyFailoverReason: ({ errorMessage }) =>
-          /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined,
+        classifyFailoverReason: ({ errorMessage, code, status }) => {
+          if (status === 403 && code === "PROVIDER_QUOTA_EXHAUSTED") {
+            return "billing";
+          }
+          return /\bquota exceeded\b/i.test(errorMessage) ? "rate_limit" : undefined;
+        },
       },
     ]);
 
@@ -1476,6 +1480,69 @@ describe("provider-runtime", () => {
         },
       }),
     ).toBe("rate_limit");
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "azure-openai-responses",
+        context: {
+          provider: "azure-openai-responses",
+          errorMessage: "Forbidden",
+          status: 403,
+          code: "PROVIDER_QUOTA_EXHAUSTED",
+        },
+      }),
+    ).toBe("billing");
+  });
+
+  it("falls back to all failover hooks when a provider owner cannot be resolved", () => {
+    const classifyFailoverReason = vi.fn(({ errorMessage }) =>
+      /\bconcurrency limit breached\b/i.test(errorMessage) ? "rate_limit" : undefined,
+    );
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "together",
+        label: "Together",
+        auth: [],
+        classifyFailoverReason,
+      },
+    ]);
+
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "my-together",
+        context: {
+          provider: "my-together",
+          errorMessage: "concurrency limit breached",
+        },
+      }),
+    ).toBe("rate_limit");
+    expect(classifyFailoverReason).toHaveBeenCalledWith({
+      provider: "my-together",
+      errorMessage: "concurrency limit breached",
+    });
+  });
+
+  it("does not broad-scan failover hooks for unresolved providers with structured descriptors", () => {
+    const classifyFailoverReason = vi.fn(() => "overloaded" as const);
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "mantle",
+        label: "Mantle",
+        auth: [],
+        classifyFailoverReason,
+      },
+    ]);
+
+    expect(
+      classifyProviderFailoverReasonWithPlugin({
+        provider: "my-openai-compatible",
+        context: {
+          provider: "my-openai-compatible",
+          status: 403,
+          errorMessage: "service unavailable",
+        },
+      }),
+    ).toBeUndefined();
+    expect(classifyFailoverReason).not.toHaveBeenCalled();
   });
 
   it("resolves stream wrapper hooks through hook-only aliases without provider ownership", () => {
