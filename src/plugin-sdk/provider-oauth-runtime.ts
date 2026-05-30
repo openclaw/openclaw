@@ -1,6 +1,7 @@
 import type { Model } from "../llm/types.js";
 import {
   positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "../shared/number-coercion.js";
 
@@ -262,12 +263,12 @@ export function resolveOAuthTokenExpiresAt(
   options: { nowMs?: number; refreshSkewMs?: number } = {},
 ): number | undefined {
   const lifetimeMs = resolveOAuthTokenLifetimeMs(value);
-  if (lifetimeMs === undefined) {
-    return undefined;
-  }
-
-  const expiresAt = (options.nowMs ?? Date.now()) + lifetimeMs - (options.refreshSkewMs ?? 0);
-  return Number.isSafeInteger(expiresAt) ? expiresAt : undefined;
+  return lifetimeMs === undefined
+    ? undefined
+    : resolveExpiresAtMsFromDurationMs(lifetimeMs, {
+        nowMs: options.nowMs,
+        bufferMs: options.refreshSkewMs,
+      });
 }
 
 export function createOAuthLoginCancelledError(): Error {

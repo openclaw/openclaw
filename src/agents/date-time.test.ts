@@ -29,4 +29,10 @@ describe("formatDateStamp", () => {
 
     expect(formatDateStamp(8_640_000_000_000_001, "UTC")).toBe("2026-05-30");
   });
+
+  it("falls back to epoch when both nowMs and Date.now are outside Date range", () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    expect(formatDateStamp(8_640_000_000_000_001, "UTC")).toBe("1970-01-01");
+  });
 });

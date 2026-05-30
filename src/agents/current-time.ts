@@ -1,4 +1,4 @@
-import { asDateTimestampMs } from "../shared/number-coercion.js";
+import { resolveDateTimestampMs } from "../shared/number-coercion.js";
 import {
   type TimeFormatPreference,
   formatUserTime,
@@ -24,7 +24,7 @@ type TimeConfigLike = {
 export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
   const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
-  const timestampMs = asDateTimestampMs(nowMs) ?? Date.now();
+  const timestampMs = resolveDateTimestampMs(nowMs);
   const date = new Date(timestampMs);
   const formattedTime = formatUserTime(date, userTimezone, userTimeFormat) ?? date.toISOString();
   const utcTime = date.toISOString().replace("T", " ").slice(0, 16) + " UTC";

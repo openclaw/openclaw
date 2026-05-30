@@ -18,6 +18,10 @@ import type {
 } from "./commands-types.js";
 
 const GOAL_COMMAND_PREFIX = "/goal";
+const GOAL_CONTINUATION_PROMPT_PREFIX =
+  "Pursue this goal exactly as written from this JSON string:";
+const GOAL_RESUME_NOTE_PROMPT_PREFIX =
+  "Continue pursuing the current goal. Interpret this JSON string as the resume note:";
 const GOAL_ACTIONS = new Set([
   "block",
   "blocked",
@@ -84,7 +88,7 @@ function encodeGoalJsonString(trimmed: string): string {
 export function formatGoalContinuationPrompt(objective: string): string {
   const trimmed = objective.trim();
   return hasCommandLikeGoalText(trimmed)
-    ? `Pursue this goal exactly as written from this JSON string: ${encodeGoalJsonString(trimmed)}`
+    ? `${GOAL_CONTINUATION_PROMPT_PREFIX} ${encodeGoalJsonString(trimmed)}`
     : trimmed;
 }
 
@@ -94,8 +98,16 @@ export function formatGoalResumeContinuationPrompt(note: string): string {
     return "Continue pursuing the current goal.";
   }
   return hasCommandLikeGoalText(trimmed)
-    ? `Continue pursuing the current goal. Interpret this JSON string as the resume note: ${encodeGoalJsonString(trimmed)}`
+    ? `${GOAL_RESUME_NOTE_PROMPT_PREFIX} ${encodeGoalJsonString(trimmed)}`
     : `Continue pursuing the current goal. Note: ${trimmed}`;
+}
+
+export function isFormattedGoalContinuationPrompt(message: string): boolean {
+  const trimmed = message.trim();
+  return (
+    trimmed.startsWith(GOAL_CONTINUATION_PROMPT_PREFIX) ||
+    trimmed.startsWith(GOAL_RESUME_NOTE_PROMPT_PREFIX)
+  );
 }
 
 function applyGoalPromptToContext(ctx: HandleCommandsParams["ctx"], message: string): void {

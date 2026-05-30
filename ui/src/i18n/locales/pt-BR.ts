@@ -564,6 +564,8 @@ export const pt_BR: TranslationMap = {
     eventMoved: "Movido",
     eventMovedTo: "Movido para {status}",
     eventLinked: "Sessão vinculada",
+    eventSpecified: "Specified",
+    eventDecomposed: "Decomposed",
     eventClaimed: "Reivindicado",
     eventHeartbeat: "Heartbeat",
     eventExecutionUpdated: "Agente atualizado",

@@ -10,6 +10,7 @@ import {
   parsePositiveInt,
   parsePositiveNumber,
 } from "./lib/numeric-options.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
@@ -23,6 +24,7 @@ const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
 
 function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     outputDir: path.join(
       process.cwd(),
@@ -39,10 +41,10 @@ function parseArgs(argv) {
     cpuCoreWarn: DEFAULT_CPU_CORE_WARN,
     hotWallWarnMs: DEFAULT_HOT_WALL_WARN_MS,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     const readValue = () => {
-      const value = argv[index + 1];
+      const value = args[index + 1];
       if (!value) {
         throw new Error(`Missing value for ${arg}`);
       }

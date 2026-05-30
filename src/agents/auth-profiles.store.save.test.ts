@@ -1160,6 +1160,121 @@ describe("saveAuthProfileStore", () => {
     }
   });
 
+  it("does not rewrite auth secrets when only runtime scheduling state changes", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-only-"));
+    try {
+      const profileId = "anthropic:default";
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-anthropic-plain",
+          },
+        },
+        usageStats: {
+          [profileId]: { lastUsed: 1 },
+        },
+      };
+
+      saveAuthProfileStore(store, agentDir);
+
+      const authPath = resolveAuthStorePath(agentDir);
+      const statePath = resolveAuthStatePath(agentDir);
+      const oldTimestamp = new Date("2001-01-01T00:00:00.000Z");
+      await fs.utimes(authPath, oldTimestamp, oldTimestamp);
+      await fs.utimes(statePath, oldTimestamp, oldTimestamp);
+
+      saveAuthProfileStore(
+        {
+          ...store,
+          usageStats: {
+            [profileId]: { lastUsed: 2 },
+          },
+        },
+        agentDir,
+      );
+
+      expect((await fs.stat(authPath)).mtimeMs).toBe(oldTimestamp.getTime());
+      expect((await fs.stat(statePath)).mtimeMs).toBeGreaterThan(oldTimestamp.getTime());
+
+      const authProfiles = JSON.parse(await fs.readFile(authPath, "utf8")) as {
+        usageStats?: unknown;
+      };
+      expect(authProfiles.usageStats).toBeUndefined();
+
+      const authState = JSON.parse(await fs.readFile(statePath, "utf8")) as {
+        usageStats?: Record<string, { lastUsed?: number }>;
+      };
+      expect(authState.usageStats?.[profileId]?.lastUsed).toBe(2);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "repairs auth secrets permissions when the payload is unchanged",
+    async () => {
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-permissions-"));
+      try {
+        const store: AuthProfileStore = {
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-anthropic-plain",
+            },
+          },
+        };
+
+        saveAuthProfileStore(store, agentDir);
+
+        const authPath = resolveAuthStorePath(agentDir);
+        await fs.chmod(authPath, 0o644);
+
+        saveAuthProfileStore(store, agentDir);
+
+        expect((await fs.stat(authPath)).mode & 0o777).toBe(0o600);
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("does not rewrite unchanged runtime scheduling state", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-same-"));
+    try {
+      const profileId = "anthropic:default";
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-anthropic-plain",
+          },
+        },
+        usageStats: {
+          [profileId]: { lastUsed: 1 },
+        },
+      };
+
+      saveAuthProfileStore(store, agentDir);
+
+      const statePath = resolveAuthStatePath(agentDir);
+      const oldTimestamp = new Date("2001-01-01T00:00:00.000Z");
+      await fs.utimes(statePath, oldTimestamp, oldTimestamp);
+
+      saveAuthProfileStore(store, agentDir);
+
+      expect((await fs.stat(statePath)).mtimeMs).toBe(oldTimestamp.getTime());
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not persist unchanged inherited main OAuth when saving secondary local updates", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-inherited-"));
     const stateDir = path.join(root, ".openclaw");

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { asDateTimestampMs } from "../shared/number-coercion.js";
+import { resolveDateTimestampMs } from "../shared/number-coercion.js";
 
 export type TimeFormatPreference = "auto" | "12" | "24";
 export type ResolvedTimeFormat = "12" | "24";
@@ -42,7 +42,7 @@ export function resolveUserTimeFormat(preference?: TimeFormatPreference): Resolv
 }
 
 export function formatDateStamp(nowMs: number, timeZone: string): string {
-  const timestampMs = asDateTimestampMs(nowMs) ?? Date.now();
+  const timestampMs = resolveDateTimestampMs(nowMs);
   const date = new Date(timestampMs);
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,

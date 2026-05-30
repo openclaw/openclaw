@@ -466,6 +466,17 @@ function buildLlmCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildModelCatalogCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/model-catalog-core/src/index.ts",
+    "configured-model-refs": "packages/model-catalog-core/src/configured-model-refs.ts",
+    "provider-id": "packages/model-catalog-core/src/provider-id.ts",
+    "provider-model-id-normalization":
+      "packages/model-catalog-core/src/provider-model-id-normalization.ts",
+    "provider-model-id-normalize": "packages/model-catalog-core/src/provider-model-id-normalize.ts",
+  };
+}
+
 function buildLlmRuntimeDistEntries(): Record<string, string> {
   return {
     index: "packages/llm-runtime/src/index.ts",
@@ -649,6 +660,12 @@ export default defineConfig([
     deps: {
       neverBundle: shouldExternalizeLlmCoreDependency,
     },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildModelCatalogCoreDistEntries(),
+    outDir: "packages/model-catalog-core/dist",
   }),
   nodeWorkspacePackageBuildConfig({
     clean: true,

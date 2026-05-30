@@ -347,6 +347,7 @@ export function renderReadingIndicatorGroup(
 export function renderStreamingGroup(
   text: string,
   startedAt: number,
+  isStreaming = true,
   onOpenSidebar?: (content: SidebarContent) => void,
   assistant?: AssistantIdentity,
   basePath?: string,
@@ -365,7 +366,7 @@ export function renderStreamingGroup(
             timestamp: startedAt,
           },
           `stream:${startedAt}`,
-          { isStreaming: true, showReasoning: false },
+          { isStreaming, showReasoning: false },
           onOpenSidebar,
         )}
         <div class="chat-group-footer">

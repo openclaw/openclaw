@@ -115,6 +115,7 @@ vi.mock("../chat/build-chat-items.ts", () => ({
               key: "stream:test",
               text: props.stream,
               startedAt: props.streamStartedAt ?? 1,
+              isStreaming: true,
             },
           ]
         : [{ kind: "reading-indicator", key: "reading:test" }];

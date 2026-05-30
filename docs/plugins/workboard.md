@@ -108,6 +108,18 @@ Workboard also exposes optional agent tools for board-aware workflows:
   final summaries, proof, artifacts, created-card manifests, and blocker
   reasons. Created-card manifests must reference cards linked back to the
   completed card, which keeps phantom children out of summaries.
+- `workboard_board_create`, `workboard_board_archive`, and
+  `workboard_board_delete` manage persisted board metadata such as display name,
+  description, archive state, and default workspace.
+- `workboard_runs` returns the persisted run-attempt history stored on a card.
+- `workboard_specify` turns a rough triage or backlog card into a clarified
+  `todo` card and records the specification summary on the card.
+- `workboard_decompose` fans a parent orchestration card into linked children,
+  inherits board and tenant metadata, and can complete the parent with a
+  created-card manifest.
+- `workboard_notify_subscribe`, `workboard_notify_list`, and
+  `workboard_notify_unsubscribe` manage notification subscriptions in plugin
+  state so operators and agents can discover durable notification intent.
 - `workboard_boards`, `workboard_stats`, `workboard_promote`,
   `workboard_reassign`, `workboard_reclaim`, `workboard_comment`,
   `workboard_proof`, `workboard_unblock`, and `workboard_dispatch` let an agent
@@ -119,6 +131,12 @@ Claimed cards reject agent-tool mutations from other agents unless the caller
 has the claim token returned by `workboard_claim`. Dashboard operators still use
 the normal Gateway RPC surface and can recover or reassign cards.
 
+Workboard stores all durable board data through the plugin SQLite key-value
+store. Cards live in `workboard.cards`, board metadata in `workboard.boards`,
+and notification subscriptions in `workboard.notify`. Run history, comments,
+proof, artifacts, diagnostics, dependencies, lifecycle events, and automation
+metadata stay on the card record so a card export remains self-contained.
+
 Workboard diagnostics are computed from local card metadata. The built-in checks
 flag assigned cards that wait too long, running cards without recent heartbeat,
 blocked cards that need attention, repeated failures, done cards without proof,
@@ -126,9 +144,9 @@ and running cards that only have a loose session link.
 
 Dispatch is intentionally Gateway-local. It does not spawn arbitrary operating
 system processes; normal OpenClaw sessions still own execution. A dispatch nudge
-promotes dependency-ready cards, records dispatch metadata on ready cards, and
-blocks expired claims or timed-out runs so operators can recover them from the
-board.
+promotes dependency-ready cards, records dispatch metadata on ready cards,
+blocks expired claims or timed-out runs, and leaves durable notification
+subscriptions for the caller that delivers notifications.
 
 ## Session lifecycle sync
 

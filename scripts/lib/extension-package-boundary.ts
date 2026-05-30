@@ -59,6 +59,20 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/llm-core/types": ["../dist/plugin-sdk/packages/llm-core/src/types.d.ts"],
   "@openclaw/llm-core/validation": ["../dist/plugin-sdk/packages/llm-core/src/validation.d.ts"],
   "@openclaw/llm-core/*": ["../dist/plugin-sdk/packages/llm-core/src/*.d.ts"],
+  "@openclaw/model-catalog-core": ["../dist/plugin-sdk/packages/model-catalog-core/src/index.d.ts"],
+  "@openclaw/model-catalog-core/configured-model-refs": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/configured-model-refs.d.ts",
+  ],
+  "@openclaw/model-catalog-core/provider-id": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
+  ],
+  "@openclaw/model-catalog-core/provider-model-id-normalization": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
+  ],
+  "@openclaw/model-catalog-core/provider-model-id-normalize": [
+    "../dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
+  ],
+  "@openclaw/model-catalog-core/*": ["../dist/plugin-sdk/packages/model-catalog-core/src/*.d.ts"],
   "@openclaw/markdown-core": ["../dist/plugin-sdk/packages/markdown-core/src/index.d.ts"],
   "@openclaw/markdown-core/code-spans": [
     "../dist/plugin-sdk/packages/markdown-core/src/code-spans.d.ts",

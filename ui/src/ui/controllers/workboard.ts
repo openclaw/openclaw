@@ -28,6 +28,8 @@ export const WORKBOARD_EVENT_KINDS = [
   "edited",
   "moved",
   "linked",
+  "specified",
+  "decomposed",
   "claimed",
   "heartbeat",
   "execution_updated",

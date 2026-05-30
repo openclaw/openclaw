@@ -819,6 +819,41 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
     srcFile: "url-userinfo.ts",
     distFile: "url-userinfo.mjs",
   },
+  {
+    packageName: "@openclaw/model-catalog-core",
+    packageDir: "model-catalog-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/model-catalog-core",
+    packageDir: "model-catalog-core",
+    subpath: "configured-model-refs",
+    srcFile: "configured-model-refs.ts",
+    distFile: "configured-model-refs.mjs",
+  },
+  {
+    packageName: "@openclaw/model-catalog-core",
+    packageDir: "model-catalog-core",
+    subpath: "provider-id",
+    srcFile: "provider-id.ts",
+    distFile: "provider-id.mjs",
+  },
+  {
+    packageName: "@openclaw/model-catalog-core",
+    packageDir: "model-catalog-core",
+    subpath: "provider-model-id-normalization",
+    srcFile: "provider-model-id-normalization.ts",
+    distFile: "provider-model-id-normalization.mjs",
+  },
+  {
+    packageName: "@openclaw/model-catalog-core",
+    packageDir: "model-catalog-core",
+    subpath: "provider-model-id-normalize",
+    srcFile: "provider-model-id-normalize.ts",
+    distFile: "provider-model-id-normalize.mjs",
+  },
 ] as const;
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {

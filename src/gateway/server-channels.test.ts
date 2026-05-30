@@ -17,7 +17,7 @@ import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createChannelManager } from "./server-channels.js";
+import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
   const computeBackoff = vi.fn(() => 10);
@@ -46,6 +46,8 @@ type TestAccount = {
   enabled?: boolean;
   configured?: boolean;
 };
+
+const createdManagers: Array<{ manager: ChannelManager; channelIds: ChannelId[] }> = [];
 
 function createTestPlugin(params?: {
   id?: ChannelId;
@@ -172,7 +174,7 @@ function createManager(options?: {
       channelRuntimeEnvs[channelId] ??= runtime;
     }
   }
-  return createChannelManager({
+  const manager = createChannelManager({
     getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
     channelLogs,
     channelRuntimeEnvs,
@@ -185,6 +187,8 @@ function createManager(options?: {
       : {}),
     ...(options?.startupTrace ? { startupTrace: options.startupTrace } : {}),
   });
+  createdManagers.push({ channelIds, manager });
+  return manager;
 }
 
 describe("server-channels auto restart", () => {
@@ -197,7 +201,16 @@ describe("server-channels auto restart", () => {
     hoisted.sleepWithAbort.mockClear();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const stops = createdManagers
+      .splice(0)
+      .flatMap(({ channelIds, manager }) =>
+        channelIds.map((channelId) => manager.stopChannel(channelId).catch(() => {})),
+      );
+    await vi.advanceTimersByTimeAsync(6_000);
+    await Promise.allSettled(stops);
+    await flushMicrotasks();
+    vi.clearAllTimers();
     vi.useRealTimers();
     setActivePluginRegistry(previousRegistry ?? createEmptyPluginRegistry());
   });
@@ -966,8 +979,16 @@ describe("server-channels auto restart", () => {
   });
 
   it("does not start traced channel accounts after stop wins the handoff", async () => {
+    const handoffEntered = createDeferred();
+    const releaseHandoff = createDeferred();
     const startupTrace = {
-      measure: async <T>(_name: string, run: () => T | Promise<T>) => await run(),
+      measure: async <T>(name: string, run: () => T | Promise<T>) => {
+        if (name === "channels.discord.start-account-handoff") {
+          handoffEntered.resolve();
+          await releaseHandoff.promise;
+        }
+        return await run();
+      },
     };
     const startAccount = vi.fn(async () => {});
 
@@ -975,8 +996,11 @@ describe("server-channels auto restart", () => {
     const manager = createManager({ startupTrace });
 
     await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
-    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
     await vi.advanceTimersByTimeAsync(0);
+    await handoffEntered.promise;
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+    releaseHandoff.resolve();
     await stopTask;
     await flushMicrotasks();
 
