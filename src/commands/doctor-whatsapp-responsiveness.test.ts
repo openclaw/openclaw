@@ -9,7 +9,7 @@ vi.mock("node:child_process", async () => {
   return mockNodeChildProcessSpawnSync(spawnSyncMock);
 });
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: noteMock,
 }));
 

@@ -570,7 +570,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
 
       expectFields(model, {
         id: "gpt-5.4",
-        provider: "openai-codex",
+        provider: "openai",
         api: "openai-codex-responses",
         contextWindow: 1_050_000,
         maxTokens: 128_000,
@@ -588,7 +588,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
               ? createModel({
                   id,
                   api: "openai-codex-responses",
-                  provider: "openai-codex",
+                  provider: "openai",
                   baseUrl: "https://chatgpt.com/backend-api",
                   input: ["text", "image"],
                   cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
@@ -601,7 +601,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
 
       expectFields(model, {
         id: "gpt-5.5",
-        provider: "openai-codex",
+        provider: "openai",
         api: "openai-codex-responses",
         contextWindow: 400_000,
         contextTokens: 272_000,
@@ -620,7 +620,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
               ? createModel({
                   id,
                   api: "openai-codex-responses",
-                  provider: "openai-codex",
+                  provider: "openai",
                   baseUrl: "https://chatgpt.com/backend-api",
                   cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
                   contextWindow: 272_000,
@@ -632,7 +632,7 @@ export function describeOpenAIProviderRuntimeContract(load: ProviderRuntimeContr
 
       expectFields(model, {
         id: "gpt-5.4-mini",
-        provider: "openai-codex",
+        provider: "openai",
         api: "openai-codex-responses",
         contextWindow: 400_000,
         contextTokens: 272_000,

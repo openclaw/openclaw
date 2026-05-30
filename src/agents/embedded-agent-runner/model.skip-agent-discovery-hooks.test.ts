@@ -40,6 +40,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
   normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
   normalizeProviderTransportWithPlugin: mocks.normalizeProviderTransportWithPlugin,
   prepareProviderDynamicModel: mocks.prepareProviderDynamicModel,
+  resolveExternalAuthProfilesWithPlugins: () => [],
   runProviderDynamicModel: mocks.runProviderDynamicModel,
   shouldPreferProviderRuntimeResolvedModel: mocks.shouldPreferProviderRuntimeResolvedModel,
 }));

@@ -6,7 +6,7 @@ import { resolveProviderRuntimePlugin } from "./provider-hook-runtime.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import type { ProviderAuthContext } from "./types.js";
 
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
 const OPENAI_CODEX_OAUTH_METHOD_ID = "oauth";
 
 type OpenAICodexOAuthBridgeContext = ProviderAuthContext & {
