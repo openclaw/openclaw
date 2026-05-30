@@ -316,6 +316,7 @@ async function callBrowserProxy(params: {
       },
       idempotencyKey: crypto.randomUUID(),
     },
+    { scopes: ["operator.admin"] },
   );
   const parsed = unwrapBrowserProxyPayload(payload);
   if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {

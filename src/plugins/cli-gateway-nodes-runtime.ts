@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { callGateway } from "../gateway/call.js";
+import { isOperatorScope, type OperatorScope } from "../gateway/operator-scopes.js";
 import { addTimerTimeoutGraceMs } from "../shared/number-coercion.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -13,6 +14,15 @@ export function resolvePluginCliNodeInvokeGatewayTimeoutMs(
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? addTimerTimeoutGraceMs(timeoutMs)
     : undefined;
+}
+
+function normalizeRuntimeNodeInvokeScopes(
+  scopes: string[] | undefined,
+): OperatorScope[] | undefined {
+  if (!Array.isArray(scopes)) {
+    return undefined;
+  }
+  return scopes.filter(isOperatorScope);
 }
 
 export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
@@ -39,6 +49,7 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
       };
     },
     async invoke(params) {
+      const scopes = normalizeRuntimeNodeInvokeScopes(params.scopes);
       return await callGateway({
         method: "node.invoke",
         params: {
@@ -51,6 +62,7 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
         timeoutMs: resolvePluginCliNodeInvokeGatewayTimeoutMs(params.timeoutMs),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
+        ...(scopes ? { scopes } : {}),
       });
     },
   };
