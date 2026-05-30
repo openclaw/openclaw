@@ -230,6 +230,24 @@ describe("checkDepsStatus", () => {
       expect(okDeps.status).toBe("ok");
     });
   });
+
+  it("uses npm-shrinkwrap.json as the npm lockfile when package-lock.json is absent", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-shrinkwrap-" }, async (base) => {
+      await fs.writeFile(path.join(base, "npm-shrinkwrap.json"), "{}", "utf8");
+      const nodeModulesPath = path.join(base, "node_modules");
+      await fs.mkdir(nodeModulesPath, { recursive: true });
+
+      const staleDate = new Date(Date.now() - 10_000);
+      await fs.utimes(path.join(base, "npm-shrinkwrap.json"), staleDate, staleDate);
+      const freshDate = new Date(Date.now() + 2_000);
+      await fs.utimes(nodeModulesPath, freshDate, freshDate);
+
+      const result = await checkDepsStatus({ root: base, manager: "npm" });
+      expect(result.manager).toBe("npm");
+      expect(result.status).toBe("ok");
+      expect(result.lockfilePath).toContain("npm-shrinkwrap.json");
+    });
+  });
 });
 
 describe("checkUpdateStatus", () => {
