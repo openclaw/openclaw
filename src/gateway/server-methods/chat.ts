@@ -134,6 +134,7 @@ import {
   capArrayByJsonBytes,
   loadSessionEntry,
   readSessionMessageByIdAsync,
+  readSessionMessagesAsync,
   resolveGatewayModelSupportsImages,
   resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
@@ -1397,11 +1398,18 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     rawMetadata && typeof rawMetadata === "object" && !Array.isArray(rawMetadata)
       ? (rawMetadata as Record<string, unknown>)
       : {};
+  const metadataId = typeof metadata.id === "string" ? metadata.id : undefined;
+  const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
   return {
     role,
     timestamp,
     content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
-    __openclaw: { ...metadata, truncated: true, reason: "oversized" },
+    __openclaw: {
+      ...(metadataId ? { id: metadataId } : {}),
+      ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
+      truncated: true,
+      reason: "oversized",
+    },
   };
 }
 
@@ -2340,6 +2348,35 @@ export function dropPreSessionStartAnnouncePairs(
   return changed ? kept : messages;
 }
 
+function readChatHistoryMessageId(message: unknown): string | undefined {
+  const metadata = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  return typeof metadata?.id === "string" ? metadata.id : undefined;
+}
+
+async function isChatMessageIdVisibleAfterHistoryFilters(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile: string | undefined;
+  messageId: string;
+  sessionStartedAt?: number;
+}): Promise<boolean> {
+  if (params.sessionStartedAt === undefined) {
+    return true;
+  }
+  const messages = await readSessionMessagesAsync(
+    params.sessionId,
+    params.storePath,
+    params.sessionFile,
+    {
+      mode: "full",
+      reason: "chat.message.get visibility",
+    },
+  );
+  return dropPreSessionStartAnnouncePairs(messages, params.sessionStartedAt).some(
+    (message) => readChatHistoryMessageId(message) === params.messageId,
+  );
+}
+
 function dropLocalHistoryOverreadContextMessage(
   messages: unknown[],
   contextMessage: unknown,
@@ -2532,6 +2569,18 @@ export const chatHandlers: GatewayRequestHandlers = {
       messageId,
     );
     if (!resolved.found) {
+      respond(true, { ok: false, unavailableReason: "not_found" });
+      return;
+    }
+    const visible = await isChatMessageIdVisibleAfterHistoryFilters({
+      sessionId,
+      storePath,
+      sessionFile: entry?.sessionFile,
+      messageId,
+      sessionStartedAt:
+        typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
+    });
+    if (!visible) {
       respond(true, { ok: false, unavailableReason: "not_found" });
       return;
     }

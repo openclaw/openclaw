@@ -1542,6 +1542,60 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.message.get does not return pre-session announce pairs hidden by history", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.now();
+      await writeSessionStore({
+        entries: {
+          main: { sessionId: "sess-main", updatedAt: Date.now(), sessionStartedAt },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-announce",
+          message: {
+            role: "user",
+            provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+            content: [{ type: "text", text: "announce" }],
+            timestamp: sessionStartedAt - 2_000,
+          },
+        }),
+        JSON.stringify({
+          id: "msg-hidden-assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "hidden pre-session reply" }],
+            timestamp: sessionStartedAt - 1_000,
+          },
+        }),
+        JSON.stringify({
+          id: "msg-visible-assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "visible reply" }],
+            timestamp: sessionStartedAt + 1_000,
+          },
+        }),
+      ]);
+
+      const hidden = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-hidden-assistant",
+      });
+      expect(hidden.ok).toBe(false);
+      expect(hidden.unavailableReason).toBe("not_found");
+
+      const visible = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-visible-assistant",
+      });
+      expect(visible.ok).toBe(true);
+      expect(JSON.stringify(visible.message)).toContain("visible reply");
+    });
+  });
+
   test("chat.history still drops assistant NO_REPLY entries before truncation", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
