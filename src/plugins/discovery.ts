@@ -927,6 +927,7 @@ function discoverInDirectory(params: {
   seen: Set<string>;
   realpathCache: Map<string, string>;
   packageManifestCache?: Map<string, PackageManifest | null>;
+  scanFiles?: boolean;
   recurseDirectories?: boolean;
   skipDirectories?: Set<string>;
   visitedDirectories?: Set<string>;
@@ -958,7 +959,7 @@ function discoverInDirectory(params: {
     const fullPath = path.join(params.dir, entry.name);
     const entryType = resolveScannedEntryType(entry, fullPath);
     if (entryType === "file") {
-      if (!isExtensionFile(fullPath)) {
+      if (!params.scanFiles || !isExtensionFile(fullPath)) {
         continue;
       }
       addCandidate({
@@ -1408,6 +1409,7 @@ function discoverFromPath(params: {
       seen: params.seen,
       realpathCache: params.realpathCache,
       packageManifestCache: params.packageManifestCache,
+      scanFiles: params.origin === "config",
       ...(params.requireBuiltRuntimeEntry !== undefined
         ? { requireBuiltRuntimeEntry: params.requireBuiltRuntimeEntry }
         : {}),
