@@ -12,7 +12,19 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  CLAUDE_BRIDGE_BIN_ENV,
+  DEFAULT_CLAUDE_BRIDGE_COMMAND,
+  type ClaudeBridgeCommandSource,
+} from "./config.js";
 import type { JsonValue, RpcMessage, RpcNotification, RpcRequest, RpcResponse } from "./types.js";
+import {
+  compareClaudeBridgeVersions,
+  MANAGED_CLAUDE_BRIDGE_PACKAGE,
+  MIN_CLAUDE_BRIDGE_VERSION,
+} from "./version.js";
+
+export { MIN_CLAUDE_BRIDGE_VERSION } from "./version.js";
 
 // Keys that must never be forwarded to a child process — prevents prototype
 // pollution and injection via env. Mirrors codex transport-stdio pattern.
@@ -40,6 +52,12 @@ export type ClaudeAppServerStartOptions = {
   command?: string;
   args?: string[];
   env?: Record<string, string | undefined>;
+  /**
+   * Provenance of `command`, threaded from config so the version-floor
+   * assertion can give the right remediation (managed reinstall vs. override).
+   * Defaults to "managed" when unset.
+   */
+  commandSource?: ClaudeBridgeCommandSource;
 };
 
 export type NotificationHandler = (notification: RpcNotification) => void;
@@ -56,7 +74,7 @@ type PendingRequest = {
   reject: (error: Error) => void;
 };
 
-const DEFAULT_COMMAND = "openclaw-claude-bridge";
+const DEFAULT_COMMAND = DEFAULT_CLAUDE_BRIDGE_COMMAND;
 const FORCE_KILL_DELAY_MS = 2_000;
 const REQUEST_TIMEOUT_MS = 600_000;
 const STDERR_TAIL_MAX = 2_000;
@@ -74,6 +92,23 @@ export class ClaudeAppServerRpcError extends Error {
   }
 }
 
+/**
+ * Thrown when the spawned bridge reports a version below
+ * MIN_CLAUDE_BRIDGE_VERSION. Surfaced as the turn's promptError with an
+ * actionable upgrade command rather than degrading to a misleading
+ * "model idle timeout" (the silent-skew failure this guard prevents).
+ */
+export class ClaudeAppServerVersionError extends Error {
+  constructor(
+    message: string,
+    readonly detectedVersion: string | undefined,
+    readonly requiredVersion: string,
+  ) {
+    super(message);
+    this.name = "ClaudeAppServerVersionError";
+  }
+}
+
 export class ClaudeAppServerClient {
   private child: ChildProcess | null = null;
   private nextId = 1;
@@ -87,6 +122,12 @@ export class ClaudeAppServerClient {
   private stdoutRl: ReadlineInterface | null = null;
   private stderrTail = "";
   private serverInfo: { name?: string; version?: string } | null = null;
+  // Fired when the child exits/crashes or is stopped. Pending RPCs are rejected
+  // via rejectAll, but a turn is driven by server->client notifications inside a
+  // plain Promise that holds NO pending RPC — without this, a dead bridge leaves
+  // every in-flight turn to hit the run-attempt idle watchdog (90s) and surface
+  // the misleading "model idle timeout" instead of the real exit cause.
+  private exitListeners = new Set<(error: Error) => void>();
 
   constructor(private readonly opts: ClaudeAppServerStartOptions) {}
 
@@ -147,13 +188,21 @@ export class ClaudeAppServerClient {
       },
       AbortSignal.timeout(INIT_TIMEOUT_MS),
     ).then((result) => {
-      this.initialized = true;
       if (result && typeof result === "object" && !Array.isArray(result)) {
         const info = (result as Record<string, unknown>).serverInfo;
         if (info && typeof info === "object" && !Array.isArray(info)) {
           this.serverInfo = info as { name?: string; version?: string };
         }
       }
+      // Fail closed on a stale bridge BEFORE marking the client usable. The
+      // bridge reports its npm package version in serverInfo.version (the
+      // userAgent field carries only the synthetic codex-protocol revision, so
+      // it must NOT be used as the floor source). On a miss the outer catch
+      // below nulls initializePromise + stop()s the child, so the turn fails
+      // with an actionable upgrade command instead of silently running an
+      // out-of-contract binary.
+      assertSupportedBridgeVersion(this.serverInfo?.version, this.opts.commandSource ?? "managed");
+      this.initialized = true;
       embeddedAgentLog.info("claude-bridge: initialized", { server: this.serverInfo });
       return result;
     });
@@ -200,7 +249,9 @@ export class ClaudeAppServerClient {
     forceKill.unref?.();
     child.once("exit", () => clearTimeout(forceKill));
     child.unref?.();
-    this.rejectAll(new Error("claude-bridge stopped"));
+    const stoppedError = new Error("claude-bridge stopped");
+    this.rejectAll(stoppedError);
+    this.fireExit(stoppedError);
   }
 
   isRunning(): boolean {
@@ -252,6 +303,33 @@ export class ClaudeAppServerClient {
     return () => {
       this.serverRequestHandlers = this.serverRequestHandlers.filter((h) => h !== handler);
     };
+  }
+
+  /**
+   * Subscribe to child exit/stop. Notification-driven turns use this to fail
+   * fast with the real exit error rather than waiting out the idle watchdog.
+   * Fires at most once per client lifetime (listeners are cleared after firing).
+   */
+  onExit(listener: (error: Error) => void): () => void {
+    this.exitListeners.add(listener);
+    return () => {
+      this.exitListeners.delete(listener);
+    };
+  }
+
+  private fireExit(error: Error): void {
+    if (this.exitListeners.size === 0) {
+      return;
+    }
+    const listeners = [...this.exitListeners];
+    this.exitListeners.clear();
+    for (const listener of listeners) {
+      try {
+        listener(error);
+      } catch (err) {
+        embeddedAgentLog.debug("claude-bridge: exit listener threw", { error: err });
+      }
+    }
   }
 
   private async sendRequest<T>(method: string, params: unknown, signal?: AbortSignal): Promise<T> {
@@ -397,6 +475,7 @@ export class ClaudeAppServerClient {
     this.child = null;
     this.initialized = false;
     this.initializePromise = null;
+    this.fireExit(error);
   }
 
   private rejectAll(error: Error): void {
@@ -448,6 +527,36 @@ function formatExitValue(value: unknown): string {
   return "unknown";
 }
 
+// ─── Version floor assertion ────────────────────────────────────────────────
+
+/**
+ * Throw a {@link ClaudeAppServerVersionError} when the spawned bridge is below
+ * MIN_CLAUDE_BRIDGE_VERSION. Reads the npm package version (serverInfo.version),
+ * never the userAgent (which carries only the synthetic codex-protocol
+ * revision). Mirrors codex's assertSupportedCodexAppServerVersion: the managed
+ * binary is resolved from the plugin's own node_modules, so an out-of-contract
+ * version means the install is stale — the remediation is reinstall + restart,
+ * not a runtime respawn.
+ */
+export function assertSupportedBridgeVersion(
+  detectedVersion: string | undefined,
+  commandSource: ClaudeBridgeCommandSource,
+): void {
+  if (compareClaudeBridgeVersions(detectedVersion, MIN_CLAUDE_BRIDGE_VERSION) >= 0) {
+    return;
+  }
+  const reported = detectedVersion ?? "an unknown version";
+  const remediation =
+    commandSource === "managed"
+      ? `Reinstall or update OpenClaw (or run pnpm install in a source checkout) so the bundled ${MANAGED_CLAUDE_BRIDGE_PACKAGE} is >= ${MIN_CLAUDE_BRIDGE_VERSION}, then restart the gateway.`
+      : `Update the binary configured via appServer.command / ${CLAUDE_BRIDGE_BIN_ENV} to >= ${MIN_CLAUDE_BRIDGE_VERSION} and restart the gateway, or remove the override to use the managed binary.`;
+  throw new ClaudeAppServerVersionError(
+    `${MANAGED_CLAUDE_BRIDGE_PACKAGE} >= ${MIN_CLAUDE_BRIDGE_VERSION} is required, but the running bridge reports ${reported}. ${remediation}`,
+    detectedVersion,
+    MIN_CLAUDE_BRIDGE_VERSION,
+  );
+}
+
 // ─── Shared client lifecycle ────────────────────────────────────────────────
 
 let sharedClient: ClaudeAppServerClient | null = null;
@@ -458,6 +567,8 @@ export function getSharedClaudeAppServerClient(
 ): ClaudeAppServerClient {
   // Spawn options form a key; if it changes we tear down the old client and
   // start fresh. This keeps reconfiguration cheap from the operator's side.
+  // `command` is the already-resolved managed (or override) path from
+  // resolveManagedClaudeBridgeStartOptions, so the key is stable across turns.
   const key = JSON.stringify({
     command: opts.command ?? DEFAULT_COMMAND,
     args: opts.args ?? [],
@@ -499,6 +610,7 @@ export function peekSharedClaudeAppServerClient(): {
   command?: string;
   pendingRequests: number;
   lastError?: string;
+  runningVersion?: string;
 } | null {
   if (!sharedClient) {
     return null;
@@ -508,5 +620,6 @@ export function peekSharedClaudeAppServerClient(): {
     pendingRequests: sharedClient.pendingRequestCount(),
     command: sharedClient.commandDescription(),
     lastError: sharedClient.lastErrorMessage(),
+    runningVersion: sharedClient.getServerInfo()?.version,
   };
 }

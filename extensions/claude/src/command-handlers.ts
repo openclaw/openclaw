@@ -8,11 +8,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { peekSharedClaudeAppServerClient } from "./app-server/client.js";
+import { resolveManagedClaudeBridgeVersion } from "./app-server/managed-binary.js";
 import {
   readClaudeAppServerBinding,
   writeClaudeAppServerBinding,
   type ClaudeAppServerBinding,
 } from "./app-server/thread-store.js";
+import { compareClaudeBridgeVersions, MIN_CLAUDE_BRIDGE_VERSION } from "./app-server/version.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
@@ -23,7 +25,7 @@ export function handleHelp(): PluginCommandResult {
       "",
       "Subcommands:",
       "  `status`             show shared-client liveness and recent error context",
-      "  `version`            report bridge + installed server package versions",
+      "  `version`            report plugin, running, installed, and required bridge versions",
       "  `threads`            list the active session's claude thread binding",
       "  `resume <thread_id>` rotate the active session's binding to a specific thread",
       "",
@@ -43,8 +45,21 @@ export function handleStatus(_ctx: PluginCommandContext): PluginCommandResult {
   if (snapshot.command) {
     lines.push(`- Command: \`${snapshot.command}\``);
   }
+  if (snapshot.runningVersion) {
+    lines.push(`- Running version: ${snapshot.runningVersion}`);
+  }
   if (snapshot.pendingRequests > 0) {
     lines.push(`- In-flight requests: ${snapshot.pendingRequests}`);
+  }
+  const bundled = resolveManagedClaudeBridgeVersion();
+  if (
+    snapshot.runningVersion &&
+    bundled &&
+    compareClaudeBridgeVersions(snapshot.runningVersion, bundled) < 0
+  ) {
+    lines.push(
+      `- Update pending: running ${snapshot.runningVersion}, bundled ${bundled} (restart the gateway to apply)`,
+    );
   }
   if (snapshot.lastError) {
     lines.push(`- Last stderr: \`${snapshot.lastError}\``);
@@ -54,16 +69,30 @@ export function handleStatus(_ctx: PluginCommandContext): PluginCommandResult {
 
 export async function handleVersion(_ctx: PluginCommandContext): Promise<PluginCommandResult> {
   const lines = ["**Claude harness versions**", ""];
-  const bridge = await readPackageVersion(path.resolve(HERE, "..", "package.json"));
-  if (bridge) {
-    lines.push(`- Bridge (extensions/claude): ${bridge}`);
+  const plugin = await readPackageVersion(path.resolve(HERE, "..", "package.json"));
+  if (plugin) {
+    lines.push(`- Plugin (extensions/claude): ${plugin}`);
   }
-  const server = await locateServerPackageVersion();
+  lines.push(`- Minimum bridge required: ${MIN_CLAUDE_BRIDGE_VERSION}`);
+
+  const bundled = resolveManagedClaudeBridgeVersion();
   lines.push(
-    server
-      ? `- Server (@zeroaltitude/openclaw-claude-bridge): ${server}`
-      : "- Server (@zeroaltitude/openclaw-claude-bridge): not installed",
+    bundled
+      ? `- Bundled bridge (managed): ${bundled}`
+      : "- Bundled bridge (managed): not found — reinstall OpenClaw or run `pnpm install`",
   );
+
+  const snapshot = peekSharedClaudeAppServerClient();
+  const running = snapshot?.running ? snapshot.runningVersion : undefined;
+  lines.push(`- Running bridge (spawned): ${running ?? "not running"}`);
+
+  if (running && compareClaudeBridgeVersions(running, MIN_CLAUDE_BRIDGE_VERSION) < 0) {
+    lines.push(
+      "- ⚠ Running bridge is below the required minimum; reinstall the bridge and restart the gateway.",
+    );
+  } else if (running && bundled && compareClaudeBridgeVersions(running, bundled) < 0) {
+    lines.push("- Update pending: a newer bridge is bundled; restart the gateway to apply.");
+  }
   return { text: lines.join("\n") };
 }
 
@@ -156,34 +185,4 @@ async function readPackageVersion(packageJsonPath: string): Promise<string | nul
   } catch {
     return null;
   }
-}
-
-async function locateServerPackageVersion(): Promise<string | null> {
-  const candidates = [
-    path.resolve(
-      HERE,
-      "..",
-      "..",
-      "..",
-      "node_modules",
-      "@zeroaltitude",
-      "openclaw-claude-bridge",
-      "package.json",
-    ),
-    path.resolve(
-      HERE,
-      "..",
-      "node_modules",
-      "@zeroaltitude",
-      "openclaw-claude-bridge",
-      "package.json",
-    ),
-  ];
-  for (const candidate of candidates) {
-    const version = await readPackageVersion(candidate);
-    if (version) {
-      return version;
-    }
-  }
-  return null;
 }

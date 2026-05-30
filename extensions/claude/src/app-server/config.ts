@@ -40,6 +40,25 @@ export const DEFAULT_CLAUDE_APP_SERVER_SANDBOX: SandboxPolicy = { type: "dangerF
 export const DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS = 30 * 60_000;
 export const DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS = 90_000;
 
+// Bare bin name of the bridge. Used only as the placeholder command when no
+// explicit override is set (commandSource "managed"); resolveManagedClaudeBridgeStartOptions
+// replaces it with the absolute path of the bundled binary before spawn.
+export const DEFAULT_CLAUDE_BRIDGE_COMMAND = "openclaw-claude-bridge";
+
+// Env override for a custom bridge binary, mirroring codex's
+// OPENCLAW_CODEX_APP_SERVER_BIN. Takes effect only when appServer.command is
+// unset; a set appServer.command wins over the env.
+export const CLAUDE_BRIDGE_BIN_ENV = "OPENCLAW_CLAUDE_APP_SERVER_BIN";
+
+/**
+ * Where the spawn command came from. "managed" => use the binary bundled in the
+ * plugin's node_modules (the default, lockstep with the dependency pin);
+ * "resolved-managed" => a managed lookup that has been resolved to an absolute
+ * path; "config"/"env" => an explicit operator override (appServer.command or
+ * the env var). Mirrors codex's CodexAppServerCommandSource.
+ */
+export type ClaudeBridgeCommandSource = "managed" | "resolved-managed" | "config" | "env";
+
 export const CLAUDE_APP_SERVER_CONFIG_KEYS = [
   "command",
   "args",
@@ -90,7 +109,14 @@ const dynamicToolsConfigSchema = z
 // ── public types ────────────────────────────────────────────────────────────
 
 export type ClaudeAppServerRuntimeConfig = {
-  command?: string;
+  /**
+   * Resolved spawn command. For commandSource "managed" this is the bare bin
+   * name placeholder (DEFAULT_CLAUDE_BRIDGE_COMMAND) until
+   * resolveManagedClaudeBridgeStartOptions replaces it with the bundled binary's
+   * absolute path; for "config"/"env" it is the operator's explicit override.
+   */
+  command: string;
+  commandSource: ClaudeBridgeCommandSource;
   args?: string[];
   env?: Record<string, string>;
   approvalPolicy: ApprovalPolicy;
@@ -124,34 +150,45 @@ export function resolveClaudeAppServerConfig(raw: unknown): ResolvedClaudeAppSer
   const appServerParsed = appServerConfigSchema.safeParse(root.appServer ?? {});
   const dynamicToolsParsed = dynamicToolsConfigSchema.safeParse(root.dynamicTools ?? {});
 
+  const parsed = appServerParsed.success ? appServerParsed.data : undefined;
+  // Command precedence mirrors codex: explicit config > env override > managed
+  // (bundled) binary. Only an explicit override sets a non-"managed" source;
+  // "managed" is later resolved to the bundled absolute path before spawn.
+  const configCommand = readNonEmptyString(parsed?.command);
+  const envCommand = readNonEmptyString(process.env[CLAUDE_BRIDGE_BIN_ENV]);
+  const command = configCommand ?? envCommand ?? DEFAULT_CLAUDE_BRIDGE_COMMAND;
+  const commandSource: ClaudeBridgeCommandSource = configCommand
+    ? "config"
+    : envCommand
+      ? "env"
+      : "managed";
+
   const appServer: ClaudeAppServerRuntimeConfig = {
+    command,
+    commandSource,
     approvalPolicy: DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY,
     sandbox: DEFAULT_CLAUDE_APP_SERVER_SANDBOX,
     turnTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,
     turnIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS,
   };
-  if (appServerParsed.success) {
-    const a = appServerParsed.data;
-    if (a.command !== undefined) {
-      appServer.command = a.command;
+  if (parsed) {
+    if (parsed.args !== undefined) {
+      appServer.args = parsed.args;
     }
-    if (a.args !== undefined) {
-      appServer.args = a.args;
+    if (parsed.env !== undefined) {
+      appServer.env = parsed.env;
     }
-    if (a.env !== undefined) {
-      appServer.env = a.env;
+    if (parsed.approvalPolicy !== undefined) {
+      appServer.approvalPolicy = parsed.approvalPolicy;
     }
-    if (a.approvalPolicy !== undefined) {
-      appServer.approvalPolicy = a.approvalPolicy;
+    if (parsed.sandbox !== undefined) {
+      appServer.sandbox = normalizeSandbox(parsed.sandbox);
     }
-    if (a.sandbox !== undefined) {
-      appServer.sandbox = normalizeSandbox(a.sandbox);
+    if (parsed.turnTimeoutMs !== undefined) {
+      appServer.turnTimeoutMs = parsed.turnTimeoutMs;
     }
-    if (a.turnTimeoutMs !== undefined) {
-      appServer.turnTimeoutMs = a.turnTimeoutMs;
-    }
-    if (a.turnIdleTimeoutMs !== undefined) {
-      appServer.turnIdleTimeoutMs = a.turnIdleTimeoutMs;
+    if (parsed.turnIdleTimeoutMs !== undefined) {
+      appServer.turnIdleTimeoutMs = parsed.turnIdleTimeoutMs;
     }
   }
 
@@ -196,4 +233,8 @@ function asRecord(raw: unknown): Record<string, unknown> {
     return raw as Record<string, unknown>;
   }
   return {};
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

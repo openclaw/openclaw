@@ -43,12 +43,15 @@ describe("/claude subcommand routing", () => {
     expect(result.text).toContain("not yet created");
   });
 
-  it("reports versions (or 'not installed' for the server package)", async () => {
+  it("reports plugin, minimum-required, bundled, and running bridge versions", async () => {
     const result = await handleClaudeCommand(makeCtx({ args: "version" }));
     expect(result.text).toContain("Claude harness versions");
-    expect(result.text).toMatch(
-      /Bridge \(extensions\/claude\)|Server \(@zeroaltitude\/openclaw-claude-bridge\)/,
-    );
+    expect(result.text).toContain("Minimum bridge required:");
+    // Running line is present even when no turn has run ("not running"); the
+    // bundled line tolerates an absent managed binary so the test stays
+    // hermetic without a real install.
+    expect(result.text).toContain("Running bridge (spawned):");
+    expect(result.text).toContain("Bundled bridge (managed):");
   });
 
   it("threads: reports missing-session when no sessionFile is bound", async () => {
@@ -84,13 +87,10 @@ describe("/claude threads + resume against a real binding sidecar", () => {
 
   it("threads: prints the binding contents when present", async () => {
     await writeClaudeAppServerBinding(sessionFile, {
-      schemaVersion: 1,
       threadId: "thr_test_abc",
       cwd: dir,
       model: "claude-sonnet-4-6",
       modelProvider: "anthropic",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
     });
     const result = await handleClaudeCommand(makeCtx({ args: "threads", sessionFile }));
     expect(result.text).toContain("`thr_test_abc`");
@@ -106,18 +106,15 @@ describe("/claude threads + resume against a real binding sidecar", () => {
 
   it("resume: preserves existing binding fields when rotating thread id", async () => {
     await writeClaudeAppServerBinding(sessionFile, {
-      schemaVersion: 1,
       threadId: "thr_old",
       cwd: dir,
       model: "claude-sonnet-4-6",
-      approvalPolicy: "ask",
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      approvalPolicy: "on-request",
     });
     await handleClaudeCommand(makeCtx({ args: "resume thr_new", sessionFile }));
     const after = await handleClaudeCommand(makeCtx({ args: "threads", sessionFile }));
     expect(after.text).toContain("`thr_new`");
     expect(after.text).toContain("claude-sonnet-4-6");
-    expect(after.text).toContain("ask");
+    expect(after.text).toContain("on-request");
   });
 });

@@ -65,6 +65,7 @@ import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./cl
 import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from "./config.js";
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { ClaudeAppServerEventProjector } from "./event-projector.js";
+import { resolveManagedClaudeBridgeStartOptions } from "./managed-binary.js";
 import {
   assertTurnStartParams,
   assertTurnStartResponse,
@@ -86,12 +87,7 @@ export async function runClaudeAppServerAttempt(
   const attemptStartedAt = Date.now();
   const result = emptyResult(params);
   const cfg = resolveClaudeAppServerConfig(options.pluginConfig);
-  const client = getSharedClaudeAppServerClient({
-    command: cfg.appServer.command,
-    args: cfg.appServer.args,
-    env: cfg.appServer.env,
-  });
-  await client.start();
+  let client: ClaudeAppServerClient | undefined;
 
   const ac = new AbortController();
   const onExternalAbort = () => ac.abort();
@@ -102,6 +98,20 @@ export async function runClaudeAppServerAttempt(
   let unregisterServerRequest: (() => void) | undefined;
 
   try {
+    // Resolve the managed (bundled) bridge binary to an absolute path, then
+    // start (or reuse) the shared client. Both run inside the try so a missing
+    // managed binary or a failed version-floor handshake surfaces as a clean
+    // promptError with an actionable message, instead of throwing past this
+    // attempt. An explicit appServer.command / OPENCLAW_CLAUDE_APP_SERVER_BIN
+    // override is passed through unresolved by resolveManagedClaudeBridgeStartOptions.
+    const startOptions = await resolveManagedClaudeBridgeStartOptions({
+      command: cfg.appServer.command,
+      commandSource: cfg.appServer.commandSource,
+      args: cfg.appServer.args,
+      env: cfg.appServer.env,
+    });
+    client = getSharedClaudeAppServerClient(startOptions);
+    await client.start();
     // 1. Resolve sandbox + effective workspace once so dynamic-tool
     //    materialization, thread/start cwd, and runTurn cwd all agree on
     //    where filesystem access is allowed. Mirrors codex/run-attempt.ts:791.
@@ -837,6 +847,7 @@ async function runTurn(
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let unsubscribe: () => void = () => {};
+    let unsubscribeExit: () => void = () => {};
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
@@ -846,6 +857,7 @@ async function runTurn(
       idleTimer = null;
       ac.signal.removeEventListener("abort", onAbort);
       unsubscribe();
+      unsubscribeExit();
     };
     const onAbort = () => {
       if (settled) {
@@ -868,12 +880,27 @@ async function runTurn(
           return;
         }
         settled = true;
+        projector.markSettled();
         cleanup();
         client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
         reject(new IdleTimeoutError(`Claude turn idle for ${cfg.appServer.turnIdleTimeoutMs}ms`));
       }, cfg.appServer.turnIdleTimeoutMs);
       idleTimer.unref?.();
     };
+
+    // If the shared bridge child dies (crash or forced restart) mid-turn, fail
+    // fast with the real exit cause instead of waiting out the idle watchdog and
+    // reporting a misleading "model idle timeout". A plain Error here (not
+    // IdleTimeoutError) so the catch maps it to promptError, not idleTimedOut.
+    unsubscribeExit = client.onExit((error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      projector.markSettled();
+      cleanup();
+      reject(new Error(`Claude bridge exited mid-turn: ${error.message}`));
+    });
 
     unsubscribe = client.onNotification((notif) => {
       // Reset idle timer only for notifications matching THIS turn — stray

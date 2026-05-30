@@ -8,6 +8,7 @@ import {
   DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY,
   DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS,
   DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,
+  DEFAULT_CLAUDE_BRIDGE_COMMAND,
   resolveClaudeAppServerConfig,
 } from "./config.js";
 
@@ -22,6 +23,8 @@ describe("resolveClaudeAppServerConfig", () => {
   it("applies runtime defaults for missing config", () => {
     expect(resolveClaudeAppServerConfig(undefined)).toEqual({
       appServer: {
+        command: DEFAULT_CLAUDE_BRIDGE_COMMAND,
+        commandSource: "managed",
         approvalPolicy: DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY,
         sandbox: { type: "dangerFullAccess" },
         turnTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,
@@ -52,6 +55,7 @@ describe("resolveClaudeAppServerConfig", () => {
     ).toEqual({
       appServer: {
         command: "node",
+        commandSource: "config",
         args: ["server.js", "--debug"],
         env: { CLAUDE_CODE_ENABLE_TELEMETRY: "0" },
         approvalPolicy: "on-request",
@@ -82,6 +86,8 @@ describe("resolveClaudeAppServerConfig", () => {
       }),
     ).toEqual({
       appServer: {
+        command: DEFAULT_CLAUDE_BRIDGE_COMMAND,
+        commandSource: "managed",
         approvalPolicy: DEFAULT_CLAUDE_APP_SERVER_APPROVAL_POLICY,
         sandbox: { type: "dangerFullAccess" },
         turnTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,

@@ -17,6 +17,8 @@ import {
 
 const BASE_CFG: ResolvedClaudeAppServerConfig = {
   appServer: {
+    command: "openclaw-claude-bridge",
+    commandSource: "managed",
     approvalPolicy: "never",
     sandbox: { type: "dangerFullAccess" },
     turnTimeoutMs: 600_000,
@@ -38,7 +40,7 @@ function makeClient(opts: {
   threadForkResponse?: unknown;
   threadForkError?: unknown;
 }): ClaudeAppServerClient {
-  const request = vi.fn(async (method: string) => {
+  const request = vi.fn(async (method: string, _params?: unknown) => {
     if (method === "thread/start") {
       return (
         opts.threadStartResponse ?? {
@@ -161,7 +163,7 @@ describe("startOrResumeClaudeThread", () => {
       dynamicToolsFingerprint: "fp-OLD",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
     });
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "thread/fork") {
         return { thread: { id: "thr_after_fork" } };
       }
@@ -235,6 +237,8 @@ describe("startOrResumeClaudeThread", () => {
     });
     const cfgWithNewPolicy: ResolvedClaudeAppServerConfig = {
       appServer: {
+        command: "openclaw-claude-bridge",
+        commandSource: "managed",
         approvalPolicy: "on-request",
         sandbox: { type: "readOnly" },
         turnTimeoutMs: 600_000,
@@ -242,7 +246,7 @@ describe("startOrResumeClaudeThread", () => {
       },
       dynamicTools: { excludeNames: [] },
     };
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "thread/fork") {
         return { thread: { id: "thr_fork_with_policy" } };
       }
@@ -286,7 +290,7 @@ describe("startOrResumeClaudeThread", () => {
       dynamicToolsFingerprint: "fp-OLD",
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
     });
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "thread/fork") {
         return { thread: { id: "thr_fork_relaxed" } };
       }
@@ -394,7 +398,9 @@ describe("startOrResumeClaudeThread", () => {
       developerInstructionsFingerprint: "fp-OLD-instructions",
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
     });
-    const request = vi.fn(async () => ({ thread: { id: "thr_patched" } }));
+    const request = vi.fn(async (_method: string, _params?: unknown) => ({
+      thread: { id: "thr_patched" },
+    }));
     const client = { request } as unknown as ClaudeAppServerClient;
     const result = await startOrResumeClaudeThread({
       client,
@@ -432,7 +438,9 @@ describe("startOrResumeClaudeThread", () => {
       developerInstructionsFingerprint: STABLE_DEVINSTRUCTIONS_FP,
       dynamicToolsFingerprint: STABLE_DYNAMIC_TOOLS_FP,
     });
-    const request = vi.fn(async () => ({ thread: { id: "thr_no_patch" } }));
+    const request = vi.fn(async (_method: string, _params?: unknown) => ({
+      thread: { id: "thr_no_patch" },
+    }));
     const client = { request } as unknown as ClaudeAppServerClient;
     await startOrResumeClaudeThread({
       client,
