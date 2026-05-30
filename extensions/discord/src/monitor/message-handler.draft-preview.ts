@@ -6,6 +6,7 @@ import {
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
+  resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingProgressCommentary,
@@ -281,7 +282,10 @@ export function createDiscordDraftPreviewController(params: {
       if (!normalized) {
         return;
       }
-      const displayLine = normalizeReasoningProgressLine(formatReasoningMessage(normalized));
+      const displayLine = formatReasoningProgressDisplayLine(
+        normalized,
+        resolveChannelProgressDraftMaxLineChars(params.discordConfig),
+      );
       if (!displayLine) {
         return;
       }
@@ -469,9 +473,45 @@ export function createDiscordDraftPreviewController(params: {
 
 function normalizeReasoningProgressLine(text: string): string {
   return text
-    .replace(/^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i, "")
+    .replace(/^\s*(?:>\s*)?(?:Reasoning:\s*|Thinking(?::\s*|\.{1,3}\s*|\s*(?:\r?\n|\r)\s*))/i, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function formatReasoningProgressDisplayLine(text: string, maxChars: number): string {
+  const formatted = normalizeReasoningProgressLine(formatReasoningMessage(text));
+  if (!formatted) {
+    return "";
+  }
+  if (Array.from(formatted).length <= maxChars) {
+    return formatted;
+  }
+  const italic = formatted.match(/^_(.*)_$/u);
+  if (!italic) {
+    return compactReasoningProgressDisplayLine(formatted, maxChars);
+  }
+  const body = compactReasoningProgressDisplayLine(italic[1] ?? "", Math.max(1, maxChars - 2));
+  return body ? `_${body}_` : "";
+}
+
+function compactReasoningProgressDisplayLine(text: string, maxChars: number): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const chars = Array.from(normalized);
+  if (chars.length <= maxChars) {
+    return normalized;
+  }
+  if (maxChars <= 1) {
+    return "…";
+  }
+  const head = chars
+    .slice(0, maxChars - 1)
+    .join("")
+    .trimEnd();
+  const boundary = head.search(/\s+\S*$/u);
+  if (boundary > Math.floor(maxChars * 0.6)) {
+    return `${head.slice(0, boundary).trimEnd()}…`;
+  }
+  return `${head}…`;
 }
 
 function normalizeCommentaryProgressText(text: string): string {
@@ -516,7 +556,9 @@ function mergeReasoningProgressText(
 }
 
 function isReasoningSnapshotText(text: string): boolean {
-  return /^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i.test(text);
+  return /^\s*(?:>\s*)?(?:Reasoning:\s*|Thinking(?::\s*|\.{1,3}\s*|\s*(?:\r?\n|\r)\s*))/i.test(
+    text,
+  );
 }
 
 function isEmptyDiscordProgressLine(line: string | ChannelProgressDraftLine | undefined): boolean {

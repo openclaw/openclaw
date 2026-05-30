@@ -3154,6 +3154,94 @@ describe("processDiscordMessage draft streaming", () => {
     expect(updates.join("\n")).not.toContain("• _!_");
   });
 
+  it("preserves raw reasoning content that starts with Thinking", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Thinking" });
+      await params?.replyOptions?.onReasoningStream?.({ text: " through the install plan" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n• _Thinking through the install plan_",
+    );
+  });
+
+  it("appends raw reasoning chunks that start with Thinking", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "I was " });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Thinking about the plan" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n• _I was Thinking about the plan_",
+    );
+  });
+
+  it("keeps reasoning italics balanced when progress lines truncate", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Thinking through a very detailed installation plan with many steps",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            maxLineChars: 36,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const lastUpdate = draftStream.update.mock.calls.at(-1)?.[0];
+    const reasoningLine = lastUpdate?.split("\n").at(-1);
+
+    expect(reasoningLine).toMatch(/^• _.*…_$/u);
+    expect(reasoningLine?.match(/_/gu)).toHaveLength(2);
+  });
+
   it("replaces reasoning snapshots instead of appending duplicates", async () => {
     const draftStream = createMockDraftStreamForTest();
 
