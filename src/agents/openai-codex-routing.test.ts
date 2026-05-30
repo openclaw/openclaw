@@ -43,13 +43,13 @@ describe("OpenAI runtime routing policy", () => {
     ).toBe("openai");
   });
 
-  it("uses Codex context config for official OpenAI under the Codex runtime", () => {
+  it("uses canonical OpenAI context config under the Codex runtime", () => {
     expect(
       resolveContextConfigProviderForRuntime({
         provider: "openai",
         runtimeId: "codex",
       }),
-    ).toBe("openai-codex");
+    ).toBe("openai");
   });
 
   it("keeps explicit OpenClaw plus Codex auth profile under the unified OpenAI provider", () => {
