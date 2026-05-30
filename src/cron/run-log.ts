@@ -7,7 +7,6 @@ import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
-import { isPathInside } from "../infra/fs-safe.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -82,6 +81,10 @@ type ReadCronRunLogAllPageOptions = Omit<ReadCronRunLogPageOptions, "jobId"> & {
   jobNameById?: Record<string, string>;
 };
 
+type AppendCronRunLogOptions = {
+  keepLines?: number;
+};
+
 type CronRunLogsTable = OpenClawStateKyselyDatabase["cron_run_logs"];
 type CronRunLogDatabase = Pick<OpenClawStateKyselyDatabase, "cron_run_logs">;
 type CronRunLogRow = Selectable<CronRunLogsTable>;
@@ -105,8 +108,8 @@ const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
 ]);
 
 const LEGACY_CRON_RUN_LOG_ARCHIVE_SUFFIX = ".migrated";
+const INVALID_CRON_RUN_LOG_JOB_ID_MESSAGE = "invalid cron run log job id";
 type CronRunLogTarget = { storePath: string; jobId: string; strictJobId: boolean };
-const runLogTargetsByPath = new Map<string, CronRunLogTarget>();
 
 function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefined {
   return typeof value === "string" && CRON_FAILOVER_REASONS.has(value as FailoverReason)
@@ -117,28 +120,19 @@ function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefi
 function assertSafeCronRunLogJobId(jobId: string): string {
   const trimmed = jobId.trim();
   if (!trimmed) {
-    throw new Error("invalid cron run log job id");
+    throw new Error(INVALID_CRON_RUN_LOG_JOB_ID_MESSAGE);
   }
   if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
-    throw new Error("invalid cron run log job id");
+    throw new Error(INVALID_CRON_RUN_LOG_JOB_ID_MESSAGE);
   }
   return trimmed;
 }
 
-export function resolveCronRunLogPath(params: { storePath: string; jobId: string }) {
-  const storePath = path.resolve(params.storePath);
-  const dir = path.dirname(storePath);
-  const runsDir = path.resolve(dir, "runs");
-  const safeJobId = assertSafeCronRunLogJobId(params.jobId);
-  const resolvedPath = path.resolve(runsDir, `${safeJobId}.jsonl`);
-  if (!isPathInside(runsDir, resolvedPath)) {
-    throw new Error("invalid cron run log job id");
-  }
-  runLogTargetsByPath.set(resolvedPath, { storePath, jobId: safeJobId, strictJobId: true });
-  return resolvedPath;
+export function isInvalidCronRunLogJobIdError(err: unknown): boolean {
+  return err instanceof Error && err.message === INVALID_CRON_RUN_LOG_JOB_ID_MESSAGE;
 }
 
-const writesByPath = new Map<string, Promise<void>>();
+const writesByTarget = new Map<string, Promise<void>>();
 
 export const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
 export const DEFAULT_CRON_RUN_LOG_KEEP_LINES = 2_000;
@@ -168,15 +162,23 @@ export function resolveCronRunLogPruneOptions(cfg?: CronConfig["runLog"]): {
 }
 
 export function getPendingCronRunLogWriteCountForTests() {
-  return writesByPath.size;
+  return writesByTarget.size;
 }
 
-async function drainPendingWrite(filePath: string): Promise<void> {
-  const resolved = path.resolve(filePath);
-  const pending = writesByPath.get(resolved);
-  if (pending) {
-    await pending.catch(() => undefined);
+function cronRunLogWriteKey(storePath: string, jobId?: string): string {
+  return `${cronStoreKey(storePath)}\0${jobId ?? ""}`;
+}
+
+async function drainPendingWrite(storePath: string, jobId?: string): Promise<void> {
+  if (jobId) {
+    await writesByTarget.get(cronRunLogWriteKey(storePath, jobId))?.catch(() => undefined);
+    return;
   }
+  const storePrefix = `${cronStoreKey(storePath)}\0`;
+  const pending = [...writesByTarget.entries()]
+    .filter(([key]) => key.startsWith(storePrefix))
+    .map(([, write]) => write.catch(() => undefined));
+  await Promise.all(pending);
 }
 
 function cronStoreKey(storePath: string): string {
@@ -185,20 +187,6 @@ function cronStoreKey(storePath: string): string {
 
 function getCronRunLogKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<CronRunLogDatabase>(db);
-}
-
-function inferCronRunLogTarget(filePath: string, jobId?: string): CronRunLogTarget {
-  const resolved = path.resolve(filePath);
-  const known = runLogTargetsByPath.get(resolved);
-  if (known && (!jobId || known.jobId === jobId)) {
-    return known;
-  }
-  const inferredJobId = assertSafeCronRunLogJobId(jobId ?? path.basename(resolved, ".jsonl"));
-  const parentDir = path.dirname(resolved);
-  const isRunsDir = path.basename(parentDir) === "runs";
-  const storeDir = isRunsDir ? path.dirname(parentDir) : parentDir;
-  const storePath = path.resolve(storeDir, "jobs.json");
-  return { storePath, jobId: inferredJobId, strictJobId: isRunsDir };
 }
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
@@ -284,6 +272,74 @@ function readCronRunLogRows(db: DatabaseSync, storeKey: string, jobId?: string):
     query = query.where("job_id", "=", jobId);
   }
   return executeSqliteQuerySync(db, query.orderBy("ts", "asc").orderBy("seq", "asc")).rows;
+}
+
+function buildRunLogWhereClause(params: {
+  storeKey: string;
+  jobId?: string;
+  statuses: CronRunStatus[] | null;
+  deliveryStatuses: CronDeliveryStatus[] | null;
+  runId?: string;
+}): { whereSql: string; values: Array<string | number> } {
+  const clauses = ["store_key = ?"];
+  const values: Array<string | number> = [params.storeKey];
+  if (params.jobId) {
+    clauses.push("job_id = ?");
+    values.push(params.jobId);
+  }
+  if (params.statuses?.length) {
+    clauses.push(`status IN (${params.statuses.map(() => "?").join(", ")})`);
+    values.push(...params.statuses);
+  }
+  if (params.deliveryStatuses?.length) {
+    clauses.push(
+      `COALESCE(delivery_status, 'not-requested') IN (${params.deliveryStatuses
+        .map(() => "?")
+        .join(", ")})`,
+    );
+    values.push(...params.deliveryStatuses);
+  }
+  const runId = normalizeOptionalString(params.runId);
+  if (runId) {
+    clauses.push("run_id = ?");
+    values.push(runId);
+  }
+  return { whereSql: clauses.join(" AND "), values };
+}
+
+function countCronRunLogRows(
+  db: DatabaseSync,
+  whereSql: string,
+  values: Array<string | number>,
+): number {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS count FROM cron_run_logs WHERE ${whereSql}`)
+    .get(...values) as { count?: number | bigint } | undefined;
+  return normalizeNumber(row?.count ?? null) ?? 0;
+}
+
+function readCronRunLogRowsPage(params: {
+  db: DatabaseSync;
+  storeKey: string;
+  jobId?: string;
+  statuses: CronRunStatus[] | null;
+  deliveryStatuses: CronDeliveryStatus[] | null;
+  runId?: string;
+  sortDir: CronRunLogSortDir;
+  offset?: number;
+  limit?: number;
+}): CronRunLogRow[] {
+  const { whereSql, values } = buildRunLogWhereClause(params);
+  const order = params.sortDir === "asc" ? "ASC" : "DESC";
+  const limitSql =
+    params.limit === undefined || params.offset === undefined ? "" : " LIMIT ? OFFSET ?";
+  const limitValues =
+    params.limit === undefined || params.offset === undefined ? [] : [params.limit, params.offset];
+  return params.db
+    .prepare(
+      `SELECT * FROM cron_run_logs WHERE ${whereSql} ORDER BY ts ${order}, seq ${order}${limitSql}`,
+    )
+    .all(...values, ...limitValues) as CronRunLogRow[];
 }
 
 function nextCronRunLogSeq(db: DatabaseSync, storeKey: string, jobId: string): number {
@@ -387,45 +443,47 @@ function archiveLegacyCronRunLogSync(filePath: string): void {
   }
 }
 
-export async function appendCronRunLog(
-  filePath: string,
-  entry: CronRunLogEntry,
-  opts?: { maxBytes?: number; keepLines?: number },
-) {
-  const resolved = path.resolve(filePath);
-  const prev = writesByPath.get(resolved) ?? Promise.resolve();
+export async function appendCronRunLog(params: {
+  storePath: string;
+  entry: CronRunLogEntry;
+  opts?: AppendCronRunLogOptions;
+}) {
+  const storeKey = cronStoreKey(params.storePath);
+  const writeKey = cronRunLogWriteKey(params.storePath, params.entry.jobId);
+  const prev = writesByTarget.get(writeKey) ?? Promise.resolve();
   const next = prev
     .catch(() => undefined)
     .then(async () => {
-      const target = inferCronRunLogTarget(resolved, entry.jobId);
       runOpenClawStateWriteTransaction(({ db }) => {
-        insertCronRunLogEntry(db, cronStoreKey(target.storePath), entry);
+        insertCronRunLogEntry(db, storeKey, params.entry);
         pruneCronRunLogRows(
           db,
-          cronStoreKey(target.storePath),
-          entry.jobId,
-          opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+          storeKey,
+          params.entry.jobId,
+          params.opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
         );
       });
     });
-  writesByPath.set(resolved, next);
+  writesByTarget.set(writeKey, next);
   try {
     await next;
   } finally {
-    if (writesByPath.get(resolved) === next) {
-      writesByPath.delete(resolved);
+    if (writesByTarget.get(writeKey) === next) {
+      writesByTarget.delete(writeKey);
     }
   }
 }
 
-export async function readCronRunLogEntries(
-  filePath: string,
-  opts?: { limit?: number; jobId?: string },
-): Promise<CronRunLogEntry[]> {
-  await drainPendingWrite(filePath);
-  const limit = Math.max(1, Math.min(5000, Math.floor(opts?.limit ?? 200)));
-  const page = await readCronRunLogEntriesPage(filePath, {
-    jobId: opts?.jobId,
+export async function readCronRunLogEntries(params: {
+  storePath: string;
+  jobId?: string;
+  limit?: number;
+}): Promise<CronRunLogEntry[]> {
+  await drainPendingWrite(params.storePath, params.jobId);
+  const limit = Math.max(1, Math.min(5000, Math.floor(params.limit ?? 200)));
+  const page = await readCronRunLogEntriesPage({
+    storePath: params.storePath,
+    jobId: params.jobId,
     limit,
     offset: 0,
     status: "all",
@@ -434,22 +492,18 @@ export async function readCronRunLogEntries(
   return page.entries.toReversed();
 }
 
-export function readCronRunLogEntriesSync(
-  filePath: string,
-  opts?: { limit?: number; jobId?: string },
-): CronRunLogEntry[] {
-  const limit = Math.max(1, Math.min(5000, Math.floor(opts?.limit ?? 200)));
-  const resolved = path.resolve(filePath);
-  const target = inferCronRunLogTarget(resolved);
-  const rows = readCronRunLogRows(
-    openOpenClawStateDatabase().db,
-    cronStoreKey(target.storePath),
-    target.strictJobId ? target.jobId : undefined,
-  );
+export function readCronRunLogEntriesSync(params: {
+  storePath: string;
+  jobId?: string;
+  limit?: number;
+}): CronRunLogEntry[] {
+  const limit = Math.max(1, Math.min(5000, Math.floor(params.limit ?? 200)));
+  const storeKey = cronStoreKey(params.storePath);
+  const jobId = params.jobId ? assertSafeCronRunLogJobId(params.jobId) : undefined;
+  const rows = readCronRunLogRows(openOpenClawStateDatabase().db, storeKey, jobId);
   return rows
     .map(parseStoredRunLogEntry)
     .filter((entry): entry is CronRunLogEntry => entry !== null)
-    .filter((entry) => !opts?.jobId || entry.jobId === opts.jobId)
     .slice(-limit);
 }
 
@@ -665,76 +719,76 @@ function filterRunLogEntries(
 }
 
 export async function readCronRunLogEntriesPage(
-  filePath: string,
-  opts?: ReadCronRunLogPageOptions,
+  opts: ReadCronRunLogPageOptions & { storePath: string; jobNameById?: Record<string, string> },
 ): Promise<CronRunLogPageResult> {
-  await drainPendingWrite(filePath);
-  const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? 50)));
-  const resolved = path.resolve(filePath);
-  const target = inferCronRunLogTarget(resolved);
-  const statuses = normalizeRunStatuses(opts);
-  const deliveryStatuses = normalizeDeliveryStatuses(opts);
-  const query = normalizeLowercaseStringOrEmpty(opts?.query);
-  const sortDir: CronRunLogSortDir = opts?.sortDir === "asc" ? "asc" : "desc";
-  const all = readCronRunLogRows(
-    openOpenClawStateDatabase().db,
-    cronStoreKey(target.storePath),
-    target.strictJobId ? target.jobId : undefined,
-  )
-    .map(parseStoredRunLogEntry)
-    .filter((entry): entry is CronRunLogEntry => entry !== null)
-    .filter((entry) => !opts?.jobId || entry.jobId === opts.jobId);
-  const filtered = filterRunLogEntries(all, {
-    runId: opts?.runId,
-    statuses,
-    deliveryStatuses,
-    query,
-    queryTextForEntry: (entry) =>
-      [
-        entry.summary ?? "",
-        entry.error ?? "",
-        entry.errorReason ?? "",
-        entry.diagnostics?.summary ?? "",
-        ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
-        entry.jobId,
-        entry.delivery?.intended?.channel ?? "",
-        entry.delivery?.resolved?.channel ?? "",
-        ...(entry.delivery?.messageToolSentTo ?? []).map((target) => target.channel),
-      ].join(" "),
-  });
-  const sorted =
-    sortDir === "asc"
-      ? filtered.toSorted((a, b) => a.ts - b.ts)
-      : filtered.toSorted((a, b) => b.ts - a.ts);
-  const total = sorted.length;
-  const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
-  const entries = sorted.slice(offset, offset + limit);
-  const nextOffset = offset + entries.length;
-  return {
-    entries,
-    total,
-    offset,
-    limit,
-    hasMore: nextOffset < total,
-    nextOffset: nextOffset < total ? nextOffset : null,
-  };
-}
-
-export async function readCronRunLogEntriesPageAll(
-  opts: ReadCronRunLogAllPageOptions,
-): Promise<CronRunLogPageResult> {
+  const jobId = opts.jobId ? assertSafeCronRunLogJobId(opts.jobId) : undefined;
+  await drainPendingWrite(opts.storePath, jobId);
   const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)));
   const statuses = normalizeRunStatuses(opts);
   const deliveryStatuses = normalizeDeliveryStatuses(opts);
   const query = normalizeLowercaseStringOrEmpty(opts.query);
   const sortDir: CronRunLogSortDir = opts.sortDir === "asc" ? "asc" : "desc";
-  const all = readCronRunLogRows(openOpenClawStateDatabase().db, cronStoreKey(opts.storePath))
+  const db = openOpenClawStateDatabase().db;
+  const storeKey = cronStoreKey(opts.storePath);
+  const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+
+  if (!query) {
+    const { whereSql, values } = buildRunLogWhereClause({
+      storeKey,
+      jobId,
+      statuses,
+      deliveryStatuses,
+      runId: opts.runId,
+    });
+    const total = countCronRunLogRows(db, whereSql, values);
+    const boundedOffset = Math.min(total, offset);
+    const entries = readCronRunLogRowsPage({
+      db,
+      storeKey,
+      jobId,
+      statuses,
+      deliveryStatuses,
+      runId: opts.runId,
+      sortDir,
+      offset: boundedOffset,
+      limit,
+    })
+      .map(parseStoredRunLogEntry)
+      .filter((entry): entry is CronRunLogEntry => entry !== null);
+    if (opts.jobNameById) {
+      for (const entry of entries) {
+        const jobName = opts.jobNameById[entry.jobId];
+        if (jobName) {
+          (entry as CronRunLogEntry & { jobName?: string }).jobName = jobName;
+        }
+      }
+    }
+    const nextOffset = boundedOffset + entries.length;
+    return {
+      entries,
+      total,
+      offset: boundedOffset,
+      limit,
+      hasMore: nextOffset < total,
+      nextOffset: nextOffset < total ? nextOffset : null,
+    };
+  }
+
+  const all = readCronRunLogRowsPage({
+    db,
+    storeKey,
+    jobId,
+    statuses,
+    deliveryStatuses,
+    runId: opts.runId,
+    sortDir,
+  })
     .map(parseStoredRunLogEntry)
     .filter((entry): entry is CronRunLogEntry => entry !== null);
   const filtered = filterRunLogEntries(all, {
     runId: opts.runId,
-    statuses,
-    deliveryStatuses,
+    statuses: null,
+    deliveryStatuses: null,
     query,
     queryTextForEntry: (entry) => {
       const jobName = opts.jobNameById?.[entry.jobId] ?? "";
@@ -757,8 +811,8 @@ export async function readCronRunLogEntriesPageAll(
       ? filtered.toSorted((a, b) => a.ts - b.ts)
       : filtered.toSorted((a, b) => b.ts - a.ts);
   const total = sorted.length;
-  const offset = Math.max(0, Math.min(total, Math.floor(opts.offset ?? 0)));
-  const entries = sorted.slice(offset, offset + limit);
+  const boundedOffset = Math.min(total, offset);
+  const entries = sorted.slice(boundedOffset, boundedOffset + limit);
   if (opts.jobNameById) {
     for (const entry of entries) {
       const jobName = opts.jobNameById[entry.jobId];
@@ -767,15 +821,21 @@ export async function readCronRunLogEntriesPageAll(
       }
     }
   }
-  const nextOffset = offset + entries.length;
+  const nextOffset = boundedOffset + entries.length;
   return {
     entries,
     total,
-    offset,
+    offset: boundedOffset,
     limit,
     hasMore: nextOffset < total,
     nextOffset: nextOffset < total ? nextOffset : null,
   };
+}
+
+export async function readCronRunLogEntriesPageAll(
+  opts: ReadCronRunLogAllPageOptions,
+): Promise<CronRunLogPageResult> {
+  return readCronRunLogEntriesPage(opts);
 }
 
 export async function migrateLegacyCronRunLogsToSqlite(
@@ -789,7 +849,7 @@ export async function migrateLegacyCronRunLogsToSqlite(
   for (const file of jsonlFiles) {
     const jobId = path.basename(file.name, ".jsonl");
     const logPath = path.join(runsDir, file.name);
-    await drainPendingWrite(logPath);
+    await drainPendingWrite(resolvedStorePath, jobId);
     await importLegacyCronRunLog(logPath, {
       storePath: resolvedStorePath,
       jobId,
