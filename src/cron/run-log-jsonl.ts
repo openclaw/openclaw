@@ -2,7 +2,7 @@ import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
-import type { CronRunLogEntry } from "./run-log.js";
+import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronDeliveryStatus } from "./types.js";
 
 const CRON_FAILOVER_REASONS = new Set<FailoverReason>([

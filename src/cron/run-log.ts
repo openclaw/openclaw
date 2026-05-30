@@ -1,7 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
-import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -17,36 +16,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { parseCronRunLogEntriesFromJsonl } from "./run-log-jsonl.js";
-import type {
-  CronDeliveryStatus,
-  CronDeliveryTrace,
-  CronFailureNotificationDelivery,
-  CronRunDiagnostics,
-  CronRunStatus,
-  CronRunTelemetry,
-} from "./types.js";
+import type { CronRunLogEntry } from "./run-log-types.js";
+import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
 
-export type CronRunLogEntry = {
-  ts: number;
-  jobId: string;
-  action: "finished";
-  status?: CronRunStatus;
-  error?: string;
-  errorReason?: FailoverReason;
-  summary?: string;
-  diagnostics?: CronRunDiagnostics;
-  delivered?: boolean;
-  deliveryStatus?: CronDeliveryStatus;
-  deliveryError?: string;
-  failureNotificationDelivery?: CronFailureNotificationDelivery;
-  delivery?: CronDeliveryTrace;
-  sessionId?: string;
-  sessionKey?: string;
-  runId?: string;
-  runAtMs?: number;
-  durationMs?: number;
-  nextRunAtMs?: number;
-} & CronRunTelemetry;
+export type { CronRunLogEntry } from "./run-log-types.js";
 
 type CronRunLogSortDir = "asc" | "desc";
 type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
