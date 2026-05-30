@@ -460,6 +460,42 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("respects disabled search repeat detection", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 3,
+        criticalThreshold: 6,
+        globalCircuitBreakerThreshold: 12,
+        detectors: {
+          genericRepeat: false,
+          knownPollNoProgress: false,
+          pingPong: false,
+          searchRepeat: false,
+        },
+      };
+      const tools = ["web_search", "searxng_search"] as const;
+
+      for (let i = 0; i < 5; i += 1) {
+        recordSuccessfulCall(
+          state,
+          tools[i % tools.length]!,
+          { query: `gold spot price today ${i}` },
+          { content: [{ type: "text", text: `result variant ${i}` }], details: { ok: true } },
+          i,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "web_search",
+        { query: "gold spot price today latest", count: 5 },
+        config,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("does not count search calls across non-search progress", () => {
       const state = createState();
       const config: ToolLoopDetectionConfig = {

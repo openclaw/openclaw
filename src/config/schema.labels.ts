@@ -231,6 +231,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.loopDetection.detectors.genericRepeat": "Tool-loop Generic Repeat Detection",
   "tools.loopDetection.detectors.knownPollNoProgress": "Tool-loop Poll No-Progress Detection",
   "tools.loopDetection.detectors.pingPong": "Tool-loop Ping-Pong Detection",
+  "tools.loopDetection.detectors.searchRepeat": "Tool-loop Search Repeat Detection",
   "tools.fs.workspaceOnly": "Workspace-only FS tools",
   "tools.sessions.visibility": "Session Tools Visibility",
   "tools.exec.notifyOnExit": "Exec Notify On Exit",

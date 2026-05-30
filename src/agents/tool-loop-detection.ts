@@ -47,6 +47,7 @@ const DEFAULT_LOOP_DETECTION_CONFIG = {
     genericRepeat: true,
     knownPollNoProgress: true,
     pingPong: true,
+    searchRepeat: true,
   },
 };
 const SEARCH_TOOL_NAMES = new Set(["web_search", "searxng_search"]);
@@ -62,6 +63,7 @@ type ResolvedLoopDetectionConfig = {
     genericRepeat: boolean;
     knownPollNoProgress: boolean;
     pingPong: boolean;
+    searchRepeat: boolean;
   };
 };
 
@@ -122,6 +124,8 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
         config?.detectors?.knownPollNoProgress ??
         DEFAULT_LOOP_DETECTION_CONFIG.detectors.knownPollNoProgress,
       pingPong: config?.detectors?.pingPong ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.pingPong,
+      searchRepeat:
+        config?.detectors?.searchRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.searchRepeat,
     },
   };
 }
@@ -575,7 +579,10 @@ export function detectToolCallLoop(
     };
   }
 
-  if (searchOnlyTailCount >= resolvedConfig.criticalThreshold) {
+  if (
+    resolvedConfig.detectors.searchRepeat &&
+    searchOnlyTailCount >= resolvedConfig.criticalThreshold
+  ) {
     log.error(
       `Critical search loop detected: search-only tool tail count=${searchOnlyTailCount} currentTool=${toolName}`,
     );

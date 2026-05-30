@@ -741,6 +741,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.detectors.knownPollNoProgress":
     "Enable known poll tool no-progress loop detection (default: true).",
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
+  "tools.loopDetection.detectors.searchRepeat":
+    "Enable consecutive web search tool-call loop detection (default: true).",
   "tools.loopDetection.postCompactionGuard.windowSize":
     "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
   "tools.exec.notifyOnExit":

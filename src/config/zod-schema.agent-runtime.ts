@@ -625,6 +625,7 @@ const ToolLoopDetectionDetectorSchema = z
     genericRepeat: z.boolean().optional(),
     knownPollNoProgress: z.boolean().optional(),
     pingPong: z.boolean().optional(),
+    searchRepeat: z.boolean().optional(),
   })
   .strict()
   .optional();

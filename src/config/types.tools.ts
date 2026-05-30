@@ -165,6 +165,8 @@ export type ToolLoopDetectionDetectorConfig = {
   knownPollNoProgress?: boolean;
   /** Enable warning/blocking for no-progress ping-pong alternating patterns. */
   pingPong?: boolean;
+  /** Enable blocking for consecutive web search tool calls. */
+  searchRepeat?: boolean;
 };
 
 export type ToolLoopPostCompactionGuardConfig = {
