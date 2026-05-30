@@ -13,7 +13,6 @@ import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
-const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -567,10 +566,20 @@ function quotePosixShellArg(value: string): string {
 
 export function buildProviderReauthCommand(provider: string): string | undefined {
   const trimmed = provider.trim();
-  if (!trimmed || CONTROL_CHAR_RE.test(trimmed)) {
+  if (!trimmed || hasControlCharacter(trimmed)) {
     return undefined;
   }
   return `openclaw models auth login --provider ${quotePosixShellArg(trimmed)} --force`;
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function describeFailoverError(err: unknown): {
