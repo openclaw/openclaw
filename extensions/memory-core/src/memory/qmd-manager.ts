@@ -147,7 +147,7 @@ function buildQmdProcessPath(rawPath: string | undefined): string {
 
 type McporterState = {
   coldStartWarned: boolean;
-  daemonStart: Promise<void> | null;
+  daemonStarts: Map<string, Promise<void>>;
 };
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
@@ -164,11 +164,74 @@ type QmdUpdateQueueState = {
   tails: Map<string, Promise<void>>;
 };
 
+type JsonExtractionResult = { found: true; value: unknown } | { found: false };
+
 function getMcporterState(): McporterState {
   return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
     coldStartWarned: false,
-    daemonStart: null,
+    daemonStarts: new Map(),
   }));
+}
+
+function parseMcporterResponseJson(stdout: string): unknown {
+  const trimmed = stdout.trim();
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch (err) {
+    const payload = extractFirstJsonValue(trimmed);
+    if (payload.found) {
+      return payload.value;
+    }
+    throw err;
+  }
+}
+
+function extractFirstJsonValue(raw: string): JsonExtractionResult {
+  for (let start = 0; start < raw.length; start += 1) {
+    const opening = raw[start];
+    if (opening !== "{" && opening !== "[") {
+      continue;
+    }
+    const closing = opening === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < raw.length; index += 1) {
+      const char = raw[index];
+      if (char === undefined) {
+        break;
+      }
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (char === "\\") {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (char === '"') {
+        inString = true;
+        continue;
+      }
+      if (char === opening) {
+        depth += 1;
+      } else if (char === closing) {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            return { found: true, value: JSON.parse(raw.slice(start, index + 1)) as unknown };
+          } catch {
+            break;
+          }
+        }
+      }
+    }
+  }
+  return { found: false };
 }
 
 function getQmdEmbedQueueState(): QmdEmbedQueueState {
@@ -389,6 +452,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgConfigHome: string;
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
+  private readonly mcporterConfigPath: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   private readonly managedCollectionNames: string[];
@@ -452,6 +516,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.xdgConfigHome = path.join(this.qmdDir, "xdg-config");
     this.xdgCacheHome = path.join(this.qmdDir, "xdg-cache");
     this.indexPath = path.join(this.xdgCacheHome, "qmd", "index.sqlite");
+    this.mcporterConfigPath = path.join(this.qmdDir, "mcporter", "mcporter.json");
 
     this.env = {
       ...process.env,
@@ -2277,6 +2342,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!mcporter.enabled) {
       return;
     }
+    await this.ensureMcporterConfig();
     const state = getMcporterState();
     if (!mcporter.startDaemon) {
       if (!state.coldStartWarned) {
@@ -2287,39 +2353,187 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       return;
     }
-    if (!state.daemonStart) {
-      state.daemonStart = (async () => {
+    const daemonKey = this.mcporterConfigPath;
+    let daemonStart = state.daemonStarts.get(daemonKey);
+    if (!daemonStart) {
+      daemonStart = (async () => {
         try {
           await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
         } catch (err) {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
           // Allow future searches to retry daemon start on transient failures.
-          state.daemonStart = null;
+          state.daemonStarts.delete(daemonKey);
         }
       })();
+      state.daemonStarts.set(daemonKey, daemonStart);
     }
-    await state.daemonStart;
+    await daemonStart;
+  }
+
+  private async ensureMcporterConfig(): Promise<void> {
+    await fs.mkdir(path.dirname(this.mcporterConfigPath), { recursive: true });
+    const server =
+      (await this.resolveConfiguredMcporterServer()) ?? this.buildDefaultMcporterQmdServer();
+    const config = {
+      imports: [],
+      mcpServers: {
+        [this.qmd.mcporter.serverName]: server,
+      },
+    };
+    await fs.writeFile(this.mcporterConfigPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+  }
+
+  private buildDefaultMcporterQmdServer(): Record<string, unknown> {
+    return {
+      command: this.qmd.command,
+      args: ["mcp"],
+      env: this.buildMcporterQmdEnv(),
+      lifecycle: { mode: "keep-alive", idleTimeoutMs: 300_000 },
+    };
+  }
+
+  private async resolveConfiguredMcporterServer(): Promise<Record<string, unknown> | null> {
+    const serverName = this.qmd.mcporter.serverName;
+    let result: { stdout: string; stderr: string };
+    try {
+      result = await this.runMcporterCommand(["config", "get", serverName, "--json"], {
+        includeGeneratedConfig: false,
+        timeoutMs: 5_000,
+      });
+    } catch (err) {
+      if (serverName === "qmd") {
+        return null;
+      }
+      throw new Error(
+        `mcporter server "${serverName}" is not configured or could not be read: ${formatErrorMessage(
+          err,
+        )}`,
+        { cause: err },
+      );
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = parseMcporterResponseJson(result.stdout);
+    } catch (err) {
+      if (serverName === "qmd") {
+        return null;
+      }
+      throw new Error(`mcporter server "${serverName}" returned invalid JSON`, { cause: err });
+    }
+    const serialized = asRecord(parsed);
+    if (!serialized) {
+      if (serverName === "qmd") {
+        return null;
+      }
+      throw new Error(`mcporter server "${serverName}" returned an invalid JSON definition`);
+    }
+
+    const server = this.toMcporterRawServerEntry(serialized);
+    if (!server) {
+      if (serverName === "qmd") {
+        return null;
+      }
+      throw new Error(`mcporter server "${serverName}" returned an unsupported definition`);
+    }
+    return server;
+  }
+
+  private toMcporterRawServerEntry(
+    serialized: Record<string, unknown>,
+  ): Record<string, unknown> | null {
+    const server: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(serialized)) {
+      if (key === "name" || key === "source" || value === undefined) {
+        continue;
+      }
+      server[key] = value;
+    }
+
+    if (typeof server.command === "string" && server.command.length > 0) {
+      const copiedEnv = asRecord(server.env) ?? {};
+      server.env = { ...copiedEnv, ...this.buildMcporterQmdEnv() };
+      if (server.lifecycle === undefined) {
+        server.lifecycle = { mode: "keep-alive", idleTimeoutMs: 300_000 };
+      }
+      return server;
+    }
+
+    const hasRemoteEndpoint =
+      typeof server.baseUrl === "string" ||
+      typeof server.url === "string" ||
+      typeof server.serverUrl === "string";
+    if (hasRemoteEndpoint) {
+      return server;
+    }
+
+    return null;
+  }
+
+  private buildMcporterQmdEnv(): Record<string, string> {
+    const keys = [
+      "PATH",
+      "XDG_CONFIG_HOME",
+      "QMD_CONFIG_DIR",
+      "XDG_CACHE_HOME",
+      "QMD_EMBED_MODEL",
+      "QMD_RERANK_MODEL",
+      "QMD_GENERATE_MODEL",
+      "QMD_LLAMA_GPU",
+      "QMD_EMBED_CONTEXT_SIZE",
+      "QMD_RERANK_CONTEXT_SIZE",
+      "QMD_EXPAND_CONTEXT_SIZE",
+      "NO_COLOR",
+    ];
+    const env: Record<string, string> = {};
+    for (const key of keys) {
+      const value = this.env[key];
+      if (typeof value === "string" && value.length > 0) {
+        env[key] = value;
+      }
+    }
+    return env;
+  }
+
+  private buildMcporterProcessEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...this.env };
+    delete env.XDG_CONFIG_HOME;
+    delete env.QMD_CONFIG_DIR;
+    delete env.XDG_CACHE_HOME;
+    return env;
+  }
+
+  private async runMcporterCommand(
+    args: string[],
+    opts?: { includeGeneratedConfig?: boolean; timeoutMs?: number },
+  ): Promise<{ stdout: string; stderr: string }> {
+    const mcporterArgs =
+      opts?.includeGeneratedConfig === false
+        ? args
+        : [...args, "--config", this.mcporterConfigPath];
+    const env = this.buildMcporterProcessEnv();
+    const spawnInvocation = resolveCliSpawnInvocation({
+      command: "mcporter",
+      args: mcporterArgs,
+      env,
+      packageName: "mcporter",
+    });
+    return await runCliCommand({
+      commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
+      spawnInvocation,
+      env,
+      cwd: this.workspaceDir,
+      timeoutMs: opts?.timeoutMs,
+      maxOutputChars: this.maxQmdOutputChars,
+    });
   }
 
   private async runMcporter(
     args: string[],
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
-    const spawnInvocation = resolveCliSpawnInvocation({
-      command: "mcporter",
-      args,
-      env: this.env,
-      packageName: "mcporter",
-    });
-    return await runCliCommand({
-      commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
-      spawnInvocation,
-      // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-      env: this.env,
-      cwd: this.workspaceDir,
-      timeoutMs: opts?.timeoutMs,
-      maxOutputChars: this.maxQmdOutputChars,
-    });
+    await this.ensureMcporterConfig();
+    return await this.runMcporterCommand(args, opts);
   }
 
   private async runQmdSearchViaMcporter(
@@ -2415,7 +2629,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw err;
     }
 
-    const parsedUnknown: unknown = JSON.parse(result.stdout);
+    const parsedUnknown = parseMcporterResponseJson(result.stdout);
     const parsedRecord = asRecord(parsedUnknown);
     const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
     const structured: unknown = structuredContent ?? parsedUnknown;
