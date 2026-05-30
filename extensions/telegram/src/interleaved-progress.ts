@@ -261,17 +261,18 @@ function dropBodyTailOverlap(body: string, increment: string): string {
   if (tail.endsWith(increment)) {
     return "";
   }
-  // Tail-as-prefix: the body tail ends with a prefix of the increment (e.g.
-  // body ends with "There", increment is "There it is."). Find the longest
-  // suffix of tail that matches a prefix of increment and strip it.
-  const scanLen = Math.min(tail.length, increment.length);
-  for (let k = scanLen; k >= 1; k -= 1) {
-    if (tail.endsWith(increment.slice(0, k))) {
-      return increment.slice(k);
-    }
+  // Full-tail re-send: the ENTIRE prose tail reappears at the start of the
+  // increment (tail "There", increment "There it is."). Fold the repeated tail —
+  // this is a stream re-sending everything it already committed plus new text.
+  // Requiring the WHOLE tail to match (not merely a trailing character) is what
+  // prevents a 1-char coincidence — body ending "a", fresh increment "and beta" —
+  // from folding "a" and silently dropping the increment's real first character.
+  if (increment.startsWith(tail)) {
+    return increment.slice(tail.length);
   }
-  // Partial overlap: only fold if above the minimum threshold and at a word
-  // boundary, to avoid folding genuinely-new short streaming tokens.
+  // Otherwise only fold a PARTIAL overlap (a suffix of the tail matching a prefix
+  // of the increment) when it reaches the minimum length AND lands on a word
+  // boundary; shorter overlaps are genuinely-new streaming tokens, appended whole.
   if (increment.length < INTERLEAVED_MIN_PARTIAL_OVERLAP) {
     return increment;
   }

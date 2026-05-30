@@ -343,6 +343,29 @@ describe("appendInterleavedDelta", () => {
     body = a.body;
     expect(body).toBe("Considering the tradeoffs here.Now checking the second file.");
   });
+
+  // Regression: a coincidental 1-char tail/prefix touch must NOT fold. The body
+  // prose tail ends in "a" and a fresh, non-prefix fragment starts with "a" —
+  // the increment must be appended whole, not have its real first char dropped.
+  it("does not fold a sub-threshold coincidental tail/prefix overlap", () => {
+    const result = appendInterleavedDelta({
+      body: "alpha",
+      state: emptyInterleavedStreamState(),
+      text: "and beta",
+    });
+    expect(result.body).toBe("alphaand beta");
+  });
+
+  // The full-tail re-send (whole prose tail repeated at the increment start) is
+  // still folded even when shorter than the partial-overlap threshold.
+  it("still folds a full-tail re-send below the partial threshold", () => {
+    const result = appendInterleavedDelta({
+      body: "OK",
+      state: emptyInterleavedStreamState(),
+      text: "OK so here is the plan",
+    });
+    expect(result.body).toBe("OK so here is the plan");
+  });
 });
 
 describe("appendStatusLine", () => {
