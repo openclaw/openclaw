@@ -181,6 +181,10 @@
       "types": "./dist/plugin-sdk/routing.d.ts",
       "default": "./dist/plugin-sdk/routing.js"
     },
+    "./plugin-sdk/progress-lane": {
+      "types": "./dist/plugin-sdk/progress-lane.d.ts",
+      "default": "./dist/plugin-sdk/progress-lane.js"
+    },
     "./plugin-sdk/runtime": {
       "types": "./dist/plugin-sdk/runtime.d.ts",
       "default": "./dist/plugin-sdk/runtime.js"
