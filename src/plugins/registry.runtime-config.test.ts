@@ -20,6 +20,43 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
+  it("stores channel origin with the scoped runtime registration", () => {
+    const runtime = createPluginRuntime();
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "bundled-channel-owner",
+      name: "Bundled Channel Owner",
+      source: "/plugins/bundled-channel-owner/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+    api.registerChannel({
+      plugin: {
+        id: "feishu",
+        meta: {
+          id: "feishu",
+          label: "Feishu",
+          selectionLabel: "Feishu",
+          docsPath: "/channels/feishu",
+          blurb: "Feishu channel",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+
+    const channel = pluginRegistry.registry.channels.find((entry) => entry.plugin.id === "feishu");
+    expect(channel?.origin).toBe("bundled");
+    expect(channel?.runtime).toBeDefined();
+  });
+
   it("adds plugin context to lazy runtime resolution failures", () => {
     const runtime = new Proxy({} as PluginRuntime, {
       get() {

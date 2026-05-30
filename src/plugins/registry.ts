@@ -924,6 +924,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (existingRuntime.pluginId === record.id) {
         existingRuntime.plugin = plugin;
         existingRuntime.pluginName = record.name;
+        existingRuntime.origin = record.origin;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
         existingRuntime.runtime = resolvePluginRuntime(record.id);
@@ -983,6 +984,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
+      origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,
       runtime: resolvePluginRuntime(record.id),
