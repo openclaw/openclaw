@@ -199,3 +199,7 @@ Keep changes fork-only when they depend on:
 - Tenant/GitOps deployment conventions (image names, ArgoCD apps, tag shapes).
 
 Upstream generic fixes whenever the change is broadly useful and does not rely on MCTL-only behavior — open a PR to `openclaw/openclaw` directly.
+
+## Automated PR review
+
+PRs are reviewed automatically by `.github/workflows/claude-review.yml` (claude-opus-4-8). The bootstrap PR that adds the workflow is merged directly (anti-tamper); every subsequent PR gets a review.
