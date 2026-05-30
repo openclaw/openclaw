@@ -149,9 +149,6 @@ function buildOversizedIndexedRawEntry(params: {
     extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
     extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
-  if (!id && parentId === undefined && !type && timestamp === undefined) {
-    return null;
-  }
   const record: ParsedTranscriptRecord = {
     ...(type ? { type } : {}),
     ...(id ? { id } : {}),
