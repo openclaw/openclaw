@@ -182,7 +182,39 @@ export function shortenHomeInString(input: string): string {
   if (!display) {
     return input;
   }
-  return input.split(display.home).join(display.prefix);
+  if (input === display.home) {
+    return display.prefix;
+  }
+
+  const { home, prefix } = display;
+  let result = "";
+  let index = 0;
+
+  while (true) {
+    const found = input.indexOf(home, index);
+    if (found === -1) {
+      result += input.slice(index);
+      break;
+    }
+
+    const before = found === 0 ? null : input[found - 1];
+    const after = input[found + home.length];
+    const isValidBefore =
+      before === null || before === "/" || before === "\\" || /[\s:;"'<>()[\]{}]/.test(before);
+    const isValidAfter =
+      after === undefined || after === "/" || after === "\\" || /[\s:;"'<>()[\]{}]/.test(after);
+
+    if (!isValidBefore || !isValidAfter) {
+      result += input.slice(index, found + 1);
+      index = found + 1;
+      continue;
+    }
+
+    result += input.slice(index, found) + prefix;
+    index = found + home.length;
+  }
+
+  return result;
 }
 
 export function displayPath(input: string): string {
