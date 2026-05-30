@@ -41,6 +41,17 @@ describe("cleanupBrowserSessionsForLifecycleEnd", () => {
     expect(closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
   });
 
+  it("skips cleanup when the browser plugin entry is disabled", async () => {
+    await expect(
+      cleanupBrowserSessionsForLifecycleEnd({
+        cfg: { plugins: { entries: { browser: { enabled: false } } } } as OpenClawConfig,
+        sessionKeys: ["session-a"],
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  });
+
   it("swallows browser cleanup failures", async () => {
     const onError = vi.fn();
     const error = new Error("cleanup failed");
