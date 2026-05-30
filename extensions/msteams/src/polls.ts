@@ -345,6 +345,10 @@ export function createMSTeamsPollStoreState(
     return crypto.createHash("sha256").update(pollId).update("\0").update(voterId).digest("hex");
   };
 
+  const buildPollStateKey = (pollId: string): string => {
+    return crypto.createHash("sha256").update(pollId).digest("hex");
+  };
+
   const selectVoteBucket = (pollId: string, voterId: string): string => {
     const bucket = Number.parseInt(hashVote(pollId, voterId).slice(0, 8), 16);
     return String(bucket % POLL_VOTE_BUCKET_COUNT).padStart(4, "0");
@@ -448,7 +452,7 @@ export function createMSTeamsPollStoreState(
         continue;
       }
       const { metadata, votes } = splitPoll(poll);
-      await pollStore.registerIfAbsent(pollId, toPluginJsonValue(metadata));
+      await pollStore.registerIfAbsent(buildPollStateKey(pollId), toPluginJsonValue(metadata));
       await registerPollVotes(pollId, votes, poll.updatedAt ?? poll.createdAt);
     }
     await migrationStore.register(LEGACY_POLLS_MIGRATION_KEY, {
@@ -471,7 +475,7 @@ export function createMSTeamsPollStoreState(
     for (const row of await pollStore.entries()) {
       if (!pruneExpired({ [row.key]: row.value })[row.key]) {
         await pollStore.delete(row.key);
-        await deletePollVotes(row.key);
+        await deletePollVotes(row.value.id);
         continue;
       }
       rows.push(row);
@@ -494,7 +498,7 @@ export function createMSTeamsPollStoreState(
     await withMSTeamsSqliteMutationLock(params, POLL_LOCK_FILENAME, async () => {
       await importLegacyStore();
       const { metadata, votes } = splitPoll(poll);
-      await pollStore.register(poll.id, toPluginJsonValue(metadata));
+      await pollStore.register(buildPollStateKey(poll.id), toPluginJsonValue(metadata));
       await deletePollVotes(poll.id);
       await registerPollVotes(poll.id, votes, poll.updatedAt ?? poll.createdAt);
       await prunePollStoreToLimit();
@@ -503,7 +507,7 @@ export function createMSTeamsPollStoreState(
 
   const getPoll = async (pollId: string) => {
     await ensureLegacyImported();
-    const poll = await pollStore.lookup(pollId);
+    const poll = await pollStore.lookup(buildPollStateKey(pollId));
     if (!poll) {
       return null;
     }
@@ -516,12 +520,13 @@ export function createMSTeamsPollStoreState(
   const recordVote = async (vote: { pollId: string; voterId: string; selections: string[] }) => {
     return await withMSTeamsSqliteMutationLock(params, POLL_LOCK_FILENAME, async () => {
       await importLegacyStore();
-      const poll = await pollStore.lookup(vote.pollId);
+      const pollKey = buildPollStateKey(vote.pollId);
+      const poll = await pollStore.lookup(pollKey);
       if (!poll) {
         return null;
       }
       if (!pruneExpired({ [vote.pollId]: poll })[vote.pollId]) {
-        await pollStore.delete(vote.pollId);
+        await pollStore.delete(pollKey);
         await deletePollVotes(vote.pollId);
         return null;
       }
@@ -529,7 +534,7 @@ export function createMSTeamsPollStoreState(
       const normalized = normalizeMSTeamsPollSelections(currentPoll, vote.selections);
       const updatedAt = new Date().toISOString();
       poll.updatedAt = updatedAt;
-      await pollStore.register(poll.id, toPluginJsonValue(poll));
+      await pollStore.register(pollKey, toPluginJsonValue(poll));
       await registerPollVote(vote.pollId, vote.voterId, normalized, updatedAt);
       await prunePollStoreToLimit();
       return await reconstructPoll(poll);

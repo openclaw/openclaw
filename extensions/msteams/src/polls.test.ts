@@ -190,6 +190,30 @@ describe("state poll store", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("hashes external poll ids before using plugin-state keys", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
+    const store = createMSTeamsPollStoreState({ stateDir });
+    const longPollId = `poll-${"x".repeat(900)}`;
+
+    await store.createPoll({
+      id: longPollId,
+      question: "Long id?",
+      options: ["A", "B"],
+      maxSelections: 1,
+      createdAt: new Date().toISOString(),
+      votes: {},
+    });
+
+    await expect(store.getPoll(longPollId)).resolves.toMatchObject({ id: longPollId });
+    await expect(
+      store.recordVote({
+        pollId: `missing-${"y".repeat(900)}`,
+        voterId: "user-1",
+        selections: ["0"],
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("serializes concurrent votes for the same poll", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
     const store = createMSTeamsPollStoreState({ stateDir });
