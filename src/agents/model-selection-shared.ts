@@ -723,10 +723,16 @@ export function resolveConfiguredModelRef(
     const manifestPluginContext = createModelManifestPluginContext(params);
     const profileStripped = Boolean(modelWithoutProfile && modelWithoutProfile !== trimmed);
     const exactAliasCandidate = findModelAliasCandidate(params.cfg, trimmed);
-    if (profileStripped && exactAliasCandidate) {
+    const strippedAliasCandidate = profileStripped
+      ? findModelAliasCandidate(params.cfg, modelWithoutProfile)
+      : undefined;
+    const profileAliasCandidate = profileStripped
+      ? (exactAliasCandidate ?? strippedAliasCandidate)
+      : undefined;
+    if (profileAliasCandidate) {
       const aliasRef = parseModelRefWithCompatAlias({
         cfg: params.cfg,
-        raw: exactAliasCandidate.keyRaw,
+        raw: profileAliasCandidate.keyRaw,
         defaultProvider: params.defaultProvider,
         allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
@@ -747,10 +753,7 @@ export function resolveConfiguredModelRef(
         manifestPlugins: manifestPluginContext.get(),
       });
     }
-    const strippedAliasCandidate = profileStripped
-      ? findModelAliasCandidate(params.cfg, modelWithoutProfile)
-      : undefined;
-    const aliasCandidate = exactAliasCandidate ?? strippedAliasCandidate;
+    const aliasCandidate = profileStripped ? undefined : exactAliasCandidate;
     const manifestPlugins = manifestPluginContext.peek();
     if (
       aliasCandidate &&
