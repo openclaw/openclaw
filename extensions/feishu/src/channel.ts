@@ -73,11 +73,13 @@ import { buildFeishuPresentationCard } from "./presentation-card.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 import { createFeishuSendReceipt } from "./send-result.js";
+import { forgetFeishuSentMessage, getLastFeishuSentMessage } from "./sent-message-cache.js";
 import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupAdapter } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { looksLikeFeishuId, normalizeFeishuTarget } from "./targets.js";
+import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function readFeishuMediaParam(params: Record<string, unknown>): string | undefined {
@@ -242,7 +244,10 @@ function describeFeishuMessageTool({
     "send",
     "read",
     "edit",
+    "delete",
+    "unsend",
     "thread-reply",
+    "thread-create",
     "pin",
     "list-pins",
     "unpin",
@@ -257,6 +262,10 @@ function describeFeishuMessageTool({
   ) {
     actions.add("react");
     actions.add("reactions");
+  }
+  if (!enabledAccounts.some(isFeishuMessagesToolEnabled)) {
+    actions.delete("delete");
+    actions.delete("unsend");
   }
   return {
     actions: Array.from(actions),
@@ -327,6 +336,10 @@ function areAnyFeishuReactionActionsEnabled(cfg: ClawdbotConfig): boolean {
   return false;
 }
 
+function isFeishuMessagesToolEnabled(account: ResolvedFeishuAccount): boolean {
+  return account.enabled && account.configured && resolveToolsConfig(account.config.tools).messages;
+}
+
 function isFeishuGroupTopicSessionKey(sessionKey: string | null | undefined): boolean {
   if (typeof sessionKey !== "string" || !sessionKey) {
     return false;
@@ -357,7 +370,7 @@ function resolveFeishuTopicAutoThreadAnchor(ctx: FeishuSendActionContext): strin
 }
 
 function buildFeishuSendReplyAnchor(ctx: FeishuSendActionContext): FeishuActionReplyAnchor {
-  if (ctx.action === "thread-reply") {
+  if (ctx.action === "thread-reply" || ctx.action === "thread-create") {
     return {
       replyToMessageId: resolveFeishuMessageId(ctx.params),
       replyInThread: true,
@@ -599,6 +612,26 @@ function resolveFeishuChatId(ctx: {
   return raw;
 }
 
+function resolveFeishuSentMessageChatId(ctx: {
+  params: Record<string, unknown>;
+  toolContext?: { currentChannelId?: string } | null;
+}): string | undefined {
+  const chatId = resolveFeishuChatId(ctx);
+  if (chatId) {
+    return chatId;
+  }
+  const raw = readFirstString(
+    ctx.params,
+    ["chatId", "chat_id", "channelId", "channel_id", "to", "target"],
+    ctx.toolContext?.currentChannelId,
+  );
+  const withoutProvider = raw?.replace(/^(feishu|lark):/i, "").trim();
+  if (!withoutProvider || !/^(user|dm|open_id):/i.test(withoutProvider)) {
+    return undefined;
+  }
+  return normalizeFeishuTarget(withoutProvider) ?? undefined;
+}
+
 function resolveFeishuMessageId(params: Record<string, unknown>): string | undefined {
   return readFirstString(params, ["messageId", "message_id", "replyTo", "reply_to"]);
 }
@@ -663,13 +696,14 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         },
         reactions: true,
         edit: true,
+        unsend: true,
         reply: true,
       },
       agentPrompt: {
         messageToolHints: () => [
           "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
           "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
-          "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
+          "- Feishu supports `send`, `read`, `edit`, `delete`, `unsend`, `thread-reply`, `thread-create`, pins, and channel/member lookup, plus reactions when enabled. Use `feishu_message` read_receipts/read_users to query message read receipts.",
         ],
       },
       groups: {
@@ -766,14 +800,27 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           ) {
             throw new Error("Feishu reactions are disabled via actions.reactions.");
           }
-          if (ctx.action === "send" || ctx.action === "thread-reply") {
+          if (
+            (ctx.action === "delete" || ctx.action === "unsend") &&
+            !isFeishuMessagesToolEnabled(account)
+          ) {
+            throw new Error("Feishu delete/unsend actions are disabled via tools.messages.");
+          }
+          if (
+            ctx.action === "send" ||
+            ctx.action === "thread-reply" ||
+            ctx.action === "thread-create"
+          ) {
             const to = resolveFeishuActionTarget(ctx);
             if (!to) {
               throw new Error(`Feishu ${ctx.action} requires a target (to).`);
             }
             const { replyToMessageId, replyInThread } = buildFeishuSendReplyAnchor(ctx);
-            if (ctx.action === "thread-reply" && !replyToMessageId) {
-              throw new Error("Feishu thread-reply requires messageId.");
+            if (
+              (ctx.action === "thread-reply" || ctx.action === "thread-create") &&
+              !replyToMessageId
+            ) {
+              throw new Error(`Feishu ${ctx.action} requires messageId.`);
             }
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
@@ -866,6 +913,46 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               };
             }
             return jsonActionResult({ ok: true, channel: "feishu", action: "read", message });
+          }
+
+          if (ctx.action === "delete" || ctx.action === "unsend") {
+            const chatId = resolveFeishuSentMessageChatId(ctx);
+            const messageId =
+              resolveFeishuMessageId(ctx.params) ??
+              getLastFeishuSentMessage({
+                cfg: ctx.cfg,
+                accountId: account.accountId,
+                chatId,
+              });
+            if (!messageId) {
+              throw new Error(
+                `Feishu ${ctx.action} requires messageId or a previous bot-sent message in this chat.`,
+              );
+            }
+            const runtime = await loadFeishuChannelRuntime();
+            const client = await createFeishuActionClient(account);
+            const result =
+              ctx.action === "delete"
+                ? await runtime.deleteFeishuMessage(client, {
+                    messageId,
+                    chatId,
+                  })
+                : await runtime.recallFeishuMessage(client, {
+                    messageId,
+                    chatId,
+                  });
+            forgetFeishuSentMessage({
+              cfg: ctx.cfg,
+              accountId: account.accountId,
+              chatId,
+              messageId,
+            });
+            return jsonActionResult({
+              ok: true,
+              channel: "feishu",
+              ...result,
+              action: ctx.action,
+            });
           }
 
           if (ctx.action === "edit") {

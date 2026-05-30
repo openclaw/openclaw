@@ -7,6 +7,7 @@ type FeishuSendTarget = {
   client: ReturnType<typeof createFeishuClient>;
   receiveId: string;
   receiveIdType: ReturnType<typeof resolveReceiveIdType>;
+  accountId: string;
 };
 
 export function resolveFeishuSendTarget(params: {
@@ -31,5 +32,6 @@ export function resolveFeishuSendTarget(params: {
     client,
     receiveId,
     receiveIdType: resolveReceiveIdType(withoutProviderPrefix),
+    accountId: account.accountId,
   };
 }

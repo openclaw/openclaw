@@ -193,6 +193,34 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 
 ---
 
+## Agent message actions
+
+Feishu exposes a broad message action surface to agents:
+
+| Action/tool                            | Description                                                                                                                                     |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `message` action `react` / `reactions` | Add, remove, or list message reactions when `actions.reactions` is enabled                                                                      |
+| `message` action `delete`              | Delete a Feishu message when `tools.messages` is enabled; defaults to the last bot-sent message in the current chat when `messageId` is omitted |
+| `message` action `unsend`              | Recall a Feishu message while preserving the generic OpenClaw `unsend` action name; uses the same last bot-sent fallback                        |
+| `message` action `thread-create`       | Create or enter a Feishu topic by replying with `reply_in_thread` semantics                                                                     |
+| `feishu_message`                       | Feishu-native message management: `list`, `delete`, `recall`, `read_receipts`, and `read_users`                                                 |
+
+Message management is opt-in. Set `channels.feishu.tools.messages: true` (or
+the account-level equivalent) before agents can call `feishu_message`,
+`message(action="delete")`, or `message(action="unsend")`.
+
+`feishu_message` time filters use Unix seconds strings, for example `"1710000000"`.
+`read_receipts` / `read_users` queries Feishu read receipt data for bot-sent
+messages; it does not mark messages as read. Feishu only returns read receipt
+data for supported recent bot messages while the bot remains in the chat.
+
+Group-message management actions such as `list`, `delete`, and `recall` may
+require the Feishu/Lark app scope `im:message.group_msg` in addition to
+`im:message:recall` for delete/recall and `im:message:readonly` for read/list
+operations.
+
+---
+
 ## Troubleshooting
 
 ### Bot does not respond in group chats
@@ -582,6 +610,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.mediaMaxMb`                             | Media size limit                                                                 | `30`                                 |
 | `channels.feishu.streaming`                              | Streaming card output                                                            | `true`                               |
 | `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                  | `false`                              |
+| `channels.feishu.tools.messages`                         | Enable Feishu message list/delete/recall/read receipt tools                      | `false`                              |
+| `channels.feishu.actions.reactions`                      | Enable generic message reaction actions                                          | `true`                               |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                            | `true`                               |
 | `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                     | `true`                               |
 

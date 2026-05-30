@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildMarkdownCard } from "./send.js";
+import { resetFeishuSentMessageCacheForTest } from "./sent-message-cache.js";
 
 const {
   mockConvertMarkdownTables,
@@ -63,6 +67,15 @@ let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessage
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
+const feishuSendSentMessageTestStorePath = path.join(
+  os.tmpdir(),
+  `openclaw-feishu-send-test-${process.pid}.json`,
+);
+
+function cleanupFeishuSendSentMessageTestStore() {
+  fs.rmSync(`${feishuSendSentMessageTestStorePath}.feishu-sent-messages.json`, { force: true });
+}
+
 describe("getMessageFeishu", () => {
   beforeAll(async () => {
     ({
@@ -81,11 +94,15 @@ describe("getMessageFeishu", () => {
     vi.doUnmock("./client.js");
     vi.doUnmock("./accounts.js");
     vi.doUnmock("./runtime.js");
+    resetFeishuSentMessageCacheForTest();
+    cleanupFeishuSendSentMessageTestStore();
     vi.resetModules();
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetFeishuSentMessageCacheForTest();
+    cleanupFeishuSendSentMessageTestStore();
     mockResolveMarkdownTableMode.mockReturnValue("preserve");
     mockConvertMarkdownTables.mockImplementation((text: string) => text);
     mockRuntimeResolveMarkdownTableMode.mockReturnValue("preserve");
@@ -104,6 +121,41 @@ describe("getMessageFeishu", () => {
         },
       },
     });
+  });
+
+  it("does not persist sent-message fallback state when message tools are disabled", async () => {
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create: vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_send" } }),
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {
+        channels: {
+          feishu: {
+            tools: {
+              messages: false,
+            },
+          },
+        },
+        session: {
+          store: feishuSendSentMessageTestStorePath,
+        },
+      } as ClawdbotConfig,
+      to: "oc_send",
+      text: "hello",
+    });
+
+    expect(fs.existsSync(`${feishuSendSentMessageTestStorePath}.feishu-sent-messages.json`)).toBe(
+      false,
+    );
   });
 
   it("sends text without requiring Feishu runtime text helpers", async () => {

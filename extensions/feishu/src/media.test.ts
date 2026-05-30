@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -6,6 +7,7 @@ import { Readable } from "node:stream";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { resetFeishuSentMessageCacheForTest } from "./sent-message-cache.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
@@ -23,6 +25,16 @@ const messageReplyMock = vi.hoisted(() => vi.fn());
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const emptyConfig: ClawdbotConfig = {};
+const feishuMediaSentMessageTestStorePath = path.join(
+  os.tmpdir(),
+  `openclaw-feishu-media-test-${process.pid}.json`,
+);
+
+function cleanupFeishuMediaSentMessageTestStore() {
+  fsSync.rmSync(`${feishuMediaSentMessageTestStorePath}.feishu-sent-messages.json`, {
+    force: true,
+  });
+}
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
@@ -130,11 +142,15 @@ describe("sendMediaFeishu msg_type routing", () => {
     vi.doUnmock("./targets.js");
     vi.doUnmock("./runtime.js");
     vi.doUnmock("openclaw/plugin-sdk/media-runtime");
+    resetFeishuSentMessageCacheForTest();
+    cleanupFeishuMediaSentMessageTestStore();
     vi.resetModules();
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetFeishuSentMessageCacheForTest();
+    cleanupFeishuMediaSentMessageTestStore();
     mockResolvedFeishuAccount();
 
     normalizeFeishuTargetMock.mockReturnValue("ou_target");
@@ -222,6 +238,30 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
     expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
+  });
+
+  it("does not persist sent-message fallback state when message tools are disabled", async () => {
+    await sendMediaFeishu({
+      cfg: {
+        channels: {
+          feishu: {
+            tools: {
+              messages: false,
+            },
+          },
+        },
+        session: {
+          store: feishuMediaSentMessageTestStorePath,
+        },
+      } as ClawdbotConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("doc"),
+      fileName: "paper.pdf",
+    });
+
+    expect(
+      fsSync.existsSync(`${feishuMediaSentMessageTestStorePath}.feishu-sent-messages.json`),
+    ).toBe(false);
   });
 
   it("uses msg_type=audio for opus", async () => {

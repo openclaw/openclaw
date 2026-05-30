@@ -1,6 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuPlugin } from "./channel.js";
+import {
+  recordFeishuSentMessage,
+  resetFeishuSentMessageCacheForTest,
+} from "./sent-message-cache.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
@@ -12,6 +19,8 @@ const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const editMessageFeishuMock = vi.hoisted(() => vi.fn());
+const deleteFeishuMessageMock = vi.hoisted(() => vi.fn());
+const recallFeishuMessageMock = vi.hoisted(() => vi.fn());
 const createPinFeishuMock = vi.hoisted(() => vi.fn());
 const listPinsFeishuMock = vi.hoisted(() => vi.fn());
 const removePinFeishuMock = vi.hoisted(() => vi.fn());
@@ -21,6 +30,10 @@ const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
+const feishuSentMessageTestStorePath = path.join(
+  os.tmpdir(),
+  `openclaw-feishu-channel-test-${process.pid}.json`,
+);
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -34,6 +47,7 @@ vi.mock("./channel.runtime.js", () => ({
   feishuChannelRuntime: {
     addReactionFeishu: addReactionFeishuMock,
     createPinFeishu: createPinFeishuMock,
+    deleteFeishuMessage: deleteFeishuMessageMock,
     editMessageFeishu: editMessageFeishuMock,
     getChatInfo: getChatInfoMock,
     getChatMembers: getChatMembersMock,
@@ -44,6 +58,7 @@ vi.mock("./channel.runtime.js", () => ({
     listPinsFeishu: listPinsFeishuMock,
     listReactionsFeishu: listReactionsFeishuMock,
     probeFeishu: probeFeishuMock,
+    recallFeishuMessage: recallFeishuMessageMock,
     removePinFeishu: removePinFeishuMock,
     removeReactionFeishu: removeReactionFeishuMock,
     sendCardFeishu: sendCardFeishuMock,
@@ -89,10 +104,16 @@ function resultDetails(result: unknown) {
   return requireRecord(requireRecord(result, "action result").details, "action result details");
 }
 
+function cleanupFeishuSentMessageTestStore() {
+  fs.rmSync(`${feishuSentMessageTestStorePath}.feishu-sent-messages.json`, { force: true });
+}
+
 afterAll(() => {
   vi.doUnmock("./probe.js");
   vi.doUnmock("./client.js");
   vi.doUnmock("./channel.runtime.js");
+  resetFeishuSentMessageCacheForTest();
+  cleanupFeishuSentMessageTestStore();
   vi.resetModules();
 });
 
@@ -216,11 +237,17 @@ describe("feishuPlugin messaging", () => {
 
 describe("feishuPlugin actions", () => {
   const cfg = {
+    session: {
+      store: feishuSentMessageTestStorePath,
+    },
     channels: {
       feishu: {
         enabled: true,
         appId: "cli_main",
         appSecret: "secret_main",
+        tools: {
+          messages: true,
+        },
         actions: {
           reactions: true,
         },
@@ -230,6 +257,8 @@ describe("feishuPlugin actions", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetFeishuSentMessageCacheForTest();
+    cleanupFeishuSentMessageTestStore();
     createFeishuClientMock.mockReturnValue({ tag: "client" });
   });
 
@@ -238,7 +267,10 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "delete",
+      "unsend",
       "thread-reply",
+      "thread-create",
       "pin",
       "list-pins",
       "unpin",
@@ -257,6 +289,9 @@ describe("feishuPlugin actions", () => {
           enabled: true,
           appId: "cli_main",
           appSecret: "secret_main",
+          tools: {
+            messages: true,
+          },
           actions: {
             reactions: false,
           },
@@ -268,7 +303,10 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "delete",
+      "unsend",
       "thread-reply",
+      "thread-create",
       "pin",
       "list-pins",
       "unpin",
@@ -278,23 +316,60 @@ describe("feishuPlugin actions", () => {
     ]);
   });
 
+  it("does not advertise delete or unsend when message tools are disabled", () => {
+    const disabledCfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_main",
+          appSecret: "secret_main",
+          tools: {
+            messages: false,
+          },
+          actions: {
+            reactions: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(getDescribedActions(disabledCfg)).toEqual([
+      "send",
+      "read",
+      "edit",
+      "thread-reply",
+      "thread-create",
+      "pin",
+      "list-pins",
+      "unpin",
+      "member-info",
+      "channel-info",
+      "channel-list",
+      "react",
+      "reactions",
+    ]);
+  });
+
   it("honors the selected Feishu account during discovery", () => {
     const cfg = {
       channels: {
         feishu: {
           enabled: true,
+          tools: { messages: true },
           actions: { reactions: false },
           accounts: {
             default: {
               enabled: true,
               appId: "cli_main",
               appSecret: "secret_main",
+              tools: { messages: true },
               actions: { reactions: false },
             },
             work: {
               enabled: true,
               appId: "cli_work",
               appSecret: "secret_work",
+              tools: { messages: true },
               actions: { reactions: true },
             },
           },
@@ -306,7 +381,10 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "delete",
+      "unsend",
       "thread-reply",
+      "thread-create",
       "pin",
       "list-pins",
       "unpin",
@@ -318,7 +396,10 @@ describe("feishuPlugin actions", () => {
       "send",
       "read",
       "edit",
+      "delete",
+      "unsend",
       "thread-reply",
+      "thread-create",
       "pin",
       "list-pins",
       "unpin",
@@ -682,6 +763,199 @@ describe("feishuPlugin actions", () => {
     expect(details.contentType).toBe("post");
   });
 
+  it("deletes messages through the shared message action surface", async () => {
+    deleteFeishuMessageMock.mockResolvedValueOnce({
+      success: true,
+      action: "delete",
+      deleted: true,
+      message_id: "om_delete",
+      chat_id: "oc_group_1",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "delete",
+      params: { messageId: "om_delete", chatId: "oc_group_1" },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(createFeishuClientMock).toHaveBeenCalled();
+    expect(deleteFeishuMessageMock).toHaveBeenCalledWith(
+      { tag: "client" },
+      {
+        messageId: "om_delete",
+        chatId: "oc_group_1",
+      },
+    );
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.action).toBe("delete");
+    expect(details.deleted).toBe(true);
+    expect(details.message_id).toBe("om_delete");
+  });
+
+  it("deletes the last bot-sent message when messageId is omitted", async () => {
+    recordFeishuSentMessage({
+      cfg,
+      accountId: "default",
+      chatId: "oc_group_1",
+      messageId: "om_last_bot",
+    });
+    deleteFeishuMessageMock.mockResolvedValueOnce({
+      success: true,
+      action: "delete",
+      deleted: true,
+      message_id: "om_last_bot",
+      chat_id: "oc_group_1",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "delete",
+      params: {},
+      cfg,
+      accountId: undefined,
+      toolContext: { currentChannelId: "oc_group_1" },
+    } as never);
+
+    expect(deleteFeishuMessageMock).toHaveBeenCalledWith(
+      { tag: "client" },
+      {
+        messageId: "om_last_bot",
+        chatId: "oc_group_1",
+      },
+    );
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.action).toBe("delete");
+    expect(details.message_id).toBe("om_last_bot");
+  });
+
+  it("deletes the last bot-sent direct message from a prefixed current channel", async () => {
+    recordFeishuSentMessage({
+      cfg,
+      accountId: "default",
+      chatId: "ou_direct_user",
+      messageId: "om_last_direct_bot",
+    });
+    deleteFeishuMessageMock.mockResolvedValueOnce({
+      success: true,
+      action: "delete",
+      deleted: true,
+      message_id: "om_last_direct_bot",
+      chat_id: "ou_direct_user",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "delete",
+      params: {},
+      cfg,
+      accountId: undefined,
+      toolContext: { currentChannelId: "user:ou_direct_user" },
+    } as never);
+
+    expect(deleteFeishuMessageMock).toHaveBeenCalledWith(
+      { tag: "client" },
+      {
+        messageId: "om_last_direct_bot",
+        chatId: "ou_direct_user",
+      },
+    );
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.action).toBe("delete");
+    expect(details.message_id).toBe("om_last_direct_bot");
+  });
+
+  it("unsends messages as Feishu recall while keeping the generic action name", async () => {
+    recallFeishuMessageMock.mockResolvedValueOnce({
+      success: true,
+      action: "recall",
+      recalled: true,
+      message_id: "om_recall",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "unsend",
+      params: { message_id: "om_recall" },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(recallFeishuMessageMock).toHaveBeenCalledWith(
+      { tag: "client" },
+      {
+        messageId: "om_recall",
+        chatId: undefined,
+      },
+    );
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.action).toBe("unsend");
+    expect(details.recalled).toBe(true);
+    expect(details.message_id).toBe("om_recall");
+  });
+
+  it("blocks delete and unsend execution when message tools are disabled", async () => {
+    const disabledCfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_main",
+          appSecret: "secret_main",
+          tools: {
+            messages: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "delete",
+        params: { messageId: "om_delete" },
+        cfg: disabledCfg,
+        accountId: undefined,
+      } as never),
+    ).rejects.toThrow("Feishu delete/unsend actions are disabled via tools.messages.");
+  });
+
+  it("does not read fallback sent-message state when message tools are disabled", async () => {
+    const disabledCfg = {
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "cli_main",
+          appSecret: "secret_main",
+          tools: {
+            messages: false,
+          },
+        },
+      },
+      session: {
+        store: feishuSentMessageTestStorePath,
+      },
+    } as OpenClawConfig;
+    recordFeishuSentMessage({
+      cfg: disabledCfg,
+      accountId: "default",
+      chatId: "oc_group_1",
+      messageId: "om_last_bot",
+    });
+
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "delete",
+        params: {},
+        cfg: disabledCfg,
+        accountId: undefined,
+        toolContext: { currentChannelId: "oc_group_1" },
+      } as never),
+    ).rejects.toThrow("Feishu delete/unsend actions are disabled via tools.messages.");
+    expect(deleteFeishuMessageMock).not.toHaveBeenCalled();
+  });
+
   it("sends explicit thread replies with reply_in_thread semantics", async () => {
     sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_reply", chatId: "oc_group_1" });
 
@@ -705,6 +979,31 @@ describe("feishuPlugin actions", () => {
     expect(details.ok).toBe(true);
     expect(details.action).toBe("thread-reply");
     expect(details.messageId).toBe("om_reply");
+  });
+
+  it("creates Feishu topics through thread-create with reply_in_thread semantics", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_topic", chatId: "oc_group_1" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "thread-create",
+      params: { to: "chat:oc_group_1", messageId: "om_parent", text: "topic starter" },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "topic starter",
+      accountId: undefined,
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.action).toBe("thread-create");
+    expect(details.messageId).toBe("om_topic");
   });
 
   it("auto-threads `send` text against the inbound trigger in group_topic sessions", async () => {
@@ -1168,6 +1467,14 @@ describe("feishuPlugin actions", () => {
         accountId: undefined,
       } as never),
     ).rejects.toThrow("Feishu thread-reply requires messageId.");
+    await expect(
+      feishuPlugin.actions?.handleAction?.({
+        action: "thread-create",
+        params: { to: "chat:oc_group_1", message: "topic starter" },
+        cfg,
+        accountId: undefined,
+      } as never),
+    ).rejects.toThrow("Feishu thread-create requires messageId.");
   });
 
   it("sends media-only messages without requiring card", async () => {

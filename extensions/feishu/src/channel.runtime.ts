@@ -7,6 +7,10 @@ import {
   listFeishuDirectoryGroupsLive as listFeishuDirectoryGroupsLiveImpl,
   listFeishuDirectoryPeersLive as listFeishuDirectoryPeersLiveImpl,
 } from "./directory.js";
+import {
+  deleteFeishuMessage as deleteFeishuMessageImpl,
+  recallFeishuMessage as recallFeishuMessageImpl,
+} from "./message-tool.js";
 import { feishuOutbound as feishuOutboundImpl } from "./outbound.js";
 import {
   createPinFeishu as createPinFeishuImpl,
@@ -44,4 +48,6 @@ export const feishuChannelRuntime = {
   getMessageFeishu: getMessageFeishuImpl,
   sendCardFeishu: sendCardFeishuImpl,
   sendMessageFeishu: sendMessageFeishuImpl,
+  deleteFeishuMessage: deleteFeishuMessageImpl,
+  recallFeishuMessage: recallFeishuMessageImpl,
 };

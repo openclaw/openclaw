@@ -20,6 +20,7 @@
       "feishu_chat",
       "feishu_doc",
       "feishu_drive",
+      "feishu_message",
       "feishu_perm",
       "feishu_wiki"
     ]
@@ -61,6 +62,9 @@
     "feishu_drive": {
       "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
     },
+    "feishu_message": {
+      "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
+    },
     "feishu_perm": {
       "configSignals": [{ "rootPath": "channels.feishu", "required": ["appId", "appSecret"] }]
     },
@@ -96,6 +100,19 @@
       },
       "secretInput": {
         "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
+      },
+      "tools": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "doc": { "type": "boolean" },
+          "chat": { "type": "boolean" },
+          "wiki": { "type": "boolean" },
+          "drive": { "type": "boolean" },
+          "perm": { "type": "boolean" },
+          "scopes": { "type": "boolean" },
+          "messages": { "type": "boolean" }
+        }
       },
       "account": {
         "type": "object",
@@ -133,6 +150,7 @@
             "type": "string",
             "enum": ["disabled", "enabled"]
           },
+          "tools": { "$ref": "#/$defs/tools" },
           "typingIndicator": { "type": "boolean" }
         }
       }
@@ -170,6 +188,7 @@
         "type": "string",
         "enum": ["disabled", "enabled"]
       },
+      "tools": { "$ref": "#/$defs/tools" },
       "typingIndicator": { "type": "boolean" },
       "accounts": {
         "type": "object",

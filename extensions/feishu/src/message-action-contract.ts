@@ -5,7 +5,11 @@ type MessageActionTargetAliasSpec = {
 };
 
 export const messageActionTargetAliases = {
+  delete: { aliases: ["messageId"] },
+  unsend: { aliases: ["messageId"] },
   read: { aliases: ["messageId"] },
+  "thread-reply": { aliases: ["messageId"] },
+  "thread-create": { aliases: ["messageId"] },
   pin: { aliases: ["messageId"] },
   unpin: { aliases: ["messageId"] },
   "list-pins": { aliases: ["chatId"] },
