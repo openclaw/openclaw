@@ -355,6 +355,9 @@ describe("doctor health contributions", () => {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: { nonInteractive: true },
       env: {},
+      configResult: { cfg: {} },
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
     } as Parameters<(typeof contribution)["run"]>[0];
 
     await contribution.run(ctx);
@@ -388,6 +391,9 @@ describe("doctor health contributions", () => {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: { nonInteractive: true },
       env: {},
+      configResult: { cfg: {} },
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
     } as Parameters<(typeof contribution)["run"]>[0];
 
     await contribution.run(ctx);
