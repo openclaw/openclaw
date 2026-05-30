@@ -36,6 +36,8 @@
       "@openclaw/llm-core/*": ["./packages/llm-core/src/*"],
       "@openclaw/llm-runtime": ["./packages/llm-runtime/src/index.ts"],
       "@openclaw/llm-runtime/*": ["./packages/llm-runtime/src/*"],
+      "@openclaw/model-catalog-core": ["./packages/model-catalog-core/src/index.ts"],
+      "@openclaw/model-catalog-core/*": ["./packages/model-catalog-core/src/*"],
       "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
       "@openclaw/gateway-client/*": ["./packages/gateway-client/src/*"],
       "@openclaw/gateway-protocol": ["./packages/gateway-protocol/src/index.ts"],
