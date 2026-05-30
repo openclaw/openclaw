@@ -2357,6 +2357,9 @@ export function applyDefaultVitestNoOutputTimeout(specs, params = {}) {
 
 export function shouldRetryVitestNoOutputTimeout(env = process.env) {
   const value = env[VITEST_NO_OUTPUT_RETRY_ENV_KEY]?.trim().toLowerCase();
+  if (value === undefined && isCiLikeEnv(env)) {
+    return false;
+  }
   return !["0", "false", "no", "off"].includes(value ?? "");
 }
 
