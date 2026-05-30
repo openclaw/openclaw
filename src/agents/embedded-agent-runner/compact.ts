@@ -543,6 +543,17 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const contextConfigProvider = resolvedCompactionTarget.contextProvider ?? provider;
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
   const authProfileId = resolvedCompactionTarget.authProfileId;
+  if (runtimeProvider !== provider || selectedHarnessRuntime) {
+    await ensureSelectedAgentHarnessPlugin({
+      config: params.config,
+      provider,
+      modelId,
+      agentId: runtimePolicyAgentId,
+      sessionKey: runtimePolicySessionKey,
+      agentHarnessRuntimeOverride: selectedHarnessRuntime,
+      workspaceDir: resolvedWorkspace,
+    });
+  }
   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
   const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
