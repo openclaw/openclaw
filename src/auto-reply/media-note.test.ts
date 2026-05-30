@@ -331,9 +331,7 @@ describe("buildInboundMediaNote", () => {
       MediaType: "image/png",
       MediaUrl: "https://example.com/a.png",
     });
-    expect(single).toBe(
-      "[media attached: /tmp/a.png (image/png) | https://example.com/a.png]",
-    );
+    expect(single).toBe("[media attached: /tmp/a.png (image/png) | https://example.com/a.png]");
 
     // Mixed array: some indices have identical path/url (Telegram local-only),
     // others carry a real remote URL. Each entry should be deduped independently.
