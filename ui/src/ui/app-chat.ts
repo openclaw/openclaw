@@ -250,6 +250,12 @@ function resolveSelectedGlobalAgentId(
   return agentId ? normalizeAgentId(agentId) : undefined;
 }
 
+function resolveDefaultAgentIdForList(host: Pick<ChatHost, "agentsList" | "hello">): string {
+  return normalizeAgentId(
+    host.agentsList?.defaultId ?? readHelloDefaultAgentId(host) ?? DEFAULT_AGENT_ID,
+  );
+}
+
 function scopedAgentIdForSession(host: ChatHost, sessionKey: string | undefined | null) {
   return isGlobalSessionKey(sessionKey)
     ? resolveSelectedGlobalAgentId(host)
@@ -296,7 +302,12 @@ export function scopedAgentListParamsForSession(
   sessionKey: string,
 ) {
   const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? scopedAgentParamsForSession(host, sessionKey).agentId;
+  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const agentId =
+    parsed?.agentId ??
+    (normalizedSessionKey === "global" || normalizedSessionKey === "unknown"
+      ? resolveSelectedGlobalAgentId(host)
+      : resolveDefaultAgentIdForList(host));
   return agentId ? { agentId: normalizeAgentId(agentId) } : {};
 }
 

@@ -235,7 +235,7 @@ describe("refreshChat", () => {
       "sessions list payload",
     );
     expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
-    expect(sessionsListPayload).not.toHaveProperty("agentId");
+    expect(sessionsListPayload.agentId).toBe("main");
     expect(sessionsListPayload.includeGlobal).toBe(true);
     expect(sessionsListPayload.includeUnknown).toBe(true);
     expect(sessionsListPayload.limit).toBe(50);
@@ -694,7 +694,7 @@ describe("refreshChat", () => {
         "sessions list payload",
       );
       expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
-      expect(sessionsListPayload).not.toHaveProperty("agentId");
+      expect(sessionsListPayload.agentId).toBe("main");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
       expect(sessionsListPayload.limit).toBe(50);
