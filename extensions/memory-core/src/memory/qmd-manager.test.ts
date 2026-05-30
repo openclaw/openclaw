@@ -279,7 +279,7 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation(() => createMockChild());
     watchMock.mockClear();
     withFileLockMock.mockClear();
-    logWarnMock.mockClear();
+    logDebugMock.mockClear();
     logDebugMock.mockClear();
     logInfoMock.mockClear();
     tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
@@ -4349,8 +4349,8 @@ describe("QmdMemoryManager", () => {
     ).resolves.toStrictEqual([]);
 
     expect(spawnMock.mock.calls.length).toBe(beforeCalls);
-    expectMockMessageContains(logWarnMock, "qmd search denied by scope");
-    expectMockMessageContains(logWarnMock, "chatType=channel");
+    expectMockMessageContains(logDebugMock, "qmd search skipped_by_scope");
+    expectMockMessageContains(logDebugMock, "chatType=channel");
 
     await manager.close();
   });

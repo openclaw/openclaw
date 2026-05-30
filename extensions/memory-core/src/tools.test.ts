@@ -3,6 +3,7 @@ import {
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
+  getMemorySearchMockCalls,
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
@@ -268,6 +269,74 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.fallback).toBe("unsupported-search-flags");
     expect(details.debug?.hits).toBe(1);
     expect(details.debug?.searchMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("skips qmd memory manager resolution when session scope denies search", async () => {
+    setMemoryBackend("qmd");
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        memory: {
+          backend: "qmd",
+          qmd: {
+            scope: {
+              default: "deny",
+              rules: [{ action: "allow", match: { chatType: "direct" } }],
+            },
+          },
+        },
+      },
+      agentSessionKey: "agent:main:slack:channel:c123",
+    });
+
+    const result = await tool.execute("scope-denied", { query: "prior work" });
+
+    expect(result.details).toMatchObject({
+      results: [],
+      debug: {
+        backend: "qmd",
+        skipped: "skipped_by_scope",
+        channel: "slack",
+        chatType: "channel",
+        sessionKey: "agent:main:slack:channel:c123",
+        searchMs: 0,
+        hits: 0,
+      },
+    });
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+    expect(getMemorySearchMockCalls()).toBe(0);
+  });
+
+  it("uses qmd memory manager when session scope allows search", async () => {
+    setMemoryBackend("qmd");
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: "prior work",
+        source: "memory",
+      },
+    ]);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        memory: {
+          backend: "qmd",
+          qmd: {
+            scope: {
+              default: "deny",
+              rules: [{ action: "allow", match: { chatType: "direct" } }],
+            },
+          },
+        },
+      },
+      agentSessionKey: "agent:main:slack:dm:u123",
+    });
+
+    await tool.execute("scope-allowed", { query: "prior work" });
+
+    expect(getMemorySearchManagerMockCalls()).toBe(1);
+    expect(getMemorySearchMockCalls()).toBe(1);
   });
 });
 

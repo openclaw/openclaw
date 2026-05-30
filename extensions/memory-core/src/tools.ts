@@ -1,4 +1,10 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  deriveQmdScopeChannel,
+  deriveQmdScopeChatType,
+  isQmdScopeAllowed,
+} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   asToolParamsRecord,
@@ -37,6 +43,8 @@ import {
   MemorySearchSchema,
   searchMemoryCorpusSupplements,
 } from "./tools.shared.js";
+
+const log = createSubsystemLogger("memory");
 
 type MemorySearchToolResult =
   | (MemorySearchResult & { corpus: MemorySource })
@@ -143,6 +151,42 @@ function normalizeActiveMemoryQmdSearchMode(
 
 function isActiveMemorySessionKey(sessionKey?: string): boolean {
   return typeof sessionKey === "string" && sessionKey.includes(":active-memory:");
+}
+
+type QmdSearchScopeDecision =
+  | { allowed: true }
+  | {
+      allowed: false;
+      reason: "skipped_by_scope";
+      channel: string;
+      chatType: string;
+      sessionKey: string;
+    };
+
+function resolveQmdSearchScopeDecision(params: {
+  backend: string;
+  qmd?: { scope?: Parameters<typeof isQmdScopeAllowed>[0] };
+  sessionKey?: string;
+}): QmdSearchScopeDecision {
+  if (params.backend !== "qmd" || !params.qmd) {
+    return { allowed: true };
+  }
+  if (isQmdScopeAllowed(params.qmd.scope, params.sessionKey)) {
+    return { allowed: true };
+  }
+  return {
+    allowed: false,
+    reason: "skipped_by_scope",
+    channel: deriveQmdScopeChannel(params.sessionKey) ?? "unknown",
+    chatType: deriveQmdScopeChatType(params.sessionKey) ?? "unknown",
+    sessionKey: params.sessionKey?.trim() || "<none>",
+  };
+}
+
+function logQmdSearchSkippedByScope(decision: Exclude<QmdSearchScopeDecision, { allowed: true }>) {
+  log.info(
+    `qmd search skipped_by_scope (channel=${decision.channel}, chatType=${decision.chatType}, session=${decision.sessionKey})`,
+  );
 }
 
 function resolveActiveMemoryQmdSearchModeOverride(
@@ -267,7 +311,17 @@ export function createMemorySearchTool(options: {
         const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         const shouldQueryMemory = requestedCorpus !== "wiki";
         const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
-        const memory = shouldQueryMemory ? await getMemoryManagerContext({ cfg, agentId }) : null;
+        const resolvedMemoryBackend = resolveMemoryBackendConfig({ cfg, agentId });
+        const scopeDecision = shouldQueryMemory
+          ? resolveQmdSearchScopeDecision({
+              ...resolvedMemoryBackend,
+              sessionKey: options.agentSessionKey,
+            })
+          : ({ allowed: true } as const);
+        const shouldOpenMemoryManager = shouldQueryMemory && scopeDecision.allowed;
+        const memory = shouldOpenMemoryManager
+          ? await getMemoryManagerContext({ cfg, agentId })
+          : null;
         if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
           return jsonResult(buildMemorySearchUnavailableResult(memory.error));
         }
@@ -299,11 +353,27 @@ export function createMemorySearchTool(options: {
                 configuredMode?: string;
                 effectiveMode?: string;
                 fallback?: string;
+                skipped?: "skipped_by_scope";
+                channel?: string;
+                chatType?: string;
+                sessionKey?: string;
                 searchMs: number;
                 hits: number;
               }
             | undefined;
-          if (shouldQueryMemory && memory && !("error" in memory)) {
+          if (shouldQueryMemory && !scopeDecision.allowed) {
+            logQmdSearchSkippedByScope(scopeDecision);
+            searchDebug = {
+              backend: "qmd",
+              skipped: scopeDecision.reason,
+              channel: scopeDecision.channel,
+              chatType: scopeDecision.chatType,
+              sessionKey: scopeDecision.sessionKey,
+              searchMs: 0,
+              hits: 0,
+            };
+          }
+          if (shouldOpenMemoryManager && memory && !("error" in memory)) {
             let activeMemory = memory;
             const runtimeDebug: MemorySearchRuntimeDebug[] = [];
             const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
@@ -357,10 +427,12 @@ export function createMemorySearchTool(options: {
             }
             const status = activeMemory.manager.status();
             const decorated = decorateCitations(rawResults, includeCitations);
-            const resolved = resolveMemoryBackendConfig({ cfg, agentId });
             const memoryResults =
               status.backend === "qmd"
-                ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+                ? clampResultsByInjectedChars(
+                    decorated,
+                    resolvedMemoryBackend.qmd?.limits.maxInjectedChars,
+                  )
                 : decorated;
             surfacedMemoryResults = memoryResults.map((result) => ({
               ...result,

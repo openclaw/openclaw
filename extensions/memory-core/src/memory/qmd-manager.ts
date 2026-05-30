@@ -2730,8 +2730,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     const channel = deriveQmdScopeChannel(sessionKey) ?? "unknown";
     const chatType = deriveQmdScopeChatType(sessionKey) ?? "unknown";
     const key = sessionKey?.trim() || "<none>";
-    log.warn(
-      `qmd search denied by scope (channel=${channel}, chatType=${chatType}, session=${key})`,
+    log.debug(
+      `qmd search skipped_by_scope (channel=${channel}, chatType=${chatType}, session=${key})`,
     );
   }
 
