@@ -616,7 +616,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   const sub = pool.subscribeMany(
     relays,
-    [{ kinds: [4], "#p": [pk], since }] as unknown as Parameters<typeof pool.subscribeMany>[1],
+    { kinds: [4], "#p": [pk], since },
     {
       onevent: handleEvent,
       oneose: () => {

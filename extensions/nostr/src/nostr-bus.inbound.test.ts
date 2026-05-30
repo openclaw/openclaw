@@ -10,6 +10,7 @@ const mockState = vi.hoisted(() => ({
     oneose?: () => void;
     onclose?: (reason: string[]) => void;
   } | null,
+  capturedFilter: undefined as unknown,
   verifyEvent: vi.fn(() => true),
   decrypt: vi.fn(() => "plaintext"),
   publishProfile: vi.fn(async () => ({
@@ -24,13 +25,14 @@ vi.mock("nostr-tools", () => {
   class MockSimplePool {
     subscribeMany(
       _relays: string[],
-      _filters: unknown,
+      filter: unknown,
       handlers: {
         onevent: (event: Record<string, unknown>) => void | Promise<void>;
         oneose?: () => void;
         onclose?: (reason: string[]) => void;
       },
     ) {
+      mockState.capturedFilter = filter;
       mockState.handlers = handlers;
       return {
         close: vi.fn(),
@@ -91,6 +93,7 @@ async function emitEvent(event: Record<string, unknown>) {
 describe("startNostrBus inbound guards", () => {
   beforeEach(() => {
     mockState.handlers = null;
+    mockState.capturedFilter = undefined;
     mockState.verifyEvent.mockClear();
     mockState.verifyEvent.mockReturnValue(true);
     mockState.decrypt.mockClear();
@@ -99,6 +102,30 @@ describe("startNostrBus inbound guards", () => {
 
   afterEach(() => {
     mockState.handlers = null;
+  });
+
+  // Regression: nostr-tools >=2.0 SimplePool.subscribeMany takes a single
+  // Filter object (the second argument). Wrapping it in an array produces
+  // a malformed `["REQ", id, [{...}]]` payload that every relay rejects
+  // with `provided filter is not an object`, so no DMs ever arrive.
+  it("passes a single Filter object (not an array) to subscribeMany", async () => {
+    const bus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage: async () => {},
+      authorizeSender: async () => "allow" as const,
+      onMetric: () => {},
+    });
+
+    expect(Array.isArray(mockState.capturedFilter)).toBe(false);
+    expect(mockState.capturedFilter).toEqual(
+      expect.objectContaining({
+        kinds: [4],
+        "#p": [BOT_PUBKEY],
+        since: expect.any(Number),
+      }),
+    );
+
+    bus.close();
   });
 
   it("checks sender authorization after verify and before decrypt", async () => {
