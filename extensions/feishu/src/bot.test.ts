@@ -500,6 +500,35 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(mockEnsureConfiguredBindingRouteReady).toHaveBeenCalledTimes(1);
   });
 
+  it("dispatches Feishu DMs when the runtime lacks an injected inbound runner", async () => {
+    mockResolveAgentRoute.mockReturnValue({
+      ...buildDefaultResolveRoute(),
+      sessionKey: "agent:main:main",
+    });
+    const runtimeWithoutInbound = createFeishuBotRuntime();
+    delete (runtimeWithoutInbound.channel as { inbound?: unknown }).inbound;
+    setFeishuRuntime(runtimeWithoutInbound);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-runtime-inbound-missing",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {
     mockResolveConfiguredBindingRoute.mockReturnValue(createConfiguredFeishuRoute());
     mockEnsureConfiguredBindingRouteReady.mockResolvedValue(
