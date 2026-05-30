@@ -97,7 +97,8 @@ vi.mock("../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
 }));
 
-vi.mock("../utils.js", () => ({
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
   shortenHomePath: mocks.shortenHomePath,
   isRecord: (value: unknown) =>
     typeof value === "object" && value !== null && !Array.isArray(value),
@@ -338,34 +339,7 @@ describe("doctor health contributions", () => {
     );
   });
 
-  it("does not probe gateway health for inline token auth", async () => {
-    const contribution = requireDoctorContribution("doctor:gateway-auth");
-    const ctx = {
-      cfg: {
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "token",
-            token: "inline-token",
-          },
-        },
-      },
-      sourceConfigValid: true,
-      prompter: buildDoctorPrompter(false),
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      options: { nonInteractive: true },
-      env: {},
-      configResult: { cfg: {} },
-      cfgForPersistence: {},
-      configPath: "/tmp/fake-openclaw.json",
-    } as Parameters<(typeof contribution)["run"]>[0];
-
-    await contribution.run(ctx);
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("suppresses unresolved SecretRef token warning when the gateway is already healthy", async () => {
+  it("keeps unresolved SecretRef token warning even when fallback gateway token is present", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-auth");
     const ctx = {
       cfg: {
@@ -390,7 +364,7 @@ describe("doctor health contributions", () => {
       prompter: buildDoctorPrompter(false),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       options: { nonInteractive: true },
-      env: {},
+      env: { OPENCLAW_GATEWAY_TOKEN: "fallback-token" },
       configResult: { cfg: {} },
       cfgForPersistence: {},
       configPath: "/tmp/fake-openclaw.json",
@@ -398,13 +372,8 @@ describe("doctor health contributions", () => {
 
     await contribution.run(ctx);
 
-    expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "status",
-      params: { includeChannelSummary: false },
-      timeoutMs: 3000,
-      config: ctx.cfg,
-    });
-    expect(mocks.note).not.toHaveBeenCalledWith(
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Gateway token SecretRef could not be resolved"),
       "Gateway auth",
     );

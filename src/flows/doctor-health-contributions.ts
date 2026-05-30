@@ -183,21 +183,6 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
   }
 }
 
-async function probeGatewayHealthForAuthWarning(ctx: DoctorHealthFlowContext): Promise<boolean> {
-  const { callGateway } = await import("../gateway/call.js");
-  try {
-    await callGateway({
-      method: "status",
-      params: { includeChannelSummary: false },
-      timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
-      config: ctx.cfg,
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { resolveSecretInputRef } = await loadSecretTypesModule();
   const { buildGatewayTokenSecretRefFixHint, buildGatewayTokenSecretRefUnavailableMessage } =
@@ -206,7 +191,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { resolveGatewayAuthToken } = await import("../gateway/auth-token-resolution.js");
   const { note } = await loadNoteModule();
   const { randomToken } = await loadOnboardHelpersModule();
-
   if (resolveDoctorMode(ctx.cfg) !== "local" || !ctx.sourceConfigValid) {
     return;
   }
@@ -264,12 +248,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     unresolvedRefReason = resolvedToken.unresolvedRefReason;
   }
   if (gatewayTokenRef) {
-    // Skip warning when gateway is confirmed healthy — the SecretRef resolves fine
-    // at Gateway runtime even if the CLI doctor cannot resolve it in audit mode.
-    const healthOk = ctx.healthOk ?? (await probeGatewayHealthForAuthWarning(ctx));
-    if (healthOk) {
-      return;
-    }
     const reason = buildGatewayTokenSecretRefUnavailableMessage({
       cfg: ctx.cfg,
       ref: gatewayTokenRef,
