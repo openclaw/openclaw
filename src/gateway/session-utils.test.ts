@@ -421,6 +421,52 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("session list indexes disk compaction checkpoint previews once per transcript base", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-list-checkpoints-"));
+    const realDir = fs.realpathSync.native(dir);
+    const sessionFile = path.join(realDir, "session-index.jsonl");
+    const checkpointId = "11111111-1111-4111-8111-111111111111";
+    const checkpointFile = path.join(realDir, `session-index.checkpoint.${checkpointId}.jsonl`);
+    const statSyncSpy = vi.spyOn(fs, "statSync");
+    try {
+      fs.writeFileSync(sessionFile, "", "utf8");
+      fs.writeFileSync(checkpointFile, "", "utf8");
+      fs.utimesSync(checkpointFile, 1_700_000_000.123, 1_700_000_001.789);
+
+      const listed = listSessionsFromStore({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath: path.join(realDir, "sessions.json"),
+        store: {
+          "agent:main:first": {
+            sessionId: "session-index",
+            sessionFile: path.basename(sessionFile),
+            updatedAt: 2,
+          },
+          "agent:main:second": {
+            sessionId: "session-index",
+            sessionFile: path.basename(sessionFile),
+            updatedAt: 1,
+          },
+        },
+        opts: {},
+      });
+
+      expect(listed.sessions).toHaveLength(2);
+      expect(listed.sessions.map((session) => session.compactionCheckpointCount)).toEqual([1, 1]);
+      expect(
+        listed.sessions.map((session) => session.latestCompactionCheckpoint?.checkpointId),
+      ).toEqual([checkpointId, checkpointId]);
+      const checkpointStatCalls = statSyncSpy.mock.calls.filter((call) => {
+        const target = call[0];
+        return typeof target === "string" && path.resolve(target) === checkpointFile;
+      });
+      expect(checkpointStatCalls).toHaveLength(1);
+    } finally {
+      statSyncSpy.mockRestore();
+      fs.rmSync(realDir, { recursive: true, force: true });
+    }
+  });
+
   test("async session list reuses thinking metadata for lightweight rows", async () => {
     const resolveThinkingProfile = vi.fn(() => ({
       levels: [{ id: "off" as const }, { id: "medium" as const }],
