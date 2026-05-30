@@ -15,6 +15,18 @@ vi.mock("./app-chat.ts", () => ({
   createChatSessionsLoadOverrides: () => ({ activeMinutes: 10, limit: 25 }),
   scopedAgentParamsForSession: (host: { assistantAgentId?: string | null }, sessionKey: string) =>
     sessionKey === "global" && host.assistantAgentId ? { agentId: host.assistantAgentId } : {},
+  scopedAgentListParamsForSession: (
+    host: { assistantAgentId?: string | null },
+    sessionKey: string,
+  ) => {
+    const [, agentId] = sessionKey.split(":");
+    if (sessionKey.startsWith("agent:") && agentId) {
+      return { agentId };
+    }
+    return sessionKey === "global" && host.assistantAgentId
+      ? { agentId: host.assistantAgentId }
+      : {};
+  },
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
   refreshChatAvatar: vi.fn(),
@@ -165,6 +177,7 @@ describe("handleGatewayEvent sessions.changed", () => {
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
       limit: 25,
+      agentId: "ops",
     });
   });
 
@@ -685,6 +698,7 @@ describe("handleGatewayEvent session.message", () => {
     expect(loadSessionsMock).toHaveBeenCalledWith(host, {
       activeMinutes: 10,
       limit: 25,
+      agentId: "qa",
       publishChatRunStatus: false,
     });
     await Promise.resolve();

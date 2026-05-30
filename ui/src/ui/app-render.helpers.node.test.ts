@@ -28,6 +28,10 @@ vi.mock("./app-chat.ts", () => ({
     includeUnknown: true,
     showArchived: false,
   }),
+  scopedAgentListParamsForSession: (_state: unknown, sessionKey: string) => {
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
   refreshChat: refreshChatMock,
   refreshChatAvatar: refreshChatAvatarMock,
 }));
@@ -786,6 +790,7 @@ describe("createChatSession", () => {
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
+        agentId: "ops",
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
@@ -988,6 +993,7 @@ describe("switchChatSession", () => {
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,
+      agentId: "main",
     });
     expect(
       (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })

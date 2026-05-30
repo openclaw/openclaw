@@ -11,6 +11,7 @@ import {
   markQueuedChatSendsWaitingForReconnect,
   refreshChatAvatar,
   retryReconnectableQueuedChatSends,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -799,7 +800,7 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         ...createChatSessionsLoadOverrides(host),
-        ...scopedAgentParamsForSession(host, host.sessionKey),
+        ...scopedAgentListParamsForSession(host, host.sessionKey),
       });
     }
   }
@@ -972,7 +973,7 @@ function handleSessionMessageGatewayEvent(
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
-      ...scopedAgentParamsForSession(host, host.sessionKey),
+      ...scopedAgentListParamsForSession(host, host.sessionKey),
       publishChatRunStatus: false,
     }).finally(() =>
       replayDeferredSessionMessageReloadAfterSessionsRefresh(

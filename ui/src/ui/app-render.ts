@@ -6,6 +6,7 @@ import {
   createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
@@ -2944,6 +2945,7 @@ export function renderApp(state: AppViewState) {
                     state.setTab("sessions" as import("./navigation.ts").Tab);
                     void loadSessions(state, {
                       ...createChatSessionsLoadOverrides(state),
+                      ...scopedAgentListParamsForSession(state, state.sessionKey),
                     });
                   },
                   onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),

@@ -1,7 +1,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
-import { createChatSessionsLoadOverrides } from "../app-chat.ts";
+import { createChatSessionsLoadOverrides, scopedAgentListParamsForSession } from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -111,6 +111,7 @@ function resolveNextChatSessionOffset(
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
     ...createChatSessionsLoadOverrides(state),
+    ...scopedAgentListParamsForSession(state, state.sessionKey),
   });
 }
 

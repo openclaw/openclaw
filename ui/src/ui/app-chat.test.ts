@@ -302,6 +302,28 @@ describe("refreshChat", () => {
     expect(sessionsListPayload.includeGlobal).toBe(true);
   });
 
+  it("scopes agent session refresh rows before the list limit", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:work:dashboard",
+      agentsList: { defaultId: "main", mainKey: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "agent direct sessions list payload",
+    );
+    expect(sessionsListPayload.agentId).toBe("work");
+    expect(sessionsListPayload.limit).toBe(50);
+    expect(sessionsListPayload.includeGlobal).toBe(true);
+  });
+
   it("uses hello default for global chat refresh before agents list loads", async () => {
     const request = vi.fn(() => new Promise<unknown>(() => undefined));
     const host = makeHost({

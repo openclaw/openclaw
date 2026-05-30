@@ -291,6 +291,15 @@ export function scopedAgentParamsForSession(
   return agentId ? { agentId } : {};
 }
 
+export function scopedAgentListParamsForSession(
+  host: Pick<ChatHost, "assistantAgentId" | "agentsList" | "hello">,
+  sessionKey: string,
+) {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const agentId = parsed?.agentId ?? scopedAgentParamsForSession(host, sessionKey).agentId;
+  return agentId ? { agentId: normalizeAgentId(agentId) } : {};
+}
+
 export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
   const activeRunId = host.chatRunId;
   const clearDraft = () => {
@@ -596,6 +605,7 @@ async function sendQueuedChatMessage(
       if (ack.status === "ok") {
         void loadSessions(host as unknown as SessionsState, {
           ...createChatSessionsLoadOverrides(host),
+          ...scopedAgentListParamsForSession(host, host.sessionKey),
         });
       } else {
         host.refreshSessionsAfterChat.add(ack.runId);
@@ -1299,7 +1309,7 @@ export async function refreshChat(
   const secondaryRefresh = Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
-      ...scopedAgentParamsForSession(host, host.sessionKey),
+      ...scopedAgentListParamsForSession(host, host.sessionKey),
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),

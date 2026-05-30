@@ -60,6 +60,10 @@ vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 60,
   CHAT_SESSIONS_REFRESH_LIMIT: 50,
   createChatSessionsLoadOverrides: () => ({ activeMinutes: 60, limit: 50 }),
+  scopedAgentListParamsForSession: (_host: unknown, sessionKey: string) => {
+    const [, agentId] = sessionKey.split(":");
+    return sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
   clearPendingQueueItemsForRun: vi.fn(),
   flushChatQueueForEvent: vi.fn(),
   hasReconnectableQueuedChatSends: vi.fn(() => false),
