@@ -83,7 +83,10 @@ function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestCon
   };
 }
 
-type ResolvedSkillsWorkspace = Extract<ReturnType<typeof resolveSkillsAgentWorkspace>, { ok: true }>;
+type ResolvedSkillsWorkspace = Extract<
+  ReturnType<typeof resolveSkillsAgentWorkspace>,
+  { ok: true }
+>;
 
 function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace) {
   return buildWorkspaceSkillStatus(resolved.workspaceDir, {
@@ -358,12 +361,14 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
   },
   "skills.proposals.revise": async ({ params, respond, context }) => {
-    if (!validateSkillsProposalReviseParams(params)) {
-      respondInvalidParams(
-        respond,
+    if (
+      !assertValidParams(
+        params,
+        validateSkillsProposalReviseParams,
         "skills.proposals.revise",
-        validateSkillsProposalReviseParams.errors,
-      );
+        respond,
+      )
+    ) {
       return;
     }
     const resolved = resolveSkillsAgentWorkspace(params, context);
