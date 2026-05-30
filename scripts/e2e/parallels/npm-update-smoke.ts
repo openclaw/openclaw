@@ -65,6 +65,11 @@ interface UpdateJobContext {
   logPath: string;
 }
 
+interface MacosUpdateExec {
+  execArgs: string[];
+  ownerUser: string;
+}
+
 interface NpmUpdateSummary {
   packageSpec: string;
   updateTarget: string;
@@ -686,26 +691,20 @@ class NpmUpdateSmoke {
     timeoutMs: number,
     ctx: UpdateJobContext,
   ): Promise<void> {
+    const macosUpdateExec = this.resolveMacosUpdateExec(ctx);
     const scriptPath = this.writeGuestScript(
       macosVm,
       script,
       "openclaw-parallels-npm-update-macos",
+      macosUpdateExec.execArgs,
     );
-    const macosExecArgs = this.resolveMacosUpdateExecArgs(ctx);
-    const sudoUserArgIndex = macosExecArgs.indexOf("-u");
-    const sudoUser =
-      sudoUserArgIndex >= 0 && sudoUserArgIndex + 1 < macosExecArgs.length
-        ? macosExecArgs[sudoUserArgIndex + 1]
-        : "";
-    if (sudoUser) {
-      run("prlctl", ["exec", macosVm, "/usr/sbin/chown", sudoUser, scriptPath], {
-        timeoutMs: 30_000,
-      });
-    }
+    run("prlctl", ["exec", macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath], {
+      timeoutMs: 30_000,
+    });
     try {
       const status = await this.runStreamingToJobLog(
         "prlctl",
-        ["exec", macosVm, ...macosExecArgs, "/bin/bash", scriptPath],
+        ["exec", macosVm, ...macosUpdateExec.execArgs, "/bin/bash", scriptPath],
         timeoutMs,
         ctx,
       );
@@ -717,7 +716,7 @@ class NpmUpdateSmoke {
     }
   }
 
-  private resolveMacosUpdateExecArgs(ctx: UpdateJobContext): string[] {
+  private resolveMacosUpdateExec(ctx: UpdateJobContext): MacosUpdateExec {
     const guestPath =
       "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
     const currentUser = run("prlctl", ["exec", macosVm, "--current-user", "whoami"], {
@@ -727,7 +726,10 @@ class NpmUpdateSmoke {
     });
     const user = currentUser.stdout.trim().replaceAll("\r", "").split("\n").at(-1) ?? "";
     if (currentUser.status === 0 && /^[A-Za-z0-9._-]+$/.test(user)) {
-      return ["--current-user", "/usr/bin/env", `PATH=${guestPath}`];
+      return {
+        execArgs: ["--current-user", "/usr/bin/env", `PATH=${guestPath}`],
+        ownerUser: user,
+      };
     }
 
     const fallbackUser = this.resolveMacosDesktopUser();
@@ -740,17 +742,20 @@ class NpmUpdateSmoke {
       `desktop user unavailable via Parallels --current-user; using root sudo fallback for ${fallbackUser}\n`,
     );
     const home = this.resolveMacosDesktopHome(fallbackUser);
-    return [
-      "/usr/bin/sudo",
-      "-H",
-      "-u",
-      fallbackUser,
-      "/usr/bin/env",
-      `HOME=${home}`,
-      `USER=${fallbackUser}`,
-      `LOGNAME=${fallbackUser}`,
-      `PATH=${guestPath}`,
-    ];
+    return {
+      execArgs: [
+        "/usr/bin/sudo",
+        "-H",
+        "-u",
+        fallbackUser,
+        "/usr/bin/env",
+        `HOME=${home}`,
+        `USER=${fallbackUser}`,
+        `LOGNAME=${fallbackUser}`,
+        `PATH=${guestPath}`,
+      ],
+      ownerUser: fallbackUser,
+    };
   }
 
   private resolveMacosDesktopUser(): string {
@@ -849,9 +854,14 @@ class NpmUpdateSmoke {
     }
   }
 
-  private writeGuestScript(vm: string, script: string, prefix: string): string {
+  private writeGuestScript(
+    vm: string,
+    script: string,
+    prefix: string,
+    execArgs: string[] = [],
+  ): string {
     const scriptPath = `/tmp/${prefix}-${process.pid}-${Date.now()}.sh`;
-    const write = run("prlctl", ["exec", vm, "/usr/bin/tee", scriptPath], {
+    const write = run("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
       check: false,
       input: script,
       quiet: true,
@@ -860,7 +870,7 @@ class NpmUpdateSmoke {
     if (write.status !== 0) {
       throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
     }
-    const chmod = run("prlctl", ["exec", vm, "/bin/chmod", "755", scriptPath], {
+    const chmod = run("prlctl", ["exec", vm, ...execArgs, "/bin/chmod", "700", scriptPath], {
       check: false,
       quiet: true,
       timeoutMs: 30_000,

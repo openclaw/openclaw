@@ -76,11 +76,17 @@ describe("parallels npm update smoke", () => {
     expect(transports).toContain("${options.label} timed out");
   });
 
-  it("keeps macOS sudo fallback update scripts readable by the desktop user", () => {
+  it("keeps macOS update scripts owner-only and owned by the executing desktop user", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
-    expect(script).toContain('macosExecArgs.indexOf("-u")');
-    expect(script).toContain('"/usr/sbin/chown", sudoUser, scriptPath');
+    expect(script).toContain("const macosUpdateExec = this.resolveMacosUpdateExec(ctx)");
+    expect(script).toContain("macosUpdateExec.execArgs,\n    );");
+    expect(script).toContain('"/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath');
+    expect(script).toContain("ownerUser: user");
+    expect(script).toContain("ownerUser: fallbackUser");
+    expect(script).toContain('["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath]');
+    expect(script).toContain('["exec", vm, ...execArgs, "/bin/chmod", "700", scriptPath]');
+    expect(script).not.toContain('"/bin/chmod", "755", scriptPath');
   });
 
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
