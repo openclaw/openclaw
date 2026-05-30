@@ -1141,10 +1141,11 @@ function rememberChatAgentSessionRows(
   state: AppViewState,
   sessions: SessionsListResult | null,
 ): void {
-  const rows = sessions?.sessions ?? [];
-  if (rows.length === 0) {
+  if (!sessions) {
     return;
   }
+  const rows = sessions.sessions;
+  const refreshedAgentId = normalizeOptionalString(state.sessionsResultAgentId);
   const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
   const grouped = new Map<string, SessionsListResult["sessions"]>();
   for (const row of rows) {
@@ -1154,10 +1155,13 @@ function rememberChatAgentSessionRows(
     }
     grouped.set(agentId, [...(grouped.get(agentId) ?? []), row]);
   }
-  if (grouped.size === 0) {
+  if (grouped.size === 0 && !refreshedAgentId) {
     return;
   }
   state.chatAgentSessionRowsByAgent ??= {};
+  if (refreshedAgentId) {
+    state.chatAgentSessionRowsByAgent[refreshedAgentId] = grouped.get(refreshedAgentId) ?? [];
+  }
   for (const [agentId, agentRows] of grouped) {
     state.chatAgentSessionRowsByAgent[agentId] = agentRows;
   }

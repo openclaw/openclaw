@@ -30,6 +30,7 @@ export type SessionsState = SessionsChatRunState & {
   connected: boolean;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
+  sessionsResultAgentId?: string | null;
   sessionsError: string | null;
   sessionsFilterActive: string;
   sessionsFilterLimit: string;
@@ -839,6 +840,7 @@ async function loadSessionsOnce(
       configuredAgentsOnly,
     };
     const agentId = overrides?.agentId?.trim();
+    const resultAgentId = agentId ? normalizeAgentId(agentId) : null;
     if (agentId) {
       params.agentId = agentId;
     }
@@ -866,6 +868,7 @@ async function loadSessionsOnce(
         overrides?.append === true && offset > 0 && state.sessionsResult
           ? appendSessionsResult(state.sessionsResult, projected)
           : projected;
+      state.sessionsResultAgentId = resultAgentId;
       if (hasCurrentChatSession(state)) {
         reconcileChatRunFromCurrentSessionRow(state, {
           publishRunStatus: overrides?.publishChatRunStatus !== false,
