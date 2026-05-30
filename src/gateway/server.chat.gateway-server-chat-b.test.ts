@@ -1084,6 +1084,7 @@ describe("gateway server chat", () => {
 
       const hugeNestedText = "n".repeat(120_000);
       const oversizedLine = JSON.stringify({
+        id: "msg-huge",
         message: {
           role: "assistant",
           timestamp: Date.now(),
@@ -1108,6 +1109,9 @@ describe("gateway server chat", () => {
       const bytes = Buffer.byteLength(serialized, "utf8");
       expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
       expect(serialized).toContain("[chat.history omitted: message too large]");
+      expect(messages[0]).toMatchObject({
+        __openclaw: { id: "msg-huge", truncated: true, reason: "oversized" },
+      });
       expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
     });
   });

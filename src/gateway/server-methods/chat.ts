@@ -1389,11 +1389,19 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     typeof (message as { timestamp?: unknown }).timestamp === "number"
       ? (message as { timestamp: number }).timestamp
       : Date.now();
+  const metadata =
+    message &&
+    typeof message === "object" &&
+    (message as { __openclaw?: unknown }).__openclaw &&
+    typeof (message as { __openclaw?: unknown }).__openclaw === "object" &&
+    !Array.isArray((message as { __openclaw?: unknown }).__openclaw)
+      ? (message as { __openclaw: Record<string, unknown> }).__openclaw
+      : {};
   return {
     role,
     timestamp,
     content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
-    __openclaw: { truncated: true, reason: "oversized" },
+    __openclaw: { ...metadata, truncated: true, reason: "oversized" },
   };
 }
 
