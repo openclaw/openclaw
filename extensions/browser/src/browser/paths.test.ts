@@ -268,7 +268,7 @@ describe("resolveExistingUploadPaths", () => {
     });
   });
 
-  it("resolves sandbox-relative inbound media paths before root validation", async () => {
+  it("falls back to sandbox-relative inbound media paths after root validation", async () => {
     await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
       const inboundFile = path.join(inboundMediaDir, "report.pdf");
       await fs.writeFile(inboundFile, "pdf", "utf8");
@@ -282,6 +282,27 @@ describe("resolveExistingUploadPaths", () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.paths).toEqual([await fs.realpath(inboundFile)]);
+      }
+    });
+  });
+
+  it("keeps upload-root paths before sandbox-relative inbound media fallback", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const uploadFile = path.join(uploadsDir, "media", "inbound", "report.pdf");
+      const inboundFile = path.join(inboundMediaDir, "report.pdf");
+      await fs.mkdir(path.dirname(uploadFile), { recursive: true });
+      await fs.writeFile(uploadFile, "upload", "utf8");
+      await fs.writeFile(inboundFile, "inbound", "utf8");
+
+      const result = await resolveExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: ["media/inbound/report.pdf"],
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.paths).toEqual([await fs.realpath(uploadFile)]);
       }
     });
   });
@@ -423,7 +444,7 @@ describe("resolveStrictExistingUploadPaths", () => {
     });
   });
 
-  it("resolves sandbox-relative inbound media paths for use-time upload validation", async () => {
+  it("falls back to sandbox-relative inbound media paths for use-time upload validation", async () => {
     await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
       const inboundFile = path.join(inboundMediaDir, "report.pdf");
       await fs.writeFile(inboundFile, "pdf", "utf8");
@@ -437,6 +458,27 @@ describe("resolveStrictExistingUploadPaths", () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.paths).toEqual([await fs.realpath(inboundFile)]);
+      }
+    });
+  });
+
+  it("keeps upload-root paths before sandbox-relative inbound media fallback at use time", async () => {
+    await withFixtureRoot(async ({ inboundMediaDir, uploadsDir }) => {
+      const uploadFile = path.join(uploadsDir, "media", "inbound", "report.pdf");
+      const inboundFile = path.join(inboundMediaDir, "report.pdf");
+      await fs.mkdir(path.dirname(uploadFile), { recursive: true });
+      await fs.writeFile(uploadFile, "upload", "utf8");
+      await fs.writeFile(inboundFile, "inbound", "utf8");
+
+      const result = await resolveStrictExistingUploadPaths({
+        uploadDir: uploadsDir,
+        inboundMediaDir,
+        requestedPaths: ["media/inbound/report.pdf"],
+      });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.paths).toEqual([await fs.realpath(uploadFile)]);
       }
     });
   });

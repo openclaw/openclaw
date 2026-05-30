@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { CONFIG_DIR } from "../utils.js";
 import {
   resolveExistingPathsWithinRoot,
   resolveStrictExistingPathsWithinRoot,
 } from "../sdk-security-runtime.js";
+import { CONFIG_DIR } from "../utils.js";
 export {
   pathScope,
   resolvePathsWithinRoot,
@@ -50,9 +50,11 @@ type UploadPathResolutionOptions = {
 };
 
 type ResolvedManagedInboundMediaRef =
-  | { ok: true; path: string }
+  | { ok: true; path: string; uploadRootPrecedence: boolean }
   | { ok: false; error: string }
   | null;
+
+type DecodedInboundMediaId = { ok: true; path: string } | { ok: false; error: string };
 
 function normalizeUploadPathSource(source: string): string {
   const trimmed = source.trim();
@@ -62,7 +64,7 @@ function normalizeUploadPathSource(source: string): string {
   return trimmed.replace(/^\s*MEDIA\s*:\s*/i, "").trim();
 }
 
-function decodeInboundMediaId(value: string, source: string): ResolvedManagedInboundMediaRef {
+function decodeInboundMediaId(value: string, source: string): DecodedInboundMediaId {
   let id: string;
   try {
     id = decodeURIComponent(value);
@@ -105,7 +107,13 @@ function resolveManagedInboundMediaRef(
       };
     }
     const decoded = decodeInboundMediaId(parsed.pathname.replace(/^\/+/, ""), normalizedSource);
-    return decoded?.ok ? { ok: true, path: path.join(inboundMediaDir, decoded.path) } : decoded;
+    return decoded?.ok
+      ? {
+          ok: true,
+          path: path.join(inboundMediaDir, decoded.path),
+          uploadRootPrecedence: false,
+        }
+      : decoded;
   }
 
   const relativeMatch = /^(?:\.\/)?media\/inbound\/([^/\\]+)$/u.exec(normalizedSource);
@@ -113,22 +121,13 @@ function resolveManagedInboundMediaRef(
     return null;
   }
   const decoded = decodeInboundMediaId(relativeMatch[1], normalizedSource);
-  return decoded?.ok ? { ok: true, path: path.join(inboundMediaDir, decoded.path) } : decoded;
-}
-
-function resolveManagedInboundMediaRefs(params: {
-  requestedPaths: string[];
-  inboundMediaDir: string;
-}): { ok: true; paths: string[] } | { ok: false; error: string } {
-  const paths: string[] = [];
-  for (const requestedPath of params.requestedPaths) {
-    const resolvedRef = resolveManagedInboundMediaRef(requestedPath, params.inboundMediaDir);
-    if (resolvedRef?.ok === false) {
-      return resolvedRef;
-    }
-    paths.push(resolvedRef?.path ?? requestedPath);
-  }
-  return { ok: true, paths };
+  return decoded?.ok
+    ? {
+        ok: true,
+        path: path.join(inboundMediaDir, decoded.path),
+        uploadRootPrecedence: true,
+      }
+    : decoded;
 }
 
 async function isDirectInboundMediaFile(params: {
@@ -191,29 +190,35 @@ export async function resolveExistingUploadPaths({
   uploadDir = DEFAULT_UPLOAD_DIR,
   inboundMediaDir = DEFAULT_INBOUND_MEDIA_DIR,
 }: UploadPathResolutionOptions): Promise<ExistingPathsResult> {
-  const managedMediaPathsResult = resolveManagedInboundMediaRefs({
-    requestedPaths,
-    inboundMediaDir,
-  });
-  if (!managedMediaPathsResult.ok) {
-    return managedMediaPathsResult;
-  }
-
   const paths: string[] = [];
-  for (const requestedPath of managedMediaPathsResult.paths) {
-    const uploadPathsResult = await resolveExistingPathsWithinRoot({
-      rootDir: uploadDir,
-      requestedPaths: [requestedPath],
-      scopeLabel: `uploads directory (${uploadDir})`,
-    });
-    if (uploadPathsResult.ok) {
-      paths.push(uploadPathsResult.paths[0] ?? requestedPath);
-      continue;
+  for (const requestedPath of requestedPaths) {
+    const managedMediaPathResult = resolveManagedInboundMediaRef(requestedPath, inboundMediaDir);
+    if (managedMediaPathResult?.ok === false) {
+      return managedMediaPathResult;
+    }
+
+    if (managedMediaPathResult?.uploadRootPrecedence !== false) {
+      const uploadPathsResult =
+        managedMediaPathResult?.uploadRootPrecedence === true
+          ? await resolveStrictExistingPathsWithinRoot({
+              rootDir: uploadDir,
+              requestedPaths: [requestedPath],
+              scopeLabel: `uploads directory (${uploadDir})`,
+            })
+          : await resolveExistingPathsWithinRoot({
+              rootDir: uploadDir,
+              requestedPaths: [requestedPath],
+              scopeLabel: `uploads directory (${uploadDir})`,
+            });
+      if (uploadPathsResult.ok) {
+        paths.push(uploadPathsResult.paths[0] ?? requestedPath);
+        continue;
+      }
     }
 
     const inboundPathsResult = await resolveDirectInboundMediaPath({
       inboundMediaDir,
-      requestedPath,
+      requestedPath: managedMediaPathResult?.path ?? requestedPath,
       strict: false,
     });
     if (!inboundPathsResult.ok) {
@@ -229,29 +234,28 @@ export async function resolveStrictExistingUploadPaths({
   uploadDir = DEFAULT_UPLOAD_DIR,
   inboundMediaDir = DEFAULT_INBOUND_MEDIA_DIR,
 }: UploadPathResolutionOptions): Promise<StrictExistingPathsResult> {
-  const managedMediaPathsResult = resolveManagedInboundMediaRefs({
-    requestedPaths,
-    inboundMediaDir,
-  });
-  if (!managedMediaPathsResult.ok) {
-    return managedMediaPathsResult;
-  }
-
   const paths: string[] = [];
-  for (const requestedPath of managedMediaPathsResult.paths) {
-    const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-      rootDir: uploadDir,
-      requestedPaths: [requestedPath],
-      scopeLabel: `uploads directory (${uploadDir})`,
-    });
-    if (uploadPathsResult.ok) {
-      paths.push(uploadPathsResult.paths[0] ?? requestedPath);
-      continue;
+  for (const requestedPath of requestedPaths) {
+    const managedMediaPathResult = resolveManagedInboundMediaRef(requestedPath, inboundMediaDir);
+    if (managedMediaPathResult?.ok === false) {
+      return managedMediaPathResult;
+    }
+
+    if (managedMediaPathResult?.uploadRootPrecedence !== false) {
+      const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
+        rootDir: uploadDir,
+        requestedPaths: [requestedPath],
+        scopeLabel: `uploads directory (${uploadDir})`,
+      });
+      if (uploadPathsResult.ok) {
+        paths.push(uploadPathsResult.paths[0] ?? requestedPath);
+        continue;
+      }
     }
 
     const inboundPathsResult = await resolveDirectInboundMediaPath({
       inboundMediaDir,
-      requestedPath,
+      requestedPath: managedMediaPathResult?.path ?? requestedPath,
       strict: true,
     });
     if (!inboundPathsResult.ok) {
