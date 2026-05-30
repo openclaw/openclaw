@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
+  archiveLegacyCronStoreForMigration,
+  loadLegacyCronStoreForMigration,
   loadCronQuarantineFile,
   loadCronStore,
   loadCronStoreSync,
@@ -88,14 +90,16 @@ describe("cron store", () => {
     expect(loaded).toEqual({ version: 1, jobs: [] });
   });
 
-  it("throws when store contains invalid JSON", async () => {
+  it("throws when doctor migration reads invalid legacy JSON", async () => {
     const store = await makeStorePath();
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, "{ not json", "utf-8");
-    await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to parse cron store/i);
+    await expect(loadLegacyCronStoreForMigration(store.storePath)).rejects.toThrow(
+      /Failed to parse cron store/i,
+    );
   });
 
-  it("accepts JSON5 syntax when loading an existing cron store", async () => {
+  it("accepts JSON5 syntax when loading a legacy cron store for doctor migration", async () => {
     const store = await makeStorePath();
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(
@@ -121,14 +125,14 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(store.storePath)).store;
     expect(loaded.version).toBe(1);
     expect(loaded.jobs).toHaveLength(1);
     expect(loaded.jobs[0]?.id).toBe("job-1");
     expect(loaded.jobs[0]?.enabled).toBe(true);
   });
 
-  it("loads legacy top-level array stores instead of treating them as empty", async () => {
+  it("loads legacy top-level array stores for doctor migration", async () => {
     const store = await makeStorePath();
     const first = makeStore("legacy-array-1", true).jobs[0];
     const second = makeStore("legacy-array-2", false).jobs[0];
@@ -139,7 +143,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(store.storePath)).store;
 
     expect(loaded.version).toBe(1);
     expect(loaded.jobs.map((job) => job.id)).toEqual(["legacy-array-1", "legacy-array-2"]);
@@ -147,7 +151,7 @@ describe("cron store", () => {
     expect(loaded.jobs[1]?.enabled).toBe(false);
   });
 
-  it("loads legacy top-level array stores synchronously", async () => {
+  it("does not load legacy top-level array stores synchronously from core", async () => {
     const store = await makeStorePath();
     const job = makeStore("legacy-array-sync", true).jobs[0];
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
@@ -155,12 +159,10 @@ describe("cron store", () => {
 
     const loaded = loadCronStoreSync(store.storePath);
 
-    expect(loaded.jobs).toHaveLength(1);
-    expect(loaded.jobs[0]?.id).toBe("legacy-array-sync");
-    expect(loaded.jobs[0]?.state).toStrictEqual(job.state);
+    expect(loaded.jobs).toHaveLength(0);
   });
 
-  it("imports legacy top-level array jobs into SQLite and archives the source", async () => {
+  it("lets doctor import legacy top-level array jobs into SQLite and archive the source", async () => {
     const store = await makeStorePath();
     const legacy = makeStore("legacy-array-preserved", true).jobs[0];
     legacy.state = { nextRunAtMs: legacy.createdAtMs + 60_000 };
@@ -168,9 +170,10 @@ describe("cron store", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify([legacy], null, 2), "utf-8");
 
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(store.storePath)).store;
     loaded.jobs.push(added);
     await saveCronStore(store.storePath, loaded);
+    await archiveLegacyCronStoreForMigration(store.storePath);
 
     const roundTrip = await loadCronStore(store.storePath);
     expect(roundTrip.jobs.map((job) => job.id)).toEqual(["legacy-array-preserved", "new-job"]);
@@ -179,7 +182,7 @@ describe("cron store", () => {
     expect(await fs.stat(`${store.storePath}.migrated`)).toBeTruthy();
   });
 
-  it("skips non-object persisted jobs instead of hydrating scalar rows", async () => {
+  it("skips non-object legacy persisted jobs during doctor migration", async () => {
     const store = await makeStorePath();
     const valid = makeStore("job-valid", true).jobs[0];
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
@@ -196,14 +199,14 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(store.storePath)).store;
 
     expect(loaded.jobs).toHaveLength(1);
     expect(loaded.jobs[0]?.id).toBe("job-valid");
     expect(loaded.jobs[0]?.state).toStrictEqual({});
   });
 
-  it("leaves malformed legacy stores unarchived until quarantine succeeds", async () => {
+  it("loads malformed legacy stores for doctor without archiving first", async () => {
     const store = await makeStorePath();
     const valid = makeStore("job-valid-unarchived", true).jobs[0];
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
@@ -234,7 +237,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = await loadCronStoreWithConfigJobs(store.storePath);
+    const loaded = await loadLegacyCronStoreForMigration(store.storePath);
 
     expect(loaded.store.jobs.map((job) => job.id)).toEqual([
       "job-valid-unarchived",
@@ -244,7 +247,7 @@ describe("cron store", () => {
     await expectPathMissing(`${store.storePath}.migrated`);
   });
 
-  it("leaves sync legacy loads unarchived for the quarantine owner", async () => {
+  it("does not synchronously import legacy files from core reads", async () => {
     const store = await makeStorePath();
     const valid = makeStore("job-valid-sync-unarchived", true).jobs[0];
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
@@ -256,7 +259,7 @@ describe("cron store", () => {
 
     const loaded = loadCronStoreSync(store.storePath);
 
-    expect(loaded.jobs.map((job) => job.id)).toEqual(["job-valid-sync-unarchived"]);
+    expect(loaded.jobs.map((job) => job.id)).toEqual([]);
     expect(await fs.stat(store.storePath)).toBeTruthy();
     await expectPathMissing(`${store.storePath}.migrated`);
   });
@@ -312,7 +315,7 @@ describe("cron store", () => {
     expect(loaded.jobs[0]?.updatedAtMs).toBeTypeOf("number");
   });
 
-  it("loads split cron state synchronously for legacy jobId rows", async () => {
+  it("loads split cron state for legacy jobId rows during doctor migration", async () => {
     const { storePath } = await makeStorePath();
     const statePath = storePath.replace(/\.json$/, "-state.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -354,13 +357,13 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = loadCronStoreSync(storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(storePath)).store;
 
     expect(loaded.jobs[0]?.state).toEqual({ runningAtMs: 456 });
     expect(loaded.jobs[0]?.updatedAtMs).toBe(123);
   });
 
-  it("compares split state identity for flat legacy cron rows", async () => {
+  it("compares split state identity for flat legacy cron rows during doctor migration", async () => {
     const { storePath } = await makeStorePath();
     const statePath = storePath.replace(/\.json$/, "-state.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -408,7 +411,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = await loadCronStore(storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(storePath)).store;
 
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
   });
@@ -550,7 +553,7 @@ describe("cron store", () => {
     });
   });
 
-  it("drops stale split runtime nextRunAtMs when importing edited legacy config", async () => {
+  it("drops stale split runtime nextRunAtMs when doctor imports edited legacy config", async () => {
     const { storePath } = await makeStorePath();
     const payload = makeStore("job-restart-drift", true);
     const staleNextRunAtMs = payload.jobs[0].createdAtMs + 3_600_000;
@@ -576,13 +579,13 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = await loadCronStore(storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(storePath)).store;
 
     expect(loaded.jobs[0]?.schedule).toEqual({ kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" });
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
   });
 
-  it("drops stale split runtime nextRunAtMs in sync legacy imports", async () => {
+  it("does not synchronously import stale split runtime nextRunAtMs from legacy files", async () => {
     const { storePath } = await makeStorePath();
     const payload = makeStore("job-sync-restart-drift", true);
     const staleNextRunAtMs = payload.jobs[0].createdAtMs + 3_600_000;
@@ -610,8 +613,7 @@ describe("cron store", () => {
 
     const loaded = loadCronStoreSync(storePath);
 
-    expect(loaded.jobs[0]?.schedule).toEqual({ kind: "every", everyMs: 60_000, anchorMs: 2 });
-    expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+    expect(loaded.jobs).toEqual([]);
   });
 
   it("keeps custom store paths separated by SQLite store key", async () => {
@@ -655,7 +657,7 @@ describe("cron store", () => {
     );
   });
 
-  it("migrates legacy inline state into SQLite", async () => {
+  it("lets doctor migrate legacy inline state into SQLite", async () => {
     const store = await makeStorePath();
     const legacy = makeStore("job-1", true);
     legacy.jobs[0].state = {
@@ -666,8 +668,9 @@ describe("cron store", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify(legacy, null, 2), "utf-8");
 
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(store.storePath)).store;
     await saveCronStore(store.storePath, loaded);
+    await archiveLegacyCronStoreForMigration(store.storePath);
 
     const roundTrip = await loadCronStore(store.storePath);
     expect(roundTrip.jobs[0]?.updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
@@ -676,7 +679,7 @@ describe("cron store", () => {
     expect(await fs.stat(`${store.storePath}.migrated`)).toBeTruthy();
   });
 
-  it("ignores array-shaped state sidecars when migrating legacy inline state", async () => {
+  it("ignores array-shaped state sidecars when doctor migrates legacy inline state", async () => {
     const store = await makeStorePath();
     const statePath = store.storePath.replace(/\.json$/, "-state.json");
     // Numeric-looking IDs catch accidental array indexing in invalid sidecars.
@@ -702,8 +705,9 @@ describe("cron store", () => {
     await fs.writeFile(store.storePath, JSON.stringify(legacy, null, 2), "utf-8");
     await fs.writeFile(statePath, JSON.stringify(staleSidecar, null, 2), "utf-8");
 
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(store.storePath)).store;
     await saveCronStore(store.storePath, loaded);
+    await archiveLegacyCronStoreForMigration(store.storePath);
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
@@ -711,7 +715,7 @@ describe("cron store", () => {
     expect(await fs.stat(`${statePath}.migrated`)).toBeTruthy();
   });
 
-  it("treats a corrupt state sidecar as absent", async () => {
+  it("treats a corrupt state sidecar as absent during doctor migration", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-1", true);
     payload.jobs[0].state = { nextRunAtMs: payload.jobs[0].createdAtMs + 60_000 };
@@ -732,13 +736,13 @@ describe("cron store", () => {
     );
     await fs.writeFile(statePath, "{ not json", "utf-8");
 
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(store.storePath)).store;
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(payload.jobs[0].createdAtMs);
     expect(loaded.jobs[0]?.state).toStrictEqual({});
   });
 
-  it("propagates unreadable state sidecar errors", async () => {
+  it("propagates unreadable state sidecar errors during doctor migration", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-1", true);
     const statePath = store.storePath.replace(/\.json$/, "-state.json");
@@ -758,13 +762,15 @@ describe("cron store", () => {
     });
 
     try {
-      await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to read cron state/);
+      await expect(loadLegacyCronStoreForMigration(store.storePath)).rejects.toThrow(
+        /Failed to read cron state/,
+      );
     } finally {
       spy.mockRestore();
     }
   });
 
-  it("sanitizes invalid updatedAtMs values from the state sidecar", async () => {
+  it("sanitizes invalid updatedAtMs values from the state sidecar during doctor migration", async () => {
     const store = await makeStorePath();
     const job = makeStore("job-1", true).jobs[0];
     const config = {
@@ -793,13 +799,13 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(store.storePath)).store;
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(job.createdAtMs);
     expect(loaded.jobs[0]?.state.nextRunAtMs).toBe(job.createdAtMs + 60_000);
   });
 
-  it("drops non-object runtime state from split cron sidecars", async () => {
+  it("drops non-object runtime state from split cron sidecars during doctor migration", async () => {
     const store = await makeStorePath();
     const first = makeStore("job-array-state", true).jobs[0];
     const second = makeStore("job-scalar-entry", true).jobs[0];
@@ -833,7 +839,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = (await loadLegacyCronStoreForMigration(store.storePath)).store;
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(first.createdAtMs + 60_000);
     expect(loaded.jobs[0]?.state).toStrictEqual({});

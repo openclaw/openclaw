@@ -7,6 +7,7 @@ import {
   DEFAULT_CRON_RUN_LOG_KEEP_LINES,
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
+  migrateLegacyCronRunLogsToSqlite,
   readCronRunLogEntries,
   readCronRunLogEntriesPage,
   readCronRunLogEntriesSync,
@@ -139,7 +140,7 @@ describe("cron run log", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "hardens an existing run-log directory to owner-only permissions",
+    "does not mutate legacy run-log directory permissions on SQLite writes",
     async () => {
       await withRunLogDir("openclaw-cron-log-dir-perms-", async (dir) => {
         const runDir = path.join(dir, "runs");
@@ -155,7 +156,7 @@ describe("cron run log", () => {
         });
 
         const runDirMode = (await fs.stat(runDir)).mode & 0o777;
-        expect(runDirMode).toBe(0o700);
+        expect(runDirMode).toBe(0o755);
       });
     },
   );
@@ -279,6 +280,7 @@ describe("cron run log", () => {
         "utf-8",
       );
 
+      await migrateLegacyCronRunLogsToSqlite(path.join(dir, "jobs.json"));
       const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
       expect(entries).toHaveLength(1);
       expect(entries[0]?.ts).toBe(2);
@@ -320,6 +322,7 @@ describe("cron run log", () => {
         "utf-8",
       );
 
+      await migrateLegacyCronRunLogsToSqlite(path.join(dir, "jobs.json"));
       expect(
         (
           await readCronRunLogEntriesPage(logPath, {
@@ -403,6 +406,7 @@ describe("cron run log", () => {
         },
       });
 
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
       await fs.appendFile(
         logPath,
         `${JSON.stringify({
@@ -417,6 +421,7 @@ describe("cron run log", () => {
         "utf-8",
       );
 
+      await migrateLegacyCronRunLogsToSqlite(path.join(dir, "jobs.json"));
       const entries = await readCronRunLogEntries(logPath, { limit: 10, jobId: "job-1" });
       expect(entries[0]?.model).toBe("gpt-5.4");
       expect(entries[0]?.provider).toBe("openai");

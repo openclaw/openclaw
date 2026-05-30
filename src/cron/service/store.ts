@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -47,15 +46,6 @@ function warnInvalidPersistedCronJob(params: {
     },
     "cron: quarantined invalid persisted job and skipped it from runtime",
   );
-}
-
-async function getFileMtimeMs(path: string): Promise<number | null> {
-  try {
-    const stats = await fs.promises.stat(path);
-    return stats.mtimeMs;
-  } catch {
-    return null;
-  }
 }
 
 async function flushPendingQuarantine(
@@ -109,10 +99,6 @@ export async function ensureLoaded(
   for (const job of state.store?.jobs ?? []) {
     previousJobsById.set(job.id, job);
   }
-  // Force reload always re-reads the file to avoid missing cross-service
-  // edits on filesystems with coarse mtime resolution.
-
-  const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStoreWithConfigJobs(state.deps.storePath);
   const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
   const jobs: CronJob[] = [];
@@ -208,7 +194,7 @@ export async function ensureLoaded(
           state.warnedMissingSessionTargetJobIds.add(dedupeKey);
           state.deps.log.warn(
             { storePath: state.deps.storePath, jobId, defaulted },
-            "cron: job missing sessionTarget; defaulted in memory (edit jobs.json to persist canonical shape)",
+            "cron: job missing sessionTarget; defaulted in memory (run openclaw doctor --fix to persist canonical shape)",
           );
         }
       }
@@ -219,7 +205,6 @@ export async function ensureLoaded(
     jobs,
   };
   state.storeLoadedAtMs = state.deps.nowMs();
-  state.storeFileMtimeMs = fileMtimeMs;
 
   if (quarantinedConfigJobs.length > 0) {
     state.pendingQuarantineConfigJobs = quarantinedConfigJobs;
@@ -227,14 +212,13 @@ export async function ensureLoaded(
     if (quarantinePath) {
       try {
         await saveCronStore(state.deps.storePath, state.store);
-        state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
         state.deps.log.warn(
           {
             storePath: state.deps.storePath,
             quarantinePath,
             quarantinedJobs: quarantinedConfigJobs.length,
           },
-          "cron: sanitized active jobs.json after quarantining malformed persisted jobs",
+          "cron: sanitized active cron store after quarantining malformed persisted jobs",
         );
       } catch (error) {
         state.deps.log.warn(
@@ -284,6 +268,4 @@ export async function persist(
   }
   const saveOpts = flushedPendingQuarantine ? { skipBackup: opts?.skipBackup } : opts;
   await saveCronStore(state.deps.storePath, state.store, saveOpts);
-  // Update file mtime after save to prevent immediate reload
-  state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }

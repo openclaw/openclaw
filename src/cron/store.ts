@@ -122,14 +122,6 @@ function parseCronStateFile(raw: string): CronStateFile | null {
   }
 }
 
-function normalizeCronStoreFile(parsed: unknown): CronStoreFile {
-  const rawJobs = getRawCronJobs(parsed);
-  return {
-    version: 1,
-    jobs: rawJobs.filter(isRecord) as never as CronStoreFile["jobs"],
-  };
-}
-
 function cronStoreKey(storePath: string): string {
   return path.resolve(storePath);
 }
@@ -478,10 +470,6 @@ function assertCronStoreCanPersist(store: CronStoreFile): void {
   }
 }
 
-function canImportLegacyCronStore(loaded: LoadedCronStore): boolean {
-  return loaded.invalidConfigRows.length === 0 && countUnpersistableCronJobs(loaded.store) === 0;
-}
-
 function scheduleFromRow(row: CronJobRow): CronSchedule | null {
   if (row.schedule_kind === "at" && row.at) {
     return { kind: "at", at: row.at };
@@ -786,6 +774,17 @@ async function archiveLegacyCronStoreFiles(storePath: string): Promise<void> {
   ]);
 }
 
+export async function legacyCronStoreFilesExist(storePath: string): Promise<boolean> {
+  return (
+    (await legacyCronFileExists(path.resolve(storePath))) ||
+    (await legacyCronFileExists(resolveStatePath(path.resolve(storePath))))
+  );
+}
+
+export async function archiveLegacyCronStoreForMigration(storePath: string): Promise<void> {
+  await archiveLegacyCronStoreFiles(path.resolve(storePath));
+}
+
 function getRawCronJobs(parsed: unknown): unknown[] {
   return Array.isArray(parsed)
     ? parsed
@@ -838,22 +837,6 @@ async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
   let raw: string;
   try {
     raw = await fs.promises.readFile(statePath, "utf-8");
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return null;
-    }
-    throw new Error(`Failed to read cron state at ${statePath}: ${String(err)}`, {
-      cause: err,
-    });
-  }
-
-  return parseCronStateFile(raw);
-}
-
-function loadStateFileSync(statePath: string): CronStateFile | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(statePath, "utf-8");
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       return null;
@@ -1006,50 +989,8 @@ async function loadLegacyCronStoreWithConfigJobs(storePath: string): Promise<Loa
   }
 }
 
-function loadLegacyCronStoreSync(storePath: string): CronStoreFile {
-  try {
-    const raw = fs.readFileSync(storePath, "utf-8");
-    let parsed: unknown;
-    try {
-      parsed = parseJsonWithJson5Fallback(raw);
-    } catch (err) {
-      throw new Error(`Failed to parse cron store at ${storePath}: ${String(err)}`, {
-        cause: err,
-      });
-    }
-    const store = normalizeCronStoreFile(parsed);
-    const jobs = store.jobs as unknown as Array<Record<string, unknown>>;
-
-    const stateFile = loadStateFileSync(resolveStatePath(storePath));
-    const hasLegacyInlineState = !stateFile && hasInlineState(jobs);
-
-    if (stateFile) {
-      for (const job of store.jobs) {
-        const stateId = resolveCronStateId(job as unknown as Record<string, unknown>);
-        const entry = stateId ? stateFile.jobs[stateId] : undefined;
-        if (entry) {
-          mergeStateFileEntry(job, entry);
-        } else {
-          backfillMissingRuntimeFields(job);
-        }
-      }
-    } else if (!hasLegacyInlineState) {
-      for (const job of store.jobs) {
-        backfillMissingRuntimeFields(job);
-      }
-    }
-
-    for (const job of store.jobs) {
-      ensureJobStateObject(job);
-    }
-
-    return store;
-  } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      return { version: 1, jobs: [] };
-    }
-    throw err;
-  }
+export async function loadLegacyCronStoreForMigration(storePath: string): Promise<LoadedCronStore> {
+  return loadLegacyCronStoreWithConfigJobs(path.resolve(storePath));
 }
 
 export async function loadCronStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
@@ -1060,28 +1001,13 @@ export async function loadCronStoreWithConfigJobs(storePath: string): Promise<Lo
   if (rows.length > 0) {
     return loadedCronStoreFromRows(rows);
   }
-
-  if (!(await legacyCronFileExists(resolvedStorePath))) {
-    return {
-      store: { version: 1, jobs: [] },
-      configJobs: [],
-      configJobIndexes: [],
-      configJobRuntimeEntries: [],
-      invalidConfigRows: [],
-    };
-  }
-
-  const legacy = await loadLegacyCronStoreWithConfigJobs(resolvedStorePath);
-  if (canImportLegacyCronStore(legacy)) {
-    if (legacy.store.jobs.length > 0) {
-      runOpenClawStateWriteTransaction(({ db }) => {
-        replaceCronRows(db, storeKey, legacy.store);
-      });
-    }
-    await archiveLegacyCronStoreFiles(resolvedStorePath);
-  }
-  serializedStoreCache.delete(resolvedStorePath);
-  return legacy;
+  return {
+    store: { version: 1, jobs: [] },
+    configJobs: [],
+    configJobIndexes: [],
+    configJobRuntimeEntries: [],
+    invalidConfigRows: [],
+  };
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
@@ -1096,10 +1022,7 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
   if (rows.length > 0) {
     return loadedCronStoreFromRows(rows).store;
   }
-  if (!fs.existsSync(resolvedStorePath)) {
-    return { version: 1, jobs: [] };
-  }
-  return loadLegacyCronStoreSync(resolvedStorePath);
+  return { version: 1, jobs: [] };
 }
 
 type SaveCronStoreOptions = {
@@ -1137,7 +1060,6 @@ export async function saveCronStore(
   runOpenClawStateWriteTransaction(({ db }) => {
     replaceCronRows(db, storeKey, store);
   });
-  await archiveLegacyCronStoreFiles(resolvedStorePath);
   serializedStoreCache.delete(resolvedStorePath);
 }
 
