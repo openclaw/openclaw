@@ -254,6 +254,15 @@ function isSidebarSessionBusy(state: AppViewState) {
   );
 }
 
+function resolveSidebarDefaultAgentId(state: AppViewState): string {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  return normalizeAgentId(
+    state.agentsList?.defaultId ?? snapshot?.sessionDefaults?.defaultAgentId ?? "main",
+  );
+}
+
 function resolveSidebarSelectedAgentId(state: AppViewState): string {
   const parsed = parseAgentSessionKey(state.sessionKey);
   if (parsed) {
@@ -262,8 +271,8 @@ function resolveSidebarSelectedAgentId(state: AppViewState): string {
   const sessionKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
   const fallbackAgentId =
     sessionKey === "global" || sessionKey === "unknown"
-      ? (state.assistantAgentId ?? state.agentsList?.defaultId ?? "main")
-      : (state.agentsList?.defaultId ?? "main");
+      ? (state.assistantAgentId ?? resolveSidebarDefaultAgentId(state))
+      : resolveSidebarDefaultAgentId(state);
   return normalizeAgentId(fallbackAgentId);
 }
 
@@ -272,7 +281,7 @@ function isSidebarSessionForSelectedAgent(
   row: GatewaySessionRow,
   selectedAgentId: string,
 ): boolean {
-  return isSessionKeyTiedToAgent(row.key, selectedAgentId, state.agentsList?.defaultId ?? "main");
+  return isSessionKeyTiedToAgent(row.key, selectedAgentId, resolveSidebarDefaultAgentId(state));
 }
 
 function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {

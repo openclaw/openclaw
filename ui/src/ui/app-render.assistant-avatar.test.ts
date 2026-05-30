@@ -411,4 +411,52 @@ describe("renderApp assistant avatar routing", () => {
     );
     expect(labels).toEqual(["Main legacy", "Main old"]);
   });
+
+  it("uses hello default agent for global sidebar sessions before agent list hydration", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "global",
+          assistantAgentId: null,
+          agentsList: null,
+          hello: {
+            snapshot: {
+              sessionDefaults: {
+                defaultAgentId: "ops",
+              },
+            },
+          } as AppViewState["hello"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 2,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:dashboard:old",
+                kind: "direct",
+                label: "Main old",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:ops:dashboard:new",
+                kind: "direct",
+                label: "Ops new",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Ops new"]);
+  });
 });
