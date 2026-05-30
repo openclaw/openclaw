@@ -772,7 +772,7 @@ export async function runCodexAppServerAttempt(
     resolveAgentHarnessBeforePromptBuildResult({
       prompt: prependCurrentInboundContext(promptText, params.currentInboundContext),
       developerInstructions,
-      messages: codexModelInputHistoryMessages,
+      messages: historyMessages,
       ctx: hookContext,
     });
   let promptBuild = await buildPromptFromCurrentInputs();

@@ -1703,7 +1703,8 @@ describe("runCodexAppServerAttempt", () => {
       { runId?: string; sessionId?: string },
     ];
     expect(hookInput.prompt).toBe("hello");
-    expect(hookInput.messages).toEqual([]);
+    expect(hookInput.messages).toHaveLength(1);
+    expect(hookInput.messages?.[0]?.role).toBe("assistant");
     expect(hookContext.runId).toBe("run-1");
     expect(hookContext.sessionId).toBe("session-1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
