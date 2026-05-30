@@ -739,6 +739,97 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+  it("uses Codex usage for bare codex models running on the Codex harness", async () => {
+    registerStatusCodexHarness();
+
+    await withTempHome(
+      async (dir) => {
+        const authPath = path.join(
+          dir,
+          ".openclaw",
+          "agents",
+          "main",
+          "agent",
+          "auth-profiles.json",
+        );
+        fs.mkdirSync(path.dirname(authPath), { recursive: true });
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "openai-codex:status": {
+                type: "oauth",
+                provider: "openai-codex",
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60 * 60_000,
+              },
+            },
+          }),
+          "utf8",
+        );
+        const usageResetBase = Math.floor(Date.now() / 1000);
+        providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+          updatedAt: Date.now(),
+          providers: [
+            {
+              provider: "openai-codex",
+              displayName: "Codex",
+              windows: [
+                {
+                  label: "5h",
+                  usedPercent: 8,
+                  resetAt: (usageResetBase + 60 * 60) * 1000,
+                },
+              ],
+            },
+          ],
+        });
+
+        const text = await buildStatusText({
+          cfg: baseCfg,
+          sessionEntry: {
+            sessionId: "sess-status-bare-codex-oauth",
+            updatedAt: 0,
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "codex",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: codex/gpt-5.5");
+        expect(normalized).toContain("oauth (openai-codex:status)");
+        expect(normalized).toContain("Runtime: OpenAI Codex");
+        expect(normalized).toContain("Usage: 5h 92% left");
+        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+          ([params]) => params?.providers?.includes("openai-codex"),
+        );
+        if (!providerUsageCall) {
+          throw new Error("expected provider usage summary call for openai-codex");
+        }
+        expect(providerUsageCall[0]?.providers).toEqual(["openai-codex"]);
+      },
+      {
+        env: {
+          OPENAI_API_KEY: undefined,
+          OPENAI_OAUTH_TOKEN: undefined,
+        },
+      },
+    );
+  });
+
   it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
     await withTempHome(
       async (dir) => {

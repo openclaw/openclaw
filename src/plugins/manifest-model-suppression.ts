@@ -1,6 +1,6 @@
+import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  buildModelCatalogMergeKey,
   planManifestModelCatalogSuppressions,
   type ManifestModelCatalogSuppressionEntry,
 } from "../model-catalog/index.js";

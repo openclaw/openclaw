@@ -120,6 +120,13 @@ function readValidPromptBlob(storePath: string, ref: SessionSkillPromptRef): str
   }
 }
 
+export function isSessionSkillPromptBlobReadable(
+  storePath: string,
+  ref: SessionSkillPromptRef,
+): boolean {
+  return readValidPromptBlob(storePath, ref) !== null;
+}
+
 async function ensurePromptBlob(storePath: string, prompt: string): Promise<SessionSkillPromptRef> {
   const ref = buildPromptRef(prompt);
   const blobPath = resolveSessionSkillPromptBlobPath(storePath, ref.hash);

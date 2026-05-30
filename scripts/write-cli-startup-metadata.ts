@@ -162,8 +162,8 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
       path.join(sourceRootDir, "src/cli/gateway-cli/run-command.ts"),
       path.join(sourceRootDir, "src/cli/models-cli.ts"),
       path.join(sourceRootDir, "src/cli/plugins-cli.ts"),
-      path.join(sourceRootDir, "src/terminal/links.ts"),
-      path.join(sourceRootDir, "src/terminal/theme.ts"),
+      path.join(sourceRootDir, "packages/terminal-core/src/links.ts"),
+      path.join(sourceRootDir, "packages/terminal-core/src/theme.ts"),
     ],
     sourceRootDir,
   );
@@ -392,19 +392,15 @@ function renderSourceCommandHelpText(
   command: "nodes" | "secrets" | PrecomputedSubcommandHelpCommand,
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
 ): string {
-  const result = spawnSync(
-    process.execPath,
-    ["--import", "tsx", "openclaw.mjs", command, "--help"],
-    {
-      cwd: rootDir,
-      encoding: "utf8",
-      env: {
-        ...renderContext.env,
-        OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
-      },
-      timeout: COMMAND_HELP_RENDER_TIMEOUT_MS,
+  const result = spawnSync(process.execPath, ["openclaw.mjs", command, "--help"], {
+    cwd: rootDir,
+    encoding: "utf8",
+    env: {
+      ...renderContext.env,
+      OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
     },
-  );
+    timeout: COMMAND_HELP_RENDER_TIMEOUT_MS,
+  });
   if (result.error) {
     throw result.error;
   }

@@ -23,7 +23,7 @@ describe("provider-usage.load", () => {
     resetProviderUsageSnapshotWithPluginMock();
   });
 
-  it("loads snapshots for copilot gemini codex and xiaomi", async () => {
+  it("loads snapshots for copilot gemini codex and Xiaomi providers", async () => {
     resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
       async ({ provider }): Promise<ProviderUsageSnapshot | null> => {
         switch (provider) {
@@ -51,6 +51,12 @@ describe("provider-usage.load", () => {
               displayName: "Xiaomi",
               windows: [],
             };
+          case "xiaomi-token-plan":
+            return {
+              provider,
+              displayName: "Xiaomi Token Plan",
+              windows: [{ label: "Token Plan", usedPercent: 15 }],
+            };
           default:
             return null;
         }
@@ -67,6 +73,7 @@ describe("provider-usage.load", () => {
         { provider: googleGeminiCliProvider, token: "gemini-token" },
         { provider: "openai-codex", token: "codex-token", accountId: "acc-1" },
         { provider: "xiaomi", token: "xiaomi-token" },
+        { provider: "xiaomi-token-plan", token: "xiaomi-token-plan-token" },
       ],
       mockFetch,
     );
@@ -76,6 +83,7 @@ describe("provider-usage.load", () => {
       googleGeminiCliProvider,
       "openai-codex",
       "xiaomi",
+      "xiaomi-token-plan",
     ]);
     expect(
       summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
@@ -90,6 +98,9 @@ describe("provider-usage.load", () => {
     expect(summary.providers.find((provider) => provider.provider === "xiaomi")?.windows).toEqual(
       [],
     );
+    expect(
+      summary.providers.find((provider) => provider.provider === "xiaomi-token-plan")?.windows,
+    ).toEqual([{ label: "Token Plan", usedPercent: 15 }]);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

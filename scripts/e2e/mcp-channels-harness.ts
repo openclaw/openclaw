@@ -13,6 +13,7 @@ import { PROTOCOL_VERSION } from "../../dist/gateway/protocol/index.js";
 import { formatErrorMessage } from "../../dist/infra/errors.js";
 import { rawDataToString } from "../../dist/infra/ws.js";
 import { readStringValue } from "../../dist/shared/string-coerce.js";
+import { readMcpChannelLimits } from "./mcp-channel-limits.ts";
 import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
 import { waitForWebSocketOpen } from "./mcp-websocket-open.ts";
 
@@ -50,28 +51,15 @@ const GATEWAY_WS_OPEN_TIMEOUT_MS = 45_000;
 const GATEWAY_RPC_TIMEOUT_MS = 60_000;
 const GATEWAY_REQUEST_TIMEOUT_MS = 45_000;
 const GATEWAY_CONNECT_RETRY_WINDOW_MS = 420_000;
-const MCP_CONNECT_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_MCP_CHANNELS_CONNECT_TIMEOUT_MS,
-  60_000,
-);
-const GATEWAY_EVENT_RETAIN_LIMIT = readPositiveInt(
-  process.env.OPENCLAW_MCP_CHANNELS_GATEWAY_EVENT_RETAIN_LIMIT,
-  2_000,
-);
-const MCP_RAW_MESSAGE_RETAIN_LIMIT = readPositiveInt(
-  process.env.OPENCLAW_MCP_CHANNELS_RAW_MESSAGE_RETAIN_LIMIT,
-  2_000,
-);
+const MCP_CHANNEL_LIMITS = readMcpChannelLimits();
+const MCP_CONNECT_TIMEOUT_MS = MCP_CHANNEL_LIMITS.connectTimeoutMs;
+const GATEWAY_EVENT_RETAIN_LIMIT = MCP_CHANNEL_LIMITS.gatewayEventRetainLimit;
+const MCP_RAW_MESSAGE_RETAIN_LIMIT = MCP_CHANNEL_LIMITS.rawMessageRetainLimit;
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
-}
-
-function readPositiveInt(raw: string | undefined, fallback: number) {
-  const parsed = Number.parseInt(raw ?? "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function pushBounded<T>(items: T[], item: T, limit: number): void {

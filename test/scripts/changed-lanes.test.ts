@@ -13,6 +13,7 @@ import {
   createChangedCheckChildEnv,
   createChangedCheckPlan,
   createPnpmManagedCommand,
+  createTargetedCoreLintCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunShrinkwrapGuard,
   createShrinkwrapGuardCommand,
@@ -292,11 +293,77 @@ describe("scripts/changed-lanes", () => {
       OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
       OPENCLAW_TSGO_SPARSE_SKIP: "1",
     });
-    expect(plan.commands.find((command) => command.args[0] === "lint:core")?.env).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_OXLINT_SKIP_LOCK: "1",
-      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
-      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+    expect(plan.commands.find((command) => command.name === "lint core changed file")).toEqual({
+      name: "lint core changed file",
+      bin: "node",
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        "config/tsconfig/oxlint.core.json",
+        "src/shared/string-normalization.ts",
+      ],
+      env: {
+        PATH: "/usr/bin",
+        OPENCLAW_OXLINT_SKIP_LOCK: "1",
+        OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+        OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+      },
+    });
+  });
+
+  it("falls back to full core lint for broad core diffs", () => {
+    const targets = Array.from({ length: 9 }, (_, index) => `src/shared/file-${index}.ts`);
+    const command = createTargetedCoreLintCommand(targets, { PATH: "/usr/bin" });
+
+    expect(command).toBeNull();
+  });
+
+  it("falls back to full core lint when a changed core target was deleted", () => {
+    expect(
+      createTargetedCoreLintCommand(
+        ["src/shared/deleted.ts"],
+        { PATH: "/usr/bin" },
+        {
+          fileExists: () => false,
+        },
+      ),
+    ).toBeNull();
+  });
+
+  it("falls back to full core lint for mixed core lint configuration diffs", () => {
+    expect(
+      createTargetedCoreLintCommand(
+        ["config/tsconfig/oxlint.core.json", "src/shared/string-normalization.ts"],
+        { PATH: "/usr/bin" },
+        { fileExists: () => true },
+      ),
+    ).toBeNull();
+  });
+
+  it("targets small core lint diffs", () => {
+    expect(
+      createTargetedCoreLintCommand(
+        [
+          ".github/workflows/ci.yml",
+          "scripts/check-changed.mjs",
+          "src/agents/auth-profiles/usage.ts",
+          "test/scripts/changed-lanes.test.ts",
+        ],
+        { PATH: "/usr/bin" },
+        { fileExists: () => true },
+      ),
+    ).toEqual({
+      name: "lint core changed file",
+      bin: "node",
+      args: [
+        "scripts/run-oxlint.mjs",
+        "--tsconfig",
+        "config/tsconfig/oxlint.core.json",
+        "src/agents/auth-profiles/usage.ts",
+      ],
+      env: {
+        PATH: "/usr/bin",
+      },
     });
   });
 

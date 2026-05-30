@@ -83,6 +83,19 @@ function shouldApplyOpenAIAttributionHeaders(model: {
     : undefined;
 }
 
+function shouldUseCodexNativeTransport(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+  compat?: unknown;
+}): boolean {
+  const api = readStringValue(model.api);
+  if (api !== "openai-codex-responses") {
+    return false;
+  }
+  return resolveOpenAIRequestCapabilities(model).endpointClass === "openai-codex";
+}
+
 function shouldApplyOpenAIServiceTier(model: {
   api?: unknown;
   provider?: unknown;
@@ -694,7 +707,7 @@ export function createOpenAIAttributionHeadersWrapper(
       return underlying(model, context, options);
     }
     const shouldCreateCodexTransport =
-      attributionProvider === "openai-codex" &&
+      shouldUseCodexNativeTransport(model) &&
       (baseStreamFn === undefined || baseStreamFn === streamSimple);
     const streamFn = shouldCreateCodexTransport
       ? (opts?.codexNativeTransportStreamFn ?? createOpenAIResponsesTransportStreamFn())

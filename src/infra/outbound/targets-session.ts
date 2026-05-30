@@ -23,6 +23,7 @@ export type SessionDeliveryTarget = {
   to?: string;
   accountId?: string;
   threadId?: string | number;
+  threadIdSource?: "explicit" | "session" | "turn-source";
   mode: ChannelOutboundTargetMode;
   lastChannel?: DeliverableMessageChannel;
   lastTo?: string;
@@ -153,6 +154,7 @@ export function resolveSessionDeliveryTarget(params: {
   const explicitThreadId = normalizeOptionalThreadValue(
     parsedExplicitTarget?.threadId ?? params.explicitThreadId,
   );
+  const explicitThreadIdSource = explicitThreadId != null ? "explicit" : undefined;
 
   let to = explicitTo;
   if (!to && lastTo) {
@@ -174,12 +176,15 @@ export function resolveSessionDeliveryTarget(params: {
         : lastThreadId
       : undefined;
 
+  const inheritedThreadIdSource =
+    threadId != null ? (hasTurnSourceThreadId ? "turn-source" : "session") : undefined;
   const resolvedThreadId = explicitThreadId ?? threadId;
   return {
     channel,
     to,
     accountId,
     threadId: resolvedThreadId,
+    threadIdSource: explicitThreadIdSource ?? inheritedThreadIdSource,
     mode,
     lastChannel,
     lastTo,

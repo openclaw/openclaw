@@ -1,12 +1,16 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   BUILD_ALL_PROFILES,
+  BUILD_ALL_PROFILE_STEP_ENV,
   BUILD_ALL_STEPS,
+  buildAllUsage,
   formatBuildAllDuration,
   formatBuildAllTimingSummary,
+  parseBuildAllArgs,
   resolveBuildAllStepCacheState,
   resolveBuildAllStep,
   resolveBuildAllSteps,
@@ -163,11 +167,52 @@ describe("resolveBuildAllStep", () => {
     const step = getBuildAllStep("build:plugin-sdk:dts");
 
     expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
+    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
     expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
   });
 });
 
 describe("resolveBuildAllSteps", () => {
+  it("parses build-all CLI args before any build work", () => {
+    expect(parseBuildAllArgs([])).toEqual({ help: false, profile: "full" });
+    expect(parseBuildAllArgs(["cliStartup"])).toEqual({ help: false, profile: "cliStartup" });
+    expect(parseBuildAllArgs(["cliStartup", "--help"])).toEqual({
+      help: true,
+      profile: "cliStartup",
+    });
+    expect(() => parseBuildAllArgs(["cliStartup", "--bogus"])).toThrow("unknown argument: --bogus");
+    expect(() => parseBuildAllArgs(["wat"])).toThrow("Unknown build profile: wat");
+  });
+
+  it("prints CLI help without starting build steps", () => {
+    for (const args of [["--help"], ["cliStartup", "--help"]]) {
+      const result = spawnSync(process.execPath, ["scripts/build-all.mjs", ...args], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("Usage: node scripts/build-all.mjs [profile]");
+      expect(result.stdout).toContain("cliStartup");
+      expect(result.stdout).not.toContain("[build-all]");
+    }
+  });
+
+  it("rejects unknown CLI args without starting build steps", () => {
+    const result = spawnSync(process.execPath, ["scripts/build-all.mjs", "cliStartup", "--bogus"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("unknown argument: --bogus");
+    expect(result.stderr).toContain(buildAllUsage());
+    expect(result.stderr).not.toContain("[build-all]");
+    expect(result.stderr).not.toContain("at ");
+  });
+
   it("keeps the full profile aligned with the declared steps", () => {
     expect(resolveBuildAllSteps("full")).toEqual(BUILD_ALL_STEPS);
     expect(BUILD_ALL_PROFILES.full).toEqual(BUILD_ALL_STEPS.map((step) => step.label));
@@ -186,13 +231,30 @@ describe("resolveBuildAllSteps", () => {
       "check-plugin-sdk-exports",
       "plugins:assets:copy",
       "copy-hook-metadata",
-      "copy-copilot-sdk-manifest",
       "copy-export-html-templates",
       "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
       "write-cli-compat",
     ]);
+  });
+
+  it("skips bundled tsdown declarations for runtime-only profiles", () => {
+    for (const profile of ["ciArtifacts", "gatewayWatch", "cliStartup"]) {
+      const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
+      if (!tsdown) {
+        throw new Error(`Missing ${profile} tsdown step`);
+      }
+
+      expect(BUILD_ALL_PROFILE_STEP_ENV[profile].tsdown).toEqual({
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      });
+      expect(
+        resolveBuildAllStep(tsdown, { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" } }).options.env,
+      ).toMatchObject({
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      });
+    }
   });
 
   it("uses a minimal built runtime profile for gateway watch regression", () => {
@@ -215,6 +277,28 @@ describe("resolveBuildAllSteps", () => {
       "write-cli-startup-metadata",
       "write-cli-compat",
     ]);
+  });
+
+  it("skips generated static plugin assets for minimal backend-only profiles", () => {
+    for (const profile of ["gatewayWatch", "cliStartup"]) {
+      const runtimePostbuild = resolveBuildAllSteps(profile).find(
+        (step) => step.label === "runtime-postbuild",
+      );
+      if (!runtimePostbuild) {
+        throw new Error(`Missing ${profile} runtime-postbuild step`);
+      }
+
+      expect(BUILD_ALL_PROFILE_STEP_ENV[profile]["runtime-postbuild"]).toEqual({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+      });
+      expect(
+        resolveBuildAllStep(runtimePostbuild, {
+          env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },
+        }).options.env,
+      ).toMatchObject({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+      });
+    }
   });
 
   it("writes the runtime postbuild stamp after the build stamp", () => {

@@ -277,6 +277,7 @@ export async function getReplyFromConfig(
         agentId: resolveSessionAgentId({
           sessionKey: resolvedAgentSessionKey,
           config: cfg,
+          agentId: finalized.AgentId,
         }),
       };
     },
@@ -789,12 +790,12 @@ export async function getReplyFromConfig(
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
       return;
     }
-    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
+    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/i);
     if (!resetMatch) {
       return;
     }
     const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
-    const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
+    const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
       ctx,

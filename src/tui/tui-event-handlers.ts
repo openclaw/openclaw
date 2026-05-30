@@ -51,6 +51,7 @@ type EventHandlerContext = {
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 const STREAMING_WATCHDOG_USER_MESSAGE =
   "This response is taking longer than expected. Still waiting for the current run.";
 
@@ -80,6 +81,10 @@ export function createEventHandlers(context: EventHandlerContext) {
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
   let reconnectPendingRunId: string | null = null;
+  const pendingTerminalLifecycleErrors = new Map<
+    string,
+    { errorMessage: string; timer: ReturnType<typeof setTimeout> }
+  >();
 
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
@@ -104,6 +109,22 @@ export function createEventHandlers(context: EventHandlerContext) {
       streamingWatchdogTimer = null;
     }
     streamingWatchdogRunId = null;
+  };
+
+  const clearPendingTerminalLifecycleError = (runId: string) => {
+    const pending = pendingTerminalLifecycleErrors.get(runId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timer);
+    pendingTerminalLifecycleErrors.delete(runId);
+  };
+
+  const clearPendingTerminalLifecycleErrors = () => {
+    for (const pending of pendingTerminalLifecycleErrors.values()) {
+      clearTimeout(pending.timer);
+    }
+    pendingTerminalLifecycleErrors.clear();
   };
 
   const pauseStreamingWatchdog = () => {
@@ -182,6 +203,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
+    clearPendingTerminalLifecycleErrors();
     btw.clear();
     clearStreamingWatchdog();
   };
@@ -336,6 +358,46 @@ export function createEventHandlers(context: EventHandlerContext) {
     void refreshSessionInfo?.();
   };
 
+  const renderTerminalRunError = (params: {
+    runId: string;
+    errorMessage: string;
+    requireActiveOrPending?: boolean;
+  }): boolean => {
+    const { runId, errorMessage } = params;
+    const wasActiveRun = state.activeChatRunId === runId;
+    if (
+      params.requireActiveOrPending === true &&
+      !wasActiveRun &&
+      state.pendingChatRunId !== runId
+    ) {
+      return false;
+    }
+    const renderedError = formatRawAssistantErrorForUi(errorMessage);
+    chatLog.dismissPendingSystem(runId);
+    chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
+    noteFinalizedRun(runId, { displayedFinal: true });
+    terminateRun({ runId, wasActiveRun, status: "error" });
+    maybeRefreshHistoryForRun(runId);
+    return true;
+  };
+
+  const renderTerminalLifecycleError = (runId: string, errorMessage: string) => {
+    if (!renderTerminalRunError({ runId, errorMessage, requireActiveOrPending: true })) {
+      return;
+    }
+    tui.requestRender(true);
+  };
+
+  const scheduleTerminalLifecycleError = (runId: string, errorMessage: string) => {
+    clearPendingTerminalLifecycleError(runId);
+    const timer = setTimeout(() => {
+      pendingTerminalLifecycleErrors.delete(runId);
+      renderTerminalLifecycleError(runId, errorMessage);
+    }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+    timer.unref?.();
+    pendingTerminalLifecycleErrors.set(runId, { errorMessage, timer });
+  };
+
   const hasConcurrentActiveRun = (runId: string) => {
     const activeRunId = state.activeChatRunId;
     if (!activeRunId || activeRunId === runId) {
@@ -431,6 +493,22 @@ export function createEventHandlers(context: EventHandlerContext) {
     return false;
   };
 
+  const isMatchingGlobalAgentEvent = (
+    sessionKey: string | undefined,
+    agentId?: string,
+  ): boolean => {
+    if (normalizeLowercaseStringOrEmpty(sessionKey) !== "global") {
+      return true;
+    }
+    const selectedAgentId = normalizeLowercaseStringOrEmpty(state.currentAgentId);
+    const defaultAgentId = normalizeLowercaseStringOrEmpty(state.agentDefaultId);
+    const eventAgentId = normalizeLowercaseStringOrEmpty(agentId);
+    if (eventAgentId) {
+      return eventAgentId === selectedAgentId;
+    }
+    return selectedAgentId === defaultAgentId;
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -440,8 +518,15 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
+      return;
+    }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
+        return;
+      }
+      if (evt.state === "error" && finalizedRunsWithDisplay.has(evt.runId)) {
+        clearStaleStreamingIfNoTrackedRunRemains();
         return;
       }
       if (evt.state === "final") {
@@ -456,6 +541,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (reconnectPendingRunId === evt.runId) {
       reconnectPendingRunId = null;
     }
+    clearPendingTerminalLifecycleError(evt.runId);
     chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
@@ -548,12 +634,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "error") {
       forgetLocalBtwRunId?.(evt.runId);
-      const wasActiveRun = state.activeChatRunId === evt.runId;
-      const errorMessage = evt.errorMessage ?? "unknown";
-      const renderedError = formatRawAssistantErrorForUi(errorMessage);
-      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
-      maybeRefreshHistoryForRun(evt.runId);
+      renderTerminalRunError({
+        runId: evt.runId,
+        errorMessage: evt.errorMessage ?? "unknown",
+      });
     }
     tui.requestRender();
   };
@@ -632,6 +716,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         }
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase && phase !== "error") {
+        clearPendingTerminalLifecycleError(evt.runId);
+      }
       const isPostFinalizingRun = postFinalizingRuns.has(evt.runId);
       const isPostFinalTerminalPhase =
         isPostFinalizingRun && (phase === "end" || phase === "error");
@@ -668,7 +755,19 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (!canUpdateActivityStatus) {
           return;
         }
-        setActivityStatus("error");
+        const isTerminalLifecycleError = typeof evt.data?.endedAt === "number";
+        if (isTerminalLifecycleError && (isActiveRun || isPendingRun)) {
+          const errorMessage =
+            typeof evt.data?.error === "string"
+              ? evt.data.error
+              : typeof evt.data?.errorMessage === "string"
+                ? evt.data.errorMessage
+                : "unknown";
+          scheduleTerminalLifecycleError(evt.runId, errorMessage);
+          setActivityStatus("error");
+        } else {
+          setActivityStatus("error");
+        }
       }
       tui.requestRender();
     }
@@ -681,6 +780,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     const evt = payload as BtwEvent;
     syncSessionKey();
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
     if (evt.kind !== "btw") {
@@ -701,6 +803,7 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const dispose = () => {
     clearStreamingWatchdog();
+    clearPendingTerminalLifecycleErrors();
   };
 
   return {

@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { readCronRunLogEntriesSync } from "../cron/run-log.js";
+import { loadCronStore, resolveCronQuarantinePath, saveCronStore } from "../cron/store.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
@@ -13,7 +15,7 @@ type TerminalNote = (message: string, title?: string) => void;
 
 const noteMock = vi.hoisted(() => vi.fn<TerminalNote>());
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: noteMock,
 }));
 
@@ -64,6 +66,25 @@ function createLegacyCronJob(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function createCurrentCronJob(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "sqlite-job",
+    name: "SQLite job",
+    enabled: true,
+    createdAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
+    updatedAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
+    schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: {
+      kind: "systemEvent",
+      text: "SQLite brief",
+    },
+    state: {},
+    ...overrides,
+  };
+}
+
 async function writeCronStore(storePath: string, jobs: Array<Record<string, unknown>>) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(
@@ -80,16 +101,20 @@ async function writeCronStore(storePath: string, jobs: Array<Record<string, unkn
   );
 }
 
+async function writeCurrentCronStore(storePath: string, jobs: Array<Record<string, unknown>>) {
+  await saveCronStore(storePath, {
+    version: 1,
+    jobs: jobs as never,
+  });
+}
+
 async function writeLegacyCronArrayStore(storePath: string, jobs: Array<Record<string, unknown>>) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify(jobs, null, 2), "utf-8");
 }
 
 async function readPersistedJobs(storePath: string): Promise<Array<Record<string, unknown>>> {
-  const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-    jobs: Array<Record<string, unknown>>;
-  };
-  return persisted.jobs;
+  return (await loadCronStore(storePath)).jobs as unknown as Array<Record<string, unknown>>;
 }
 
 function requirePersistedJob(jobs: Array<Record<string, unknown>>, index: number) {
@@ -124,9 +149,42 @@ function expectNoNoteContaining(message: string, title: string): void {
 }
 
 describe("maybeRepairLegacyCronStore", () => {
+  it("reports quarantined cron rows even when the active store is already sanitized", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, []);
+    await fs.writeFile(
+      resolveCronQuarantinePath(storePath),
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              quarantinedAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
+              sourceIndex: 1,
+              reason: "missing-schedule",
+              job: { id: "bad-cron", name: "Bad cron" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expectNoteContaining("Quarantined cron job rows found", "Cron");
+    expectNoteContaining("1 row was removed from the active cron store", "Cron");
+  });
+
   it("surfaces cron payload model overrides without rewriting current jobs", async () => {
     const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [
+    await writeCurrentCronStore(storePath, [
       {
         id: "api-pinned",
         name: "API pinned",
@@ -206,7 +264,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
   it("does not surface cron model override diagnostics when jobs inherit the default", async () => {
     const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [
+    await writeCurrentCronStore(storePath, [
       {
         id: "inherits-default",
         name: "Inherits default",
@@ -235,7 +293,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
   it("counts alias model pins as default mismatches", async () => {
     const storePath = await makeTempStorePath();
-    await writeCronStore(storePath, [
+    await writeCurrentCronStore(storePath, [
       {
         id: "alias-pinned",
         name: "Alias the native runtime",
@@ -302,7 +360,7 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(payload.text).toBe("Morning brief");
 
     expectNoteContaining("Legacy cron job storage detected", "Cron");
-    expectNoteContaining("Cron store normalized", "Doctor changes");
+    expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
   });
 
   it("repairs legacy top-level array cron stores instead of treating them as empty (#60799)", async () => {
@@ -315,17 +373,79 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      version?: unknown;
-      jobs?: Array<Record<string, unknown>>;
-    };
-    const job = requirePersistedJob(persisted.jobs ?? [], 0);
-    expect(persisted.version).toBe(1);
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
     expect(job.jobId).toBeUndefined();
     expect(job.id).toBe("legacy-job");
     expect(job.notify).toBeUndefined();
     expectNoteContaining("Legacy cron job storage detected", "Cron");
-    expectNoteContaining("Cron store normalized", "Doctor changes");
+    expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+  });
+
+  it("imports legacy-only jobs when SQLite already has cron rows", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "legacy-job",
+        name: "SQLite wins",
+      }),
+    ]);
+    await writeCronStore(storePath, [
+      createLegacyCronJob({
+        name: "Stale duplicate",
+      }),
+      createLegacyCronJob({
+        jobId: "legacy-only",
+        name: "Legacy only",
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const jobs = await readPersistedJobs(storePath);
+    expect(jobs).toHaveLength(2);
+    expect(jobs.map((job) => job.id)).toEqual(["legacy-job", "legacy-only"]);
+    expect(requirePersistedJob(jobs, 0).name).toBe("SQLite wins");
+    expect(requirePersistedJob(jobs, 1).name).toBe("Legacy only");
+    expectNoteContaining("1 legacy JSON cron job will be imported into SQLite", "Cron");
+    expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+  });
+
+  it("migrates legacy run logs even when the legacy job store was already archived", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [createCurrentCronJob()]);
+    const runLogPath = path.join(path.dirname(storePath), "runs", "sqlite-job.jsonl");
+    await fs.mkdir(path.dirname(runLogPath), { recursive: true });
+    await fs.writeFile(
+      runLogPath,
+      `${JSON.stringify({
+        ts: Date.parse("2026-02-04T00:00:00.000Z"),
+        jobId: "sqlite-job",
+        action: "finished",
+        status: "ok",
+        summary: "done",
+      })}\n`,
+      "utf-8",
+    );
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const entries = readCronRunLogEntriesSync({ storePath, jobId: "sqlite-job" });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.jobId).toBe("sqlite-job");
+    expect(entries[0]?.summary).toBe("done");
+    await expect(fs.stat(runLogPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${runLogPath}.migrated`)).resolves.toBeTruthy();
+    expectNoteContaining("legacy JSON cron run logs will be imported into SQLite", "Cron");
+    expectNoteContaining("Cron run logs migrated to SQLite", "Doctor changes");
   });
 
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {
@@ -422,15 +542,19 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter,
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    const job = requirePersistedJob(jobs, 0);
+    expect(await readPersistedJobs(storePath)).toEqual([]);
+    const legacy = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    const job = requirePersistedJob(legacy.jobs, 0);
     expect(prompter.confirm).toHaveBeenCalledWith({
       message: "Repair legacy cron jobs now?",
       initialValue: true,
     });
     expect(job.jobId).toBe("legacy-job");
+    expect(job.id).toBeUndefined();
     expect(job.notify).toBe(true);
-    expectNoNoteContaining("Cron store normalized", "Doctor changes");
+    expectNoNoteContaining("Cron store migrated to SQLite", "Doctor changes");
   });
 
   it("migrates notify fallback none delivery jobs to cron.webhook", async () => {
@@ -552,10 +676,8 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
-      jobs: Array<Record<string, unknown>>;
-    };
-    const job = requirePersistedJob(persisted.jobs, 0);
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
     expect(job.sessionTarget).toBe("isolated");
     const payload = requireRecord(job.payload, "cron payload");
     expect(payload.kind).toBe("agentTurn");

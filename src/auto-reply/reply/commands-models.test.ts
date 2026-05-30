@@ -736,6 +736,12 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
   });
 
+  it("ignores unsafe bare list page tokens", async () => {
+    const result = await handleModelsCommand(buildParams("/models openai 9007199254740992"), true);
+
+    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
+  });
+
   it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },
@@ -797,7 +803,7 @@ describe("handleModelsCommand", () => {
     expect(authLabelParams.workspaceDir).toBe("/tmp");
   });
 
-  it("labels OpenAI provider pages with the effective Codex auth provider set", async () => {
+  it("labels OpenAI provider pages with canonical and legacy auth provider ids", async () => {
     modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(
       "oauth (openai-codex:user@example.com)",
     );
@@ -821,7 +827,7 @@ describe("handleModelsCommand", () => {
     );
     expect(openaiAuthCall?.[0]).toMatchObject({
       provider: "openai",
-      acceptedProviderIds: ["openai-codex"],
+      acceptedProviderIds: ["openai-codex", "openai"],
     });
   });
 

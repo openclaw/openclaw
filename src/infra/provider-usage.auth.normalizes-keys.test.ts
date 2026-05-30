@@ -184,6 +184,14 @@ const providerRuntimeMocks = vi.hoisted(() => ({
         return token ? { token } : null;
       }
 
+      if (params.provider === "xiaomi-token-plan") {
+        const token = resolveToken({
+          providerIds: ["xiaomi-token-plan"],
+          envDirect: [params.context.env?.XIAOMI_TOKEN_PLAN_API_KEY],
+        });
+        return token ? { token } : null;
+      }
+
       if (params.provider === "google-gemini-cli") {
         const resolved = await params.context.resolveOAuthToken({
           provider: "google-gemini-cli",
@@ -413,16 +421,18 @@ describe("resolveProviderAuths key normalization", () => {
 
   it("strips embedded CR/LF from env keys", async () => {
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai", "minimax", "xiaomi"],
+      providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
       env: {
         ZAI_API_KEY: "zai-\r\nkey",
         MINIMAX_API_KEY: "minimax-\r\nkey",
         XIAOMI_API_KEY: "xiaomi-\r\nkey",
+        XIAOMI_TOKEN_PLAN_API_KEY: "xiaomi-token-\r\nplan",
       },
       expected: [
         { provider: "zai", token: "zai-key" },
         { provider: "minimax", token: "minimax-key" },
         { provider: "xiaomi", token: "xiaomi-key" },
+        { provider: "xiaomi-token-plan", token: "xiaomi-token-plan" },
       ],
     });
   }, 300_000);
@@ -471,16 +481,22 @@ describe("resolveProviderAuths key normalization", () => {
 
   it("strips embedded CR/LF from stored auth profiles (token + api_key)", async () => {
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["minimax", "xiaomi"],
+      providers: ["minimax", "xiaomi", "xiaomi-token-plan"],
       setup: async (home) => {
         await writeAuthProfiles(home, {
           "minimax:default": { type: "token", provider: "minimax", token: "mini-\r\nmax" },
           "xiaomi:default": { type: "api_key", provider: "xiaomi", key: "xiao-\r\nmi" },
+          "xiaomi-token-plan:default": {
+            type: "api_key",
+            provider: "xiaomi-token-plan",
+            key: "token-\r\nplan",
+          },
         });
       },
       expected: [
         { provider: "minimax", token: "mini-max" },
         { provider: "xiaomi", token: "xiao-mi" },
+        { provider: "xiaomi-token-plan", token: "token-plan" },
       ],
     });
   });
@@ -542,11 +558,16 @@ describe("resolveProviderAuths key normalization", () => {
             models: [createTestModelDefinition()],
             apiKey: "cfg-xiaomi-key", // pragma: allowlist secret
           },
+          "xiaomi-token-plan": {
+            baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
+            models: [createTestModelDefinition()],
+            apiKey: "cfg-xiaomi-token-plan-key", // pragma: allowlist secret
+          },
         },
       },
     } satisfies OpenClawConfig;
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai", "minimax", "xiaomi"],
+      providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
       setup: async (home) => {
         await writeConfig(home, config);
       },
@@ -555,13 +576,14 @@ describe("resolveProviderAuths key normalization", () => {
         { provider: "zai", token: "cfg-zai-key" },
         { provider: "minimax", token: "cfg-minimax-key" },
         { provider: "xiaomi", token: "cfg-xiaomi-key" },
+        { provider: "xiaomi-token-plan", token: "cfg-xiaomi-token-plan-key" },
       ],
     });
   });
 
   it("returns no auth when providers have no configured credentials", async () => {
     await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai", "minimax", "xiaomi"],
+      providers: ["zai", "minimax", "xiaomi", "xiaomi-token-plan"],
       expected: [],
     });
   });

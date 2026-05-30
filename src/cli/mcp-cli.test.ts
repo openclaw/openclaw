@@ -96,6 +96,88 @@ describe("mcp cli", () => {
     });
   });
 
+  it("updates per-server MCP tool filters", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["server.mjs"]}']);
+      await runMcpCommand([
+        "mcp",
+        "tools",
+        "docs",
+        "--include",
+        "search,read_*",
+        "--exclude",
+        "admin_*",
+      ]);
+
+      expect(lastLogLine()).toBe(`Updated MCP tool selection for "docs" in ${configPath}.`);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine()).toolFilter).toEqual({
+        include: ["read_*", "search"],
+        exclude: ["admin_*"],
+      });
+    });
+  });
+
+  it("requires an explicit MCP tool filter operation", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["server.mjs"]}']);
+      await expect(runMcpCommand(["mcp", "tools", "docs"])).rejects.toThrow("__exit__:1");
+
+      expect(lastErrorLine()).toBe("Specify --include, --exclude, or --clear.");
+    });
+  });
+
+  it("clears per-server MCP tool filters only when requested", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand(["mcp", "set", "docs", '{"command":"node","args":["server.mjs"]}']);
+      await runMcpCommand(["mcp", "tools", "docs", "--include", "search"]);
+      await runMcpCommand(["mcp", "tools", "docs", "--clear"]);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).not.toHaveProperty("toolFilter");
+    });
+  });
+
+  it("shows MCP transport status without connecting", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"url":"https://mcp.example.com","transport":"streamable-http"}',
+      ]);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "status", "--json"]);
+
+      expect(JSON.parse(lastLogLine()).servers).toEqual([
+        {
+          name: "docs",
+          configured: true,
+          ok: true,
+          transport: "streamable-http",
+          launch: "https://mcp.example.com",
+        },
+      ]);
+    });
+  });
+
   it("fails when removing an unknown MCP server", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();

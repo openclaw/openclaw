@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import { asDateTimestampMs, resolveExpiresAtMsFromDurationMs } from "../shared/number-coercion.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   buildRealtimeVoiceAgentConsultWorkingResponse,
@@ -55,7 +56,14 @@ const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
   | { relaySessionId: string; type: "inputAudio"; byteLength: number }
-  | { relaySessionId: string; type: "audio"; audioBase64: string }
+  | {
+      relaySessionId: string;
+      type: "audio";
+      audioBase64: string;
+      itemId?: string;
+      responseId?: string;
+    }
+  | { relaySessionId: string; type: "audioDone"; itemId?: string; responseId?: string }
   | { relaySessionId: string; type: "clear" }
   | { relaySessionId: string; type: "mark"; markName: string }
   | {
@@ -268,8 +276,13 @@ function closeRelaySession(session: RelaySession, reason: "completed" | "error")
 }
 
 function pruneExpiredRelaySessions(nowMs = Date.now()): void {
+  const validNowMs = asDateTimestampMs(nowMs);
+  if (validNowMs === undefined) {
+    return;
+  }
   for (const session of relaySessions.values()) {
-    if (nowMs > session.expiresAtMs) {
+    const expiresAtMs = asDateTimestampMs(session.expiresAtMs);
+    if (expiresAtMs === undefined || validNowMs > expiresAtMs) {
       closeRelaySession(session, "completed");
     }
   }
@@ -301,7 +314,10 @@ export function createTalkRealtimeRelaySession(
   enforceRelaySessionLimits(params.connId);
   const forceAgentConsultOnFinalTranscript = params.forceAgentConsultOnFinalTranscript === true;
   const relaySessionId = randomUUID();
-  const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(RELAY_SESSION_TTL_MS);
+  if (expiresAtMs === undefined) {
+    throw new Error("Realtime relay session expiry is outside the supported Date range");
+  }
   const talk = createTalkSessionController(
     {
       sessionId: relaySessionId,
@@ -318,6 +334,8 @@ export function createTalkRealtimeRelaySession(
       ...event,
       ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
     });
+  let currentOutputItemId: string | undefined;
+  let currentOutputResponseId: string | undefined;
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
     cfg: params.cfg,
@@ -337,6 +355,8 @@ export function createTalkRealtimeRelaySession(
             relaySessionId,
             type: "audio",
             audioBase64: audio.toString("base64"),
+            ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
+            ...(currentOutputResponseId ? { responseId: currentOutputResponseId } : {}),
           },
           {
             type: "output.audio.delta",
@@ -369,6 +389,40 @@ export function createTalkRealtimeRelaySession(
           },
         );
       },
+    },
+    onEvent: (event) => {
+      if (event.direction !== "server") {
+        return;
+      }
+      if (
+        event.type === "conversation.output_audio.delta" ||
+        event.type === "response.audio.delta" ||
+        event.type === "response.output_audio.delta"
+      ) {
+        currentOutputItemId = event.itemId ?? currentOutputItemId;
+        currentOutputResponseId = event.responseId ?? currentOutputResponseId;
+        return;
+      }
+      if (
+        event.type === "response.audio.done" ||
+        event.type === "response.output_audio.done" ||
+        event.type === "conversation.output_audio.done" ||
+        event.type === "response.done" ||
+        event.type === "response.cancelled"
+      ) {
+        emit({
+          relaySessionId,
+          type: "audioDone",
+          ...((event.itemId ?? currentOutputItemId)
+            ? { itemId: event.itemId ?? currentOutputItemId }
+            : {}),
+          ...((event.responseId ?? currentOutputResponseId)
+            ? { responseId: event.responseId ?? currentOutputResponseId }
+            : {}),
+        });
+        currentOutputItemId = undefined;
+        currentOutputResponseId = undefined;
+      }
     },
     onTranscript: (role, text, final) => {
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
@@ -643,7 +697,15 @@ function ensureRelayTurn(session: RelaySession): string {
 
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
   const session = relaySessions.get(relaySessionId);
-  if (!session || session.connId !== connId || Date.now() > session.expiresAtMs) {
+  const nowMs = asDateTimestampMs(Date.now());
+  const expiresAtMs = session ? asDateTimestampMs(session.expiresAtMs) : undefined;
+  if (
+    !session ||
+    session.connId !== connId ||
+    nowMs === undefined ||
+    expiresAtMs === undefined ||
+    nowMs > expiresAtMs
+  ) {
     if (session) {
       closeRelaySession(session, "completed");
     }

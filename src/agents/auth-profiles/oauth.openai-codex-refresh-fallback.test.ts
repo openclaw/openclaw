@@ -841,7 +841,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       profileId: resolved.profileId ?? "",
       agentDir,
     });
-    expect(ensureAuthProfileStore(agentDir).lastGood?.["openai-codex"]).toBe(healthyProfileId);
+    expect(ensureAuthProfileStore(agentDir).lastGood?.openai).toBe(healthyProfileId);
   });
 
   it("retries Codex refresh once after refresh_token_reused updates only the stored refresh token", async () => {

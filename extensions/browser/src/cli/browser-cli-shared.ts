@@ -1,11 +1,14 @@
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPES,
 } from "../browser-gateway-contract.js";
+import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
-
-const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 
 export type BrowserParentOpts = GatewayRpcOpts & {
   json?: boolean;
@@ -33,20 +36,28 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
-function parsePositiveInteger(raw: string, flag: string): number {
-  const value = raw.trim();
-  if (!/^\+?\d+$/.test(value)) {
-    throw new Error(`${flag} must be a positive integer.`);
-  }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+export function parseBrowserPositiveIntegerValue(value: unknown): number | undefined {
+  return parseStrictPositiveInteger(value);
+}
+
+export function parseBrowserNonNegativeIntegerValue(value: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(value);
+}
+
+export function parseBrowserPositiveIntegerOption(raw: string, flag: string): number {
+  const parsed = parseBrowserPositiveIntegerValue(raw);
+  if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
   return parsed;
 }
 
-function normalizeCliTimeoutMs(timeoutMs: number): number {
-  return Math.min(MAX_SAFE_TIMEOUT_DELAY_MS, Math.max(1, Math.floor(timeoutMs)));
+export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string): number {
+  const parsed = parseBrowserNonNegativeIntegerValue(raw);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a non-negative integer.`);
+  }
+  return parsed;
 }
 
 export async function callBrowserRequest<T>(
@@ -56,9 +67,9 @@ export async function callBrowserRequest<T>(
 ): Promise<T> {
   const resolvedTimeoutMs =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
-      ? normalizeCliTimeoutMs(extra.timeoutMs)
+      ? normalizeBrowserTimerDelayMs(extra.timeoutMs)
       : typeof opts.timeout === "string"
-        ? normalizeCliTimeoutMs(parsePositiveInteger(opts.timeout, "--timeout"))
+        ? normalizeBrowserTimerDelayMs(parseBrowserPositiveIntegerOption(opts.timeout, "--timeout"))
         : undefined;
   const resolvedTimeout =
     typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)

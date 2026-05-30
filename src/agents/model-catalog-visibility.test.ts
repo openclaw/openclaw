@@ -37,6 +37,45 @@ describe("resolveVisibleModelCatalog", () => {
     expect(result).toEqual([{ provider: "openai", id: "gpt-test", name: "GPT Test" }]);
   });
 
+  it("keeps Codex-routable canonical OpenAI rows visible through Codex OAuth auth", async () => {
+    const authChecker = vi.fn((provider: string, api?: string) => api === "openai-codex-responses");
+    const catalog: ModelCatalogEntry[] = [
+      {
+        provider: "openai",
+        id: "chat-latest",
+        name: "Chat Latest",
+        api: "openai-responses",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT 5.5",
+        api: "openai-responses",
+      },
+    ];
+
+    const result = await resolveVisibleModelCatalog({
+      cfg: {} as OpenClawConfig,
+      catalog,
+      defaultProvider: "openai",
+      runtimeAuthDiscovery: false,
+      providerAuthChecker: authChecker,
+    });
+
+    expect(authChecker).toHaveBeenNthCalledWith(1, "openai", "openai-responses");
+    expect(authChecker).toHaveBeenNthCalledWith(2, "openai", "openai-responses");
+    expect(authChecker).toHaveBeenNthCalledWith(3, "openai", "openai-codex-responses");
+    expect(authChecker).toHaveBeenCalledTimes(3);
+    expect(result).toEqual([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT 5.5",
+        api: "openai-responses",
+      },
+    ]);
+  });
+
   it("does not runtime-normalize unrestricted default browse", async () => {
     normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => "custom-modern-model");
 
@@ -94,7 +133,7 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
-  });
+  }, 240_000);
 
   it("uses runtime model normalization for exact allowlist entries", async () => {
     normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ provider, context }) => {

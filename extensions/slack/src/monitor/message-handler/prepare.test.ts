@@ -707,6 +707,18 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared?.ackReactionPromise).toBeNull();
   });
 
+  it("does not coerce malformed Slack timestamps into inbound event times", async () => {
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        ts: "0x10",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.Timestamp).toBeUndefined();
+    expect(prepared.ctxPayload.MessageSid).toBe("0x10");
+  });
+
   it("primes Slack status reactions when channel replies are message-tool-only", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -1364,6 +1376,39 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expectMainScopedDmClassification(prepared);
   });
 
+  it("preserves MessageThreadId for normalized DM assistant thread roots", async () => {
+    const cases: Array<{
+      name: string;
+      message: SlackMessageEvent;
+    }> = [
+      {
+        name: "raw im",
+        message: createMainScopedDmMessage({ channel_type: "im", thread_ts: "1.000" }),
+      },
+      {
+        name: "wrong channel_type",
+        message: createMainScopedDmMessage({ channel_type: "channel", thread_ts: "1.000" }),
+      },
+      {
+        name: "missing channel_type",
+        message: createMainScopedDmMessage({ thread_ts: "1.000" }),
+      },
+    ];
+    delete cases[2].message.channel_type;
+
+    for (const testCase of cases) {
+      const prepared = await prepareMessageWith(
+        createDmScopeMainSlackCtx(),
+        createSlackAccount(),
+        testCase.message,
+      );
+
+      expectMainScopedDmClassification(prepared, { includeFromCheck: testCase.name !== "raw im" });
+      expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
+      expect(prepared!.ctxPayload.ReplyToId).toBe("1.000");
+    }
+  });
+
   it("sets MessageThreadId for top-level messages when replyToMode=all", async () => {
     const prepared = await prepareMessageWith(
       createReplyToAllSlackCtx(),
@@ -1534,7 +1579,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       messages: [
         { text: "current answer", user: "U1", ts: "300.000" },
         { text: "please choose A or B", bot_id: "B1", ts: "299.000" },
-        { text: "earlier user context", user: "U1", ts: "298.000" },
+        { text: "earlier user context", user: "U1", ts: "0x12a" },
       ],
     });
     const slackCtx = createInboundSlackCtx({
@@ -1572,7 +1617,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       {
         sender: "Alice (user)",
         body: "earlier user context",
-        timestamp: 298000,
+        timestamp: undefined,
       },
       {
         sender: "Assistant (assistant)",
