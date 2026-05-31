@@ -18,7 +18,13 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   externalAbort: boolean;
   timedOut: boolean;
   assistantTexts: string[];
-  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
+  toolMetas: Array<{
+    toolName: string;
+    meta?: string;
+    asyncStarted?: boolean;
+    asyncTaskRunId?: string;
+    asyncTaskId?: string;
+  }>;
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt: boolean;
   messagingToolSentTexts: string[];

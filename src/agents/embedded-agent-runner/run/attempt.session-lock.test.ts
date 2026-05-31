@@ -922,6 +922,75 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releases).toEqual(["release", "release", "release"]);
   });
 
+  it("allows prompt-stream announcement writes from another controller but still rejects external edits", async () => {
+    const sessionFile = await createTempSessionFile();
+    const acquireSessionWriteLockAnnouncement = vi.fn(async () => ({ release: vi.fn() }));
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockAnnouncement,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    const sessionKey = "agent:main:imessage:requester";
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockAnnouncement,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    const forwardedOptions: Array<{ publishOwnedWrite?: boolean } | undefined> = [];
+    const announceSession = {
+      agent: {
+        streamFn: vi.fn(async () => {
+          await runWithOwnedSessionTranscriptWritePublication(
+            { sessionFile, sessionKey },
+            async () => {
+              await fs.appendFile(
+                sessionFile,
+                '{"type":"message","id":"announcement-complete"}\n',
+                "utf8",
+              );
+            },
+          );
+        }),
+      },
+    };
+
+    installPromptSubmissionLockRelease({
+      session: announceSession,
+      waitForSessionEvents: (sessionToDrain) =>
+        secondController.waitForSessionEvents(sessionToDrain),
+      releaseForPrompt: () => secondController.releaseForPrompt(),
+      reacquireAfterPrompt: () => secondController.reacquireAfterPrompt(),
+      sessionFile,
+      sessionKey,
+      withSessionWriteLock: (run, options) => {
+        forwardedOptions.push(options);
+        return secondController.withSessionWriteLock(run, options);
+      },
+    });
+
+    await announceSession.agent.streamFn();
+    await expect(
+      firstController.withSessionWriteLock(async () => {
+        await fs.appendFile(sessionFile, '{"type":"message","id":"post-announcement"}\n', "utf8");
+        return "post-announcement";
+      }),
+    ).resolves.toBe("post-announcement");
+    expect(firstController.hasSessionTakeover()).toBe(false);
+
+    await fs.appendFile(
+      sessionFile,
+      '{"type":"message","id":"external-after-announcement"}\n',
+      "utf8",
+    );
+    await expect(firstController.withSessionWriteLock(() => "late")).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+
+    expect(firstController.hasSessionTakeover()).toBe(true);
+    expect(forwardedOptions).toContainEqual({ publishOwnedWrite: true });
+  });
+
   it("rejects external edits interleaved while another controller holds cleanup lock", async () => {
     const sessionFile = await createTempSessionFile();
     const releases: string[] = [];

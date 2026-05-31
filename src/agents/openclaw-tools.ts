@@ -215,6 +215,11 @@ export function createOpenClawTools(
     trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
       ? trimmedRunSessionKey
       : options?.agentSessionKey;
+  const mediaGenerationAsyncStartCallback = mediaGenerationAgentSessionKey
+    ? isCronRunSessionKey(mediaGenerationAgentSessionKey)
+      ? undefined
+      : options?.onYield
+    : options?.onYield;
   const imageToolAgentDir = options?.agentDir;
   const imageTool = resolveImageToolFactoryAvailable({
     config: availabilityConfig ?? resolvedConfig,
@@ -248,7 +253,7 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
-        onAsyncTaskStarted: options?.onYield,
+        onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-generate-tool");
@@ -262,7 +267,7 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
-        onAsyncTaskStarted: options?.onYield,
+        onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:video-generate-tool");
@@ -276,7 +281,7 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
-        onAsyncTaskStarted: options?.onYield,
+        onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:music-generate-tool");
