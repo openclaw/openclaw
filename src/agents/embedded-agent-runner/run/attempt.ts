@@ -162,7 +162,6 @@ import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
-import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import { collectRuntimeChannelCapabilities } from "../../runtime-capabilities.js";
 import {
   logAgentRuntimeToolDiagnostics,
@@ -327,6 +326,7 @@ import {
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -5031,15 +5031,11 @@ export async function runEmbeddedAttempt(
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
         });
       }
-      await runAgentCleanupStep({
+      await flushEmbeddedAttemptTrajectoryRecorder({
         runId: params.runId,
         sessionId: params.sessionId,
-        step: "openclaw-trajectory-flush",
         log,
-        getTimeoutDetails: () => trajectoryRecorder?.describeFlushState(),
-        cleanup: async () => {
-          await trajectoryRecorder?.flush();
-        },
+        trajectoryRecorder,
       });
       // Always tear down the session (and release the lock) before we leave this attempt.
       //
