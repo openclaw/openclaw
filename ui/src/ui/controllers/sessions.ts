@@ -10,6 +10,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import type {
   GatewaySessionRow,
   SessionCompactionCheckpoint,
@@ -485,15 +486,34 @@ function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRo
 }
 
 type ThinkingMetadataCarrier = {
+  modelProvider?: string | null;
+  model?: string | null;
   thinkingLevels?: Array<{ id: string; label: string }>;
   thinkingOptions?: string[];
   thinkingDefault?: string;
 };
 
+function thinkingMetadataModelMatches(
+  incoming: ThinkingMetadataCarrier,
+  existing: ThinkingMetadataCarrier,
+): boolean {
+  const incomingProvider = incoming.modelProvider;
+  const existingProvider = existing.modelProvider;
+  if (incomingProvider && existingProvider && incomingProvider !== existingProvider) {
+    return false;
+  }
+  const incomingModel = incoming.model;
+  const existingModel = existing.model;
+  return !(incomingModel && existingModel && incomingModel !== existingModel);
+}
+
 function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
   incoming: T,
   existing: ThinkingMetadataCarrier | undefined,
 ): T {
+  if (existing && !thinkingMetadataModelMatches(incoming, existing)) {
+    return incoming;
+  }
   const existingLevels = existing?.thinkingLevels;
   if (!existingLevels?.length) {
     return incoming;
@@ -511,6 +531,22 @@ function preserveRicherThinkingMetadata<T extends ThinkingMetadataCarrier>(
       ? { thinkingDefault: existingThinkingDefault }
       : {}),
   };
+}
+
+function historyRowIsStaleForActiveSession(
+  incoming: GatewaySessionRow,
+  existing: GatewaySessionRow | undefined,
+): boolean {
+  if (!existing || !isSessionRunActive(existing) || isSessionRunActive(incoming)) {
+    return false;
+  }
+  const existingUpdatedAt = existing.updatedAt ?? 0;
+  const incomingUpdatedAt = incoming.updatedAt ?? 0;
+  if (existingUpdatedAt > incomingUpdatedAt) {
+    return true;
+  }
+  const existingStartedAt = typeof existing.startedAt === "number" ? existing.startedAt : 0;
+  return existingStartedAt > incomingUpdatedAt;
 }
 
 function checkpointSummarySignature(
@@ -886,6 +922,9 @@ export function applyChatHistorySessionInfo(
     keyedVisibleSession,
     existingVisibleSession,
   );
+  if (historyRowIsStaleForActiveSession(visibleSession, existingVisibleSession)) {
+    return true;
+  }
   const applied = applySessionsChangedEvent(state, {
     session: visibleSession,
     sessionKey: visibleSession.key,

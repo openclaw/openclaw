@@ -2239,6 +2239,78 @@ describe("applySessionsChangedEvent", () => {
     ]);
   });
 
+  it("uses incoming thinking metadata when chat history changes models", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: {
+          modelProvider: "custom",
+          model: "extended-model",
+          contextTokens: 200_000,
+          thinkingLevels: [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+            { id: "xhigh", label: "Extra high" },
+          ],
+          thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+          thinkingDefault: "medium",
+        },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 1,
+            modelProvider: "custom",
+            model: "extended-model",
+            thinkingLevels: [
+              { id: "low", label: "Low" },
+              { id: "medium", label: "Medium" },
+              { id: "high", label: "High" },
+              { id: "xhigh", label: "Extra high" },
+            ],
+            thinkingOptions: ["Low", "Medium", "High", "Extra high"],
+            thinkingDefault: "medium",
+          },
+        ],
+      },
+    });
+
+    const applied = applyChatHistorySessionInfo(
+      state,
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 2,
+        modelProvider: "custom",
+        model: "basic-model",
+        thinkingLevels: [{ id: "off", label: "Off" }],
+        thinkingOptions: ["Off"],
+        thinkingDefault: "off",
+      },
+      {
+        modelProvider: "custom",
+        model: "basic-model",
+        contextTokens: 200_000,
+        thinkingLevels: [{ id: "off", label: "Off" }],
+        thinkingOptions: ["Off"],
+        thinkingDefault: "off",
+      },
+    );
+
+    expect(applied).toBe(true);
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      model: "basic-model",
+      thinkingLevels: [{ id: "off", label: "Off" }],
+      thinkingOptions: ["Off"],
+    });
+    expect(state.sessionsResult?.defaults.thinkingLevels?.map((level) => level.id)).toEqual([
+      "off",
+    ]);
+  });
+
   it("applies chat history session info for the selected non-default global agent", () => {
     const state = createState(async () => undefined, {
       sessionKey: "global",
@@ -2270,6 +2342,47 @@ describe("applySessionsChangedEvent", () => {
       hasActiveRun: false,
     });
     expect(state.chatRunId).toBeNull();
+  });
+
+  it("does not clear newer active runs from stale chat history session info", () => {
+    const state = createState(async () => undefined, {
+      sessionKey: "agent:main:main",
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 100,
+            startedAt: 90,
+            status: "running",
+            hasActiveRun: true,
+          },
+        ],
+      },
+      chatRunId: "run-active",
+      chatStream: "streaming",
+    });
+
+    const applied = applyChatHistorySessionInfo(state, {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 50,
+      status: "done",
+      hasActiveRun: false,
+    });
+
+    expect(applied).toBe(true);
+    expect(state.chatRunId).toBe("run-active");
+    expect(state.chatStream).toBe("streaming");
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      updatedAt: 100,
+      status: "running",
+      hasActiveRun: true,
+    });
   });
 
   it("clears current runs from canonical chat history rows outside the visible list", () => {
