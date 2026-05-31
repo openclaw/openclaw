@@ -1043,8 +1043,23 @@ function isPublicNpmRegistry(value: string | undefined | null): boolean {
   }
 }
 
+function readRegistryEnv(env: NodeJS.ProcessEnv, pattern: RegExp): string | null {
+  let registry: string | null = null;
+  for (const [key, value] of Object.entries(env)) {
+    if (!pattern.test(key) || value === "") {
+      continue;
+    }
+    registry = normalizeOptionalString(value) ?? registry;
+  }
+  return registry;
+}
+
 function readNpmRegistryEnv(env: NodeJS.ProcessEnv): string | null {
-  return normalizeOptionalString(env.npm_config_registry ?? env.NPM_CONFIG_REGISTRY) ?? null;
+  return readRegistryEnv(env, /^npm_config_registry$/iu);
+}
+
+function readBunRegistryEnv(env: NodeJS.ProcessEnv): string | null {
+  return readRegistryEnv(env, /^(?:bun_config_registry|npm_config_registry)$/iu);
 }
 
 function resolvePackageManagerRegistryConfigArgs(params: {
@@ -1095,14 +1110,13 @@ async function resolveEffectiveNpmRegistry(params: {
   timeoutMs?: number;
   manager?: GlobalInstallManager | null;
 }): Promise<string | null> {
-  const registryEnv = readNpmRegistryEnv(params.env);
-  if (registryEnv) {
-    return registryEnv;
+  if (params.manager === "bun") {
+    return readBunRegistryEnv(params.env);
   }
   const prefix = resolveNpmConfigPrefixFromPackageRoot(params.root);
   const argv = resolvePackageManagerRegistryConfigArgs({ manager: params.manager, prefix });
   if (!argv) {
-    return null;
+    return readNpmRegistryEnv(params.env);
   }
   const result = await runCommandWithTimeout(
     argv,
@@ -1116,7 +1130,7 @@ async function resolveEffectiveNpmRegistry(params: {
     },
   ).catch(() => null);
   if (!result || result.code !== 0) {
-    return null;
+    return readNpmRegistryEnv(params.env);
   }
   return normalizeOptionalString(result.stdout) ?? null;
 }
@@ -1136,6 +1150,9 @@ async function hasCustomNpmRegistryOverride(params: {
     timeoutMs: params.timeoutMs,
     manager: params.manager,
   });
+  if (params.manager === "bun" && !registry) {
+    return true;
+  }
   return registry ? !isPublicNpmRegistry(registry) : false;
 }
 

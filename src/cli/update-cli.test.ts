@@ -2087,6 +2087,18 @@ describe("update-cli", () => {
       error: "HTTP 404",
     });
     vi.mocked(defaultRuntime.writeJson).mockClear();
+    vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv, options) => {
+      expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
+      expect(options.env?.NPM_CONFIG_REGISTRY).toBe("https://npm.internal.example/");
+      return {
+        stdout: "https://npm.internal.example/\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
 
     await withEnvAsync({ NPM_CONFIG_REGISTRY: "https://npm.internal.example/" }, async () => {
       await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
@@ -2189,8 +2201,63 @@ describe("update-cli", () => {
     expect(jsonOutput?.targetVersion).toBe("2026.5.26");
   });
 
-  it("uses lowercase npm registry env precedence when deciding availability preflight", async () => {
-    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+  it("checks npm availability preflight for Bun-managed package updates when Bun registry is public", async () => {
+    const root = createCaseDir("openclaw-update-bun");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    resolveGlobalManager.mockResolvedValue("bun");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "package",
+      packageManager: "bun",
+      deps: {
+        manager: "bun",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await withEnvAsync({ BUN_CONFIG_REGISTRY: "https://registry.npmjs.org/" }, async () => {
+      await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+    });
+
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "2026.5.26",
+      timeoutMs: undefined,
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain(
+      "openclaw@2026.5.26 is not available on the npm registry yet.",
+    );
+  });
+
+  it("skips npm availability preflight for Bun-managed updates when the registry is not proven public", async () => {
+    const root = createCaseDir("openclaw-update-bun-custom");
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    resolveGlobalManager.mockResolvedValue("bun");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root,
+      installKind: "package",
+      packageManager: "bun",
+      deps: {
+        manager: "bun",
+        status: "ok",
+        lockfilePath: null,
+        markerPath: null,
+      },
+    });
     readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
       target: "2026.5.26",
@@ -2202,8 +2269,50 @@ describe("update-cli", () => {
 
     await withEnvAsync(
       {
-        NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/",
-        npm_config_registry: "https://npm.internal.example/",
+        BUN_CONFIG_REGISTRY: undefined,
+        NPM_CONFIG_REGISTRY: undefined,
+        npm_config_registry: undefined,
+      },
+      async () => {
+        await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
+      },
+    );
+
+    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    const jsonOutput = lastWriteJsonCall() as { tag?: string; targetVersion?: string } | undefined;
+    expect(jsonOutput?.tag).toBe("openclaw@2026.5.26");
+    expect(jsonOutput?.targetVersion).toBe("2026.5.26");
+  });
+
+  it("uses npm registry config output instead of guessing registry env casing", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 404",
+    });
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+    vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv, options) => {
+      expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
+      expect(options.env?.npm_config_registry).toBe("https://registry.npmjs.org/");
+      expect(options.env?.NPM_CONFIG_REGISTRY).toBe("https://npm.internal.example/");
+      return {
+        stdout: "https://npm.internal.example/\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await withEnvAsync(
+      {
+        npm_config_registry: "https://registry.npmjs.org/",
+        NPM_CONFIG_REGISTRY: "https://npm.internal.example/",
       },
       async () => {
         await updateCommand({ dryRun: true, tag: "2026.5.26", json: true });
@@ -2824,6 +2933,18 @@ describe("update-cli", () => {
       nodeEngine: ">=22.19.0",
     });
     nodeVersionSatisfiesEngine.mockReturnValue(false);
+    vi.mocked(runCommandWithTimeout).mockImplementationOnce(async (argv, options) => {
+      expect(argv).toEqual(["npm", "config", "get", "registry", "--global"]);
+      expect(options.env?.NPM_CONFIG_REGISTRY).toBe("https://npm.internal.example/");
+      return {
+        stdout: "https://npm.internal.example/\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
 
     await withEnvAsync({ NPM_CONFIG_REGISTRY: "https://npm.internal.example/" }, async () => {
       await updateCommand({ yes: true, tag: "2026.5.26" });
