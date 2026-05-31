@@ -3,30 +3,39 @@ import {
   completeTaskRunByRunId,
   createRunningTaskRun,
 } from "../../../tasks/detached-task-runtime.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-registry.js";
+import { resetTaskRegistryForTests, type TaskRecord } from "../../../tasks/runtime-internal.js";
 import {
   requiresCompletionRequiredAsyncTaskWait,
   waitForCompletionRequiredAsyncTasks,
   type AsyncStartedToolMeta,
 } from "./attempt.async-tasks.js";
 
+function requireCreatedTask(task: TaskRecord | null): TaskRecord {
+  if (!task) {
+    throw new Error("expected test task to be created");
+  }
+  return task;
+}
+
 describe("waitForCompletionRequiredAsyncTasks", () => {
   it("waits for async task ids discovered during the attempt", async () => {
     resetTaskRegistryForTests();
-    const task = createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "image_generation",
-      sourceId: "image_generate:openai",
-      requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
-      ownerKey: "agent:main:cron:daily-media:run:run-123",
-      scopeKind: "session",
-      runId: "tool:image_generate:run-123",
-      task: "daily image",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
+    const task = requireCreatedTask(
+      createRunningTaskRun({
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+        ownerKey: "agent:main:cron:daily-media:run:run-123",
+        scopeKind: "session",
+        runId: "tool:image_generate:run-123",
+        task: "daily image",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        startedAt: 1,
+        lastEventAt: 1,
+      }),
+    );
     const metas: AsyncStartedToolMeta[] = [
       {
         toolName: "image_generate",
@@ -166,20 +175,22 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
   it("waits for async task ids discovered after an earlier async completion", async () => {
     resetTaskRegistryForTests();
     const sessionKey = "agent:main:cron:daily-media:run:run-123";
-    const imageTask = createRunningTaskRun({
-      runtime: "cli",
-      taskKind: "image_generation",
-      sourceId: "image_generate:openai",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      scopeKind: "session",
-      runId: "tool:image_generate:run-123",
-      task: "daily image",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-      startedAt: 1,
-      lastEventAt: 1,
-    });
+    const imageTask = requireCreatedTask(
+      createRunningTaskRun({
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:openai",
+        requesterSessionKey: sessionKey,
+        ownerKey: sessionKey,
+        scopeKind: "session",
+        runId: "tool:image_generate:run-123",
+        task: "daily image",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        startedAt: 1,
+        lastEventAt: 1,
+      }),
+    );
     const metas: AsyncStartedToolMeta[] = [
       {
         toolName: "image_generate",
@@ -209,20 +220,22 @@ describe("waitForCompletionRequiredAsyncTasks", () => {
               progressSummary: "Generated 1 image",
               terminalSummary: "Generated 1 image.",
             });
-            const musicTask = createRunningTaskRun({
-              runtime: "cli",
-              taskKind: "music_generation",
-              sourceId: "music_generate:fal",
-              requesterSessionKey: sessionKey,
-              ownerKey: sessionKey,
-              scopeKind: "session",
-              runId: "tool:music_generate:run-456",
-              task: "daily track",
-              deliveryStatus: "not_applicable",
-              notifyPolicy: "silent",
-              startedAt: now,
-              lastEventAt: now,
-            });
+            const musicTask = requireCreatedTask(
+              createRunningTaskRun({
+                runtime: "cli",
+                taskKind: "music_generation",
+                sourceId: "music_generate:fal",
+                requesterSessionKey: sessionKey,
+                ownerKey: sessionKey,
+                scopeKind: "session",
+                runId: "tool:music_generate:run-456",
+                task: "daily track",
+                deliveryStatus: "not_applicable",
+                notifyPolicy: "silent",
+                startedAt: now,
+                lastEventAt: now,
+              }),
+            );
             metas.push({
               toolName: "music_generate",
               asyncStarted: true,
