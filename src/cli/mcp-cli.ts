@@ -306,53 +306,62 @@ async function collectMcpDoctorIssues(params: {
   const issues: McpDoctorIssue[] = [];
   const { name, server } = params;
   const resolved = resolveMcpTransportConfig(name, server);
+  const disabled = server.enabled === false;
   if (server.enabled === false) {
     issues.push(issue("warning", "server is disabled"));
-    return issues;
   }
-  if (!resolved) {
-    issues.push(issue("error", "server transport is invalid"));
-  }
-  if (resolved?.kind === "stdio") {
-    if (!(await commandExists(resolved.command, resolved.cwd, resolved.env))) {
-      issues.push(issue("error", `stdio command not found or not executable: ${resolved.command}`));
+  if (!disabled) {
+    if (!resolved) {
+      issues.push(issue("error", "server transport is invalid"));
     }
-    if (resolved.cwd && !(await directoryExists(resolved.cwd))) {
-      issues.push(issue("error", `stdio cwd does not exist: ${resolved.cwd}`));
-    }
-  }
-  if (resolved?.kind === "http") {
-    if (server.auth === "oauth") {
-      const authStatus = await readMcpOAuthCredentialsStatus({
-        serverName: name,
-        serverUrl: resolved.url,
-      });
-      if (!authStatus.hasTokens) {
+    if (resolved?.kind === "stdio") {
+      if (!(await commandExists(resolved.command, resolved.cwd, resolved.env))) {
         issues.push(
-          issue(
-            "warning",
-            `OAuth credentials are not authorized; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
-          ),
+          issue("error", `stdio command not found or not executable: ${resolved.command}`),
         );
       }
-      const headers = asRecord(server.headers);
-      if (headers && "Authorization" in headers) {
-        issues.push(
-          issue("warning", "OAuth is enabled and the static Authorization header is ignored"),
-        );
+      if (resolved.cwd && !(await directoryExists(resolved.cwd))) {
+        issues.push(issue("error", `stdio cwd does not exist: ${resolved.cwd}`));
       }
     }
-    if (resolved.sslVerify === false) {
-      issues.push(issue("warning", "TLS certificate verification is disabled"));
-    }
-    if (
-      resolved.clientCert &&
-      !(await fileExists(resolveConfiguredPath(resolved.clientCert, "")))
-    ) {
-      issues.push(issue("error", `client certificate file does not exist: ${resolved.clientCert}`));
-    }
-    if (resolved.clientKey && !(await fileExists(resolveConfiguredPath(resolved.clientKey, "")))) {
-      issues.push(issue("error", `client key file does not exist: ${resolved.clientKey}`));
+    if (resolved?.kind === "http") {
+      if (server.auth === "oauth") {
+        const authStatus = await readMcpOAuthCredentialsStatus({
+          serverName: name,
+          serverUrl: resolved.url,
+        });
+        if (!authStatus.hasTokens) {
+          issues.push(
+            issue(
+              "warning",
+              `OAuth credentials are not authorized; run ${formatCliCommand(`openclaw mcp login ${name}`)}`,
+            ),
+          );
+        }
+        const headers = asRecord(server.headers);
+        if (headers && "Authorization" in headers) {
+          issues.push(
+            issue("warning", "OAuth is enabled and the static Authorization header is ignored"),
+          );
+        }
+      }
+      if (resolved.sslVerify === false) {
+        issues.push(issue("warning", "TLS certificate verification is disabled"));
+      }
+      if (
+        resolved.clientCert &&
+        !(await fileExists(resolveConfiguredPath(resolved.clientCert, "")))
+      ) {
+        issues.push(
+          issue("error", `client certificate file does not exist: ${resolved.clientCert}`),
+        );
+      }
+      if (
+        resolved.clientKey &&
+        !(await fileExists(resolveConfiguredPath(resolved.clientKey, "")))
+      ) {
+        issues.push(issue("error", `client key file does not exist: ${resolved.clientKey}`));
+      }
     }
   }
   for (const [field, values] of [

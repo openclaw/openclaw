@@ -394,7 +394,12 @@ describe("mcp cli", () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
 
-      await runMcpCommand(["mcp", "set", "docs", '{"enabled":false}']);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        '{"enabled":false,"env":{"DOCS_API_KEY":"literal"},"headers":{"Authorization":"Bearer literal"}}',
+      ]);
       mockLog.mockClear();
 
       await runMcpCommand(["mcp", "doctor", "--json"]);
@@ -405,7 +410,21 @@ describe("mcp cli", () => {
           {
             name: "docs",
             ok: true,
-            issues: [{ level: "warning", message: "server is disabled" }],
+            issues: expect.arrayContaining([
+              { level: "warning", message: "server is disabled" },
+              expect.objectContaining({
+                level: "warning",
+                message: expect.stringContaining(
+                  "env.DOCS_API_KEY contains a literal sensitive value",
+                ),
+              }),
+              expect.objectContaining({
+                level: "warning",
+                message: expect.stringContaining(
+                  "headers.Authorization contains a literal sensitive value",
+                ),
+              }),
+            ]),
           },
         ],
       });
