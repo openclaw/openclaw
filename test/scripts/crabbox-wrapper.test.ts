@@ -128,6 +128,27 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
   return crabboxPath;
 }
 
+function makeSlowVersionCrabbox(helpText: string): string {
+  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-slow-crabbox-"));
+  tempDirs.push(binDir);
+  const crabboxPath = path.join(binDir, "crabbox");
+
+  const script = [
+    "#!/usr/bin/env node",
+    "const args = process.argv.slice(2);",
+    'if (args[0] === "--version") { setTimeout(() => process.exit(0), 6_000); }',
+    `else if (args[0] === "run" && args[1] === "--help") { process.stdout.write(${JSON.stringify(helpText)}); }`,
+  ].join("\n");
+  writeFileSync(crabboxPath, `${script}\n`, "utf8");
+  writeFileSync(
+    `${crabboxPath}.cmd`,
+    `@echo off\r\n"${process.execPath}" "%~dp0crabbox" %*\r\n`,
+    "utf8",
+  );
+  chmodSync(crabboxPath, 0o755);
+  return binDir;
+}
+
 function shellSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -1535,6 +1556,18 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("selected binary does not advertise provider bogus");
+  });
+
+  it("times out hung sanity probes before rejecting the selected binary", () => {
+    const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
+    const result = runWrapper(helpText, ["--version"], {
+      extraPathEntries: [makeSlowVersionCrabbox(helpText)],
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("version=unknown");
+    expect(result.stderr).toContain("selected binary failed basic --version/--help sanity checks");
   });
 
   it("parses provider choices from the --provider flag help format", () => {
