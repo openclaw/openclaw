@@ -143,7 +143,7 @@ jobs:
       - name: Apply maintainer or trusted-contributor label
         uses: actions/github-script@v9
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}
           script: |
             const login = context.payload.pull_request?.user?.login;
             if (!login) {
@@ -214,7 +214,7 @@ jobs:
       - name: Apply beta-blocker title label
         uses: actions/github-script@v9
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}
           script: |
             const pullRequest = context.payload.pull_request;
             if (!pullRequest) {
@@ -267,7 +267,7 @@ jobs:
       - name: Apply too-many-prs label
         uses: actions/github-script@v9
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}
           script: |
             const pullRequest = context.payload.pull_request;
             if (!pullRequest) {
@@ -856,7 +856,7 @@ jobs:
       - name: Apply beta-blocker title label
         uses: actions/github-script@v9
         with:
-          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token || github.token }}
           script: |
             const issue = context.payload.issue;
             if (!issue || issue.pull_request) {
