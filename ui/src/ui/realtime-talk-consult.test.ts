@@ -310,6 +310,72 @@ describe("RealtimeTalkSession consult handoff", () => {
     });
   });
 
+  it.each([
+    {
+      waitResult: { runId: "run-1", status: "error", error: "provider authentication failed" },
+      expected: "provider authentication failed",
+    },
+    {
+      waitResult: {
+        runId: "run-1",
+        status: "timeout",
+        stopReason: "rpc",
+        error: "aborted by operator",
+      },
+      expected: "aborted by operator",
+    },
+    {
+      waitResult: {
+        runId: "run-1",
+        status: "timeout",
+        stopReason: "timeout",
+        error: "agent runtime timeout",
+      },
+      expected: "agent runtime timeout",
+    },
+  ])("submits $expected from terminal empty-final waits", async ({ waitResult, expected }) => {
+    let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.toolCall") {
+        setImmediate(() => {
+          listener?.({
+            event: "chat",
+            payload: {
+              runId: "run-1",
+              state: "final",
+              message: undefined,
+            },
+          });
+        });
+        return { runId: "run-1" };
+      }
+      if (method === "agent.wait") {
+        return waitResult;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const addEventListener = vi.fn((callback: typeof listener) => {
+      listener = callback;
+      return () => {
+        listener = undefined;
+      };
+    });
+    const submit = vi.fn();
+
+    await submitRealtimeTalkConsult({
+      ctx: {
+        client: { request, addEventListener },
+        sessionKey: "agent:main:main",
+        callbacks: {},
+      } as never,
+      callId: "call-1",
+      args: { question: "Check status" },
+      submit,
+    });
+
+    expect(submit).toHaveBeenCalledWith("call-1", { error: expected });
+  });
+
   it("emits Talk progress from chat tool events while waiting for the consult result", async () => {
     let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
     const request = vi.fn(async (method: string) => {

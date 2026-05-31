@@ -197,6 +197,17 @@ type ChatPayload = {
   message?: unknown;
 };
 
+type AgentWaitResult = {
+  status?: string;
+  error?: string;
+  stopReason?: string;
+  endedAt?: number;
+  pendingError?: boolean;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
+  aborted?: boolean;
+};
+
 function extractTextFromMessage(message: unknown): string {
   if (!message || typeof message !== "object") {
     return "";
@@ -216,6 +227,30 @@ function extractTextFromMessage(message: unknown): string {
     })
     .filter(Boolean);
   return parts.join("\n\n").trim();
+}
+
+function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error | undefined {
+  if (!result) {
+    return undefined;
+  }
+  const message = result.error?.trim();
+  if (result.status === "error") {
+    return new Error(message || "OpenClaw tool call failed");
+  }
+  if (result.status !== "timeout" || result.pendingError) {
+    return undefined;
+  }
+  const stopReason = result.stopReason?.trim();
+  const hasTerminalTimeoutMetadata =
+    result.endedAt !== undefined ||
+    result.aborted === true ||
+    stopReason === "timeout" ||
+    stopReason === "timed_out" ||
+    (result.timeoutPhase === "provider" && result.providerStarted === true);
+  if (stopReason || hasTerminalTimeoutMetadata) {
+    return new Error(message || "OpenClaw tool call timed out");
+  }
+  return undefined;
 }
 
 function waitForChatResult(params: {
@@ -262,12 +297,20 @@ function waitForChatResult(params: {
       }
       emptyFinalWaitStarted = true;
       void params.client
-        .request<{ status?: string; error?: string }>("agent.wait", {
+        .request<AgentWaitResult>("agent.wait", {
           runId: params.runId,
           timeoutMs: params.timeoutMs,
         })
         .then((result) => {
-          if (settled || result?.status === "timeout") {
+          if (settled) {
+            return;
+          }
+          const waitError = getTerminalAgentWaitError(result);
+          if (waitError) {
+            settleReject(waitError);
+            return;
+          }
+          if (result?.status === "timeout") {
             return;
           }
           settleResolve("OpenClaw finished with no text.");
