@@ -21,6 +21,9 @@ function installStateRuntime(): void {
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => "",
+      openChannelIngressQueue: (() => {
+        throw new Error("openChannelIngressQueue is not used by voice-call tests");
+      }) as never,
       openKeyedStore: (() => {
         throw new Error("openKeyedStore is not used by voice-call event tests");
       }) as never,

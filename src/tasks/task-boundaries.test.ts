@@ -35,6 +35,7 @@ const TASK_REGISTRY_ALLOWED_IMPORTERS = new Set([
   "tasks/runtime-internal.ts",
   "tasks/task-owner-access.ts",
   "tasks/task-status-access.ts",
+  "agents/embedded-agent-runner/run/attempt.async-tasks.ts",
 ]);
 
 let sources: TaskBoundarySource[] = [];
