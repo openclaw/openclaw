@@ -208,10 +208,17 @@ describe("resolveAuthProfileOrder", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        "fixture-provider:primary": {
+        "fixture-provider:key": {
           type: "api_key",
           provider: "fixture-provider",
           key: "sk-primary",
+        },
+        "fixture-provider:oauth": {
+          type: "oauth",
+          provider: "fixture-provider",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
         },
       },
       order: {
@@ -224,7 +231,7 @@ describe("resolveAuthProfileOrder", () => {
       provider: "fixture-provider",
     });
 
-    expect(order).toStrictEqual(["fixture-provider:primary"]);
+    expect(order).toStrictEqual(["fixture-provider:oauth", "fixture-provider:key"]);
   });
 
   it("does not fall back past an explicit configured auth order", async () => {

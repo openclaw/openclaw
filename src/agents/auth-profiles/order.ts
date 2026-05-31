@@ -301,6 +301,7 @@ export function resolveAuthProfileOrder(params: {
       now,
     }).eligible;
   let filtered = baseOrder.filter(isValidProfile);
+  let repairedFallbackToStoreProfiles = false;
 
   // Repair stored-order and config-profile drift from older setup flows:
   // bare config auth.order is a hard constraint, but configured profile ids
@@ -312,6 +313,7 @@ export function resolveAuthProfileOrder(params: {
     (explicitOrderFromStore || explicitProfiles.length > 0)
   ) {
     filtered = storeProfiles.filter(isValidProfile);
+    repairedFallbackToStoreProfiles = true;
   }
 
   const deduped = dedupeProfileIds(filtered);
@@ -319,7 +321,7 @@ export function resolveAuthProfileOrder(params: {
   // If user specified explicit order (store override or config), respect it
   // exactly, but still apply cooldown sorting to avoid repeatedly selecting
   // known-bad/rate-limited keys as the first candidate.
-  if (explicitOrder && explicitOrder.length > 0) {
+  if (explicitOrder && explicitOrder.length > 0 && !repairedFallbackToStoreProfiles) {
     // ...but still respect cooldown tracking to avoid repeatedly selecting a
     // known-bad/rate-limited key as the first candidate.
     const available: string[] = [];
