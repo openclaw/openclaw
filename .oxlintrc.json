@@ -219,13 +219,6 @@
   ],
   "overrides": [
     {
-      "files": ["src/security/**"],
-      "rules": {
-        "eslint/no-warning-comments": "off",
-        "oxc/no-map-spread": "off"
-      }
-    },
-    {
       "files": [
         "**/*.test.ts",
         "**/*.test.tsx",

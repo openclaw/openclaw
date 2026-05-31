@@ -95,6 +95,8 @@ export interface ChannelsConfig {
    * Channel sections are plugin-owned and keyed by arbitrary channel ids.
    * Keep the lookup permissive so augmented channel configs remain ergonomic at call sites.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // Plugin-owned channel sections are open-world config; narrowing this breaks
+  // SDK config-write helpers that accept account-shaped channel records.
+  // oxlint-disable-next-line typescript/no-explicit-any
   [key: string]: any;
 }

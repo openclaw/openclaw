@@ -297,6 +297,28 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it.each(["/new", "/RESET", "/reset check status"] as const)(
+    "uses backend admin authority for %s gateway commands",
+    async (message) => {
+      await withTempStore(async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message, sessionKey: "agent:main:main" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        expect(request.clientName).toBe("gateway-client");
+        expect(request.mode).toBe("backend");
+        expect(request.scopes).toEqual(["operator.admin"]);
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params.message).toBe(message);
+      });
+    },
+  );
+
   it("uses an explicit session key as the gateway session selector", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();

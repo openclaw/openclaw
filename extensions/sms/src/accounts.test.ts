@@ -169,6 +169,19 @@ describe("SMS account config", () => {
     });
   });
 
+  it("coerces numeric allowFrom entries accepted by the config schema", () => {
+    const parsed = SmsConfigSchema.parse({
+      accountSid: "AC123",
+      authToken: "token",
+      fromNumber: "+15550001111",
+      allowFrom: [15551234567],
+    });
+
+    expect(resolveSmsAccount({ channels: { sms: parsed } })).toMatchObject({
+      allowFrom: ["+15551234567"],
+    });
+  });
+
   it("discovers env-only SMS credentials as the implicit default account", () => {
     process.env.TWILIO_ACCOUNT_SID = "AC-env";
     process.env.TWILIO_AUTH_TOKEN = "env-token";

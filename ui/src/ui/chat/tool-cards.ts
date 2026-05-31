@@ -238,17 +238,27 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
   return normalized.slice(0, 120);
 }
 
-function findLatestCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
-  for (let i = cards.length - 1; i >= 0; i--) {
-    const card = cards[i];
-    if (!card) {
-      continue;
-    }
-    if (card.id === id || (card.name === name && !card.outputText)) {
+function findFirstUnmatchedCard(
+  cards: ToolCard[],
+  id: string,
+  name: string,
+  fallbackMatchedCards: WeakSet<ToolCard>,
+): ToolCard | undefined {
+  let nameOnlyCandidate: ToolCard | undefined;
+  for (const card of cards) {
+    if (card.id === id) {
       return card;
     }
+    if (
+      !nameOnlyCandidate &&
+      card.name === name &&
+      card.outputText === undefined &&
+      !fallbackMatchedCards.has(card)
+    ) {
+      nameOnlyCandidate = card;
+    }
   }
-  return undefined;
+  return nameOnlyCandidate;
 }
 
 export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
@@ -256,6 +266,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const cards: ToolCard[] = [];
+  const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
 
   for (let index = 0; index < content.length; index++) {
@@ -280,11 +291,12 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
     if (kind === "toolresult" || kind === "tool_result") {
       const name = typeof item.name === "string" ? item.name : "tool";
       const cardId = resolveToolCardId(item, m, index, prefix);
-      const existing = findLatestCard(cards, cardId, name);
+      const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
+        fallbackMatchedCards.add(existing);
         existing.outputText = text;
         existing.preview = preview;
         if (isError !== undefined) {

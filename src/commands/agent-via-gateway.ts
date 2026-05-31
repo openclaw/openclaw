@@ -214,6 +214,10 @@ function isControlCommandThatMustNotFallback(opts: Pick<AgentCliOpts, "message">
   return normalized === "/compact" || normalized.startsWith("/compact ");
 }
 
+function isSessionResetCommand(message: string): boolean {
+  return /^\/(?:new|reset)(?:\s|$)/i.test(message.trim());
+}
+
 function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
   return isGatewayTransportError(err);
 }
@@ -625,7 +629,8 @@ async function agentViaGatewayCommand(
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const hasModelOverride = Boolean(modelOverride);
-  const gatewayIdentity: AgentGatewayCallIdentity = hasModelOverride
+  const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
+  const gatewayIdentity: AgentGatewayCallIdentity = needsAdminGatewayIdentity
     ? {
         clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         mode: GATEWAY_CLIENT_MODES.BACKEND,
