@@ -586,6 +586,12 @@ describe("promoteAuthProfileInOrder", () => {
         existingProfileId,
         configOnlyProfileId,
       ]);
+      saveAuthProfileStore(loadAuthProfileStoreForRuntime(agentDir), agentDir);
+      expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai"]).toEqual([
+        newProfileId,
+        existingProfileId,
+        configOnlyProfileId,
+      ]);
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;

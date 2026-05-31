@@ -299,11 +299,11 @@ export function resolveAuthProfileOrder(params: {
     }).eligible;
   let filtered = baseOrder.filter(isValidProfile);
 
-  // Repair config/store profile-id drift from older setup flows:
-  // if configured profile ids no longer exist in auth-profiles.json, scan the
-  // provider's stored credentials and use any valid entries.
+  // Repair explicit order drift from older setup flows or deleted credentials:
+  // order state can also name config-only profiles, so only fall back when every
+  // ordered id is missing from the persisted credential store and none is usable.
   const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);
-  if (filtered.length === 0 && explicitProfiles.length > 0 && allBaseProfilesMissing) {
+  if (filtered.length === 0 && allBaseProfilesMissing) {
     filtered = storeProfiles.filter(isValidProfile);
   }
 

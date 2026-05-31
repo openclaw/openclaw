@@ -97,9 +97,6 @@ export async function promoteAuthProfileInOrder(params: {
   const providerKey = resolveProviderIdForAuth(params.provider);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
-    ...(params.createFromOrder
-      ? { saveOptions: { preserveOrderProfileIds: params.createFromOrder } }
-      : {}),
     updater: (store) => {
       const profile = store.profiles[params.profileId];
       if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
