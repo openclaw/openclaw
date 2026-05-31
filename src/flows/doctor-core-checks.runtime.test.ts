@@ -683,6 +683,32 @@ describe("doctor provider catalog projection checks", () => {
     );
   });
 
+  it("reports falsy non-empty provider catalog results", async () => {
+    mocks.resolvePluginProviders.mockReturnValueOnce([
+      {
+        id: "mockplugin",
+        pluginId: "mockplugin",
+        label: "Mock",
+        auth: [],
+        staticCatalog: {
+          order: "simple",
+          run: async () => false as never,
+        },
+      },
+    ]);
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        path: "plugins.entries.mockplugin",
+        target: "mockplugin",
+        message: "Provider catalog mockplugin result is invalid during doctor validation.",
+        requirement: "result must be an object",
+      }),
+    );
+  });
+
   it("reports invalid provider catalog orders without aborting doctor", async () => {
     mocks.resolvePluginProviders.mockReturnValueOnce([
       {

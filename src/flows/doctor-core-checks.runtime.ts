@@ -231,7 +231,7 @@ function collectProviderCatalogResultFindings(params: {
   pluginId?: string;
   result: unknown;
 }): HealthFinding[] {
-  if (!params.result) {
+  if (params.result == null) {
     return [];
   }
   if (!isReadableRecord(params.result)) {
