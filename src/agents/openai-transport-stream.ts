@@ -1203,7 +1203,7 @@ function convertResponsesMessages(
               : undefined;
           output.push({
             type: "function_call",
-            id: itemId,
+            ...(itemId ? { id: itemId } : {}),
             call_id: callId,
             name: block.name,
             arguments:
