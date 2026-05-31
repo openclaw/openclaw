@@ -336,6 +336,7 @@ export function resolvePluginProviders(params: {
   mode?: "runtime" | "setup";
   includeUntrustedWorkspacePlugins?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  skipIfLoadInFlight?: boolean;
 }): ProviderPlugin[] {
   const { env, workspaceDir, snapshot } = resolveProviderMetadataLookup(params);
   const base = resolvePluginProviderLoadBase({ ...params, workspaceDir, env }, snapshot);
@@ -344,12 +345,18 @@ export function resolvePluginProviders(params: {
     if (!loadState) {
       return [];
     }
+    if (params.skipIfLoadInFlight && isPluginRegistryLoadInFlight(loadState.loadOptions)) {
+      return [];
+    }
     const registry = loadOpenClawPlugins(loadState.loadOptions);
     return registry.providers.map((entry) =>
       Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
     );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base, snapshot);
+  if (params.skipIfLoadInFlight && isPluginRegistryLoadInFlight(loadState.loadOptions)) {
+    return [];
+  }
   const registry =
     loadState.loadOptions.onlyPluginIds?.length === 0
       ? undefined
