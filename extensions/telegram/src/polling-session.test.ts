@@ -3,14 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChannelIngressQueue } from "../../../src/channels/message/ingress-queue.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../src/infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../../src/state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests as createChannelIngressQueue,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
   openOpenClawStateDatabase,
-} from "../../../src/state/openclaw-state-db.js";
+  type OpenClawStateKyselyDatabaseForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js";
@@ -105,7 +106,10 @@ type WorkerPollErrorListener = (message: {
 type WorkerMessageListener = (message: TelegramIngressWorkerMessage) => void;
 type AsyncVoidFn = () => Promise<void>;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
-type TelegramPollingTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
+type TelegramPollingTestDatabase = Pick<
+  OpenClawStateKyselyDatabaseForTests,
+  "channel_ingress_events"
+>;
 
 const POLLING_TEST_WATCHDOG_INTERVAL_MS = 30_000;
 
@@ -115,7 +119,7 @@ function installTelegramIngressQueueRuntime(resolveStateDir: () => string): void
       resolveStateDir,
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => createChannelIngressQueue({ ...(options ?? {}), channelId: "telegram" }),
+      ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
     },
   } as TelegramRuntime);
 }

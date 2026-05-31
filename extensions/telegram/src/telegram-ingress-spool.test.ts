@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests as createChannelIngressQueue,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { createChannelIngressQueue } from "../../../src/channels/message/ingress-queue.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../src/state/openclaw-state-db.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
@@ -25,7 +27,7 @@ function installTelegramIngressQueueRuntime(resolveStateDir: () => string): void
       resolveStateDir,
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-      ) => createChannelIngressQueue({ ...(options ?? {}), channelId: "telegram" }),
+      ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
     },
   } as TelegramRuntime);
 }

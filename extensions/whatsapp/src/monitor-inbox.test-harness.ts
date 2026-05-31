@@ -136,9 +136,9 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
 });
 
 vi.mock("./runtime.js", async () => {
-  const { createChannelIngressQueue } = await vi.importActual<
-    typeof import("../../../src/channels/message/ingress-queue.js")
-  >("../../../src/channels/message/ingress-queue.js");
+  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")
+  >("openclaw/plugin-sdk/plugin-state-test-runtime");
   return {
     getWhatsAppRuntime: () => ({
       state: {
@@ -146,7 +146,7 @@ vi.mock("./runtime.js", async () => {
         openKeyedStore: pluginRuntimeMocks.openKeyedStore,
         openChannelIngressQueue: (
           options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-        ) => createChannelIngressQueue({ ...(options ?? {}), channelId: "whatsapp" }),
+        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
       },
     }),
     setWhatsAppRuntime: vi.fn(),

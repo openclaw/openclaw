@@ -21,6 +21,11 @@ function installStateRuntime(): void {
       }) as never,
       openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
         createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openChannelIngressQueue: (() => {
+        throw new Error(
+          "openChannelIngressQueue is not used by voice-call webhook lifecycle tests",
+        );
+      }) as never,
     },
   });
 }

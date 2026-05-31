@@ -186,8 +186,8 @@ function affectedRows(result: { numAffectedRows?: bigint }): number {
   return Number(result.numAffectedRows ?? 0n);
 }
 
-function parseJson<T>(value: string): T {
-  return JSON.parse(value) as T;
+function parseJson(value: string): unknown {
+  return JSON.parse(value) as unknown;
 }
 
 function baseRecord<TPayload, TMetadata>(
@@ -198,13 +198,13 @@ function baseRecord<TPayload, TMetadata>(
     channelId: row.channel_id,
     accountId: row.account_id,
     queueName: row.queue_name,
-    payload: parseJson<TPayload>(row.payload_json),
-    ...(row.metadata_json === null ? {} : { metadata: parseJson<TMetadata>(row.metadata_json) }),
-    receivedAt: Number(row.received_at),
-    updatedAt: Number(row.updated_at),
+    payload: parseJson(row.payload_json) as TPayload,
+    ...(row.metadata_json === null ? {} : { metadata: parseJson(row.metadata_json) as TMetadata }),
+    receivedAt: row.received_at,
+    updatedAt: row.updated_at,
     ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
-    attempts: Number(row.attempts),
-    ...(row.last_attempt_at === null ? {} : { lastAttemptAt: Number(row.last_attempt_at) }),
+    attempts: row.attempts,
+    ...(row.last_attempt_at === null ? {} : { lastAttemptAt: row.last_attempt_at }),
     ...(row.last_error === null ? {} : { lastError: row.last_error }),
   };
 }
@@ -217,7 +217,7 @@ function claimedRecord<TPayload, TMetadata>(
     claim: {
       token: row.claim_token ?? "",
       ownerId: row.claim_owner ?? "",
-      claimedAt: Number(row.claimed_at ?? 0),
+      claimedAt: row.claimed_at ?? 0,
     },
   };
 }
@@ -230,10 +230,10 @@ function completedRecord<TCompletedMetadata>(
     channelId: row.channel_id,
     accountId: row.account_id,
     queueName: row.queue_name,
-    completedAt: Number(row.completed_at ?? row.updated_at),
+    completedAt: row.completed_at ?? row.updated_at,
     ...(row.completed_metadata_json === null
       ? {}
-      : { metadata: parseJson<TCompletedMetadata>(row.completed_metadata_json) }),
+      : { metadata: parseJson(row.completed_metadata_json) as TCompletedMetadata }),
   };
 }
 
@@ -243,7 +243,7 @@ function failedRecord(row: ChannelIngressRow): ChannelIngressQueueFailedRecord {
     channelId: row.channel_id,
     accountId: row.account_id,
     queueName: row.queue_name,
-    failedAt: Number(row.failed_at ?? row.updated_at),
+    failedAt: row.failed_at ?? row.updated_at,
     reason: row.failed_reason ?? "failed",
     ...(row.last_error === null ? {} : { message: row.last_error }),
   };

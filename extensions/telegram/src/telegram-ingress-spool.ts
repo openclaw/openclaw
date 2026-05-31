@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import {
-  type ChannelIngressQueue,
-  type ChannelIngressQueueClaim,
-  type ChannelIngressQueueClaimRef,
-  type ChannelIngressQueueRecord,
+import type {
+  ChannelIngressQueue,
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueClaimRef,
+  ChannelIngressQueueRecord,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { getTelegramRuntime } from "./runtime.js";
