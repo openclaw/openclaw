@@ -16,7 +16,11 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createEmptyPluginRegistry,
+  createMockPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerEventProjector,
@@ -106,6 +110,7 @@ afterEach(async () => {
   resetDiagnosticEventsForTest();
   resetGlobalHookRunner();
   resetCodexRateLimitCacheForTests();
+  setActivePluginRegistry(createEmptyPluginRegistry());
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const tempDir of tempDirs) {
@@ -1540,6 +1545,74 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.toolName).toBe("bash");
     expect(toolResultContentItem.toolCallId).toBe("cmd-1");
     expect(toolResultContentItem.content).toBe("ok");
+  });
+
+  it("pipes Codex-native bash results through tool-result middleware (tokenjuice)", async () => {
+    // Regression test for https://github.com/OpenClaw/openclaw/issues/88537
+    // The tokenjuice middleware was only applied to OpenClaw dynamic tool calls;
+    // Codex-native bash/commandExecution results bypassed compaction entirely.
+    const registry = createEmptyPluginRegistry();
+    const middleware = vi.fn(
+      async (event: {
+        result: { content: Array<{ type: string; text?: string }> };
+        toolName: string;
+      }) => ({
+        result: {
+          ...event.result,
+          content: [{ type: "text" as const, text: `[compacted:${event.toolName}]` }],
+        },
+      }),
+    );
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const projector = await createProjector();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-tokenjuice",
+          command: "cat large-output.txt",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "lots and lots of raw bash output",
+          exitCode: 0,
+          durationMs: 50,
+        },
+      }),
+    );
+    await projector.handleNotification(turnCompleted());
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    // The tool-result middleware must have been invoked for the native bash call.
+    expect(middleware).toHaveBeenCalledTimes(1);
+    const middlewareEvent = requireRecord(middleware.mock.calls[0]?.[0], "middleware event") as {
+      toolName: string;
+      result: { content: Array<{ type: string; text?: string }> };
+    };
+    expect(middlewareEvent.toolName).toBe("bash");
+
+    // The compacted text must appear in the transcript message, not the raw output.
+    const toolResultMsg = result.messagesSnapshot.find(
+      (m) => (m as { role: string }).role === "toolResult",
+    );
+    const toolResultRecord = requireRecord(toolResultMsg, "tool result message");
+    const contentItems = requireArray(toolResultRecord.content, "tool result content");
+    const firstItem = requireRecord(contentItems[0], "tool result content item");
+    expect(firstItem.content).toBe("[compacted:bash]");
+    expect(firstItem.toolCallId).toBe("cmd-tokenjuice");
   });
 
   it("synthesizes native tool progress from turn completion snapshots", async () => {

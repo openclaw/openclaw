@@ -1,5 +1,6 @@
 import {
   classifyAgentHarnessTerminalOutcome,
+  createAgentToolResultMiddlewareRunner,
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
   formatErrorMessage,
@@ -191,12 +192,24 @@ export class CodexAppServerEventProjector {
   private completedCompactionCount = 0;
   private latestRateLimits: JsonValue | undefined;
 
+  private readonly nativeToolMiddlewareRunner: ReturnType<
+    typeof createAgentToolResultMiddlewareRunner
+  >;
+
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
-  ) {}
+  ) {
+    this.nativeToolMiddlewareRunner = createAgentToolResultMiddlewareRunner({
+      runtime: "codex",
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      runId: params.runId,
+    });
+  }
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
@@ -627,7 +640,7 @@ export class CodexAppServerEventProjector {
     this.emitStandardItemEvent({ phase: "end", item });
     this.emitNormalizedToolItemEvent({ phase: "result", item });
     this.recordNativeToolTranscriptCall(item);
-    this.recordNativeToolTranscriptResult(item);
+    await this.recordNativeToolTranscriptResult(item);
     this.emitToolResultSummary(item);
     this.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -731,7 +744,7 @@ export class CodexAppServerEventProjector {
       this.recordToolMeta(item);
       this.emitSnapshotOnlyNativeToolProgress(item);
       this.recordNativeToolTranscriptCall(item);
-      this.recordNativeToolTranscriptResult(item);
+      await this.recordNativeToolTranscriptResult(item);
       this.emitAfterToolCallObservation(item);
       this.emitToolResultSummary(item);
       this.emitToolResultOutput(item);
@@ -1363,7 +1376,7 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private recordNativeToolTranscriptResult(item: CodexThreadItem | undefined): void {
+  private async recordNativeToolTranscriptResult(item: CodexThreadItem | undefined): Promise<void> {
     if (!item || !shouldRecordNativeToolTranscript(item)) {
       return;
     }
@@ -1371,11 +1384,35 @@ export class CodexAppServerEventProjector {
     if (!name) {
       return;
     }
+    const rawText = itemTranscriptResultText(item, this.toolResultOutputTextByItem);
+    const isError = isNonSuccessItemStatus(itemStatus(item));
+    // Pipe native tool results (bash/apply_patch/mcp) through the tokenjuice
+    // middleware runner so compaction reducers fire for Codex-native tools the
+    // same way they do for OpenClaw dynamic tools.  The runner is a no-op when
+    // no middleware is registered.
+    const middlewareResult = await this.nativeToolMiddlewareRunner.applyToolResultMiddleware({
+      threadId: this.threadId,
+      turnId: this.turnId,
+      toolCallId: item.id,
+      toolName: name,
+      args: normalizeToolTranscriptArguments(itemToolArgs(item)),
+      isError,
+      result: {
+        content: rawText ? [{ type: "text" as const, text: rawText }] : [],
+        details: {},
+      },
+    });
+    type TextBlock = { type: "text"; text: string };
+    const compactedText =
+      (middlewareResult.content as Array<{ type: string; text?: string }>)
+        .filter((c): c is TextBlock => c.type === "text" && typeof c.text === "string")
+        .map((c) => c.text)
+        .join("") || rawText;
     this.recordToolTranscriptResult({
       id: item.id,
       name,
-      text: itemTranscriptResultText(item, this.toolResultOutputTextByItem),
-      isError: isNonSuccessItemStatus(itemStatus(item)),
+      text: compactedText,
+      isError,
     });
   }
 
