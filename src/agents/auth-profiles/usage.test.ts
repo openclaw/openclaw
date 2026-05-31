@@ -660,8 +660,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
     reason: "rate_limit" | "billing" | "auth_permanent";
     cfg?: OpenClawConfig;
   }): Promise<void> {
-    vi.useFakeTimers();
-    vi.setSystemTime(params.now);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
     try {
       await markAuthProfileFailure({
         store: params.store,
@@ -670,7 +669,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         cfg: params.cfg,
       });
     } finally {
-      vi.useRealTimers();
+      dateNowSpy.mockRestore();
     }
   }
 
@@ -931,7 +930,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         reason: params.reason ?? "rate_limit",
       });
     } finally {
-      vi.useRealTimers();
+      dateNowSpy.mockRestore();
     }
   }
 
