@@ -10,7 +10,7 @@ import {
   loadOpenClawPlugins,
   type PluginLoadOptions,
 } from "./loader.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { hasExplicitPluginIdScope } from "./plugin-scope.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
@@ -294,7 +294,7 @@ export function isPluginProvidersLoadInFlight(
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
   const snapshot =
     params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
+    resolvePluginMetadataSnapshot({
       config: params.config ?? {},
       workspaceDir,
       env,
@@ -331,7 +331,7 @@ export function resolvePluginProviders(params: {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
   const snapshot =
     params.pluginMetadataSnapshot ??
-    loadPluginMetadataSnapshot({
+    resolvePluginMetadataSnapshot({
       config: params.config ?? {},
       workspaceDir,
       env,
