@@ -509,6 +509,14 @@ export function runAgentAttempt(params: {
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
+    const mutableCliSessionStore =
+      params.sessionKey && params.sessionStore && params.storePath
+        ? {
+            sessionKey: params.sessionKey,
+            sessionStore: params.sessionStore,
+            storePath: params.storePath,
+          }
+        : undefined;
     const resolveReusableCliSessionBinding = async () => {
       if (
         !isClaudeCliProvider(cliExecutionProvider) ||
@@ -525,21 +533,16 @@ export function runAgentAttempt(params: {
         `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
       );
 
-      if (params.sessionKey && params.sessionStore && params.storePath) {
+      if (mutableCliSessionStore) {
         params.sessionEntry =
           (await clearCliSessionInStore({
             provider: cliExecutionProvider,
-            sessionKey: params.sessionKey,
-            sessionStore: params.sessionStore,
-            storePath: params.storePath,
+            ...mutableCliSessionStore,
           })) ?? params.sessionEntry;
       }
 
       return undefined;
     };
-    const canClearCliSessionBeforeRetry = Boolean(
-      params.sessionKey && params.sessionStore && params.storePath,
-    );
     const runCliWithSession = (
       nextCliSessionId: string | undefined,
       activeCliSessionBinding = cliSessionBinding,
@@ -581,28 +584,21 @@ export function runAgentAttempt(params: {
         toolsAllow: params.opts.toolsAllow,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
-        ...(canClearCliSessionBeforeRetry
+        ...(mutableCliSessionStore
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
-                if (
-                  retry.sessionId !== activeCliSessionBinding?.sessionId ||
-                  !params.sessionKey ||
-                  !params.sessionStore ||
-                  !params.storePath
-                ) {
+                if (retry.sessionId !== activeCliSessionBinding?.sessionId) {
                   return false;
                 }
 
                 log.warn(
-                  `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
+                  `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
                 );
 
                 params.sessionEntry =
                   (await clearCliSessionInStore({
                     provider: cliExecutionProvider,
-                    sessionKey: params.sessionKey,
-                    sessionStore: params.sessionStore,
-                    storePath: params.storePath,
+                    ...mutableCliSessionStore,
                   })) ?? params.sessionEntry;
                 return true;
               },
@@ -617,20 +613,16 @@ export function runAgentAttempt(params: {
           isClaudeCliProvider(cliExecutionProvider) &&
           shouldClearReusedCliSessionAfterError(err) &&
           activeCliSessionBinding?.sessionId &&
-          params.sessionKey &&
-          params.sessionStore &&
-          params.storePath
+          mutableCliSessionStore
         ) {
           log.warn(
-            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
+            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
           );
 
           params.sessionEntry =
             (await clearCliSessionInStore({
               provider: cliExecutionProvider,
-              sessionKey: params.sessionKey,
-              sessionStore: params.sessionStore,
-              storePath: params.storePath,
+              ...mutableCliSessionStore,
             })) ?? params.sessionEntry;
         }
         throw err;

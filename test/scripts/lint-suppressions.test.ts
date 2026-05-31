@@ -108,7 +108,6 @@ function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
     "git",
     [
       "grep",
-      "--cached",
       "-n",
       "-E",
       String.raw`(oxlint|eslint)-disable(-next-line)?[[:space:]]+[@/[:alnum:]_-]+`,
