@@ -219,12 +219,14 @@ class TalkModeManager internal constructor(
       }
     }
 
+  /** Updates the chat session used for TalkMode turns and wake-command replies. */
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
     mainSessionKey = trimmed
   }
 
+  /** Starts or stops continuous realtime TalkMode capture. */
   fun setEnabled(enabled: Boolean) {
     if (_isEnabled.value == enabled) return
     _isEnabled.value = enabled
@@ -237,6 +239,7 @@ class TalkModeManager internal constructor(
     }
   }
 
+  /** Starts a push-to-talk capture session for gateway node.invoke callers. */
   suspend fun beginPushToTalk(): TalkPttStartPayload {
     if (!isConnected()) {
       _statusText.value = "Gateway not connected"
@@ -282,6 +285,7 @@ class TalkModeManager internal constructor(
     return TalkPttStartPayload(captureId = captureId)
   }
 
+  /** Stops push-to-talk capture and queues the transcript for gateway chat. */
   suspend fun endPushToTalk(): TalkPttStopPayload {
     val captureId = activePttCaptureId ?: UUID.randomUUID().toString()
     if (activePttCaptureId == null) {
@@ -316,6 +320,7 @@ class TalkModeManager internal constructor(
     return finishPushToTalk(TalkPttStopPayload(captureId = captureId, transcript = transcript, status = "queued"))
   }
 
+  /** Cancels push-to-talk capture without sending the current transcript. */
   suspend fun cancelPushToTalk(): TalkPttStopPayload {
     val captureId = activePttCaptureId ?: UUID.randomUUID().toString()
     if (activePttCaptureId == null) {
@@ -332,6 +337,7 @@ class TalkModeManager internal constructor(
     return finishPushToTalk(TalkPttStopPayload(captureId = captureId, transcript = null, status = "cancelled"))
   }
 
+  /** Runs a bounded one-shot PTT turn that auto-stops on silence or timeout. */
   suspend fun runPushToTalkOnce(maxDurationMs: Long = 12_000L): TalkPttStopPayload {
     if (pttCompletion != null) {
       cancelPushToTalk()
@@ -399,6 +405,7 @@ class TalkModeManager internal constructor(
   /** When true, play TTS for all final chat responses (even ones we didn't initiate). */
   @Volatile var ttsOnAllResponses = false
 
+  /** Plays one text response through the configured Android/TalkMode TTS output. */
   fun playTtsForText(text: String) {
     val playbackToken = playbackGeneration.incrementAndGet()
     cancelActivePlayback()
@@ -410,6 +417,7 @@ class TalkModeManager internal constructor(
     }
   }
 
+  /** Routes gateway talk/chat events into realtime playback, pending PTT turns, and TTS. */
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -501,6 +509,7 @@ class TalkModeManager internal constructor(
     handleGatewayEvent("talk.event", realtimeTranscriptPayload(sessionId = sessionId, role = "assistant", text = assistantText))
   }
 
+  /** Enables or disables local assistant audio playback and stops active audio when disabled. */
   fun setPlaybackEnabled(enabled: Boolean) {
     if (playbackEnabled == enabled) return
     playbackEnabled = enabled
@@ -510,10 +519,12 @@ class TalkModeManager internal constructor(
     }
   }
 
+  /** Reloads TalkMode voice/TTS settings from the gateway. */
   suspend fun refreshConfig() {
     reloadConfig()
   }
 
+  /** Speaks a chat assistant reply when playback is enabled. */
   suspend fun speakAssistantReply(text: String) {
     if (!playbackEnabled) return
     val playbackToken = playbackGeneration.incrementAndGet()
