@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
@@ -15,7 +16,6 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const log = createSubsystemLogger("llm-slug-generator");
 const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
@@ -73,6 +73,9 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,
       cleanupBundleMcpOnRunEnd: true,
+      // Internal helper run: route failures lane-local so an upstream 400/billing
+      // here cannot poison the shared profile (#71709).
+      authProfileFailurePolicy: "local",
     });
 
     // Extract text from payloads

@@ -8,24 +8,115 @@ const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
 const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
+const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
+  process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
-  `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=4096`.trim();
+  `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
+
+function listPackageDtsOutputsFromExports({ packageDir, outputPrefix }) {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "packages", packageDir, "package.json"), "utf8"),
+  );
+  return Object.entries(packageJson.exports ?? {})
+    .flatMap(([exportKey, value]) => {
+      const entry =
+        exportKey === "." ? "index" : exportKey.startsWith("./") ? exportKey.slice(2) : "";
+      const importPath =
+        value && typeof value === "object" && !Array.isArray(value) ? value.import : value;
+      if (!entry || entry.includes("..") || typeof importPath !== "string") {
+        return [];
+      }
+      if (!importPath.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+        return [];
+      }
+      return [`${outputPrefix}/${entry}.d.ts`];
+    })
+    .toSorted((a, b) => a.localeCompare(b));
+}
 
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
   "src/auto-reply",
+  "packages/llm-core/src",
+  "packages/markdown-core/src",
+  "packages/media-core/src",
+  "packages/model-catalog-core/src",
   "packages/memory-host-sdk/src",
+  "packages/media-generation-core/src",
+  "packages/media-understanding-common/src",
+  "packages/normalization-core/src",
+  "packages/acp-core/src",
+  "packages/terminal-core/src",
   "src/video-generation/dashscope-compatible.ts",
   "src/video-generation/types.ts",
   "src/types",
 ];
 const ROOT_DTS_INPUTS = ["tsconfig.plugin-sdk.dts.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const ROOT_DTS_STAMP = "dist/plugin-sdk/.boundary-dts.stamp";
+const ACP_CORE_REQUIRED_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
+  packageDir: "acp-core",
+  outputPrefix: "dist/plugin-sdk/packages/acp-core/src",
+});
 const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/memory-host-sdk/src/engine-embeddings.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/secret.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/status.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/types.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/utils/event-stream.d.ts",
+  "dist/plugin-sdk/packages/llm-core/src/validation.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/code-spans.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/fences.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/frontmatter.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/ir.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/render-aware-chunking.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/render.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/tables.d.ts",
+  "dist/plugin-sdk/packages/markdown-core/src/types.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/capability-model-ref.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/catalog.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/model-ref.d.ts",
+  "dist/plugin-sdk/packages/media-generation-core/src/normalization.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/base64.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/constants.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/content-length.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/file-name.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/inbound-path-policy.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/inline-image-data-url.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/media-source-url.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/mime.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
+  "dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts",
+  ...ACP_CORE_REQUIRED_DTS_OUTPUTS,
+  "dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/decorative-emoji.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/health-style.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/index.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/links.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/note.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/osc-progress.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/palette.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/progress-line.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled-params.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/prompt-select-styled.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/prompt-style.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/restore.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/safe-text.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/stream-writer.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/table.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/terminal-link.d.ts",
+  "dist/plugin-sdk/packages/terminal-core/src/theme.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/configured-model-refs.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-refs.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/model-catalog-types.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/provider-id.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
+  "dist/plugin-sdk/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
   "dist/plugin-sdk/error-runtime.d.ts",
   "dist/plugin-sdk/plugin-entry.d.ts",
   "dist/plugin-sdk/provider-auth.d.ts",
@@ -33,7 +124,66 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
 ];
 const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
+const ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
+  packageDir: "acp-core",
+  outputPrefix: "packages/plugin-sdk/dist/packages/acp-core/src",
+});
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
+  "packages/plugin-sdk/dist/packages/markdown-core/src/code-spans.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/fences.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/frontmatter.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/ir.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/render-aware-chunking.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/render.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/tables.d.ts",
+  "packages/plugin-sdk/dist/packages/markdown-core/src/types.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/capability-model-ref.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/catalog.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/model-ref.d.ts",
+  "packages/plugin-sdk/dist/packages/media-generation-core/src/normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/base64.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/constants.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/content-length.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/file-name.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/inbound-path-policy.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/inline-image-data-url.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/media-source-url.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/mime.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/read-byte-stream-with-limit.d.ts",
+  "packages/plugin-sdk/dist/packages/media-core/src/read-response-with-limit.d.ts",
+  ...ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS,
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/configured-model-refs.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-refs.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-types.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-id.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
+  "packages/plugin-sdk/dist/packages/normalization-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/normalization-core/src/number-coercion.d.ts",
+  "packages/plugin-sdk/dist/packages/normalization-core/src/record-coerce.d.ts",
+  "packages/plugin-sdk/dist/packages/normalization-core/src/string-coerce.d.ts",
+  "packages/plugin-sdk/dist/packages/normalization-core/src/string-normalization.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/ansi.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/decorative-emoji.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/health-style.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/links.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/note.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/osc-progress.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/palette.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/progress-line.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/prompt-select-styled-params.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/prompt-select-styled.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/prompt-style.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/restore.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/safe-text.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/stream-writer.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/table.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/terminal-link.d.ts",
+  "packages/plugin-sdk/dist/packages/terminal-core/src/theme.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/error-runtime.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/plugin-entry.d.ts",
   "packages/plugin-sdk/dist/src/plugin-sdk/provider-auth.d.ts",

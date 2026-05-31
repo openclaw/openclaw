@@ -10,7 +10,10 @@ import {
   hasReconnectableQueuedChatSends,
   markQueuedChatSendsWaitingForReconnect,
   refreshChatAvatar,
+  scopedAgentListParamsForRefreshTarget,
   retryReconnectableQueuedChatSends,
+  scopedAgentListParamsForSession,
+  scopedAgentParamsForSession,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -28,6 +31,7 @@ import {
   type SessionOperationEventPayload,
 } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -83,6 +87,7 @@ import type {
   StatusSummary,
   UpdateAvailable,
 } from "./types.ts";
+import type { ChatSessionRefreshTarget } from "./ui-types.ts";
 
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());
@@ -97,6 +102,7 @@ type GatewayHost = {
   hello: GatewayHelloOk | null;
   lastError: string | null;
   lastErrorCode: string | null;
+  chatError?: string | null;
   onboarding?: boolean;
   eventLogBuffer: EventLogEntry[];
   eventLog: EventLogEntry[];
@@ -120,8 +126,8 @@ type GatewayHost = {
   sessionKey: string;
   sessionsShowArchived: boolean;
   chatRunId: string | null;
-  pendingAbort?: { runId?: string | null; sessionKey: string } | null;
-  refreshSessionsAfterChat: Set<string>;
+  pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
+  refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
   sessionsLoading?: boolean;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
@@ -464,6 +470,85 @@ function resolveMainSessionFallback(host: GatewayHost): string {
   });
 }
 
+function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+  return sessionKey?.trim().toLowerCase() === "global";
+}
+
+function resolveDefaultAgentId(host: GatewayHost): string {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  return normalizeAgentId(
+    host.agentsList?.defaultId?.trim() ||
+      snapshot?.sessionDefaults?.defaultAgentId?.trim() ||
+      "main",
+  );
+}
+
+function resolveSelectedGlobalAgentId(host: GatewayHost): string {
+  return normalizeAgentId(host.assistantAgentId?.trim() || resolveDefaultAgentId(host));
+}
+
+function resolveGlobalAliasAgentId(host: GatewayHost, sessionKey: string | undefined | null) {
+  const parsed = parseAgentSessionKey(sessionKey ?? "");
+  if (!parsed) {
+    return undefined;
+  }
+  const rest = parsed.rest.trim().toLowerCase();
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim().toLowerCase() || "main";
+  return rest === "main" || rest === mainKey ? normalizeAgentId(parsed.agentId) : undefined;
+}
+
+function resolveSelectedGlobalEventAgentId(
+  host: GatewayHost,
+  agentId: string | undefined | null,
+): string {
+  return agentId ? normalizeAgentId(agentId) : resolveDefaultAgentId(host);
+}
+
+function globalAgentScopeMatches(
+  host: GatewayHost,
+  sessionKey: string | undefined | null,
+  agentId: string | undefined | null,
+): boolean {
+  if (!isGlobalSessionKey(sessionKey)) {
+    return true;
+  }
+  const selectedAgentId = isGlobalSessionKey(host.sessionKey)
+    ? resolveSelectedGlobalAgentId(host)
+    : resolveGlobalAliasAgentId(host, host.sessionKey);
+  if (!selectedAgentId) {
+    return true;
+  }
+  return resolveSelectedGlobalEventAgentId(host, agentId) === selectedAgentId;
+}
+
+function sessionMessageMatchesHost(
+  host: GatewayHost,
+  sessionKey: string | undefined,
+  agentId: string | undefined | null,
+): boolean {
+  if (!sessionKey) {
+    return false;
+  }
+  if (areUiSessionKeysEquivalent(sessionKey, host.sessionKey)) {
+    return true;
+  }
+  const hostAliasAgentId = resolveGlobalAliasAgentId(host, host.sessionKey);
+  return Boolean(
+    hostAliasAgentId &&
+    isGlobalSessionKey(sessionKey) &&
+    resolveSelectedGlobalEventAgentId(host, agentId) === hostAliasAgentId,
+  );
+}
+
+function chatSideResultAgentScopeMatches(host: GatewayHost, sideResult: ChatSideResult): boolean {
+  return globalAgentScopeMatches(host, sideResult.sessionKey, sideResult.agentId);
+}
+
 function fallbackUnconfiguredSessionSelection(host: GatewayHost) {
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (!parsed) {
@@ -506,6 +591,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
   clearSessionsChangedReloadTimer(host);
   host.lastError = null;
   host.lastErrorCode = null;
+  host.chatError = null;
   host.hello = null;
   host.connected = false;
   if (reconnectReason === "seq-gap") {
@@ -541,8 +627,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.connected = true;
       host.lastError = null;
       host.lastErrorCode = null;
+      host.chatError = null;
       host.hello = hello;
       applySnapshot(host, hello);
+      restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
+        preserveCurrent: true,
+      });
       void loadControlUiBootstrapConfig(
         host as unknown as Parameters<typeof loadControlUiBootstrapConfig>[0],
         { applyIdentity: false },
@@ -555,8 +645,17 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           .request(
             "chat.abort",
             abort.runId
-              ? { sessionKey: abort.sessionKey, runId: abort.runId }
-              : { sessionKey: abort.sessionKey },
+              ? {
+                  sessionKey: abort.sessionKey,
+                  ...scopedAgentParamsForSession(host, abort.sessionKey),
+                  ...(abort.agentId ? { agentId: abort.agentId } : {}),
+                  runId: abort.runId,
+                }
+              : {
+                  sessionKey: abort.sessionKey,
+                  ...scopedAgentParamsForSession(host, abort.sessionKey),
+                  ...(abort.agentId ? { agentId: abort.agentId } : {}),
+                },
           )
           .catch((err) => {
             // Log to console for diagnostics; user sees no feedback for a stale abort
@@ -705,11 +804,13 @@ function handleTerminalChatEvent(
     payload?.runId,
   );
   const runId = payload?.runId;
-  if (runId && host.refreshSessionsAfterChat.has(runId)) {
+  const refreshTarget = runId ? host.refreshSessionsAfterChat.get(runId) : undefined;
+  if (runId && refreshTarget) {
     host.refreshSessionsAfterChat.delete(runId);
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         ...createChatSessionsLoadOverrides(host),
+        ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
       });
     }
   }
@@ -850,13 +951,14 @@ function flushChatQueueAfterSessionRunReconcile(
 
 function handleSessionMessageGatewayEvent(
   host: GatewayHost,
-  payload: { sessionKey?: string; runId?: unknown } | undefined,
+  payload: { sessionKey?: string; agentId?: string; runId?: unknown } | undefined,
 ) {
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
   const sessionKey = payload?.sessionKey?.trim();
-  const sessionMatchesHost = Boolean(
-    sessionKey && areUiSessionKeysEquivalent(sessionKey, host.sessionKey),
-  );
+  if (!globalAgentScopeMatches(host, sessionKey, payload?.agentId)) {
+    return;
+  }
+  const sessionMatchesHost = sessionMessageMatchesHost(host, sessionKey, payload?.agentId);
   const runIdBeforeApply = host.chatRunId;
   const result = applySessionsChangedEvent(host as unknown as SessionsState, payload);
   if (result.applied && result.clearedChatRun) {
@@ -881,11 +983,13 @@ function handleSessionMessageGatewayEvent(
     const runIdBeforeRefresh = host.chatRunId;
     void loadSessions(host as unknown as SessionsState, {
       ...createChatSessionsLoadOverrides(host),
+      ...scopedAgentListParamsForSession(host, host.sessionKey),
       publishChatRunStatus: false,
     }).finally(() =>
       replayDeferredSessionMessageReloadAfterSessionsRefresh(
         host,
         sessionKey,
+        payload?.agentId,
         refreshStartedAt,
         runIdBeforeRefresh,
       ),
@@ -899,6 +1003,7 @@ function handleSessionMessageGatewayEvent(
 function replayDeferredSessionMessageReloadAfterSessionsRefresh(
   host: GatewayHost,
   sessionKey: string,
+  agentId: string | undefined | null,
   startedAt: number,
   completedRunId?: string | null,
 ) {
@@ -908,7 +1013,7 @@ function replayDeferredSessionMessageReloadAfterSessionsRefresh(
       deferredReloadHost.pendingSessionMessageReloadSessionKey?.trim() ?? "",
       sessionKey,
     ) ||
-    !areUiSessionKeysEquivalent(host.sessionKey, sessionKey)
+    !sessionMessageMatchesHost(host, sessionKey, agentId)
   ) {
     return;
   }
@@ -922,6 +1027,7 @@ function replayDeferredSessionMessageReloadAfterSessionsRefresh(
           replayDeferredSessionMessageReloadAfterSessionsRefresh(
             host,
             sessionKey,
+            agentId,
             startedAt,
             completedRunId,
           ),
@@ -981,7 +1087,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "chat.side_result") {
     const sideResult = parseChatSideResult(evt.payload);
-    if (!sideResult || sideResult.sessionKey !== host.sessionKey) {
+    if (
+      !sideResult ||
+      !sessionMessageMatchesHost(host, sideResult.sessionKey, sideResult.agentId) ||
+      !chatSideResultAgentScopeMatches(host, sideResult)
+    ) {
       return;
     }
     const sideResultHost = host as GatewayHostWithSideResults;
@@ -991,7 +1101,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "session.message") {
-    handleSessionMessageGatewayEvent(host, evt.payload as { sessionKey?: string } | undefined);
+    handleSessionMessageGatewayEvent(
+      host,
+      evt.payload as { sessionKey?: string; agentId?: string } | undefined,
+    );
     return;
   }
 

@@ -25,6 +25,7 @@ type CapturedDispatchParams = {
   replyOptions?: {
     disableBlockStreaming?: boolean;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    suppressTyping?: boolean;
   };
 };
 
@@ -1068,6 +1069,7 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
+      suppressTyping: false,
     });
   });
 
@@ -1084,7 +1086,35 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "automatic",
       disableBlockStreaming: false,
+      suppressTyping: false,
     });
+  });
+
+  it("suppresses typing for message-tool-only group chat without mention", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: false }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressTyping).toBe(true);
+  });
+
+  it("does not suppress typing for group chat when mentioned", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "@bot hi", ChatType: "group" },
+      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: true }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
+  });
+
+  it("does not suppress typing for direct chat", async () => {
+    await dispatchBufferedReply({
+      context: { Body: "hi", ChatType: "direct" },
+      msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
   });
 
   it("treats block-only turns as visible replies instead of silent turns", async () => {

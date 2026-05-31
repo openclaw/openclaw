@@ -1,4 +1,10 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  asDateTimestampMs,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type CacheEntry<T> = {
   value: T;
@@ -12,13 +18,13 @@ const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
 export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.max(1, Math.floor(parsed));
+  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
 }
 
 export function resolvePositiveTimeoutSeconds(value: unknown, fallback: number): number {
   const parsed =
     typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-  return Math.max(1, Math.floor(parsed));
+  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
 }
 
 export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): number {
@@ -39,7 +45,8 @@ export function readCache<T>(
   if (!entry) {
     return null;
   }
-  if (Date.now() > entry.expiresAt) {
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined || now > entry.expiresAt) {
     cache.delete(key);
     return null;
   }
@@ -55,6 +62,11 @@ export function writeCache<T>(
   if (ttlMs <= 0) {
     return;
   }
+  const now = Date.now();
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now });
+  if (expiresAt === undefined) {
+    return;
+  }
   if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
     const oldest = cache.keys().next();
     if (!oldest.done) {
@@ -63,8 +75,8 @@ export function writeCache<T>(
   }
   cache.set(key, {
     value,
-    expiresAt: Date.now() + ttlMs,
-    insertedAt: Date.now(),
+    expiresAt,
+    insertedAt: now,
   });
 }
 
@@ -73,7 +85,7 @@ export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number):
     return signal ?? new AbortController().signal;
   }
   const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
+  const timer = setTimeout(controller.abort.bind(controller), resolveTimerTimeoutMs(timeoutMs, 1));
   if (signal) {
     signal.addEventListener(
       "abort",

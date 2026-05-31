@@ -1,7 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 type CliUsage = {
@@ -606,7 +606,6 @@ function dispatchClaudeCliStreamingToolEvent(params: {
         params.onToolResult,
       );
     }
-    return;
   }
 }
 
@@ -750,9 +749,7 @@ export function parseCliJsonl(
   const texts: string[] = [];
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
-      if (!sessionId) {
-        sessionId = pickCliSessionId(parsed, backend);
-      }
+      sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }

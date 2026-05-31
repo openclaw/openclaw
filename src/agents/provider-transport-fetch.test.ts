@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,27 +20,58 @@ const {
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
   withTrustedEnvProxyGuardedFetchModeMock,
-} = vi.hoisted(() => ({
-  buildProviderRequestDispatcherPolicyMock: vi.fn<
-    (_request?: unknown) => { mode: "direct" } | undefined
-  >(() => undefined),
-  fetchWithSsrFGuardMock: vi.fn(),
-  ensureModelProviderLocalServiceMock: vi.fn(),
-  mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
-    ...current,
-    ...overrides,
-  })),
-  resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
-    () => ({
-      allowPrivateNetwork: false,
-    }),
-  ),
-  shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
-  withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
-    ...params,
-    mode: "trusted_env_proxy",
-  })),
-}));
+  managedStreamCleanupRegistrations,
+} = vi.hoisted(() => {
+  const managedStreamCleanupRegistrations: Array<{
+    callback: (held: { finalize: () => Promise<void> }) => void;
+    held: { finalize: () => Promise<void> };
+    token: object;
+  }> = [];
+
+  class MockFinalizationRegistry {
+    constructor(private callback: (held: { finalize: () => Promise<void> }) => void) {}
+
+    register(_target: object, held: { finalize: () => Promise<void> }, token?: object) {
+      managedStreamCleanupRegistrations.push({
+        callback: this.callback,
+        held,
+        token: token ?? {},
+      });
+    }
+
+    unregister(token: object) {
+      const index = managedStreamCleanupRegistrations.findIndex((entry) => entry.token === token);
+      if (index >= 0) {
+        managedStreamCleanupRegistrations.splice(index, 1);
+      }
+    }
+  }
+
+  vi.stubGlobal("FinalizationRegistry", MockFinalizationRegistry);
+
+  return {
+    buildProviderRequestDispatcherPolicyMock: vi.fn<
+      (_request?: unknown) => { mode: "direct" } | undefined
+    >(() => undefined),
+    fetchWithSsrFGuardMock: vi.fn(),
+    ensureModelProviderLocalServiceMock: vi.fn(),
+    mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
+      ...current,
+      ...overrides,
+    })),
+    resolveProviderRequestPolicyConfigMock: vi.fn<() => ProviderRequestPolicyConfigMockResult>(
+      () => ({
+        allowPrivateNetwork: false,
+      }),
+    ),
+    shouldUseEnvHttpProxyForUrlMock: vi.fn(() => false),
+    withTrustedEnvProxyGuardedFetchModeMock: vi.fn((params: Record<string, unknown>) => ({
+      ...params,
+      mode: "trusted_env_proxy",
+    })),
+    managedStreamCleanupRegistrations,
+  };
+});
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -81,6 +113,7 @@ function latestTrustedEnvProxyParams(): Record<string, unknown> {
 
 describe("buildGuardedModelFetch", () => {
   beforeEach(() => {
+    managedStreamCleanupRegistrations.length = 0;
     fetchWithSsrFGuardMock.mockReset().mockResolvedValue({
       response: new Response("ok", { status: 200 }),
       finalUrl: "https://api.openai.com/v1/responses",
@@ -148,6 +181,49 @@ describe("buildGuardedModelFetch", () => {
     expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(model, undefined, undefined);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  });
+
+  it("releases guarded fetch slots when streamed bodies are abandoned", async () => {
+    const release = vi.fn(async () => undefined);
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode("chunk-1"));
+            controller.enqueue(encoder.encode("chunk-2"));
+          },
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "https://api.anthropic.com/v1/messages",
+      release,
+    });
+    const model = {
+      id: "claude-sonnet-4-6",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+    } as unknown as Model<"anthropic-messages">;
+
+    const fetcher = buildGuardedModelFetch(model, undefined, { sanitizeSse: false });
+    let response = await fetcher("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"stream":true}',
+    });
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+    const firstChunk = await reader?.read();
+    expect(firstChunk?.done).toBe(false);
+
+    response = undefined as unknown as Response;
+    const registration = managedStreamCleanupRegistrations.at(-1);
+    expect(registration).toBeDefined();
+    await registration?.held.finalize();
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(managedStreamCleanupRegistrations).toHaveLength(0);
   });
 
   it("passes model request headers to local service health probes", async () => {
@@ -222,6 +298,60 @@ describe("buildGuardedModelFetch", () => {
       expect(params.timeoutMs).toBe(750);
       expect(params.signal).toBeUndefined();
       expect((params.init as RequestInit | undefined)?.signal).toBeUndefined();
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("caps oversized model request timeouts before arming abort signals", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    } as unknown as Model<"openai-completions">;
+
+    try {
+      const fetcher = buildGuardedModelFetch(model, Number.MAX_SAFE_INTEGER);
+      const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
+        method: "POST",
+      });
+      await response.text();
+
+      expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+      expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(
+        model,
+        undefined,
+        timeoutController.signal,
+      );
+      expect(latestGuardedFetchParams().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("ignores non-positive model request timeout metadata", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+      requestTimeoutMs: -1,
+    } as unknown as Model<"openai-completions">;
+
+    try {
+      const fetcher = buildGuardedModelFetch(model);
+      const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
+        method: "POST",
+      });
+      await response.text();
+
+      expect(timeoutSpy).not.toHaveBeenCalled();
+      expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(model, undefined, undefined);
+      expect(latestGuardedFetchParams().timeoutMs).toBeUndefined();
     } finally {
       timeoutSpy.mockRestore();
     }
@@ -1040,6 +1170,23 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
+    it("bypasses unsafe retry-after-ms numeric headers", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after-ms": "9007199254740993" },
+        }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(openaiModel)(
+        "https://api.openai.com/v1/responses",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBe("false");
+    });
+
     it("falls back to retry-after when retry-after-ms is blank", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({
         response: new Response(null, {
@@ -1136,6 +1283,23 @@ describe("buildGuardedModelFetch", () => {
       },
     );
 
+    it("ignores invalid obsolete asctime retry-after values", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after": "Sun Nov 99 99:99:99 9999" },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+
     it("respects OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS", async () => {
       process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "10";
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -1192,6 +1356,24 @@ describe("buildGuardedModelFetch", () => {
         expect(response.headers.get("x-should-retry")).toBeNull();
       },
     );
+
+    it("ignores unsafe OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS values", async () => {
+      process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "9007199254740993";
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 429,
+          headers: { "retry-after": "30" },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
 
     it("injects x-should-retry:false for terminal 429 responses without retry-after", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -1264,7 +1446,7 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
-    it.each(["soon", "1.5", "0x10"])(
+    it.each(["soon", "1.5", "0x10", "9007199254740993"])(
       "treats malformed 429 retry-after values as terminal: %s",
       async (retryAfter) => {
         fetchWithSsrFGuardMock.mockResolvedValue({

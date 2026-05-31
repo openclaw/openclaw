@@ -176,6 +176,18 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
   });
 
+  it("matches runtime slash aliases across command list surfaces", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const payload = {
+      commands: [{ name: "voicecall" }, { nativeName: "phone" }, { textAliases: ["/pair"] }],
+    };
+
+    expect(runtimeSmoke.isCommandVisible(payload, "/voicecall")).toBe(true);
+    expect(runtimeSmoke.isCommandVisible(payload, "/phone")).toBe(true);
+    expect(runtimeSmoke.isCommandVisible(payload, "/pair")).toBe(true);
+    expect(runtimeSmoke.isCommandVisible(payload, "/missing")).toBe(false);
+  });
+
   it("rejects loose runtime output limit env values instead of parsing prefixes", async () => {
     const runtimeSmoke = await importRuntimeSmokeWithEnv({
       OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS: "5chars",
@@ -348,6 +360,43 @@ describe("bundled plugin install/uninstall probe", () => {
       await expect(runtimeSmoke.httpOk(port, "/healthz", { timeoutMs: 100 })).resolves.toBe(false);
 
       expect(Date.now() - startedAt).toBeLessThan(2_500);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closeServer(server);
+    }
+  });
+
+  it("keeps stalled runtime readiness probes inside the ready deadline", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "1000",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: "50",
+    });
+    const sockets = new Set<Socket>();
+    const server = createNetServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => {
+        sockets.delete(socket);
+      });
+    });
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(logPath, "booting\n", "utf8");
+
+    try {
+      const port = await listenOnLoopback(server);
+      const startedAt = Date.now();
+
+      await expect(
+        runtimeSmoke.waitForReady({
+          child: { exitCode: null, signalCode: null },
+          logPath,
+          port,
+        }),
+      ).rejects.toThrow("gateway did not become ready");
+
+      expect(Date.now() - startedAt).toBeLessThan(500);
     } finally {
       for (const socket of sockets) {
         socket.destroy();

@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Cron } from "croner";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import type { CronSchedule } from "./types.js";
@@ -37,16 +37,11 @@ function resolveCachedCron(expr: string, timezone: string): Cron {
   return next;
 }
 
-function resolveCronFromSchedule(schedule: {
-  tz?: string;
-  expr?: unknown;
-  cron?: unknown;
-}): Cron | undefined {
-  const exprSource = typeof schedule.expr === "string" ? schedule.expr : schedule.cron;
-  if (typeof exprSource !== "string") {
+function resolveCronFromSchedule(schedule: { tz?: string; expr?: unknown }): Cron | undefined {
+  if (typeof schedule.expr !== "string") {
     throw new Error("invalid cron schedule: expr is required");
   }
-  const expr = exprSource.trim();
+  const expr = schedule.expr.trim();
   if (!expr) {
     return undefined;
   }
@@ -55,18 +50,7 @@ function resolveCronFromSchedule(schedule: {
 
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
-    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
-    // The store migration should convert atMs→at, but be defensive in case
-    // the migration hasn't run yet or was bypassed.
-    const sched = schedule as { at?: string; atMs?: number | string };
-    const atMs =
-      typeof sched.atMs === "number" && Number.isFinite(sched.atMs) && sched.atMs > 0
-        ? sched.atMs
-        : typeof sched.atMs === "string"
-          ? parseAbsoluteTimeMs(sched.atMs)
-          : typeof sched.at === "string"
-            ? parseAbsoluteTimeMs(sched.at)
-            : null;
+    const atMs = parseAbsoluteTimeMs(schedule.at);
     if (atMs === null) {
       return undefined;
     }
@@ -89,15 +73,15 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return anchor + steps * everyMs;
   }
 
-  const cron = resolveCronFromSchedule(schedule as { tz?: string; expr?: unknown; cron?: unknown });
+  const cron = resolveCronFromSchedule(schedule);
   if (!cron) {
     return undefined;
   }
-  let next = cron.nextRun(new Date(nowMs));
+  const next = cron.nextRun(new Date(nowMs));
   if (!next) {
     return undefined;
   }
-  let nextMs = next.getTime();
+  const nextMs = next.getTime();
   if (!Number.isFinite(nextMs)) {
     return undefined;
   }
@@ -134,7 +118,7 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   if (schedule.kind !== "cron") {
     return undefined;
   }
-  const cron = resolveCronFromSchedule(schedule as { tz?: string; expr?: unknown; cron?: unknown });
+  const cron = resolveCronFromSchedule(schedule);
   if (!cron) {
     return undefined;
   }

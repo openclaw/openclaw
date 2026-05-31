@@ -79,6 +79,7 @@ const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antth
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
 const GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS = 60 * 60 * 1000;
+const EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW = 128_000;
 const GATEWAY_LIVE_MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
   30_000,
@@ -89,6 +90,7 @@ const GATEWAY_LIVE_SETUP_TIMEOUT_MS = Math.max(
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS, 60_000),
 );
 const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
+const GATEWAY_LIVE_SESSION_CONTROL_TIMEOUT_MS = resolveGatewayLiveSessionControlTimeoutMs();
 const GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS = resolveGatewayLiveTranscriptTimeoutMs();
 const GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS = resolveGatewayLiveAgentRunTimeoutMs();
 const GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS = resolveGatewayLiveAgentWaitTimeoutMs();
@@ -250,6 +252,13 @@ function resolveGatewayLiveModelTimeoutMs(
   return Math.max(stepTimeoutMs, requested);
 }
 
+function resolveGatewayLiveSessionControlTimeoutMs(
+  stepTimeoutMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+  modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
+): number {
+  return Math.max(stepTimeoutMs, Math.min(modelTimeoutMs, 180_000));
+}
+
 function resolveGatewayLiveTranscriptTimeoutMs(
   stepTimeoutMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS,
   modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
@@ -273,6 +282,12 @@ function resolveGatewayLiveAgentWaitTimeoutMs(
 ): number {
   const waitGraceMs = Math.min(10_000, Math.max(1_000, Math.floor(modelTimeoutMs / 12)));
   return Math.max(1_000, Math.min(modelTimeoutMs, Math.floor(agentRunTimeoutMs + waitGraceMs)));
+}
+
+function resolveGatewayLiveProviderTimeoutSeconds(
+  modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
+): number {
+  return Math.max(1, Math.ceil(modelTimeoutMs / 1_000));
 }
 
 function isGatewayLiveProbeTimeout(error: string): boolean {
@@ -394,6 +409,18 @@ async function withGatewayLiveProbeTimeout<T>(operation: Promise<T>, context: st
   return await withGatewayLiveTimeout({
     operation,
     timeoutMs: GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+    timeoutLabel: "probe",
+    context,
+  });
+}
+
+async function withGatewayLiveSessionControlTimeout<T>(
+  operation: Promise<T>,
+  context: string,
+): Promise<T> {
+  return await withGatewayLiveTimeout({
+    operation,
+    timeoutMs: GATEWAY_LIVE_SESSION_CONTROL_TIMEOUT_MS,
     timeoutLabel: "probe",
     context,
   });
@@ -584,7 +611,7 @@ function shouldSkipEmptyResponseForLiveModel(params: {
     params.provider === "google-antigravity" ||
     params.provider === "minimax" ||
     params.provider === "minimax-portal" ||
-    params.provider === "openai-codex" ||
+    params.provider === "openai" ||
     params.provider === "zai"
   );
 }
@@ -719,19 +746,28 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
   it("defaults to the release live model budget", () => {
     expect(resolveGatewayLiveModelTimeoutMs("", undefined, 90_000)).toBe(300_000);
   });
-
-  it("never goes below the probe timeout", () => {
-    expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
-  });
 });
 
 describe("resolveGatewayLiveTranscriptTimeoutMs", () => {
   it("uses the model budget for transcript waits", () => {
     expect(resolveGatewayLiveTranscriptTimeoutMs(90_000, 180_000)).toBe(180_000);
   });
+});
 
+describe("gateway live timeout floors", () => {
   it("never goes below the probe timeout", () => {
+    expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
     expect(resolveGatewayLiveTranscriptTimeoutMs(240_000, 180_000)).toBe(240_000);
+  });
+});
+
+describe("resolveGatewayLiveSessionControlTimeoutMs", () => {
+  it("allows slow gateway session-control calls without using the full model budget", () => {
+    expect(resolveGatewayLiveSessionControlTimeoutMs(90_000, 300_000)).toBe(180_000);
+  });
+
+  it("keeps explicit longer probe budgets intact", () => {
+    expect(resolveGatewayLiveSessionControlTimeoutMs(240_000, 300_000)).toBe(240_000);
   });
 });
 
@@ -748,6 +784,12 @@ describe("resolveGatewayLiveAgentRunTimeoutMs", () => {
 describe("resolveGatewayLiveAgentWaitTimeoutMs", () => {
   it("waits past the run timeout but before the model timeout", () => {
     expect(resolveGatewayLiveAgentWaitTimeoutMs(150_000, 180_000)).toBe(160_000);
+  });
+});
+
+describe("resolveGatewayLiveProviderTimeoutSeconds", () => {
+  it("matches provider timeout config to the harness model budget", () => {
+    expect(resolveGatewayLiveProviderTimeoutSeconds(180_001)).toBe(181);
   });
 });
 
@@ -904,6 +946,14 @@ function createGatewayLiveTestModel(provider: string, id: string): Model {
   } as Model;
 }
 
+function createExplicitLiveFallbackModel(provider: string, id: string): Model {
+  return {
+    ...createGatewayLiveTestModel(provider, id),
+    contextWindow: EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW,
+    maxTokens: 4_096,
+  };
+}
+
 describe("resolveExplicitLiveModelCandidates", () => {
   it("uses targeted registry lookup for explicit provider/model filters", () => {
     const model = createGatewayLiveTestModel("xai", "grok-4.3");
@@ -979,7 +1029,11 @@ describe("resolveExplicitLiveModelCandidates", () => {
       targetMatcher: matcher,
     });
 
-    expect(candidates).toEqual([createGatewayLiveTestModel("openai", "gpt-5.5")]);
+    if (!candidates) {
+      throw new Error("expected explicit fallback candidates");
+    }
+    expect(candidates).toEqual([createExplicitLiveFallbackModel("openai", "gpt-5.5")]);
+    expect(candidates[0]?.contextWindow).toBeGreaterThanOrEqual(4_000);
   });
 
   it("falls back to enumeration for ambiguous model-only filters", () => {
@@ -1148,6 +1202,28 @@ describe("buildLiveGatewayConfig", () => {
 
     expect(cfg.models?.providers?.google?.models?.[0]?.contextWindow).toBe(128_000);
   });
+
+  it("keeps live provider request timeout aligned with the harness model budget", () => {
+    const cfg = buildLiveGatewayConfig({
+      cfg: {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com",
+              models: [],
+              timeoutSeconds: 30,
+            },
+          },
+        },
+      },
+      candidates: [createGatewayLiveTestModel("google", "gemini-3.1-pro-preview")],
+    });
+
+    expect(cfg.models?.providers?.google?.timeoutSeconds).toBeGreaterThanOrEqual(
+      Math.ceil(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000),
+    );
+  });
 });
 
 describe("enterProductionEnvForLiveRun", () => {
@@ -1193,6 +1269,17 @@ function isGoogleModelNotFoundText(text: string): boolean {
     return true;
   }
   return false;
+}
+
+function isAnthropicModelUnavailableDrift(raw: string): boolean {
+  const msg = raw.trim();
+  if (!msg) {
+    return false;
+  }
+  if (isModelNotFoundErrorMessage(msg)) {
+    return true;
+  }
+  return /\b404 status code\b/i.test(msg) && /\bno body\b/i.test(msg);
 }
 
 function isGoogleishProvider(provider: string): boolean {
@@ -1331,7 +1418,7 @@ describe("shouldSkipEmptyResponseForLiveModel", () => {
     { provider: "minimax", allowNotFoundSkip: true, expected: true },
     { provider: "minimax-portal", allowNotFoundSkip: true, expected: true },
     { provider: "zai", allowNotFoundSkip: true, expected: true },
-    { provider: "openai-codex", allowNotFoundSkip: true, expected: true },
+    { provider: "openai", allowNotFoundSkip: true, expected: true },
     { provider: "xai", allowNotFoundSkip: true, expected: false },
   ])(
     "returns $expected for $provider (allowNotFoundSkip=$allowNotFoundSkip)",
@@ -1339,6 +1426,17 @@ describe("shouldSkipEmptyResponseForLiveModel", () => {
       expect(shouldSkipEmptyResponseForLiveModel({ provider, allowNotFoundSkip })).toBe(expected);
     },
   );
+});
+
+describe("isAnthropicModelUnavailableDrift", () => {
+  it("treats Anthropic bare 404 live probe failures as model drift", () => {
+    expect(
+      isAnthropicModelUnavailableDrift(
+        "agent.wait error for runId=run-1 (error=FailoverError: 404 status code (no body))",
+      ),
+    ).toBe(true);
+    expect(isAnthropicModelUnavailableDrift("Error: 503 status code (no body)")).toBe(false);
+  });
 });
 
 describe("isEmptyStreamText", () => {
@@ -1624,7 +1722,6 @@ async function connectClientOnce(params: { url: string; token: string; timeoutMs
   const timeoutMs = params.timeoutMs ?? 10_000;
   return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    let client: GatewayClient | undefined;
     const stop = (err?: Error, nextClient?: GatewayClient) => {
       if (settled) {
         return;
@@ -1640,7 +1737,7 @@ async function connectClientOnce(params: { url: string; token: string; timeoutMs
         resolve(nextClient as GatewayClient);
       }
     };
-    client = new GatewayClient({
+    const client: GatewayClient | undefined = new GatewayClient({
       url: params.url,
       token: params.token,
       requestTimeoutMs: Math.max(timeoutMs, GATEWAY_LIVE_MODEL_TIMEOUT_MS),
@@ -1682,19 +1779,17 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
         },
         codexProfile: {
           type: "oauth",
-          provider: "openai-codex",
+          provider: "openai",
           access: "access",
           refresh: "refresh",
           expires: 1,
         },
       },
       order: {
-        openai: ["openaiProfile"],
-        "openai-codex": ["codexProfile"],
+        openai: ["codexProfile", "openaiProfile"],
       },
       lastGood: {
-        openai: "openaiProfile",
-        "openai-codex": "codexProfile",
+        openai: "codexProfile",
       },
       usageStats: {
         openaiProfile: { lastUsed: 1 },
@@ -1921,7 +2016,16 @@ async function requestGatewayAgentText(params: {
   );
   const first = await Promise.race([transcriptPromise, agentWaitPromise]);
   if (first.kind === "transcript") {
-    void agentWaitPromise.catch(() => undefined);
+    // Do not start the next live probe while this run is still cleaning up.
+    // The transcript can be visible before the embedded attempt reacquires and
+    // releases its session lock, and back-to-back probes on the same session
+    // can otherwise trip the takeover fence.
+    const waitResult = await agentWaitPromise;
+    if (waitResult.kind === "agent-error") {
+      throw waitResult.error instanceof Error
+        ? waitResult.error
+        : new Error(String(waitResult.error));
+    }
     return first.text;
   }
   void transcriptPromise.catch(() => undefined);
@@ -2054,6 +2158,51 @@ function createStaticLiveModelRegistry(models: Array<Model>): LiveModelRegistry 
   };
 }
 
+async function loadAuthBackedLiveModelRegistry(params: {
+  agentDir: string;
+  cfg: OpenClawConfig;
+  providerList: string[] | undefined;
+}): Promise<{
+  authProfileStore: AuthProfileStore;
+  modelRegistry: LiveModelRegistry;
+  all: Array<Model>;
+}> {
+  const authProfileStore = await withGatewayLiveSetupTimeout(
+    Promise.resolve().then(() =>
+      params.providerList
+        ? ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+            allowKeychainPrompt: false,
+          })
+        : ensureAuthProfileStore(params.agentDir, {
+            allowKeychainPrompt: false,
+          }),
+    ),
+    "[all-models] load auth profiles",
+  );
+  const authStorage = await withGatewayLiveSetupTimeout(
+    Promise.resolve().then(() =>
+      discoverAuthStorage(params.agentDir, {
+        config: params.cfg,
+        env: process.env,
+        ...(params.providerList
+          ? {
+              skipExternalAuthProfiles: true,
+              syntheticAuthProviderRefs: [],
+            }
+          : {}),
+      }),
+    ),
+    "[all-models] load auth storage",
+  );
+  logProgress("[all-models] loading model registry");
+  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const all = await withGatewayLiveSetupTimeout(
+    Promise.resolve().then(() => modelRegistry.getAll()),
+    "[all-models] load model registry",
+  );
+  return { authProfileStore, modelRegistry, all };
+}
+
 function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["models"]>[number] {
   return {
     id: model.id,
@@ -2091,6 +2240,10 @@ function mergeLiveProviderConfig(params: {
     ...params.base,
     api: params.base?.api ?? params.discovered.api,
     baseUrl: params.base?.baseUrl ?? params.discovered.baseUrl,
+    timeoutSeconds: Math.max(
+      params.base?.timeoutSeconds ?? 0,
+      params.discovered.timeoutSeconds ?? 0,
+    ),
     models: [...mergedModels.values()],
   };
 }
@@ -2107,6 +2260,7 @@ function buildLiveProviderConfigs(candidates: Array<Model>): Record<string, Mode
     providers[model.provider] = {
       api: model.api as ModelProviderConfig["api"],
       baseUrl: model.baseUrl,
+      timeoutSeconds: resolveGatewayLiveProviderTimeoutSeconds(),
       models: [toLiveModelConfig(model)],
     };
   }
@@ -2156,7 +2310,7 @@ function resolveExplicitLiveModelCandidates(params: {
     }
     const model =
       params.modelRegistry.find(ref.provider, ref.modelId) ??
-      createGatewayLiveTestModel(ref.provider, ref.modelId);
+      createExplicitLiveFallbackModel(ref.provider, ref.modelId);
     if (
       !params.targetMatcher.matchesProvider(model.provider) ||
       !params.targetMatcher.matchesModel(model.provider, model.id)
@@ -2215,10 +2369,22 @@ function getProviderThinkingModelCompat(model: Model): ProviderThinkingModelComp
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
-  if ("thinkingFormat" in compat || "supportedReasoningEfforts" in compat) {
-    return compat as ProviderThinkingModelCompat;
-  }
-  return undefined;
+  const record = compat as Record<string, unknown>;
+  const thinkingFormat =
+    typeof record.thinkingFormat === "string" ? record.thinkingFormat : undefined;
+  const supportedReasoningEfforts =
+    Array.isArray(record.supportedReasoningEfforts) &&
+    record.supportedReasoningEfforts.every((value) => typeof value === "string")
+      ? record.supportedReasoningEfforts
+      : record.supportedReasoningEfforts === null
+        ? null
+        : undefined;
+  return thinkingFormat || supportedReasoningEfforts !== undefined
+    ? {
+        ...(thinkingFormat ? { thinkingFormat } : {}),
+        ...(supportedReasoningEfforts !== undefined ? { supportedReasoningEfforts } : {}),
+      }
+    : undefined;
 }
 
 function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean }): string {
@@ -2375,8 +2541,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     agentDir: process.env.OPENCLAW_AGENT_DIR,
     stateDir: process.env.OPENCLAW_STATE_DIR,
   };
-  let tempAgentDir: string | undefined;
-  let tempStateDir: string | undefined;
 
   process.env.OPENCLAW_SKIP_CHANNELS = "1";
   process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -2404,9 +2568,16 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
   });
-  tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
+  const tempStateDir: string | undefined = await fs.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-live-state-"),
+  );
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
-  tempAgentDir = path.join(tempStateDir, "agents", DEFAULT_AGENT_ID, "agent");
+  const tempAgentDir: string | undefined = path.join(
+    tempStateDir,
+    "agents",
+    DEFAULT_AGENT_ID,
+    "agent",
+  );
   saveAuthProfileStore(sanitizedStore, tempAgentDir);
   const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
   if (tempSessionAgentDir !== tempAgentDir) {
@@ -2542,13 +2713,13 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               // Ensure session exists + override model for this run.
               // Reset between models: avoids cross-provider transcript incompatibilities
               // (notably OpenAI Responses requiring reasoning replay for function_call items).
-              await withGatewayLiveProbeTimeout(
+              await withGatewayLiveSessionControlTimeout(
                 client.request("sessions.reset", {
                   key: sessionKey,
                 }),
                 `${progressLabel}: sessions-reset`,
               );
-              await withGatewayLiveProbeTimeout(
+              await withGatewayLiveSessionControlTimeout(
                 client.request("sessions.patch", {
                   key: sessionKey,
                   model: modelKey,
@@ -2848,7 +3019,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
               if (
                 (model.provider === "openai" && model.api === "openai-responses") ||
-                (model.provider === "openai-codex" && model.api === "openai-codex-responses")
+                (model.provider === "openai" && model.api === "openai-chatgpt-responses")
               ) {
                 logProgress(`${progressLabel}: tool-only regression`);
                 const runId2 = randomUUID();
@@ -2943,6 +3114,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
             break;
           }
+          if (model.provider === "anthropic" && isAnthropicModelUnavailableDrift(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (anthropic model unavailable)`);
+            break;
+          }
           if (
             isEmptyStreamText(message) &&
             shouldSkipEmptyResponseForLiveModel({
@@ -3027,38 +3203,32 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             break;
           }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
-          if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
+          if (model.provider === "openai" && isRefreshTokenReused(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
             break;
           }
-          if (model.provider === "openai-codex" && isAccountIdExtractionError(message)) {
+          if (model.provider === "openai" && isAccountIdExtractionError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (codex account id extraction)`);
             break;
           }
-          if (model.provider === "openai-codex" && isChatGPTUsageLimitErrorMessage(message)) {
+          if (model.provider === "openai" && isChatGPTUsageLimitErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (chatgpt usage limit)`);
             break;
           }
-          if (model.provider === "openai-codex" && isInstructionsRequiredError(message)) {
+          if (model.provider === "openai" && isInstructionsRequiredError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (instructions required)`);
             break;
           }
-          if (
-            (model.provider === "openai" || model.provider === "openai-codex") &&
-            isOpenAIReasoningSequenceError(message)
-          ) {
+          if (model.provider === "openai" && isOpenAIReasoningSequenceError(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (openai reasoning sequence error)`);
             break;
           }
-          if (
-            (model.provider === "openai" || model.provider === "openai-codex") &&
-            isToolNonceRefusal(message)
-          ) {
+          if (model.provider === "openai" && isToolNonceRefusal(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (tool probe refusal)`);
             break;
@@ -3186,42 +3356,25 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             loadProviderScopedModels({ agentDir, providerList: providerScopedModelProviders }),
             "[all-models] load provider-scoped model refs",
           );
-          modelRegistry = createStaticLiveModelRegistry(all);
+          if (all.length > 0) {
+            modelRegistry = createStaticLiveModelRegistry(all);
+          } else {
+            logProgress("[all-models] provider-scoped model refs empty; loading auth profiles");
+            const authBacked = await loadAuthBackedLiveModelRegistry({
+              agentDir,
+              cfg,
+              providerList: providerScopedModelProviders,
+            });
+            authProfileStore = authBacked.authProfileStore;
+            modelRegistry = authBacked.modelRegistry;
+            all = authBacked.all;
+          }
         } else {
           logProgress("[all-models] loading auth profiles");
-          authProfileStore = await withGatewayLiveSetupTimeout(
-            Promise.resolve().then(() =>
-              providerList
-                ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-                    allowKeychainPrompt: false,
-                  })
-                : ensureAuthProfileStore(agentDir, {
-                    allowKeychainPrompt: false,
-                  }),
-            ),
-            "[all-models] load auth profiles",
-          );
-          const authStorage = await withGatewayLiveSetupTimeout(
-            Promise.resolve().then(() =>
-              discoverAuthStorage(agentDir, {
-                config: cfg,
-                env: process.env,
-                ...(providerList
-                  ? {
-                      skipExternalAuthProfiles: true,
-                      syntheticAuthProviderRefs: [],
-                    }
-                  : {}),
-              }),
-            ),
-            "[all-models] load auth storage",
-          );
-          logProgress("[all-models] loading model registry");
-          modelRegistry = discoverModels(authStorage, agentDir);
-          all = await withGatewayLiveSetupTimeout(
-            Promise.resolve().then(() => modelRegistry.getAll()),
-            "[all-models] load model registry",
-          );
+          const authBacked = await loadAuthBackedLiveModelRegistry({ agentDir, cfg, providerList });
+          authProfileStore = authBacked.authProfileStore;
+          modelRegistry = authBacked.modelRegistry;
+          all = authBacked.all;
         }
         const maxModels = GATEWAY_LIVE_MAX_MODELS;
         const targetMatcher = createLiveTargetMatcher({
@@ -3465,14 +3618,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     try {
       const sessionKey = `agent:${agentId}:live-zai-fallback`;
 
-      await withGatewayLiveProbeTimeout(
+      await withGatewayLiveSessionControlTimeout(
         client.request("sessions.patch", {
           key: sessionKey,
           model: "anthropic/claude-opus-4-6",
         }),
         "zai-fallback: sessions-patch-anthropic",
       );
-      await withGatewayLiveProbeTimeout(
+      await withGatewayLiveSessionControlTimeout(
         client.request("sessions.reset", {
           key: sessionKey,
         }),
@@ -3500,7 +3653,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         throw new Error(`anthropic tool probe missing nonce: ${toolText}`);
       }
 
-      await withGatewayLiveProbeTimeout(
+      await withGatewayLiveSessionControlTimeout(
         client.request("sessions.patch", {
           key: sessionKey,
           model: "zai/glm-5.1",

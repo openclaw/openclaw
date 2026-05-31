@@ -1,3 +1,4 @@
+import { setCurrentManifestModelIdNormalizationRecords } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearCurrentPluginMetadataSnapshotState,
@@ -9,10 +10,19 @@ import {
   resolvePluginControlPlaneFingerprint,
   type ResolvePluginControlPlaneContextParams,
 } from "./plugin-control-plane-context.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import type {
+  PluginMetadataSnapshot,
+  PluginMetadataSnapshotPluginIdScope,
+} from "./plugin-metadata-snapshot.types.js";
+import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
 
 type CurrentPluginMetadataSnapshotState = ReturnType<typeof getCurrentPluginMetadataSnapshotState>;
 let currentPluginMetadataConfigIdentityCache = new WeakSet<OpenClawConfig>();
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  setCurrentManifestModelIdNormalizationRecords(undefined);
+});
 
 export function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,
@@ -55,16 +65,37 @@ export function setCurrentPluginMetadataSnapshot(
         }),
       )
     : undefined;
-  setCurrentPluginMetadataSnapshotState(
-    snapshot,
-    snapshot
-      ? resolvePluginMetadataControlPlaneFingerprint(options.config, {
+  const configFingerprint = snapshot
+    ? resolvePluginMetadataControlPlaneFingerprint(options.config, {
+        env: options.env,
+        index: snapshot.index,
+        policyHash: snapshot.policyHash,
+        workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
+      })
+    : undefined;
+  const defaultDiscoveryConfigFingerprint = snapshot
+    ? resolvePluginMetadataControlPlaneFingerprint(
+        {},
+        {
           env: options.env,
           index: snapshot.index,
           policyHash: snapshot.policyHash,
           workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
-        })
-      : undefined,
+        },
+      )
+    : undefined;
+  const defaultDiscoveryCompatible =
+    snapshot &&
+    defaultDiscoveryConfigFingerprint &&
+    (configFingerprint === defaultDiscoveryConfigFingerprint ||
+      snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
+      Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint)));
+  setCurrentManifestModelIdNormalizationRecords(
+    defaultDiscoveryCompatible ? snapshot.plugins : undefined,
+  );
+  setCurrentPluginMetadataSnapshotState(
+    snapshot,
+    configFingerprint,
     compatiblePolicyHashes,
     compatibleConfigFingerprints,
   );
@@ -87,6 +118,7 @@ export function setCurrentPluginMetadataSnapshot(
 
 export function clearCurrentPluginMetadataSnapshot(): void {
   currentPluginMetadataConfigIdentityCache = new WeakSet();
+  setCurrentManifestModelIdNormalizationRecords(undefined);
   clearCurrentPluginMetadataSnapshotState();
 }
 
@@ -98,6 +130,26 @@ export function restoreCurrentPluginMetadataSnapshotState(
   state: CurrentPluginMetadataSnapshotState,
 ): void {
   currentPluginMetadataConfigIdentityCache = new WeakSet();
+  const snapshot = state.snapshot as PluginMetadataSnapshot | undefined;
+  const defaultDiscoveryConfigFingerprint = snapshot
+    ? resolvePluginMetadataControlPlaneFingerprint(
+        {},
+        {
+          index: snapshot.index,
+          policyHash: snapshot.policyHash,
+          workspaceDir: snapshot.workspaceDir,
+        },
+      )
+    : undefined;
+  const defaultDiscoveryCompatible =
+    snapshot &&
+    defaultDiscoveryConfigFingerprint &&
+    (state.configFingerprint === defaultDiscoveryConfigFingerprint ||
+      snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
+      Boolean(state.compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint)));
+  setCurrentManifestModelIdNormalizationRecords(
+    defaultDiscoveryCompatible ? snapshot.plugins : undefined,
+  );
   setCurrentPluginMetadataSnapshotState(
     state.snapshot,
     state.configFingerprint,
@@ -110,6 +162,9 @@ export function getCurrentPluginMetadataSnapshot(
   params: {
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
+    allowScopedSnapshot?: boolean;
+    pluginIds?: readonly string[];
+    pluginIdScope?: PluginMetadataSnapshotPluginIdScope;
     workspaceDir?: string;
     allowWorkspaceScopedSnapshot?: boolean;
     requireDefaultDiscoveryContext?: boolean;
@@ -126,6 +181,23 @@ export function getCurrentPluginMetadataSnapshot(
     return undefined;
   }
   const env = params.env ?? process.env;
+  const requestedPluginIds = normalizePluginIdScope(
+    params.pluginIds ?? params.pluginIdScope?.resolve({ index: snapshot.index }),
+  );
+  const snapshotPluginIds = normalizePluginIdScope(snapshot.pluginIds);
+  if (
+    requestedPluginIds !== undefined &&
+    serializePluginIdScope(snapshotPluginIds) !== serializePluginIdScope(requestedPluginIds)
+  ) {
+    return undefined;
+  }
+  if (
+    snapshotPluginIds !== undefined &&
+    requestedPluginIds === undefined &&
+    params.allowScopedSnapshot !== true
+  ) {
+    return undefined;
+  }
   const requestedWorkspaceDir =
     params.workspaceDir ??
     (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);

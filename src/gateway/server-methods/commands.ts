@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
   CommandEntry,
   CommandsListResult,
@@ -27,12 +28,11 @@ import type {
   CommandArgChoice,
   CommandArgDefinition,
 } from "../../auto-reply/commands-registry.types.js";
-import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCommandSpecs } from "../../plugins/command-specs.js";
 import { listPluginCommands } from "../../plugins/commands.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { listSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type SerializedArg = NonNullable<CommandEntry["args"]>[number];
@@ -90,6 +90,7 @@ function stripLeadingSlash(value: string): string {
   return value.startsWith("/") ? value.slice(1) : value;
 }
 
+/** Resolves normalized text aliases, preserving slash-prefixed command names. */
 function resolveTextAliases(cmd: ChatCommandDefinition): string[] {
   const seen = new Set<string>();
   const aliases: string[] = [];
@@ -118,6 +119,7 @@ function resolvePrimaryTextName(cmd: ChatCommandDefinition): string {
   return stripLeadingSlash(resolveTextAliases(cmd)[0] ?? `/${cmd.key}`);
 }
 
+/** Serializes a command argument into the bounded gateway protocol shape. */
 function serializeArg(arg: CommandArgDefinition): SerializedArg {
   const isDynamic = typeof arg.choices === "function";
   const staticChoices = Array.isArray(arg.choices)
@@ -174,6 +176,7 @@ function mapCommand(
   };
 }
 
+/** Builds plugin command entries from text specs plus provider-native metadata. */
 function buildPluginCommandEntries(params: {
   provider?: string;
   nameSurface: CommandNameSurface;
@@ -206,6 +209,7 @@ function buildPluginCommandEntries(params: {
   return entries;
 }
 
+/** Builds the public commands.list payload for an agent/provider/scope view. */
 export function buildCommandsListResult(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -244,6 +248,7 @@ export function buildCommandsListResult(params: {
   return { commands: commands.slice(0, COMMAND_LIST_MAX_ITEMS) };
 }
 
+/** Gateway handler for enumerating available chat/native commands. */
 export const commandsHandlers: GatewayRequestHandlers = {
   "commands.list": ({ params, respond, context }) => {
     if (!validateCommandsListParams(params)) {

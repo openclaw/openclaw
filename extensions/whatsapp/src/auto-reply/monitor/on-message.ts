@@ -250,6 +250,7 @@ export function createWebOnMessageHandler(params: {
         agentId: route.agentId,
         sessionKey: route.sessionKey,
         baseMentionConfig,
+        providerMentionPatterns: account.mentionPatterns,
         authDir: account.authDir,
         selfChatMode: account.selfChatMode,
         groupHistories: params.groupHistories,
@@ -275,6 +276,7 @@ export function createWebOnMessageHandler(params: {
           agentId: route.agentId,
           sessionKey: route.sessionKey,
           baseMentionConfig,
+          providerMentionPatterns: account.mentionPatterns,
           authDir: account.authDir,
           selfChatMode: account.selfChatMode,
           groupHistories: params.groupHistories,
@@ -287,14 +289,12 @@ export function createWebOnMessageHandler(params: {
       if (!gating.shouldProcess) {
         return;
       }
-    } else {
+    } else if (!msg.sender?.e164 && !msg.senderE164 && peerId && peerId.startsWith("+")) {
       // Ensure `peerId` for DMs is stable and stored as E.164 when possible.
-      if (!msg.sender?.e164 && !msg.senderE164 && peerId && peerId.startsWith("+")) {
-        const normalized = normalizeE164(peerId);
-        if (normalized) {
-          msg.sender = { ...msg.sender, e164: normalized };
-          msg.senderE164 = normalized;
-        }
+      const normalized = normalizeE164(peerId);
+      if (normalized) {
+        msg.sender = { ...msg.sender, e164: normalized };
+        msg.senderE164 = normalized;
       }
     }
 

@@ -29,8 +29,26 @@ import {
 } from "../types.js";
 import { killProcessTree } from "./kill-tree.js";
 
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+
 function resolvePath(cwd: string, path: string): string {
   return isAbsolute(path) ? path : resolve(cwd, path);
+}
+
+/** Convert user-facing timeout seconds into a positive, timer-safe millisecond delay. */
+export function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return undefined;
+  }
+  const milliseconds = Math.floor(timeoutSeconds * 1000);
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
+    return 1;
+  }
+  return Math.min(milliseconds, MAX_TIMER_TIMEOUT_MS);
 }
 
 function fileKindFromStats(stats: {
@@ -224,6 +242,7 @@ function getShellEnv(
   };
 }
 
+/** Node-backed execution environment for agent harness filesystem and shell operations. */
 export class NodeExecutionEnv implements ExecutionEnv {
   cwd: string;
   private shellPath?: string;
@@ -271,7 +290,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
       let timedOut = false;
       let callbackError: ExecutionError | undefined;
       let child: ReturnType<typeof spawn> | undefined;
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeoutRef: { current?: ReturnType<typeof setTimeout> } = {};
 
       const onAbort = () => {
         if (child?.pid) {
@@ -282,8 +301,8 @@ export class NodeExecutionEnv implements ExecutionEnv {
       const settle = (
         result: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>,
       ) => {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
         }
         if (options?.abortSignal) {
           options.abortSignal.removeEventListener("abort", onAbort);
@@ -309,15 +328,16 @@ export class NodeExecutionEnv implements ExecutionEnv {
         return;
       }
 
-      timeoutId =
-        typeof options?.timeout === "number"
-          ? setTimeout(() => {
+      const timeoutMs = resolveExecTimeoutMs(options?.timeout);
+      timeoutRef.current =
+        timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => {
               timedOut = true;
               if (child?.pid) {
                 killProcessTree(child.pid, { force: true });
               }
-            }, options.timeout * 1000)
-          : undefined;
+            }, timeoutMs);
 
       if (options?.abortSignal) {
         if (options.abortSignal.aborted) {
@@ -564,7 +584,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
     }
   }
 
-  async createTempDir(prefix: string = "tmp-"): Promise<Result<string, FileError>> {
+  async createTempDir(prefix = "tmp-"): Promise<Result<string, FileError>> {
     try {
       return ok(await mkdtemp(join(tmpdir(), prefix)));
     } catch (error) {

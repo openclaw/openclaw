@@ -17,6 +17,10 @@ import {
 } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
@@ -201,10 +205,15 @@ const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
 const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
 const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
+const NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS = 250;
 const NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR =
   "native hook relay bridge stale registration";
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
+
+function resolveNativeHookRelayExpiresAtMs(ttlMs: number | undefined): number | undefined {
+  return resolveExpiresAtMsFromDurationMs(normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS));
+}
 
 type NativeHookRelayPermissionDecision = "allow" | "deny";
 
@@ -396,6 +405,10 @@ export function registerNativeHookRelay(
   const generation = normalizeRelayGeneration(params.generation) ?? randomUUID();
   const generationMismatchGraceMs = normalizePositiveInteger(params.generationMismatchGraceMs, 0);
   const now = Date.now();
+  const expiresAtMs = resolveNativeHookRelayExpiresAtMs(params.ttlMs);
+  if (expiresAtMs === undefined) {
+    throw new Error("Native hook relay expiry is outside the supported Date range");
+  }
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
   unregisterNativeHookRelay(relayId);
   const registration: ActiveNativeHookRelayRegistration = {
@@ -412,7 +425,7 @@ export function registerNativeHookRelay(
     runId: params.runId,
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
-    expiresAtMs: now + normalizePositiveInteger(params.ttlMs, DEFAULT_RELAY_TTL_MS),
+    expiresAtMs,
     ...(params.signal ? { signal: params.signal } : {}),
   };
   relays.set(relayId, registration);
@@ -436,9 +449,12 @@ export function registerNativeHookRelay(
       if (current !== registration) {
         return;
       }
-      const expiresAtMs = Date.now() + normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS);
-      current.expiresAtMs = expiresAtMs;
-      handle.expiresAtMs = expiresAtMs;
+      const renewedExpiresAtMs = resolveNativeHookRelayExpiresAtMs(ttlMs);
+      if (renewedExpiresAtMs === undefined) {
+        return;
+      }
+      current.expiresAtMs = renewedExpiresAtMs;
+      handle.expiresAtMs = renewedExpiresAtMs;
       const bridge = relayBridges.get(relayId);
       if (bridge) {
         writeNativeHookRelayBridgeRecordForRegistration(current, bridge);
@@ -717,7 +733,12 @@ export async function invokeNativeHookRelayBridge(
       ) {
         break;
       }
-      if (!isRetryableNativeHookRelayBridgeError(error)) {
+      if (
+        !isRetryableNativeHookRelayBridgeLookupError({
+          error,
+          elapsedMs: Date.now() - startedAt,
+        })
+      ) {
         break;
       }
       await delay(
@@ -894,7 +915,9 @@ function registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegist
   } catch (error) {
     log.debug("native hook relay bridge dir prune skipped", { error });
   }
-  unregisterNativeHookRelayBridge(registration.relayId);
+  unregisterNativeHookRelayBridge(registration.relayId, {
+    deferRegistryRemovalMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
+  });
   const token = randomUUID();
   const bridgeDir = ensureNativeHookRelayBridgeDir();
   const bridgeKey = nativeHookRelayBridgeKey(registration.relayId);
@@ -954,7 +977,10 @@ function writeNativeHookRelayBridgeRecordForRegistration(
   writeNativeHookRelayBridgeRecord(bridge.registryPath, record);
 }
 
-function unregisterNativeHookRelayBridge(relayId: string): void {
+function unregisterNativeHookRelayBridge(
+  relayId: string,
+  options?: { deferRegistryRemovalMs?: number },
+): void {
   const bridge = relayBridges.get(relayId);
   if (!bridge) {
     return;
@@ -963,6 +989,19 @@ function unregisterNativeHookRelayBridge(relayId: string): void {
   bridge.server.close();
   const record = readNativeHookRelayBridgeRecordIfExists(relayId);
   if (record?.token === bridge.token) {
+    const deferRegistryRemovalMs = normalizePositiveInteger(options?.deferRegistryRemovalMs, 0);
+    if (deferRegistryRemovalMs > 0) {
+      // During stable-id replacement, leave the old record in place until the
+      // new bridge writes over it. Hook subprocesses can then retry
+      // ECONNREFUSED/stale-registration instead of observing a missing relay.
+      const timeout = setTimeout(() => {
+        if (readNativeHookRelayBridgeRecordIfExists(relayId)?.token === bridge.token) {
+          rmSync(bridge.registryPath, { force: true });
+        }
+      }, deferRegistryRemovalMs);
+      timeout.unref();
+      return;
+    }
     rmSync(bridge.registryPath, { force: true });
   }
 }
@@ -1221,6 +1260,17 @@ function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
   );
 }
 
+function isRetryableNativeHookRelayBridgeLookupError(params: {
+  error: unknown;
+  elapsedMs: number;
+}): boolean {
+  return (
+    isRetryableNativeHookRelayBridgeError(params.error) ||
+    (params.elapsedMs < NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS &&
+      isNativeHookRelayBridgeStaleRegistrationError(params.error))
+  );
+}
+
 function nativeHookRelayBridgeDir(): string {
   const uid = typeof process.getuid === "function" ? process.getuid() : "nouid";
   return path.join(tmpdir(), `openclaw-native-hook-relays-${uid}`);
@@ -1471,12 +1521,12 @@ async function startNativeHookRelayPermissionApprovalWithBudget(params: {
     );
     return "defer";
   }
-  let approval!: Promise<NativeHookRelayPermissionApprovalResult>;
-  approval = nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
-    if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
-      pendingPermissionApprovals.delete(params.approvalKey);
-    }
-  });
+  const approval: Promise<NativeHookRelayPermissionApprovalResult> =
+    nativeHookRelayPermissionApprovalRequester(params.request).finally(() => {
+      if (pendingPermissionApprovals.get(params.approvalKey) === approval) {
+        pendingPermissionApprovals.delete(params.approvalKey);
+      }
+    });
   pendingPermissionApprovals.set(params.approvalKey, approval);
   return approval;
 }
@@ -1593,7 +1643,7 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
     const sortedKeySet = new Set(keys);
     hash.update("#object-tail:");
     for (const key in value) {
-      if (!Object.prototype.hasOwnProperty.call(value, key) || sortedKeySet.has(key)) {
+      if (!Object.hasOwn(value, key) || sortedKeySet.has(key)) {
         continue;
       }
       hash.update(JSON.stringify(key));
@@ -1612,7 +1662,7 @@ function readBoundedOwnKeys(
   const keys: string[] = [];
   let truncated = false;
   for (const key in value) {
-    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+    if (!Object.hasOwn(value, key)) {
       continue;
     }
     if (keys.length >= maxKeys) {
@@ -1640,11 +1690,16 @@ function consumeNativeHookRelayPermissionBudget(relayId: string, now = Date.now(
 }
 
 function hasNativeHookRelayPermissionAllowAlways(key: string, now = Date.now()): boolean {
+  const validNow = asDateTimestampMs(now);
+  if (validNow === undefined) {
+    return false;
+  }
   const entry = permissionAllowAlwaysApprovals.get(key);
   if (!entry) {
     return false;
   }
-  if (entry.expiresAtMs <= now) {
+  const expiresAtMs = asDateTimestampMs(entry.expiresAtMs);
+  if (expiresAtMs === undefined || expiresAtMs <= validNow) {
     permissionAllowAlwaysApprovals.delete(key);
     return false;
   }
@@ -1653,8 +1708,14 @@ function hasNativeHookRelayPermissionAllowAlways(key: string, now = Date.now()):
 
 function rememberNativeHookRelayPermissionAllowAlways(key: string, now = Date.now()): void {
   pruneNativeHookRelayPermissionAllowAlways(now);
+  const expiresAtMs = resolveExpiresAtMsFromDurationMs(PERMISSION_ALLOW_ALWAYS_TTL_MS, {
+    nowMs: now,
+  });
+  if (expiresAtMs === undefined) {
+    return;
+  }
   permissionAllowAlwaysApprovals.set(key, {
-    expiresAtMs: now + PERMISSION_ALLOW_ALWAYS_TTL_MS,
+    expiresAtMs,
   });
   while (permissionAllowAlwaysApprovals.size > MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES) {
     const oldestKey = permissionAllowAlwaysApprovals.keys().next().value;
@@ -1666,8 +1727,13 @@ function rememberNativeHookRelayPermissionAllowAlways(key: string, now = Date.no
 }
 
 function pruneNativeHookRelayPermissionAllowAlways(now = Date.now()): void {
+  const validNow = asDateTimestampMs(now);
+  if (validNow === undefined) {
+    return;
+  }
   for (const [key, entry] of permissionAllowAlwaysApprovals) {
-    if (entry.expiresAtMs <= now) {
+    const expiresAtMs = asDateTimestampMs(entry.expiresAtMs);
+    if (expiresAtMs === undefined || expiresAtMs <= validNow) {
       permissionAllowAlwaysApprovals.delete(key);
     }
   }
@@ -1910,7 +1976,7 @@ async function requestNativeHookRelayPermissionApproval(
     return "defer";
   }
   let decision: string | null | undefined;
-  if (Object.prototype.hasOwnProperty.call(requestResult ?? {}, "decision")) {
+  if (Object.hasOwn(requestResult ?? {}, "decision")) {
     decision = requestResult.decision;
   } else {
     const waitResult = await waitForNativeHookRelayApprovalDecision({
@@ -2155,11 +2221,11 @@ function isJsonValue(value: unknown): value is JsonValue {
       continue;
     }
     if (Array.isArray(current.value)) {
-      for (let index = 0; index < current.value.length; index += 1) {
+      for (const value of current.value) {
         if (nodes + stack.length + 1 > MAX_NATIVE_HOOK_RELAY_JSON_NODES) {
           return false;
         }
-        stack.push({ value: current.value[index], depth: current.depth + 1 });
+        stack.push({ value, depth: current.depth + 1 });
       }
       continue;
     }
@@ -2168,7 +2234,7 @@ function isJsonValue(value: unknown): value is JsonValue {
     }
     try {
       for (const key in current.value) {
-        if (!Object.prototype.hasOwnProperty.call(current.value, key)) {
+        if (!Object.hasOwn(current.value, key)) {
           continue;
         }
         if (key.length > MAX_NATIVE_HOOK_RELAY_STRING_LENGTH) {
@@ -2234,6 +2300,9 @@ export const testing = {
   getNativeHookRelayBridgeRecordForTests(relayId: string): Record<string, unknown> | undefined {
     const record = readNativeHookRelayBridgeRecordIfExists(relayId);
     return record ? { ...record } : undefined;
+  },
+  isNativeHookRelayBridgeLookupRetryableForTests(error: unknown, elapsedMs = 0): boolean {
+    return isRetryableNativeHookRelayBridgeLookupError({ error, elapsedMs });
   },
   formatPermissionApprovalDescriptionForTests(
     request: NativeHookRelayPermissionApprovalRequest,

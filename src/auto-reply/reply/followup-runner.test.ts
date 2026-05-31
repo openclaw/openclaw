@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setCliSessionBinding } from "../../agents/cli-session.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -333,6 +334,9 @@ async function persistRunSessionUsageForFollowupTest(
         (params.lastCallUsage?.cacheWrite ?? params.usage?.cacheWrite ?? 0);
     nextEntry.totalTokens = promptTokens > 0 ? promptTokens : undefined;
     nextEntry.totalTokensFresh = promptTokens > 0;
+  }
+  if (params.cliSessionBinding && params.providerUsed && !preserveUserFacingRunState) {
+    setCliSessionBinding(nextEntry, params.providerUsed, params.cliSessionBinding);
   }
   store[sessionKey] = nextEntry;
   if (registeredStore) {
@@ -680,6 +684,66 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(call.sessionId).toBe("post-compact-session");
     expect(call.sessionFile).toBe("/tmp/post-compact.jsonl");
   });
+
+  it("registers the admitted session id when the local session store is stale", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+    const active = createReplyOperationForTest({
+      sessionKey: "main",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+    let observedRunId: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { runId: string; sessionId?: string }) => {
+        observedRunId = params.runId;
+        expect(params.sessionId).toBe("post-compact-session");
+        return {
+          payloads: [],
+          meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+        };
+      },
+    );
+    const sessionStore = {
+      main: {
+        sessionId: "pre-compact-session",
+        sessionFile: "/tmp/pre-compact.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: sessionStore.main,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        run: {
+          sessionId: "queued-stale-session",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    active.updateSessionId("post-compact-session");
+    active.complete();
+    await pending;
+
+    expect(observedRunId).toBeDefined();
+    expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe(
+      "post-compact-session",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+  });
 });
 
 async function normalizeComparablePath(filePath: string): Promise<string> {
@@ -880,6 +944,10 @@ describe("createFollowupRunner runtime config", () => {
     await runner(
       createQueuedRun({
         originatingChannel: "telegram",
+        originatingTo: "telegram:-100123:topic:42",
+        originatingThreadId: "42",
+        originatingReplyToId: "reply-42",
+        messageId: "queued-message-1",
         run: {
           config: runtimeConfig,
           sessionId: "session-cli-followup",
@@ -887,6 +955,11 @@ describe("createFollowupRunner runtime config", () => {
           model: "claude-opus-4-7",
           messageProvider: "telegram",
           cwd: "/tmp/task-repo",
+          inputProvenance: {
+            kind: "internal_system",
+            sourceChannel: "telegram",
+            sourceTool: "restart-sentinel",
+          },
         },
       }),
     );
@@ -899,6 +972,9 @@ describe("createFollowupRunner runtime config", () => {
     expect(call.config).toBe(runtimeConfig);
     expect(call.cliSessionId).toBe("cli-session-1");
     expect(call.messageChannel).toBe("telegram");
+    expect(call.currentChannelId).toBe("telegram:-100123:topic:42");
+    expect(call.currentThreadTs).toBe("42");
+    expect(call.currentMessageId).toBe("reply-42");
     expect(call).toMatchObject({
       sessionId: "session-cli-followup",
       sessionKey: "main",
@@ -909,6 +985,215 @@ describe("createFollowupRunner runtime config", () => {
       suppressNextUserMessagePersistence: false,
     });
     expect(call.onUserMessagePersisted).toEqual(expect.any(Function));
+  });
+
+  it("reuses CLI session bindings for queued room-event followups", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-room-event",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "cli-session-1",
+        },
+      },
+    };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          cliSessionBinding: {
+            sessionId: "cli-session-1",
+          },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        run: {
+          config: runtimeConfig,
+          sessionId: "session-cli-room-event",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.suppressNextUserMessagePersistence).toBe(true);
+    expect(call.cliSessionId).toBe("cli-session-1");
+    expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
+  });
+
+  it("stores queued room-event CLI sessions created from the first ambient run", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const storePath = "/tmp/openclaw-followup-room-event-cli.json";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-room-event",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    registerFollowupTestSessionStore(storePath, sessionStore);
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          sessionId: "cli-session-1",
+          cliSessionBinding: {
+            sessionId: "cli-session-1",
+            authProfileId: "profile",
+          },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        run: {
+          config: runtimeConfig,
+          sessionId: "session-cli-room-event",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.cliSessionId).toBeUndefined();
+    expect(sessionStore.main.cliSessionBindings?.["claude-cli"]).toEqual({
+      sessionId: "cli-session-1",
+      authProfileId: "profile",
+    });
+  });
+
+  it("does not replace queued room-event CLI session bindings when reuse fails", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-room-event",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "cli-session-1",
+        },
+      },
+    };
+    const sessionStore = { main: sessionEntry };
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          sessionId: "transient-cli-session",
+          cliSessionBinding: {
+            sessionId: "transient-cli-session",
+          },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        run: {
+          config: runtimeConfig,
+          sessionId: "session-cli-room-event",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: true,
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    const call = requireLastMockCallArg(runCliAgentMock, "run cli agent");
+    expect(call.currentInboundEventKind).toBe("room_event");
+    expect(call.cliSessionId).toBe("cli-session-1");
+    expect(call.cliSessionBinding).toEqual({ sessionId: "cli-session-1" });
+    expect(sessionStore.main.cliSessionBindings?.["claude-cli"]).toBeUndefined();
   });
 
   it("passes prepared media user turns to CLI runtime dispatch", async () => {
@@ -1412,6 +1697,33 @@ describe("createFollowupRunner runtime config", () => {
 });
 
 describe("createFollowupRunner progress forwarding", () => {
+  it("records queued thread id on follow-up reply operations", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "slack",
+      originatingTo: "user:U1",
+      originatingThreadId: "501.000",
+      run: {
+        messageProvider: "slack",
+      },
+    });
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: { replyOperation?: { routeThreadId?: string | number } }) => {
+        expect(args.replyOperation?.routeThreadId).toBe("501.000");
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("forwards queued follow-up tool progress and verbose tool result payloads", async () => {
     const onToolStart = vi.fn(async () => {});
     const queued = createQueuedRun({
@@ -2318,6 +2630,69 @@ describe("createFollowupRunner compaction", () => {
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
     expect(sessionStore.main?.compactionCount).toBe(2);
   });
+
+  it("registers the post-preflight session id for lifecycle event stamping", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    realAgentEvents.resetAgentRunContextForTest();
+    const sessionEntry: SessionEntry = {
+      sessionId: "old-session",
+      updatedAt: Date.now(),
+      sessionFile: "/tmp/old-session.jsonl",
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      main: sessionEntry,
+    };
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(
+      async (params: {
+        followupRun: FollowupRun;
+        sessionEntry?: SessionEntry;
+        sessionStore?: Record<string, SessionEntry>;
+        sessionKey?: string;
+      }) => {
+        const updatedEntry: SessionEntry = {
+          ...(params.sessionEntry ?? sessionEntry),
+          sessionId: "new-session",
+          sessionFile: "/tmp/new-session.jsonl",
+          updatedAt: Date.now(),
+        };
+        params.followupRun.run.sessionId = updatedEntry.sessionId;
+        params.followupRun.run.sessionFile = "/tmp/new-session.jsonl";
+        if (params.sessionKey && params.sessionStore) {
+          params.sessionStore[params.sessionKey] = updatedEntry;
+        }
+        return updatedEntry;
+      },
+    );
+
+    let observedRunId: string | undefined;
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (params: { runId: string; sessionId?: string }) => {
+        observedRunId = params.runId;
+        expect(params.sessionId).toBe("new-session");
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(createQueuedRun());
+
+    expect(observedRunId).toBeDefined();
+    expect(realAgentEvents.getAgentRunContext(observedRunId ?? "")?.sessionId).toBe("new-session");
+    realAgentEvents.resetAgentRunContextForTest();
+  });
 });
 
 describe("createFollowupRunner bootstrap warning dedupe", () => {
@@ -2600,7 +2975,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.5",
       contextTokens: 200_000,
       inputTokens: 1_234,
@@ -2629,7 +3004,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       opts: { onBlockReply: createAsyncReplySpy() },
       typing: createMockTypingController(),
       typingMode: "instant",
-      defaultModel: "openai-codex/gpt-5.5",
+      defaultModel: "openai/gpt-5.5",
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -2653,7 +3028,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     const persistCall = requireMockCallArg(persistSpy, 0);
     expect(persistCall.preserveUserFacingSessionModelState).toBe(true);
-    expect(sessionStore[sessionKey]?.modelProvider).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
     expect(sessionStore[sessionKey]?.model).toBe("gpt-5.5");
     expect(sessionStore[sessionKey]?.contextTokens).toBe(200_000);
     expect(sessionStore[sessionKey]?.inputTokens).toBe(1_234);

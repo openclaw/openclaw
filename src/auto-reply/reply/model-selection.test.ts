@@ -78,7 +78,46 @@ describe("createModelSelectionState catalog loading", () => {
         defaults: {
           thinkingDefault: "low",
           models: {
-            "openai-codex/gpt-5.4": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [makeConfiguredModel()],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.4",
+      provider: "openai",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    expect(state.allowedModelKeys.has("openai/gpt-5.4")).toBe(true);
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("low");
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("prefers per-model params.thinking over global thinkingDefault", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          thinkingDefault: "low",
+          models: {
+            "openai-codex/gpt-5.4": {
+              params: { thinking: "high" },
+            },
           },
         },
       },
@@ -102,9 +141,44 @@ describe("createModelSelectionState catalog loading", () => {
       hasModelDirective: false,
     });
 
-    expect(state.allowedModelKeys.has("openai-codex/gpt-5.4")).toBe(true);
-    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("low");
-    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("high");
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("keeps per-model disabled params.thinking ahead of global thinkingDefault", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          thinkingDefault: "low",
+          models: {
+            "deepseek/deepseek-v4-pro": {
+              params: { thinking: false },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          deepseek: {
+            baseUrl: "https://api.deepseek.com/v1",
+            models: [makeConfiguredModel({ id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" })],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "deepseek",
+      defaultModel: "deepseek-v4-pro",
+      provider: "deepseek",
+      model: "deepseek-v4-pro",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("off");
     expect(loadModelCatalog).not.toHaveBeenCalled();
   });
 
@@ -114,13 +188,13 @@ describe("createModelSelectionState catalog loading", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {},
+            "openai/gpt-5.4": {},
           },
         },
       },
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://api.openai.com/v1",
             models: [makeConfiguredModel()],
           },
@@ -131,9 +205,9 @@ describe("createModelSelectionState catalog loading", () => {
     const state = await createModelSelectionState({
       cfg,
       agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai-codex",
+      defaultProvider: "openai",
       defaultModel: "gpt-5.4",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       hasModelDirective: false,
     });
@@ -145,19 +219,19 @@ describe("createModelSelectionState catalog loading", () => {
   it("hydrates runtime catalog metadata when the configured allowlist entry lacks reasoning", async () => {
     vi.mocked(loadModelCatalog).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([
-      { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
     ]);
     const cfg = {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.4": {},
+            "openai/gpt-5.4": {},
           },
         },
       },
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://api.openai.com/v1",
             models: [makeConfiguredModel({ reasoning: undefined })],
           },
@@ -168,9 +242,9 @@ describe("createModelSelectionState catalog loading", () => {
     const state = await createModelSelectionState({
       cfg,
       agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai-codex",
+      defaultProvider: "openai",
       defaultModel: "gpt-5.4",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       hasModelDirective: false,
     });
@@ -331,7 +405,7 @@ describe("createModelSelectionState catalog loading", () => {
         defaults: {
           thinkingDefault: "low",
           models: {
-            "openai-codex/gpt-5.4": {
+            "openai/gpt-5.4": {
               params: { thinking: "high" },
             },
           },
@@ -349,9 +423,9 @@ describe("createModelSelectionState catalog loading", () => {
       cfg,
       agentId: "alpha",
       agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai-codex",
+      defaultProvider: "openai",
       defaultModel: "gpt-5.4",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
       hasModelDirective: false,
     });
@@ -388,7 +462,7 @@ describe("createModelSelectionState catalog loading", () => {
     vi.mocked(loadModelCatalog).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([
       { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
-      { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      { provider: "openai", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
       { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
     ]);
     const cfg = {
@@ -396,7 +470,7 @@ describe("createModelSelectionState catalog loading", () => {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-5" },
           models: {
-            "openai-codex/*": {},
+            "openai/*": {},
             "vllm/*": {},
           },
         },
@@ -413,7 +487,7 @@ describe("createModelSelectionState catalog loading", () => {
       hasModelDirective: false,
     });
 
-    expect(state.provider).toBe("openai-codex");
+    expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-5.5-codex");
     expect(state.allowedModelKeys.has("anthropic/claude-opus-4-5")).toBe(false);
     expect(loadModelCatalog).toHaveBeenCalledOnce();
@@ -920,14 +994,14 @@ describe("createModelSelectionState respects session model override", () => {
           model: { primary: "anthropic/claude-sonnet-4-6" },
           models: {
             "anthropic/claude-sonnet-4-6": {},
-            "openai-codex/*": {},
+            "openai/*": {},
           },
         },
       },
     } as OpenClawConfig;
     const sessionKey = "agent:main:telegram:direct:1";
     const sessionEntry = makeEntry({
-      providerOverride: "openai-codex",
+      providerOverride: "openai",
       modelOverride: "gpt-added-after-startup",
     });
     const sessionStore = { [sessionKey]: sessionEntry };
@@ -945,10 +1019,10 @@ describe("createModelSelectionState respects session model override", () => {
       hasModelDirective: false,
     });
 
-    expect(state.provider).toBe("openai-codex");
+    expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-added-after-startup");
     expect(state.resetModelOverride).toBe(false);
-    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-added-after-startup");
   });
 
@@ -1058,15 +1132,15 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
-  it("clears stale auto-created legacy openai-codex route pins when primary is canonical openai", async () => {
+  it("clears stale auto-created legacy openai route pins when primary is canonical openai", async () => {
     const sessionEntry = makeEntry({
-      providerOverride: "openai-codex",
+      providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "auto",
-      modelProvider: "openai-codex",
+      modelProvider: "openai",
       model: "gpt-5.5",
       contextTokens: 350_000,
-      authProfileOverride: "openai-codex:default",
+      authProfileOverride: "openai:default",
       authProfileOverrideSource: "auto",
     });
     const sessionStore = { [sessionKey]: sessionEntry };
@@ -1081,7 +1155,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       defaultModel: "gpt-5.5",
       primaryProvider: "openai",
       primaryModel: "gpt-5.5",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5",
       hasModelDirective: false,
     });
@@ -1089,7 +1163,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-5.5");
     expect(state.resetModelOverride).toBe(true);
-    expect(state.resetModelOverrideRef).toBe("openai-codex/gpt-5.5");
+    expect(state.resetModelOverrideRef).toBe("openai/gpt-5.5");
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
@@ -1100,22 +1174,22 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBeUndefined();
   });
 
-  it("preserves usable Codex auth while clearing stale legacy openai-codex route pins", async () => {
+  it("preserves usable Codex auth while clearing stale legacy openai route pins", async () => {
     authProfileStoreMock.store = {
       version: 1,
       profiles: {
-        "openai-codex:default": {
+        "openai:default": {
           type: "api_key",
-          provider: "openai-codex",
+          provider: "openai",
           key: "test-key",
         },
       },
     };
     const sessionEntry = makeEntry({
-      providerOverride: "openai-codex",
+      providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "auto",
-      authProfileOverride: "openai-codex:default",
+      authProfileOverride: "openai:default",
       authProfileOverrideSource: "auto",
     });
     const sessionStore = { [sessionKey]: sessionEntry };
@@ -1130,7 +1204,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       defaultModel: "gpt-5.5",
       primaryProvider: "openai",
       primaryModel: "gpt-5.5",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5",
       hasModelDirective: false,
     });
@@ -1140,11 +1214,11 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(state.resetModelOverride).toBe(true);
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
-    expect(sessionStore[sessionKey]?.authProfileOverride).toBe("openai-codex:default");
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBe("openai:default");
     expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBe("auto");
   });
 
-  it("keeps auto openai-codex pins when canonical openai uses a custom API route", async () => {
+  it("keeps auto openai pins when canonical openai uses a custom API route", async () => {
     const cfg = {
       models: {
         providers: {
@@ -1156,7 +1230,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       },
     } as OpenClawConfig;
     const sessionEntry = makeEntry({
-      providerOverride: "openai-codex",
+      providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "auto",
     });
@@ -1172,22 +1246,22 @@ describe("createModelSelectionState auto-failover overrides", () => {
       defaultModel: "gpt-5.5",
       primaryProvider: "openai",
       primaryModel: "gpt-5.5",
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.5",
       hasModelDirective: false,
     });
 
-    expect(state.provider).toBe("openai-codex");
+    expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-5.5");
     expect(state.resetModelOverride).toBe(false);
-    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-5.5");
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
   });
 
-  it("keeps explicit user openai-codex route overrides", async () => {
+  it("keeps explicit user openai route overrides", async () => {
     const sessionEntry = makeEntry({
-      providerOverride: "openai-codex",
+      providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "user",
     });
@@ -1208,10 +1282,10 @@ describe("createModelSelectionState auto-failover overrides", () => {
       hasModelDirective: false,
     });
 
-    expect(state.provider).toBe("openai-codex");
+    expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-5.5");
     expect(state.resetModelOverride).toBe(false);
-    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-5.5");
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("user");
   });
@@ -1308,7 +1382,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       providerOverride: "openrouter",
       modelOverride: "minimax/minimax-m2.7",
       modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "openai-codex",
+      modelOverrideFallbackOriginProvider: "openai",
       modelOverrideFallbackOriginModel: "gpt-5.3",
       provider: "openrouter",
       model: "minimax/minimax-m2.7",
@@ -1341,7 +1415,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       providerOverride: "openrouter",
       modelOverride: "minimax/minimax-m2.7",
       modelOverrideSource: "auto",
-      modelOverrideFallbackOriginProvider: "openai-codex",
+      modelOverrideFallbackOriginProvider: "openai",
       modelOverrideFallbackOriginModel: "gpt-5.3",
       authProfileOverride: "mac-studio:local",
       authProfileOverrideSource: "user",

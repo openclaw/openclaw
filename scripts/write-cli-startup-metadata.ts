@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -28,6 +28,7 @@ const extensionsDir = path.join(rootDir, "extensions");
 const ROOT_HELP_RENDER_TIMEOUT_MS = 120_000;
 const BROWSER_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
+const COMMAND_HELP_RENDER_CONCURRENCY = 2;
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = ["doctor", "gateway", "models", "plugins"] as const;
 const CORE_CHANNEL_ORDER = [
   "telegram",
@@ -39,6 +40,7 @@ const CORE_CHANNEL_ORDER = [
   "signal",
   "imessage",
 ] as const;
+const generatorSignature = createHash("sha1").update(readFileSync(scriptPath)).digest("hex");
 
 type ExtensionChannelEntry = {
   id: string;
@@ -54,6 +56,9 @@ type BundledChannelCatalog = {
 type PrecomputedSubcommandHelpCommand = (typeof PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS)[number];
 type PrecomputedSubcommandHelpText = Record<PrecomputedSubcommandHelpCommand, string>;
 type RootHelpRenderContext = Pick<RootHelpRenderOptions, "config" | "env">;
+type Awaitable<T> = T | Promise<T>;
+type SourceCommandHelpCommand = "nodes" | "secrets" | PrecomputedSubcommandHelpCommand;
+type SourceCommandHelpText = Record<SourceCommandHelpCommand, string>;
 
 function resolveRootHelpBundleIdentity(
   distDirOverride: string = distDir,
@@ -162,8 +167,8 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
       path.join(sourceRootDir, "src/cli/gateway-cli/run-command.ts"),
       path.join(sourceRootDir, "src/cli/models-cli.ts"),
       path.join(sourceRootDir, "src/cli/plugins-cli.ts"),
-      path.join(sourceRootDir, "src/terminal/links.ts"),
-      path.join(sourceRootDir, "src/terminal/theme.ts"),
+      path.join(sourceRootDir, "packages/terminal-core/src/links.ts"),
+      path.join(sourceRootDir, "packages/terminal-core/src/theme.ts"),
     ],
     sourceRootDir,
   );
@@ -254,6 +259,98 @@ function createIsolatedRootHelpRenderContext(
     },
   };
   return { config, env };
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  limit: number,
+  run: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  results.length = values.length;
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, limit), values.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      for (;;) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= values.length) {
+          return;
+        }
+        results[index] = await run(values[index]);
+      }
+    }),
+  );
+  return results;
+}
+
+async function spawnText(
+  args: string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    failureMessage: string;
+    timeoutMs: number;
+  },
+): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      callback();
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, options.timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", (error) => {
+      settle(() => {
+        reject(error);
+      });
+    });
+    child.once("close", (code, signal) => {
+      settle(() => {
+        if (code === 0) {
+          resolve(stdout);
+          return;
+        }
+        const detail = stderr.trim();
+        reject(
+          new Error(
+            options.failureMessage +
+              (detail
+                ? `: ${detail}`
+                : timedOut
+                  ? ": timed out"
+                  : signal
+                    ? `: terminated by ${signal}`
+                    : ""),
+          ),
+        );
+      });
+    });
+  });
 }
 
 export async function renderBundledRootHelpText(
@@ -388,56 +485,60 @@ function renderSourceBrowserHelpText(
   return result.stdout ?? "";
 }
 
-function renderSourceCommandHelpText(
-  command: "nodes" | "secrets" | PrecomputedSubcommandHelpCommand,
+async function renderSourceCommandHelpText(
+  command: SourceCommandHelpCommand,
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): string {
-  const result = spawnSync(
-    process.execPath,
-    ["--import", "tsx", "openclaw.mjs", command, "--help"],
-    {
-      cwd: rootDir,
-      encoding: "utf8",
-      env: {
-        ...renderContext.env,
-        OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
-      },
-      timeout: COMMAND_HELP_RENDER_TIMEOUT_MS,
+): Promise<string> {
+  return await spawnText(["openclaw.mjs", command, "--help"], {
+    cwd: rootDir,
+    env: {
+      ...renderContext.env,
+      OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
     },
+    failureMessage: `Failed to render source ${command} help`,
+    timeoutMs: COMMAND_HELP_RENDER_TIMEOUT_MS,
+  });
+}
+
+async function renderSourceSecretsHelpText(
+  renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
+): Promise<string> {
+  return await renderSourceCommandHelpText("secrets", renderContext);
+}
+
+async function renderSourceNodesHelpText(
+  renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
+): Promise<string> {
+  return await renderSourceCommandHelpText("nodes", renderContext);
+}
+
+async function renderSourceCommandHelpTextRecord(
+  commands: readonly SourceCommandHelpCommand[],
+  renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
+): Promise<SourceCommandHelpText> {
+  const helpTexts = await mapWithConcurrency(
+    commands,
+    COMMAND_HELP_RENDER_CONCURRENCY,
+    async (commandName) => await renderSourceCommandHelpText(commandName, renderContext),
   );
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    throw new Error(
-      `Failed to render source ${command} help` +
-        (stderr ? `: ${stderr}` : result.signal ? `: terminated by ${result.signal}` : ""),
-    );
-  }
-  return result.stdout ?? "";
+  return Object.fromEntries(
+    commands.map((commandName, index) => [commandName, helpTexts[index]]),
+  ) as SourceCommandHelpText;
 }
 
-function renderSourceSecretsHelpText(
+async function renderSourceSubcommandHelpTextRecord(
   renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): string {
-  return renderSourceCommandHelpText("secrets", renderContext);
-}
-
-function renderSourceNodesHelpText(
-  renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): string {
-  return renderSourceCommandHelpText("nodes", renderContext);
-}
-
-function renderSourceSubcommandHelpTextRecord(
-  renderContext: RootHelpRenderContext = createIsolatedRootHelpRenderContext(),
-): PrecomputedSubcommandHelpText {
-  const entries = PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
-    commandName,
-    renderSourceCommandHelpText(commandName, renderContext),
-  ]);
-  return Object.fromEntries(entries) as PrecomputedSubcommandHelpText;
+): Promise<PrecomputedSubcommandHelpText> {
+  const commandHelpText = await renderSourceCommandHelpTextRecord(
+    PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS,
+    renderContext,
+  );
+  return Object.fromEntries(
+    PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
+      commandName,
+      commandHelpText[commandName],
+    ]),
+  ) as PrecomputedSubcommandHelpText;
 }
 
 export async function writeCliStartupMetadata(options?: {
@@ -448,9 +549,11 @@ export async function writeCliStartupMetadata(options?: {
   renderBundledRootHelpText?: typeof renderBundledRootHelpText;
   renderSourceRootHelpText?: typeof renderSourceRootHelpText;
   renderSourceBrowserHelpText?: typeof renderSourceBrowserHelpText;
-  renderSourceSecretsHelpText?: typeof renderSourceSecretsHelpText;
-  renderSourceNodesHelpText?: typeof renderSourceNodesHelpText;
-  renderSourceSubcommandHelpTextRecord?: typeof renderSourceSubcommandHelpTextRecord;
+  renderSourceSecretsHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
+  renderSourceNodesHelpText?: (renderContext: RootHelpRenderContext) => Awaitable<string>;
+  renderSourceSubcommandHelpTextRecord?: (
+    renderContext: RootHelpRenderContext,
+  ) => Awaitable<PrecomputedSubcommandHelpText>;
 }): Promise<void> {
   const resolvedDistDir = options?.distDir ?? distDir;
   const resolvedOutputPath = options?.outputPath ?? outputPath;
@@ -471,6 +574,7 @@ export async function writeCliStartupMetadata(options?: {
   try {
     const existing = JSON.parse(readFileSync(resolvedOutputPath, "utf8")) as {
       rootHelpBundleSignature?: unknown;
+      generatorSignature?: unknown;
       browserHelpSourceSignature?: unknown;
       secretsHelpSourceSignature?: unknown;
       nodesHelpSourceSignature?: unknown;
@@ -484,6 +588,7 @@ export async function writeCliStartupMetadata(options?: {
     if (
       bundleIdentity &&
       existing.rootHelpBundleSignature === bundleIdentity.signature &&
+      existing.generatorSignature === generatorSignature &&
       existing.browserHelpSourceSignature === browserHelpSourceSignature &&
       existing.secretsHelpSourceSignature === secretsHelpSourceSignature &&
       existing.nodesHelpSourceSignature === nodesHelpSourceSignature &&
@@ -515,15 +620,31 @@ export async function writeCliStartupMetadata(options?: {
   const browserHelpText = (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(
     renderContext,
   );
-  const secretsHelpText = (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(
-    renderContext,
-  );
-  const nodesHelpText = (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(
-    renderContext,
-  );
-  const subcommandHelpText = (
-    options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord
-  )(renderContext);
+  const commandHelpText =
+    options?.renderSourceSecretsHelpText ||
+    options?.renderSourceNodesHelpText ||
+    options?.renderSourceSubcommandHelpTextRecord
+      ? null
+      : await renderSourceCommandHelpTextRecord(
+          ["secrets", "nodes", ...PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS],
+          renderContext,
+        );
+  const secretsHelpText = commandHelpText
+    ? commandHelpText.secrets
+    : await (options?.renderSourceSecretsHelpText ?? renderSourceSecretsHelpText)(renderContext);
+  const nodesHelpText = commandHelpText
+    ? commandHelpText.nodes
+    : await (options?.renderSourceNodesHelpText ?? renderSourceNodesHelpText)(renderContext);
+  const subcommandHelpText = commandHelpText
+    ? (Object.fromEntries(
+        PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS.map((commandName) => [
+          commandName,
+          commandHelpText[commandName],
+        ]),
+      ) as PrecomputedSubcommandHelpText)
+    : await (options?.renderSourceSubcommandHelpTextRecord ?? renderSourceSubcommandHelpTextRecord)(
+        renderContext,
+      );
 
   mkdirSync(resolvedDistDir, { recursive: true });
   writeFileSync(
@@ -531,6 +652,7 @@ export async function writeCliStartupMetadata(options?: {
     `${JSON.stringify(
       {
         generatedBy: "scripts/write-cli-startup-metadata.ts",
+        generatorSignature,
         channelOptions,
         channelCatalogSignature: channelCatalog.signature,
         rootHelpBundleSignature: bundleIdentity?.signature ?? null,
@@ -560,6 +682,12 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
     (commandName) => typeof record[commandName] === "string" && record[commandName].length > 0,
   );
 }
+
+export const testing = {
+  mapWithConcurrency,
+};
+
+export { testing as __testing };
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   await writeCliStartupMetadata();

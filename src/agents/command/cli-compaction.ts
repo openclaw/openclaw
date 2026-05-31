@@ -5,6 +5,7 @@ import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl 
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { createPreparedEmbeddedAgentSettingsManager as createPreparedEmbeddedAgentSettingsManagerImpl } from "../agent-project-settings.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -12,6 +13,7 @@ import {
   applyAgentAutoCompactionGuard as applyAgentAutoCompactionGuardImpl,
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
+import { classifyCompactionReason } from "../embedded-agent-runner/compact-reasons.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../embedded-agent-runner/compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -26,9 +28,13 @@ import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-
 import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImpl } from "../harness/runtime-plugin.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/selection.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { SessionManager } from "../sessions/index.js";
-import type { SkillSnapshot } from "../skills.js";
-import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
+import { SessionManager } from "../sessions/session-manager.js";
+import {
+  clearCliSessionInStore as clearCliSessionInStoreImpl,
+  recordCliCompactionInStore as recordCliCompactionInStoreImpl,
+} from "./session-store.js";
+
+const CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON = "codex app-server owns automatic compaction";
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SettingsManagerLike = {
@@ -62,6 +68,7 @@ type CliCompactionDeps = {
   runContextEngineMaintenance: typeof runContextEngineMaintenanceImpl;
   ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPluginImpl;
   maybeCompactAgentHarnessSession: typeof maybeCompactAgentHarnessSessionImpl;
+  clearCliSessionInStore: typeof clearCliSessionInStoreImpl;
   recordCliCompactionInStore: typeof recordCliCompactionInStoreImpl;
 };
 
@@ -69,6 +76,7 @@ type NativeHarnessCliCompactionOutcome = {
   compacted: boolean;
   result?: EmbeddedAgentCompactResult;
   fallbackToContextEngine?: boolean;
+  clearCliSessionBinding?: boolean;
   failureReason?: string;
 };
 type CliTranscriptCompactionOutcome = {
@@ -107,6 +115,7 @@ const cliCompactionDeps: CliCompactionDeps = {
   runContextEngineMaintenance: runContextEngineMaintenanceImpl,
   ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginImpl,
   maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionImpl,
+  clearCliSessionInStore: clearCliSessionInStoreImpl,
   recordCliCompactionInStore: recordCliCompactionInStoreImpl,
 };
 
@@ -126,6 +135,7 @@ export function resetCliCompactionTestDeps(): void {
     runContextEngineMaintenance: runContextEngineMaintenanceImpl,
     ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginImpl,
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionImpl,
+    clearCliSessionInStore: clearCliSessionInStoreImpl,
     recordCliCompactionInStore: recordCliCompactionInStoreImpl,
   });
 }
@@ -165,7 +175,7 @@ function isNativeHarnessCompactionSession(
   return (
     harnessId === providerId ||
     (harnessId === "codex" &&
-      (providerId === "codex" || providerId === "openai" || providerId === "openai-codex"))
+      (providerId === "codex" || providerId === "openai" || providerId === "openai"))
   );
 }
 
@@ -173,6 +183,20 @@ function isUnsupportedNativeHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
   return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
+}
+
+function isBelowCompactionTargetReason(reason: string | undefined): boolean {
+  return classifyCompactionReason(reason) === "below_threshold";
+}
+
+function isIntentionalNativeAutoCompactionSkip(
+  result: EmbeddedAgentCompactResult | undefined,
+): boolean {
+  return (
+    result?.ok === true &&
+    !result.compacted &&
+    result.reason === CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON
+  );
 }
 
 function readAgentIdFromSessionKey(sessionKey: string): string | undefined {
@@ -273,8 +297,15 @@ async function compactCliTranscript(params: {
   }
 
   if (!compactResult.compacted) {
+    const reason = compactResult.reason ?? "nothing to compact";
+    if (isBelowCompactionTargetReason(reason)) {
+      log.info(
+        `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
+      );
+      return { compacted: false };
+    }
     log.warn(
-      `CLI transcript compaction did not reduce context for ${params.provider}/${params.model}: ${compactResult.reason ?? "nothing to compact"}`,
+      `CLI transcript compaction did not reduce context for ${params.provider}/${params.model}: ${reason}`,
     );
     return {
       compacted: false,
@@ -400,15 +431,30 @@ async function compactNativeHarnessCliTranscript(params: {
   }
 
   if (!result?.compacted) {
+    const reason = result?.reason ?? "nothing to compact";
+    if (isBelowCompactionTargetReason(reason)) {
+      log.info(
+        `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${reason}`,
+      );
+      return { compacted: false };
+    }
+    if (isIntentionalNativeAutoCompactionSkip(result)) {
+      return {
+        compacted: false,
+        fallbackToContextEngine: true,
+        failureReason: CODEX_APP_SERVER_OWNS_AUTO_COMPACTION_REASON,
+      };
+    }
+    const recoverableBindingFailure = isRecoverableNativeHarnessBindingFailure(result);
     const fallbackToContextEngine =
-      isUnsupportedNativeHarnessCompaction(result) ||
-      isRecoverableNativeHarnessBindingFailure(result);
+      isUnsupportedNativeHarnessCompaction(result) || recoverableBindingFailure;
     log.warn(
-      `CLI native harness compaction did not reduce context for ${params.provider}/${params.model}: ${result?.reason ?? "nothing to compact"}`,
+      `CLI native harness compaction did not reduce context for ${params.provider}/${params.model}: ${reason}`,
     );
     return {
       compacted: false,
       fallbackToContextEngine,
+      clearCliSessionBinding: recoverableBindingFailure,
       failureReason: result?.reason ?? "native harness compaction did not reduce context",
     };
   }
@@ -477,6 +523,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   let nativeCompactionResult: EmbeddedAgentCompactResult | undefined;
   let useContextEngineCompaction = true;
   let nativeFallbackToContextEngine = false;
+  let nativeFallbackNeedsBindingClear = false;
   let resolvedContextEngine: ContextEngine | undefined;
   let autoCompactionGuardApplied = false;
   const applyAutoCompactionGuard = async (contextEngine: ContextEngine): Promise<void> => {
@@ -520,14 +567,17 @@ export async function runCliTurnCompactionLifecycle(params: {
       compacted = true;
       nativeCompactionResult = nativeOutcome.result;
       useContextEngineCompaction = false;
-    } else if (!nativeOutcome.fallbackToContextEngine) {
+    } else if (nativeOutcome.fallbackToContextEngine) {
+      nativeFallbackToContextEngine = true;
+      nativeFallbackNeedsBindingClear = nativeOutcome.clearCliSessionBinding === true;
+    } else if (nativeOutcome.failureReason) {
       throw new Error(
         `CLI native harness compaction failed for ${params.provider}/${params.model}: ${
           nativeOutcome.failureReason ?? "compaction did not reduce context"
         }`,
       );
     } else {
-      nativeFallbackToContextEngine = true;
+      useContextEngineCompaction = false;
     }
   }
 
@@ -562,13 +612,24 @@ export async function runCliTurnCompactionLifecycle(params: {
       bestEffortMaintenance: nativeFallbackToContextEngine,
     });
     compacted = contextOutcome.compacted;
-    if (!compacted) {
+    if (!compacted && contextOutcome.failureReason) {
       throw new Error(
         `CLI transcript compaction failed for ${params.provider}/${params.model}: ${
           contextOutcome.failureReason ?? "compaction did not reduce context"
         }`,
       );
     }
+  }
+
+  if (nativeFallbackNeedsBindingClear && !compacted && params.sessionStore && params.storePath) {
+    return (
+      (await cliCompactionDeps.clearCliSessionInStore({
+        provider: params.provider,
+        sessionKey: params.sessionKey,
+        sessionStore: params.sessionStore,
+        storePath: params.storePath,
+      })) ?? params.sessionEntry
+    );
   }
 
   if (!compacted || !params.sessionStore || !params.storePath) {

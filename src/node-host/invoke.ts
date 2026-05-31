@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { GatewayClient } from "../gateway/client.js";
 import {
   ensureExecApprovals,
@@ -23,9 +25,11 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { buildSystemRunApprovalPlan, handleSystemRunInvoke } from "./invoke-system-run.js";
+import {
+  buildSystemRunApprovalPlan,
+  handleSystemRunInvoke,
+  resolveEffectiveSystemRunExecPolicy,
+} from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
   ExecFinishedEventParams,
@@ -453,8 +457,20 @@ export async function handleInvoke(
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
         return;
       }
+      const { getRuntimeConfig } = await import("../config/config.js");
+      const execPolicy = resolveEffectiveSystemRunExecPolicy({
+        cfg: getRuntimeConfig(),
+        agentId: prepared.plan.agentId ?? undefined,
+        defaultSecurity: resolveExecSecurity(undefined),
+        defaultAsk: resolveExecAsk(undefined),
+        requireSocket: preferMacAppExecHost,
+      });
       await sendJsonPayloadResult(client, frame, {
         plan: prepared.plan,
+        execPolicy: {
+          security: execPolicy.security,
+          ask: execPolicy.ask,
+        },
       });
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);

@@ -1,5 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import {
+  clampPositiveTimerTimeoutMs,
+  resolvePositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -261,7 +265,11 @@ async function startAndWaitForLocalService(params: {
     throw new Error(`${provider} local service failed to start: ${spawnError.message}`);
   }
 
-  const deadline = Date.now() + (service.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
+  const readyTimeoutMs = resolvePositiveTimerTimeoutMs(
+    service.readyTimeoutMs,
+    DEFAULT_READY_TIMEOUT_MS,
+  );
+  const deadline = Date.now() + readyTimeoutMs;
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal)) {
       log.info(`${provider} local service ready`);
@@ -286,7 +294,7 @@ function scheduleIdleStop(
   managed: ManagedLocalService,
   service: ModelProviderLocalServiceConfig,
 ) {
-  const idleStopMs = service.idleStopMs ?? 0;
+  const idleStopMs = clampPositiveTimerTimeoutMs(service.idleStopMs);
   if (managed.active > 0) {
     return;
   }
@@ -296,7 +304,7 @@ function scheduleIdleStop(
     }
     return;
   }
-  if (idleStopMs <= 0) {
+  if (idleStopMs === undefined) {
     return;
   }
   managed.idleTimer = setTimeout(() => {
@@ -412,7 +420,6 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
-    let timeout: NodeJS.Timeout;
     const cleanup = () => signal?.removeEventListener("abort", onAbort);
     const onDone = () => {
       cleanup();
@@ -423,7 +430,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       cleanup();
       reject(toAbortError(signal));
     };
-    timeout = setTimeout(onDone, ms);
+    const timeout: NodeJS.Timeout = setTimeout(onDone, ms);
     timeout.unref?.();
     signal?.addEventListener("abort", onAbort, { once: true });
   });
@@ -470,7 +477,6 @@ function waitForChildExit(
   }
   throwIfAborted(signal);
   return new Promise((resolve, reject) => {
-    let timeout: NodeJS.Timeout;
     const cleanup = () => {
       clearTimeout(timeout);
       child.off("exit", onExit);
@@ -485,7 +491,7 @@ function waitForChildExit(
       cleanup();
       reject(toAbortError(signal));
     };
-    timeout = setTimeout(finish, timeoutMs);
+    const timeout: NodeJS.Timeout = setTimeout(finish, timeoutMs);
     timeout.unref?.();
     child.once("exit", onExit);
     signal.addEventListener("abort", onAbort, { once: true });

@@ -1,11 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-} from "../../packages/gateway-protocol/src/index.js";
-import { getRuntimeConfig } from "../config/io.js";
+} from "../../packages/gateway-protocol/src/version.js";
+import { readGatewayDispatchConfig } from "../config/gateway-dispatch-config.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
   resolveGatewayPort as resolveGatewayPortFromPaths,
@@ -15,13 +22,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../utils/message-channel.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { resolveGatewayAuth } from "./auth-resolve.js";
@@ -155,6 +155,13 @@ export class GatewayCredentialsRequiredError extends Error {
   }
 }
 
+export class GatewayExplicitAuthRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayExplicitAuthRequiredError";
+  }
+}
+
 export type GatewayTransportErrorJson = {
   ok: false;
   error: {
@@ -232,10 +239,28 @@ export function isGatewayCredentialsRequiredError(
   return typeof candidate.method === "string" && typeof candidate.configPath === "string";
 }
 
+export function isGatewayExplicitAuthRequiredError(
+  value: unknown,
+): value is GatewayExplicitAuthRequiredError {
+  return value instanceof Error && value.name === "GatewayExplicitAuthRequiredError";
+}
+
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
-const defaultGatewayCallDeps = {
+type GatewayRuntimeConfigLoader = () => OpenClawConfig | Promise<OpenClawConfig>;
+const defaultGetRuntimeConfig = async (): Promise<OpenClawConfig> =>
+  (await import("../config/io.js")).getRuntimeConfig();
+const defaultGatewayCallDeps: {
+  createGatewayClient: typeof defaultCreateGatewayClient;
+  getRuntimeConfig: GatewayRuntimeConfigLoader;
+  loadOrCreateDeviceIdentity: typeof loadOrCreateDeviceIdentity;
+  resolveGatewayPort: typeof resolveGatewayPortFromPaths;
+  resolveConfigPath: typeof resolveConfigPathFromPaths;
+  resolveStateDir: typeof resolveStateDirFromPaths;
+  loadGatewayTlsRuntime: typeof loadGatewayTlsRuntime;
+  loadDeviceAuthToken: typeof loadDeviceAuthToken;
+} = {
   createGatewayClient: defaultCreateGatewayClient,
-  getRuntimeConfig,
+  getRuntimeConfig: defaultGetRuntimeConfig,
   loadOrCreateDeviceIdentity,
   resolveGatewayPort: resolveGatewayPortFromPaths,
   resolveConfigPath: resolveConfigPathFromPaths,
@@ -268,14 +293,28 @@ function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string |
   return method ? `gateway:${method}` : "gateway:request";
 }
 
-function loadGatewayConfig(): OpenClawConfig {
+async function loadGatewayConfig(): Promise<OpenClawConfig> {
   const loadConfigFn =
     typeof gatewayCallDeps.getRuntimeConfig === "function"
       ? gatewayCallDeps.getRuntimeConfig
       : typeof defaultGatewayCallDeps.getRuntimeConfig === "function"
         ? defaultGatewayCallDeps.getRuntimeConfig
-        : getRuntimeConfig;
-  return loadConfigFn();
+        : defaultGetRuntimeConfig;
+  return await loadConfigFn();
+}
+
+function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
+  if (
+    gatewayCallDeps.getRuntimeConfig !== defaultGetRuntimeConfig &&
+    typeof gatewayCallDeps.getRuntimeConfig === "function"
+  ) {
+    const config = gatewayCallDeps.getRuntimeConfig();
+    if (config && typeof (config as Promise<OpenClawConfig>).then === "function") {
+      throw new Error("async gateway config loader is not supported for connection details");
+    }
+    return config as OpenClawConfig;
+  }
+  return readGatewayDispatchConfig();
 }
 
 function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
@@ -311,7 +350,7 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
-    getRuntimeConfig: () => loadGatewayConfig(),
+    getRuntimeConfig: () => loadGatewayConfigForConnectionDetails(),
     resolveConfigPath: (env) => resolveGatewayConfigPath(env),
     resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
   });
@@ -497,7 +536,7 @@ export function ensureExplicitGatewayAuth(params: {
   ]
     .filter(Boolean)
     .join("\n");
-  throw new Error(message);
+  throw new GatewayExplicitAuthRequiredError(message);
 }
 
 type GatewayRemoteSettings = {
@@ -553,7 +592,9 @@ function resolveGatewayCallTimeout(
   return { timeoutMs, safeTimerTimeoutMs };
 }
 
-function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
+async function resolveGatewayCallContext(
+  opts: CallGatewayBaseOptions,
+): Promise<ResolvedGatewayCallContext> {
   const cliUrlOverride = trimToUndefined(opts.url);
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
   const envUrlOverride = cliUrlOverride
@@ -566,7 +607,8 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
     urlOverride,
     explicitAuth,
   });
-  const config = opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : loadGatewayConfig());
+  const config =
+    opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : await loadGatewayConfig());
   const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
@@ -789,9 +831,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
     let settled = false;
     let ignoreClose = false;
     const startAbort = new AbortController();
-    let abortHandler: (() => void) | undefined;
-    let client: GatewayClient | undefined;
-    let timer: NodeJS.Timeout | undefined;
     let primaryRequestStarted = false;
     const cleanup = () => {
       startAbort.abort();
@@ -828,7 +867,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       cleanup();
       stopClientThenSettle(client, err, value);
     };
-    abortHandler = () => {
+    const abortHandler: (() => void) | undefined = () => {
       if (settled) {
         return;
       }
@@ -850,7 +889,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     };
     opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-    client = gatewayCallDeps.createGatewayClient({
+    const client: GatewayClient | undefined = gatewayCallDeps.createGatewayClient({
       url,
       token,
       password,
@@ -915,7 +954,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
     });
 
-    timer = setTimeout(() => {
+    const timer: NodeJS.Timeout | undefined = setTimeout(() => {
       ignoreClose = true;
       stop(
         createGatewayTimeoutTransportError({
@@ -955,7 +994,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
 ): Promise<T> {
-  const context = resolveGatewayCallContext(opts);
+  const context = await resolveGatewayCallContext(opts);
   const { timeoutMs, safeTimerTimeoutMs } = resolveGatewayCallTimeout(
     opts.timeoutMs,
     context.config.gateway?.handshakeTimeoutMs,

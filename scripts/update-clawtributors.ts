@@ -6,6 +6,7 @@ import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtribut
 const REPO = "openclaw/openclaw";
 const PER_LINE = 10;
 const AVATAR_PROBE_SIZE = 40;
+const AVATAR_PROBE_MAX_BYTES = 256 * 1024;
 const AVATAR_SIZE = 48;
 const CLAWTRIBUTORS_START = "<!-- clawtributors:start -->";
 const CLAWTRIBUTORS_END = "<!-- clawtributors:end -->";
@@ -108,7 +109,7 @@ for (const line of log.split("\n")) {
     continue;
   }
 
-  let login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
+  const login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
   if (!login) {
     continue;
   }
@@ -155,7 +156,7 @@ function computeScore(loc: number, commits: number, prs: number, firstDate: stri
     ? Math.max(0, (now - new Date(firstDate.slice(0, 10)).getTime()) / 86_400_000)
     : 0;
   const tenureRatio = Math.min(1, daysIn / repoAgeDays);
-  const tenure = 1.0 + tenureRatio * tenureRatio * 0.5;
+  const tenure = 1 + tenureRatio * tenureRatio * 0.5;
   return base * tenure;
 }
 
@@ -329,7 +330,7 @@ for (const [index, entry] of visibleEntries.slice(0, 25).entries()) {
   const daysIn =
     fd !== "?" ? Math.max(0, (now - new Date(fd.slice(0, 10)).getTime()) / 86_400_000) : 0;
   const tr = Math.min(1, daysIn / repoAgeDays);
-  const tenure = 1.0 + tr * tr * 0.5;
+  const tenure = 1 + tr * tr * 0.5;
   console.log(
     `${index + 1}`.padStart(3) +
       `  ${login.padEnd(24)} ${entry.score.toFixed(0).padStart(8)} ${tenure.toFixed(2).padStart(6)}x ${String(entry.commits).padStart(8)} ${String(entry.prs).padStart(6)} ${String(entry.lines).padStart(10)}  ${fd}`,
@@ -459,7 +460,7 @@ async function probeDefaultGitHubAvatar(login: string): Promise<boolean> {
     if (!response.ok) {
       return false;
     }
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const buffer = await readAvatarProbeBuffer(response);
     const dimensions = readImageDimensions(buffer);
     return Boolean(
       dimensions && (dimensions.width > AVATAR_PROBE_SIZE || dimensions.height > AVATAR_PROBE_SIZE),
@@ -467,6 +468,43 @@ async function probeDefaultGitHubAvatar(login: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function readAvatarProbeBuffer(response: Response): Promise<Buffer> {
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > AVATAR_PROBE_MAX_BYTES) {
+    throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+  }
+
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength > AVATAR_PROBE_MAX_BYTES) {
+      throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+    }
+    return buffer;
+  }
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (!value?.byteLength) {
+      continue;
+    }
+    const chunk = Buffer.from(value);
+    const nextTotal = total + chunk.byteLength;
+    if (nextTotal > AVATAR_PROBE_MAX_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+    }
+    chunks.push(chunk);
+    total = nextTotal;
+  }
+  return Buffer.concat(chunks, total);
 }
 
 async function filterVisibleEntries(

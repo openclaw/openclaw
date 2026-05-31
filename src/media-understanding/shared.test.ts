@@ -1,3 +1,7 @@
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VERSION } from "../version.js";
 
@@ -70,6 +74,40 @@ describe("provider operation deadlines", () => {
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(60_000);
   });
 
+  it("caps oversized operation and per-call timeouts to timer-safe values", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(deadline.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(deadline.deadlineAtMs).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
+    expect(
+      resolveProviderOperationTimeoutMs({
+        deadline: createProviderOperationDeadline({ label: "no deadline" }),
+        defaultTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("keeps operation deadlines inside the Date timestamp range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: 1,
+    });
+
+    expect(deadline.deadlineAtMs).toBe(MAX_DATE_TIMESTAMP_MS);
+    expect(() => resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toThrow(
+      "video generation timed out after 1ms",
+    );
+  });
+
   it("clamps per-call timeouts to the remaining operation deadline", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -122,6 +160,20 @@ describe("provider operation deadlines", () => {
     expect(settled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
+    await expect(wait).resolves.toBeUndefined();
+  });
+
+  it("caps oversized provider poll waits without an operation deadline", async () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const wait = waitProviderOperationPollInterval({
+      deadline: createProviderOperationDeadline({ label: "video generation" }),
+      pollIntervalMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
     await expect(wait).resolves.toBeUndefined();
   });
 

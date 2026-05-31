@@ -1,7 +1,7 @@
 import path from "node:path";
+import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
-import { mimeTypeFromFilePath } from "../media/mime.js";
 import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
@@ -410,6 +410,7 @@ export async function appendUserTurnTranscriptMessage(
         emitSessionTranscriptUpdate({
           sessionFile: params.transcriptPath,
           ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           message: appended.message,
           messageId: appended.messageId,
         });

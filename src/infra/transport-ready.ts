@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sleepWithAbort } from "./backoff.js";
@@ -20,11 +21,11 @@ export type WaitForTransportReadyParams = {
 
 export async function waitForTransportReady(params: WaitForTransportReadyParams): Promise<void> {
   const started = Date.now();
-  const timeoutMs = Math.max(0, params.timeoutMs);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 0, 0);
   const deadline = started + timeoutMs;
-  const logAfterMs = Math.max(0, params.logAfterMs ?? timeoutMs);
-  const logIntervalMs = Math.max(1_000, params.logIntervalMs ?? 30_000);
-  const pollIntervalMs = Math.max(50, params.pollIntervalMs ?? 150);
+  const logAfterMs = resolveTimerTimeoutMs(params.logAfterMs, timeoutMs, 0);
+  const logIntervalMs = resolveTimerTimeoutMs(params.logIntervalMs, 30_000, 1_000);
+  const pollIntervalMs = resolveTimerTimeoutMs(params.pollIntervalMs, 150, 50);
   let nextLogAt = started + logAfterMs;
   let lastError: string | null = null;
 

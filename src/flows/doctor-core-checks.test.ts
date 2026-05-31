@@ -1,9 +1,9 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SkillStatusEntry } from "../agents/skills-status.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import {
   CORE_HEALTH_CHECKS,
   createCoreHealthChecks,
@@ -80,6 +80,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectRuntimeToolSchemaFindings() {
       return [];
     },
+    async collectProviderCatalogProjectionFindings() {
+      return [];
+    },
     ...overrides,
   };
 }
@@ -94,6 +97,36 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
 
 describe("registerCoreHealthChecks", () => {
   let tmp: string | undefined;
+  let hooksModelCatalogCase: {
+    calls: unknown[][];
+  };
+
+  beforeAll(async () => {
+    clearHealthChecksForTest();
+    resetCoreHealthChecksForTest();
+    mocks.loadModelCatalog.mockClear();
+    mocks.loadModelCatalog.mockResolvedValue([]);
+    const cfg: OpenClawConfig = {
+      hooks: {
+        gmail: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
+
+    await check.detect({
+      mode: "lint",
+      runtime,
+      cfg,
+    });
+
+    hooksModelCatalogCase = {
+      calls: [...mocks.loadModelCatalog.mock.calls],
+    };
+    clearHealthChecksForTest();
+    resetCoreHealthChecksForTest();
+  });
 
   beforeEach(() => {
     clearHealthChecksForTest();
@@ -302,15 +335,7 @@ describe("registerCoreHealthChecks", () => {
         },
       },
     };
-    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
-
-    await check.detect({
-      mode: "lint",
-      runtime,
-      cfg,
-    });
-
-    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
+    expect(hooksModelCatalogCase.calls).toContainEqual([{ config: cfg, readOnly: true }]);
   });
 
   it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {
@@ -639,6 +664,43 @@ describe("registerCoreHealthChecks", () => {
         checkId: "core/doctor/runtime-tool-schemas",
         severity: "error",
         target: "dofbot_move_angles",
+      }),
+    );
+  });
+
+  it("reports active provider catalog projection findings", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectProviderCatalogProjectionFindings(): Promise<readonly HealthFinding[]> {
+            return [
+              {
+                checkId: "core/doctor/provider-catalog-projection",
+                severity: "error",
+                message:
+                  "Provider catalog mockplugin cannot be projected into the unified text model catalog.",
+                path: "plugins.entries.mockplugin",
+                target: "mockplugin",
+                requirement: "mockplugin provider catalog entry read failed",
+              },
+            ];
+          },
+        }),
+      ),
+      "core/doctor/provider-catalog-projection",
+    );
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: {},
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/provider-catalog-projection",
+        severity: "error",
+        target: "mockplugin",
       }),
     );
   });

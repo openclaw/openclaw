@@ -1,6 +1,9 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../provider-id.js";
 import {
   evaluateStoredCredentialEligibility,
   type AuthCredentialReasonCode,
@@ -25,7 +28,7 @@ export type AuthProfileEligibility = {
 };
 
 const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
 
 function isOpenAIApiKeyCompatibleWithCodexAuth(params: {
   cfg?: OpenClawConfig;
@@ -243,6 +246,9 @@ export function resolveAuthProfileOrder(params: {
     : undefined;
   const directExplicitOrder = directStoredOrder ?? directConfiguredOrder;
   const aliasExplicitOrder = aliasStoredOrder ?? aliasConfiguredOrder;
+  const explicitOrderFromStore =
+    directStoredOrder !== undefined ||
+    (directExplicitOrder === undefined && aliasStoredOrder !== undefined);
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(([profileId, profile]) =>
@@ -295,13 +301,19 @@ export function resolveAuthProfileOrder(params: {
       now,
     }).eligible;
   let filtered = baseOrder.filter(isValidProfile);
+  let repairedFallbackToStoreProfiles = false;
 
-  // Repair config/store profile-id drift from older setup flows:
-  // if configured profile ids no longer exist in auth-profiles.json, scan the
-  // provider's stored credentials and use any valid entries.
+  // Repair stored-order and config-profile drift from older setup flows:
+  // bare config auth.order is a hard constraint, but configured profile ids
+  // can drift from their stored credential ids and still need repair.
   const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);
-  if (filtered.length === 0 && explicitProfiles.length > 0 && allBaseProfilesMissing) {
+  if (
+    filtered.length === 0 &&
+    allBaseProfilesMissing &&
+    (explicitOrderFromStore || explicitProfiles.length > 0)
+  ) {
     filtered = storeProfiles.filter(isValidProfile);
+    repairedFallbackToStoreProfiles = true;
   }
 
   const deduped = dedupeProfileIds(filtered);
@@ -309,7 +321,7 @@ export function resolveAuthProfileOrder(params: {
   // If user specified explicit order (store override or config), respect it
   // exactly, but still apply cooldown sorting to avoid repeatedly selecting
   // known-bad/rate-limited keys as the first candidate.
-  if (explicitOrder && explicitOrder.length > 0) {
+  if (explicitOrder && explicitOrder.length > 0 && !repairedFallbackToStoreProfiles) {
     // ...but still respect cooldown tracking to avoid repeatedly selecting a
     // known-bad/rate-limited key as the first candidate.
     const available: string[] = [];

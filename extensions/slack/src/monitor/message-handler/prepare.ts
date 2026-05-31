@@ -72,6 +72,7 @@ import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prep
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -204,8 +205,14 @@ async function restoreSlackAssistantThreadContextFromMetadata(params: {
 function resolveCachedMentionRegexes(
   ctx: SlackMonitorContext,
   agentId: string | undefined,
+  options?: Parameters<typeof buildMentionRegexes>[2],
 ): RegExp[] {
-  const key = normalizeOptionalString(agentId) ?? "__default__";
+  const key = [
+    normalizeOptionalString(agentId) ?? "__default__",
+    normalizeOptionalString(options?.provider),
+    normalizeOptionalString(options?.conversationId ?? undefined),
+    options?.providerPolicy ? JSON.stringify(options.providerPolicy) : "",
+  ].join("\u001f");
   let byAgent = mentionRegexCache.get(ctx);
   if (!byAgent) {
     byAgent = new Map<string, RegExp[]>();
@@ -215,7 +222,7 @@ function resolveCachedMentionRegexes(
   if (cached) {
     return cached;
   }
-  const built = buildMentionRegexes(ctx.cfg, agentId);
+  const built = buildMentionRegexes(ctx.cfg, agentId, options);
   byAgent.set(key, built);
   return built;
 }
@@ -720,7 +727,13 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
-  let mentionRegexes = resolveCachedMentionRegexes(ctx, routing.route.agentId);
+  const buildPolicyMentionRegexes = (agentId: string | undefined) =>
+    resolveCachedMentionRegexes(ctx, agentId, {
+      provider: "slack",
+      conversationId: message.channel,
+      providerPolicy: account.config.mentionPatterns,
+    });
+  let mentionRegexes = buildPolicyMentionRegexes(routing.route.agentId);
   let wasMentioned = resolveWasMentioned(mentionRegexes);
   const hasBoundSession = Boolean(
     routing.runtimeBoundSessionKey || routing.configuredBindingSessionKey,
@@ -745,7 +758,7 @@ export async function prepareSlackMessage(params: {
       seedTopLevelRoomThread: true,
       assistantThreadTs: assistantThreadContext?.threadTs,
     });
-    mentionRegexes = resolveCachedMentionRegexes(ctx, routing.route.agentId);
+    mentionRegexes = buildPolicyMentionRegexes(routing.route.agentId);
     wasMentioned = resolveWasMentioned(mentionRegexes);
   }
   const {
@@ -761,6 +774,14 @@ export async function prepareSlackMessage(params: {
     sessionKey,
     historyKey,
   } = routing;
+  const isAssistantThreadMessage = Boolean(isDirectMessage && messageAssistantThreadContext);
+  const shouldForceAssistantReplyThread = Boolean(
+    assistantThreadContext?.threadTs &&
+    (isThreadReply || isAssistantThreadMessage || replyToMode !== "off"),
+  );
+  const forcedAssistantReplyThreadTs = shouldForceAssistantReplyThread
+    ? assistantThreadContext?.threadTs
+    : undefined;
   if (runtimeBinding && shouldLogVerbose()) {
     logVerbose(
       `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
@@ -969,7 +990,7 @@ export async function prepareSlackMessage(params: {
             client: ctx.app.client,
           })
         : null;
-    const timestamp = message.ts ? Math.round(Number(message.ts) * 1000) : undefined;
+    const timestamp = resolveSlackTimestampMs(message.ts);
     const senderName = pendingBody ? await resolveSenderName() : undefined;
     await recordDroppedChannelInboundHistory({
       input: {
@@ -1145,7 +1166,7 @@ export async function prepareSlackMessage(params: {
   const body = formatInboundEnvelope({
     channel: "Slack",
     from: envelopeFrom,
-    timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+    timestamp: resolveSlackTimestampMs(message.ts),
     body: textWithId,
     chatType,
     sender: { name: senderName, id: senderId },
@@ -1238,7 +1259,7 @@ export async function prepareSlackMessage(params: {
     channel: "slack",
     accountId: route.accountId,
     messageId: message.ts,
-    timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+    timestamp: resolveSlackTimestampMs(message.ts),
     from: slackFrom,
     sender: {
       id: senderId,
@@ -1335,7 +1356,7 @@ export async function prepareSlackMessage(params: {
       entry: {
         sender: senderName,
         body: rawBody,
-        timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+        timestamp: resolveSlackTimestampMs(message.ts),
         messageId: message.ts,
       },
     });
@@ -1426,9 +1447,7 @@ export async function prepareSlackMessage(params: {
           : undefined,
     },
     replyToMode,
-    ...(assistantThreadContext?.threadTs
-      ? { forcedReplyThreadTs: assistantThreadContext.threadTs }
-      : {}),
+    ...(forcedAssistantReplyThreadTs ? { forcedReplyThreadTs: forcedAssistantReplyThreadTs } : {}),
     ...(assistantThreadContext
       ? { slackMessageMetadata: buildSlackAssistantThreadMetadata(assistantThreadContext) }
       : {}),

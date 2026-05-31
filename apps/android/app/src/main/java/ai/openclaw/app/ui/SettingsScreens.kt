@@ -94,6 +94,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
+/**
+ * Detail routes reachable from the Android settings home surface.
+ */
 internal enum class SettingsRoute {
   Home,
   Profile,
@@ -115,6 +118,9 @@ internal enum class SettingsRoute {
   About,
 }
 
+/**
+ * Dispatches a selected settings route to its detail screen without changing navigation ownership.
+ */
 @Composable
 internal fun SettingsDetailScreen(
   viewModel: MainViewModel,
@@ -784,6 +790,7 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
   }
 }
 
+/** Converts raw gateway connection text into stable settings metric labels. */
 private fun gatewayStatusLabel(
   statusText: String,
   isConnected: Boolean,
@@ -861,6 +868,7 @@ private fun AboutStatusRow(
   }
 }
 
+/** Chooses about-screen copy based on whether the gateway advertises an update. */
 private fun aboutUpdateText(latestVersion: String?): String =
   if (latestVersion == null) {
     "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway."
@@ -868,6 +876,9 @@ private fun aboutUpdateText(latestVersion: String?): String =
     "A Gateway update is available. Run the update from the Web UI or CLI when you are ready."
   }
 
+/**
+ * Shared settings detail shell with back navigation, title, subtitle, and section content.
+ */
 @Composable
 internal fun SettingsDetailFrame(
   title: String,
@@ -900,6 +911,9 @@ internal fun SettingsDetailFrame(
   }
 }
 
+/**
+ * Toggle row model reused by settings sections that render simple on/off controls.
+ */
 private data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
@@ -908,6 +922,9 @@ private data class SettingsToggleRow(
   val onCheckedChange: (Boolean) -> Unit,
 )
 
+/**
+ * Compact metric row model for connected gateway summaries.
+ */
 internal data class SettingsMetric(
   val title: String,
   val value: String,
@@ -989,6 +1006,9 @@ private fun AgentListRow(
   )
 }
 
+/**
+ * Chooses a display name for the configured default agent, falling back to any available agent.
+ */
 private fun defaultAgentName(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
@@ -998,6 +1018,9 @@ private fun defaultAgentName(
   return agent?.name?.takeIf { it.isNotBlank() } ?: agent?.id ?: "None"
 }
 
+/**
+ * Builds a short stable badge from agent emoji/name/id for dense lists.
+ */
 private fun agentBadge(agent: GatewayAgentSummary): String {
   agent.emoji
     ?.trim()
@@ -1013,6 +1036,9 @@ private fun agentBadge(agent: GatewayAgentSummary): String {
     .ifBlank { "A" }
 }
 
+/**
+ * Normalizes tool-call names into readable approval action labels.
+ */
 private fun approvalActionName(name: String): String {
   val cleaned =
     name
@@ -1027,6 +1053,7 @@ private fun approvalActionName(name: String): String {
     .ifBlank { "Action Request" }
 }
 
+/** Builds approval row age/error copy without exposing raw tool arguments. */
 private fun approvalSubtitle(
   toolCall: ChatPendingToolCall,
   hasIssue: Boolean,
@@ -1037,8 +1064,10 @@ private fun approvalSubtitle(
   return if (minutes < 1) "Waiting for review" else "Waiting ${minutes}m"
 }
 
+/** Builds the dense cron-job subtitle from schedule, next wake, and prompt preview. */
 private fun cronJobSubtitle(job: GatewayCronJobSummary): String = "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
 
+/** Summarizes a provider plan and most-used quota window for usage rows. */
 private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String {
   provider.error?.let { return it }
   val window = provider.windows.maxByOrNull { it.usedPercent }
@@ -1046,6 +1075,9 @@ private fun usageProviderSubtitle(provider: GatewayUsageProviderSummary): String
   return listOfNotNull(provider.plan, quota).joinToString(" · ").ifBlank { "No limits reported" }
 }
 
+/**
+ * Converts usage timestamps into short relative labels for metric panels.
+ */
 private fun formatUsageUpdated(updatedAtMs: Long?): String {
   val updated = updatedAtMs ?: return "Never"
   val deltaMs = (System.currentTimeMillis() - updated).coerceAtLeast(0L)
@@ -1059,6 +1091,7 @@ private fun formatUsageUpdated(updatedAtMs: Long?): String {
   }
 }
 
+/** Converts gateway cron status text into the short row badge label. */
 private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   if (!job.enabled) return "Off"
   return when (job.lastRunStatus?.lowercase()) {
@@ -1069,6 +1102,7 @@ private fun cronJobStatusText(job: GatewayCronJobSummary): String {
   }
 }
 
+/** Maps gateway cron status text to app status colors. */
 private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   if (!job.enabled) return ClawStatus.Neutral
   return when (job.lastRunStatus?.lowercase()) {
@@ -1078,6 +1112,9 @@ private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   }
 }
 
+/**
+ * Converts cron wake times into short relative labels for scheduled-work rows.
+ */
 private fun formatCronWake(timeMs: Long?): String {
   val target = timeMs ?: return "None"
   val deltaMs = target - System.currentTimeMillis()
@@ -1123,6 +1160,9 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
   }
 }
 
+/**
+ * Reusable metric panel for settings screens with compact title/value rows.
+ */
 @Composable
 internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
@@ -1159,11 +1199,15 @@ private fun SettingsIconMark(icon: ImageVector) {
   }
 }
 
+/**
+ * Checks an exact Android runtime permission for settings enablement.
+ */
 private fun hasPermission(
   context: Context,
   permission: String,
 ): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
+/** Returns true when either fine or coarse location is available to settings callers. */
 private fun hasLocationPermission(context: Context): Boolean =
   hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
     hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)

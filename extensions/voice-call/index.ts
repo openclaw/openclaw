@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import {
@@ -299,6 +300,7 @@ export default definePluginEntry({
             coreConfig: api.config as CoreConfig,
             fullConfig: api.config,
             agentRuntime: api.runtime.agent,
+            stateRuntime: api.runtime.state,
             ttsRuntime: api.runtime.tts,
             logger: api.logger,
           });
@@ -347,10 +349,11 @@ export default definePluginEntry({
       if (!call) {
         return undefined;
       }
+      const endedAt = timestampMsToIsoString(call.endedAt);
       const details = [
         `last state=${call.state}`,
         call.endReason ? `endReason=${call.endReason}` : undefined,
-        call.endedAt ? `endedAt=${new Date(call.endedAt).toISOString()}` : undefined,
+        endedAt ? `endedAt=${endedAt}` : undefined,
       ].filter(Boolean);
       return `call is not active (${details.join(", ")})`;
     };
@@ -809,6 +812,7 @@ export default definePluginEntry({
           program,
           config,
           ensureRuntime,
+          stateRuntime: api.runtime.state,
           logger: api.logger,
         }),
       { commands: ["voicecall"] },

@@ -173,6 +173,11 @@ export type ChannelLegacyStateMigrationPlan =
       stateDir?: string;
       cleanupSource?: "rename";
       preview?: string;
+      shouldReplaceExistingEntry?: (params: {
+        key: string;
+        existingValue: unknown;
+        incomingValue: unknown;
+      }) => boolean | Promise<boolean>;
       readEntries: () =>
         | Array<{ key: string; value: unknown; ttlMs?: number }>
         | Promise<Array<{ key: string; value: unknown; ttlMs?: number }>>;
@@ -538,6 +543,7 @@ export type ChannelMessagingAdapter = {
     to?: string;
     conversationId?: string;
     threadId?: string | number;
+    threadParentId?: string | number;
     isGroup: boolean;
   }) => {
     conversationId?: string;

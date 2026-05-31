@@ -6,16 +6,20 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import {
+  basenameFromAnyPath,
+  extnameFromAnyPath,
+  nameFromAnyPath,
+} from "@openclaw/media-core/file-name";
+import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/fs-safe.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
-import { basenameFromAnyPath, extnameFromAnyPath, nameFromAnyPath } from "./file-name.js";
-import { detectMime, extensionForMime } from "./mime.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
@@ -379,6 +383,25 @@ function buildSavedMediaResult(params: {
   };
 }
 
+type SavedMediaTempWriteResult = Omit<SavedMedia, "path">;
+
+async function saveMediaSiblingTempFile(params: {
+  dir: string;
+  tempPrefix: string;
+  writeTemp: (tempPath: string) => Promise<SavedMediaTempWriteResult>;
+}): Promise<SavedMedia> {
+  const { result } = await retryAfterRecreatingDir(params.dir, () =>
+    writeSiblingTempFile<SavedMediaTempWriteResult>({
+      dir: params.dir,
+      mode: MEDIA_FILE_MODE,
+      tempPrefix: params.tempPrefix,
+      writeTemp: params.writeTemp,
+      resolveFinalPath: (result) => path.join(params.dir, result.id),
+    }),
+  );
+  return buildSavedMediaResult({ dir: params.dir, ...result });
+}
+
 async function writeSavedMediaBuffer(params: {
   subdir: string;
   id: string;
@@ -501,36 +524,26 @@ export async function saveMediaSource(
   await cleanOldMedia(DEFAULT_TTL_MS, { recursive: false });
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
-    const saved = await retryAfterRecreatingDir(dir, () =>
-      writeSiblingTempFile({
-        dir,
-        mode: MEDIA_FILE_MODE,
-        tempPrefix: `.${baseId}`,
-        writeTemp: async (tempPath) => {
-          const { headerMime, sniffBuffer, size } = await downloadToFile(
-            source,
-            tempPath,
-            headers,
-            5,
-            maxBytes,
-          );
-          const mime = await detectMime({
-            buffer: sniffBuffer,
-            headerMime,
-            filePath: source,
-          });
-          const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
-          const id = buildSavedMediaId({ baseId, ext });
-          return { id, size, contentType: mime };
-        },
-        resolveFinalPath: (result) => path.join(dir, result.id),
-      }),
-    );
-    return buildSavedMediaResult({
+    return await saveMediaSiblingTempFile({
       dir,
-      id: saved.result.id,
-      size: saved.result.size,
-      contentType: saved.result.contentType,
+      tempPrefix: `.${baseId}`,
+      writeTemp: async (tempPath) => {
+        const { headerMime, sniffBuffer, size } = await downloadToFile(
+          source,
+          tempPath,
+          headers,
+          5,
+          maxBytes,
+        );
+        const mime = await detectMime({
+          buffer: sniffBuffer,
+          headerMime,
+          filePath: source,
+        });
+        const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
+        const id = buildSavedMediaId({ baseId, ext });
+        return { id, size, contentType: mime };
+      },
     });
   }
   try {
@@ -591,39 +604,29 @@ export async function saveMediaStream(
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const baseId = crypto.randomUUID();
   const headerExt = extensionForAuthoritativeHeaderMime(contentType);
-  const saved = await retryAfterRecreatingDir(dir, () =>
-    writeSiblingTempFile<{ id: string; size: number; contentType?: string }>({
-      dir,
-      mode: MEDIA_FILE_MODE,
-      tempPrefix: `.${baseId}`,
-      writeTemp: async (tempPath) => {
-        const { sniffBuffer, size } = await writeMediaStreamToFile({
-          stream,
-          tempPath,
-          maxBytes,
-        });
-        const mime = await detectMime({
-          buffer: sniffBuffer,
-          headerMime: contentType,
-          filePath: originalFilename ?? detectionFilePathHint,
-        });
-        const ext = resolveSavedMediaExtension({
-          detectedMime: mime,
-          headerExt,
-          contentType,
-          originalFilename,
-        });
-        const id = buildSavedMediaId({ baseId, ext, originalFilename });
-        return { id, size, contentType: mime };
-      },
-      resolveFinalPath: (result) => path.join(dir, result.id),
-    }),
-  );
-  return buildSavedMediaResult({
+  return await saveMediaSiblingTempFile({
     dir,
-    id: saved.result.id,
-    size: saved.result.size,
-    contentType: saved.result.contentType,
+    tempPrefix: `.${baseId}`,
+    writeTemp: async (tempPath) => {
+      const { sniffBuffer, size } = await writeMediaStreamToFile({
+        stream,
+        tempPath,
+        maxBytes,
+      });
+      const mime = await detectMime({
+        buffer: sniffBuffer,
+        headerMime: contentType,
+        filePath: originalFilename ?? detectionFilePathHint,
+      });
+      const ext = resolveSavedMediaExtension({
+        detectedMime: mime,
+        headerExt,
+        contentType,
+        originalFilename,
+      });
+      const id = buildSavedMediaId({ baseId, ext, originalFilename });
+      return { id, size, contentType: mime };
+    },
   });
 }
 
@@ -723,7 +726,7 @@ export async function readMediaBuffer(
  * @param id     The media ID as returned by SavedMedia.id.
  * @param subdir The subdirectory the file was saved into (default "inbound").
  */
-export async function deleteMediaBuffer(id: string, subdir: "inbound" = "inbound"): Promise<void> {
+export async function deleteMediaBuffer(id: string, subdir = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
   await openMediaStore().remove(relativePath);
 }

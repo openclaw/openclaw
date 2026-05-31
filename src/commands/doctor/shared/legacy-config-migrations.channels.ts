@@ -7,7 +7,7 @@ import {
 } from "../../../config/legacy.shared.js";
 
 function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(target, key);
+  return Object.hasOwn(target, key);
 }
 
 function cleanupEmptyRecord(parent: Record<string, unknown>, key: string): void {
@@ -460,7 +460,60 @@ const FEISHU_ACCOUNT_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const WEBCHAT_CHANNEL_RULES: LegacyConfigRule[] = [
+  {
+    path: ["channels", "webchat"],
+    message:
+      'channels.webchat is retired; use gateway.webchat.chatHistoryMaxChars for WebChat history limits. Run "openclaw doctor --fix".',
+  },
+];
+
+const WEBCHAT_CHAT_HISTORY_MAX_CHARS_LIMIT = 500_000;
+
+function migrateRetiredWebchatChannelConfig(raw: Record<string, unknown>, changes: string[]): void {
+  const channels = getRecord(raw.channels);
+  if (!channels || !hasOwnKey(channels, "webchat")) {
+    return;
+  }
+
+  const webchat = getRecord(channels.webchat);
+  const legacyTextChunkLimit = webchat?.textChunkLimit;
+  const gateway = getRecord(raw.gateway) ?? {};
+  const gatewayWebchat = getRecord(gateway.webchat) ?? {};
+  const canMoveLegacyTextChunkLimit =
+    typeof legacyTextChunkLimit === "number" &&
+    Number.isInteger(legacyTextChunkLimit) &&
+    legacyTextChunkLimit > 0 &&
+    legacyTextChunkLimit <= WEBCHAT_CHAT_HISTORY_MAX_CHARS_LIMIT;
+  if (canMoveLegacyTextChunkLimit && gatewayWebchat.chatHistoryMaxChars === undefined) {
+    gatewayWebchat.chatHistoryMaxChars = legacyTextChunkLimit;
+    gateway.webchat = gatewayWebchat;
+    raw.gateway = gateway;
+    changes.push("Moved channels.webchat.textChunkLimit → gateway.webchat.chatHistoryMaxChars.");
+  } else if (
+    legacyTextChunkLimit !== undefined &&
+    gatewayWebchat.chatHistoryMaxChars === undefined
+  ) {
+    changes.push(
+      "Removed channels.webchat.textChunkLimit (not a valid gateway.webchat.chatHistoryMaxChars value).",
+    );
+  }
+
+  delete channels.webchat;
+  raw.channels = channels;
+  cleanupEmptyRecord(raw, "channels");
+  changes.push("Removed retired channels.webchat config.");
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "channels.webchat->gateway.webchat",
+    describe: "Remove retired WebChat channel config",
+    legacyRules: WEBCHAT_CHANNEL_RULES,
+    apply: (raw, changes) => {
+      migrateRetiredWebchatChannelConfig(raw, changes);
+    },
+  }),
   defineLegacyConfigMigration({
     id: "legacy-group-routing->channel-groups",
     describe:

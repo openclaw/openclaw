@@ -7,10 +7,10 @@ import type {
   ResumeSessionRequest,
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -250,6 +250,33 @@ describe("acp translator stable lifecycle handlers", () => {
 
     expect(result.sessions.map((session) => session.sessionId)).toEqual(["agent:main:a1"]);
     expect(result.sessions.map((session) => session.cwd)).toEqual(["/work/a"]);
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("lists Gateway sessions with invalid updated timestamps", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([
+          createSessionRow({
+            key: "agent:main:work",
+            cwd: "/tmp/openclaw",
+            title: "Work session",
+            updatedAt: Number.POSITIVE_INFINITY,
+          }),
+        ]);
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.listSessions(createListSessionsRequest({ cwd: "/tmp/openclaw" }));
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.updatedAt).toBeUndefined();
 
     sessionStore.clearAllSessionsForTest();
   });

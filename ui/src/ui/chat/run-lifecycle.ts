@@ -11,9 +11,23 @@ export type ChatRunUiStatus = {
   occurredAt: number;
 };
 
+export type LocalTerminalReconcile = {
+  sessionKey: string;
+  runId: string | null;
+  phase: ChatRunUiStatus["phase"];
+  sessionStatus: SessionRunStatus;
+  occurredAt: number;
+};
+
+// A terminal chat event clears local run state before the periodic
+// sessions.list poll catches up. Within this window a stale "active" row for
+// the just-completed selected session is treated as poll lag and reconciled
+// back to terminal, so the composer does not snap back to in-progress. (#87875)
+export const STALE_ACTIVE_ROW_RECONCILE_WINDOW_MS = 10_000;
+
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Partial<Parameters<typeof resetToolStream>[0]> & {
+type RunLifecycleHost = Omit<Partial<Parameters<typeof resetToolStream>[0]>, "hello"> & {
   sessionKey: string;
   chatRunId?: string | null;
   chatStream?: string | null;
@@ -26,6 +40,7 @@ type RunLifecycleHost = Partial<Parameters<typeof resetToolStream>[0]> & {
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
+  lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   requestUpdate?: () => void;
 };
 
@@ -42,6 +57,7 @@ type ReconcileOptions = {
   clearSideResultTerminalRuns?: boolean;
   clearRunStatus?: boolean;
   publishRunStatus?: boolean;
+  armLocalTerminalReconcile?: boolean;
 };
 
 function toSessionKey(value: string | null | undefined): string | null {
@@ -184,6 +200,15 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
       occurredAt,
     };
     reconcileSessionRows(host, options, occurredAt);
+    if (options.armLocalTerminalReconcile) {
+      host.lastLocalTerminalReconcile = {
+        sessionKey,
+        runId,
+        phase: options.outcome,
+        sessionStatus: options.sessionStatus ?? (options.outcome === "done" ? "done" : "killed"),
+        occurredAt,
+      };
+    }
     if (options.publishRunStatus !== false) {
       host.chatRunStatus = status;
       scheduleRunStatusClear(host, status);
@@ -198,12 +223,48 @@ function currentSessionRow(host: RunLifecycleHost) {
   return host.sessionsResult?.sessions.find((row) => row.key === host.sessionKey);
 }
 
+// After a terminal chat event clears local run state, a racing sessions.list
+// refresh can still carry a stale "active" row for the session we just
+// finished, which would drive the composer back to in-progress. Re-apply
+// terminal to that row — but only while we hold a recent LOCAL terminal
+// reconcile for the currently selected session, so a genuinely recovered
+// active run (e.g. opening WebChat to a session already running elsewhere) is
+// never cleared. (#87875)
+function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycleHost): boolean {
+  const recent = host.lastLocalTerminalReconcile;
+  if (!recent || recent.sessionKey !== host.sessionKey) {
+    return false;
+  }
+  if (Date.now() - recent.occurredAt > STALE_ACTIVE_ROW_RECONCILE_WINDOW_MS) {
+    host.lastLocalTerminalReconcile = null;
+    return false;
+  }
+  const row = currentSessionRow(host);
+  if (!row || !isSessionRunActive(row)) {
+    // No row, or the server already reflects a non-active state — the poll has
+    // caught up, so stop suppressing.
+    host.lastLocalTerminalReconcile = null;
+    return false;
+  }
+  if (typeof row.startedAt === "number" && row.startedAt > recent.occurredAt) {
+    host.lastLocalTerminalReconcile = null;
+    return false;
+  }
+  reconcileSessionRows(
+    host,
+    { outcome: recent.phase, sessionStatus: recent.sessionStatus, sessionKey: recent.sessionKey },
+    Date.now(),
+  );
+  host.requestUpdate?.();
+  return true;
+}
+
 export function reconcileChatRunFromCurrentSessionRow(
   host: RunLifecycleHost,
   options: { publishRunStatus?: boolean } = {},
 ): boolean {
   if (!host.chatRunId && host.chatStream == null) {
-    return false;
+    return reconcileStaleSelectedSessionRunAfterLocalCompletion(host);
   }
   const row = currentSessionRow(host);
   if (!row) {

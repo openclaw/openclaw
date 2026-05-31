@@ -19,6 +19,7 @@ import {
   registerMemoryCapability,
   type MemoryPluginCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
@@ -27,6 +28,7 @@ import memoryPlugin, {
   normalizeEmbeddingVector,
   normalizeRecallQuery,
   shouldCapture,
+  testing,
 } from "./index.js";
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.js";
 import { installTmpDirHarness } from "./test-helpers.js";
@@ -622,7 +624,9 @@ describe("memory plugin e2e", () => {
       expect(providerOptions.fallback).toBe("none");
       expect(providerOptions.model).toBe("text-embedding-3-small");
       expect(providerOptions).not.toHaveProperty("remote");
-      expect(embedQuery).toHaveBeenCalledWith("project memory");
+      expect(embedQuery).toHaveBeenCalledWith("project memory", {
+        signal: expect.any(AbortSignal),
+      });
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
       vi.doUnmock("openai");
@@ -707,6 +711,99 @@ describe("memory plugin e2e", () => {
         ).rejects.toThrow("limit must be a positive integer");
       },
     });
+  });
+
+  test("returns unavailable when memory_recall embedding does not settle", async () => {
+    vi.useFakeTimers();
+    const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
+    const post = vi.fn(() => new Promise(() => undefined));
+    const loadLanceDbModule = vi.fn(async () => ({
+      connect: vi.fn(async () => ({
+        tableNames: vi.fn(async () => ["memories"]),
+        openTable: vi.fn(async () => ({
+          vectorSearch: vi.fn(),
+          countRows: vi.fn(async () => 0),
+          add: vi.fn(async () => undefined),
+          delete: vi.fn(async () => undefined),
+        })),
+      })),
+    }));
+
+    try {
+      await withMockedOpenAiMemoryPlugin({
+        ensureGlobalUndiciEnvProxyDispatcher,
+        openAiPost: post,
+        loadLanceDbModule,
+        run: async (dynamicMemoryPlugin) => {
+          const registeredTools: any[] = [];
+          const logger = {
+            info: vi.fn(),
+            warn: vi.fn(),
+            error: vi.fn(),
+            debug: vi.fn(),
+          };
+          const mockApi = {
+            id: "memory-lancedb",
+            name: "Memory (LanceDB)",
+            source: "test",
+            config: {},
+            pluginConfig: {
+              embedding: {
+                apiKey: OPENAI_API_KEY,
+                model: "text-embedding-3-small",
+              },
+              dbPath: getDbPath(),
+              autoCapture: false,
+              autoRecall: false,
+            },
+            runtime: {},
+            logger,
+            registerTool: (tool: any, opts: any) => {
+              registeredTools.push({ tool, opts });
+            },
+            registerCli: vi.fn(),
+            registerService: vi.fn(),
+            on: vi.fn(),
+            resolvePath: (filePath: string) => filePath,
+          };
+
+          dynamicMemoryPlugin.register(mockApi as any);
+          const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+          if (!recallTool) {
+            throw new Error("memory_recall tool was not registered");
+          }
+
+          const resultPromise = recallTool.execute("timeout-call", { query: "project memory" });
+          await vi.advanceTimersByTimeAsync(15_000);
+          const result = await resultPromise;
+
+          expect(result.details).toMatchObject({
+            count: 0,
+            disabled: true,
+            unavailable: true,
+            error: "memory_recall timed out after 15s",
+          });
+          expect(logger.warn).toHaveBeenCalledWith(
+            "memory-lancedb: memory_recall timed out after 15000ms; returning unavailable memory result",
+          );
+          expect(loadLanceDbModule).not.toHaveBeenCalled();
+
+          const cooldownResult = await recallTool.execute("cooldown-call", {
+            query: "project memory again",
+          });
+          expect(cooldownResult.details).toMatchObject({
+            count: 0,
+            disabled: true,
+            unavailable: true,
+            error: "memory_recall timed out after 15s",
+          });
+          expect(post).toHaveBeenCalledTimes(1);
+          expect(loadLanceDbModule).not.toHaveBeenCalled();
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("normalizes signed decimal CLI limits through the shared parser", async () => {
@@ -974,7 +1071,18 @@ describe("memory plugin e2e", () => {
 
   test("bounds auto-recall latency during prompt build", async () => {
     vi.useFakeTimers();
-    const post = vi.fn(() => new Promise(() => undefined));
+    const post = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                data: [{ embedding: [0.1, 0.2, 0.3] }],
+              }),
+            30_000,
+          );
+        }),
+    );
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
@@ -1047,8 +1155,43 @@ describe("memory plugin e2e", () => {
           expect(logger.warn).toHaveBeenCalledWith(
             "memory-lancedb: auto-recall timed out after 15000ms; skipping memory injection to avoid stalling agent startup",
           );
+          await vi.advanceTimersByTimeAsync(15_000);
         },
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("clamps oversized auto-recall timeout timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      await expect(
+        testing.runWithTimeout({
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+          task: async () => "ok",
+        }),
+      ).resolves.toEqual({ status: "ok", value: "ok" });
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("falls back for invalid auto-recall timeout timers", async () => {
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      await expect(
+        testing.runWithTimeout({
+          timeoutMs: Number.NaN,
+          task: async () => "ok",
+        }),
+      ).resolves.toEqual({ status: "ok", value: "ok" });
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1);
     } finally {
       vi.useRealTimers();
     }
@@ -2687,14 +2830,16 @@ describe("memory plugin e2e", () => {
         post = vi.fn(async () => ({ data: [{ embedding: [0.1, 0.2, 0.3] }] }));
       },
     }));
-    vi.doMock("@lancedb/lancedb", () => ({
-      connect: vi.fn(async () => ({
-        tableNames: vi.fn(async () => ["memories"]),
-        openTable: vi.fn(async () => ({
-          vectorSearch,
-          countRows: vi.fn(async () => 2),
-          add: vi.fn(async () => undefined),
-          delete: vi.fn(async () => undefined),
+    vi.doMock("./lancedb-runtime.js", () => ({
+      loadLanceDbModule: vi.fn(async () => ({
+        connect: vi.fn(async () => ({
+          tableNames: vi.fn(async () => ["memories"]),
+          openTable: vi.fn(async () => ({
+            vectorSearch,
+            countRows: vi.fn(async () => 2),
+            add: vi.fn(async () => undefined),
+            delete: vi.fn(async () => undefined),
+          })),
         })),
       })),
     }));
@@ -2742,7 +2887,7 @@ describe("memory plugin e2e", () => {
       expect(text).not.toMatch(/\[a1b2c3d4\]/);
     } finally {
       vi.doUnmock("openai");
-      vi.doUnmock("@lancedb/lancedb");
+      vi.doUnmock("./lancedb-runtime.js");
       vi.resetModules();
     }
   });

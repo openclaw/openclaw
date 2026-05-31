@@ -74,8 +74,9 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       };
     },
     async stop() {
-      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node worker_threads workers do not accept a targetOrigin argument.
-      worker.postMessage({ type: "stop" });
+      Reflect.apply(Reflect.get(worker, "postMessage") as (value: unknown) => void, worker, [
+        { type: "stop" },
+      ]);
       const timeout = setTimeout(() => {
         void worker.terminate();
       }, 15_000);

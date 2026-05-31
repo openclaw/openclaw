@@ -1,20 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
-const command = process.argv[2];
-const CLICKCLACK_HTTP_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS,
-  5000,
-);
-const CLICKCLACK_HTTP_BODY_MAX_BYTES = readPositiveInt(
-  process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
-  1024 * 1024,
-);
+function clickClackHttpTimeoutMs() {
+  return readPositiveInt(process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS, 5000);
+}
+
+function clickClackHttpBodyMaxBytes() {
+  return readPositiveInt(
+    process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
+    1024 * 1024,
+  );
+}
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -30,7 +33,7 @@ function readPositiveInt(raw, fallback) {
 }
 
 async function withClickClackFixtureResponse(url, init, consume, options = {}) {
-  const timeoutMs = options.timeoutMs ?? CLICKCLACK_HTTP_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? clickClackHttpTimeoutMs();
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort();
@@ -46,49 +49,8 @@ async function withClickClackFixtureResponse(url, init, consume, options = {}) {
   }
 }
 
-function bodyTooLargeError(label, byteLimit) {
-  return Object.assign(new Error(`${label} response body exceeded ${byteLimit} bytes`), {
-    code: "ETOOBIG",
-  });
-}
-
-async function readBoundedResponseText(
-  response,
-  label,
-  byteLimit = CLICKCLACK_HTTP_BODY_MAX_BYTES,
-) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw bodyTooLargeError(label, byteLimit);
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw bodyTooLargeError(label, byteLimit);
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
+async function readBoundedResponseText(response, label, byteLimit = clickClackHttpBodyMaxBytes()) {
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit);
 }
 
 async function readBoundedResponseJson(response, label) {
@@ -319,7 +281,7 @@ async function waitClickClackSocket() {
           ? await readBoundedResponseJson(response, "ClickClack fixture state")
           : undefined,
       {
-        timeoutMs: Math.min(CLICKCLACK_HTTP_TIMEOUT_MS, remainingMs),
+        timeoutMs: Math.min(clickClackHttpTimeoutMs(), remainingMs),
       },
     ).catch(() => undefined);
     if (state) {
@@ -374,8 +336,20 @@ const commands = {
   "wait-clickclack-reply": waitClickClackReply,
 };
 
-const fn = commands[command];
-if (!fn) {
-  throw new Error(`unknown release-user-journey assertion command: ${command ?? "<missing>"}`);
+export async function runReleaseUserJourneyAssertion(command, args = []) {
+  const fn = commands[command];
+  if (!fn) {
+    throw new Error(`unknown release-user-journey assertion command: ${command ?? "<missing>"}`);
+  }
+  const previousArgv = process.argv;
+  process.argv = [previousArgv[0] ?? "node", fileURLToPath(import.meta.url), command, ...args];
+  try {
+    await fn();
+  } finally {
+    process.argv = previousArgv;
+  }
 }
-await fn();
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runReleaseUserJourneyAssertion(process.argv[2], process.argv.slice(3));
+}

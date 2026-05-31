@@ -500,22 +500,21 @@ export function prependSystemPromptAddition(params: {
   return prependSystemPromptAdditionAfterCacheBoundary(params);
 }
 
-export function resolveAttemptPrependSystemContext(params: {
+// Per-turn media-generation task hints depend on live session state, so they must
+// be routed BELOW the system-prompt cache boundary (via prependSystemPromptAddition)
+// rather than placed in the static prepend slot — keeping them above the boundary
+// shifted the cacheable prefix turn-to-turn and broke prompt caching (#85203).
+export function resolveAttemptMediaTaskSystemPromptAddition(params: {
   sessionKey?: string;
   trigger?: EmbeddedRunAttemptParams["trigger"];
-  hookPrependSystemContext?: string;
 }): string | undefined {
-  const activeMediaTaskPromptContexts =
-    params.trigger === "user" || params.trigger === "manual"
-      ? [
-          buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
-          buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
-          buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
-        ]
-      : [];
+  if (params.trigger !== "user" && params.trigger !== "manual") {
+    return undefined;
+  }
   return joinPresentTextSegments([
-    ...activeMediaTaskPromptContexts,
-    params.hookPrependSystemContext,
+    buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
+    buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
+    buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
   ]);
 }
 
@@ -534,6 +533,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "senderId"
   | "provider"
   | "modelId"
+  | "agentHarnessId"
   | "thinkLevel"
   | "reasoningLevel"
   | "bashElevated"
@@ -574,6 +574,7 @@ export function buildAfterTurnRuntimeContext(params: {
       senderId: params.attempt.senderId,
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,
+      harnessRuntime: params.attempt.agentHarnessId,
       thinkLevel: params.attempt.thinkLevel,
       reasoningLevel: params.attempt.reasoningLevel,
       bashElevated: params.attempt.bashElevated,

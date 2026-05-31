@@ -11,6 +11,11 @@ import {
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import {
+  asDateTimestampMs,
+  parseStrictNonNegativeInteger,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
   type HistoryEntry,
@@ -107,9 +112,14 @@ function isFeishuTopicSessionScope(scope: FeishuGroupSessionScope): boolean {
 }
 
 function evictGroupNameCache(): void {
-  const now = Date.now();
+  const now = asDateTimestampMs(Date.now());
+  if (now === undefined) {
+    groupNameCache.clear();
+    return;
+  }
   for (const [key, val] of groupNameCache) {
-    if (val.expiresAt <= now) {
+    const expiresAt = asDateTimestampMs(val.expiresAt);
+    if (expiresAt === undefined || expiresAt <= now) {
       groupNameCache.delete(key);
     }
   }
@@ -127,9 +137,12 @@ function evictGroupNameCache(): void {
   }
 }
 
-function setCacheEntry(key: string, value: { name: string; expiresAt: number }): void {
+function setCacheEntry(key: string, name: string): void {
+  const expiresAt = resolveExpiresAtMsFromDurationMs(GROUP_NAME_CACHE_TTL_MS);
   groupNameCache.delete(key);
-  groupNameCache.set(key, value);
+  if (expiresAt !== undefined) {
+    groupNameCache.set(key, { name, expiresAt });
+  }
 }
 
 export function clearGroupNameCache(): void {
@@ -149,37 +162,34 @@ export async function resolveGroupName(params: {
   const cacheKey = `${account.accountId}:${chatId}`;
 
   const cached = groupNameCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.name || undefined;
+  if (cached) {
+    const now = asDateTimestampMs(Date.now());
+    const expiresAt = asDateTimestampMs(cached.expiresAt);
+    if (now !== undefined && expiresAt !== undefined && expiresAt > now) {
+      return cached.name || undefined;
+    }
+    groupNameCache.delete(cacheKey);
   }
 
+  let resolvedName: string | undefined;
   try {
     const client = createFeishuClient(account);
     const chatInfo = await getChatInfo(client, chatId);
     const name = chatInfo?.name?.trim();
     if (name) {
-      setCacheEntry(cacheKey, {
-        name,
-        expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
-      });
+      setCacheEntry(cacheKey, name);
+      resolvedName = name;
     } else {
-      setCacheEntry(cacheKey, {
-        name: "",
-        expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
-      });
+      setCacheEntry(cacheKey, "");
     }
   } catch (err) {
     log(`feishu[${account.accountId}]: getChatInfo failed for ${chatId}: ${String(err)}`);
-    setCacheEntry(cacheKey, {
-      name: "",
-      expiresAt: Date.now() + GROUP_NAME_CACHE_TTL_MS,
-    });
+    setCacheEntry(cacheKey, "");
   }
 
-  const result = groupNameCache.get(cacheKey)?.name || undefined;
   evictGroupNameCache();
 
-  return result;
+  return resolvedName;
 }
 
 async function resolveFeishuAudioPreflightTranscript(params: {
@@ -430,6 +440,7 @@ export async function handleFeishuMessage(params: {
   botOpenId?: string;
   botName?: string;
   runtime?: RuntimeEnv;
+  channelRuntime?: ReturnType<typeof getFeishuRuntime>["channel"];
   chatHistories?: Map<string, HistoryEntry[]>;
   accountId?: string;
   processingClaimHeld?: boolean;
@@ -440,6 +451,7 @@ export async function handleFeishuMessage(params: {
     botOpenId,
     botName,
     runtime,
+    channelRuntime,
     chatHistories,
     accountId,
     processingClaimHeld = false,
@@ -604,10 +616,9 @@ export async function handleFeishuMessage(params: {
   // Parse message create_time early so every downstream consumer (pending
   // history, inbound payload, etc.) uses the original authoring timestamp
   // instead of the delivery/processing time.  Feishu uses a millisecond
-  // epoch string; fall back to Date.now() only when the field is absent.
-  const messageCreateTimeMs = event.message.create_time
-    ? Number.parseInt(event.message.create_time, 10)
-    : Date.now();
+  // epoch string; fall back to Date.now() when absent or malformed.
+  const messageCreateTimeMs =
+    parseStrictNonNegativeInteger(event.message.create_time) ?? Date.now();
 
   let requireMention = false; // DMs never require mention; groups may override below
   if (isGroup) {
@@ -700,7 +711,9 @@ export async function handleFeishuMessage(params: {
   }
 
   try {
-    const core = getFeishuRuntime();
+    const core = {
+      channel: channelRuntime ?? getFeishuRuntime().channel,
+    } as ReturnType<typeof getFeishuRuntime>;
     const pairing = createChannelPairingController({
       core,
       channel: "feishu",
@@ -1190,7 +1203,7 @@ export async function handleFeishuMessage(params: {
       }
 
       const rootMsg = await getRootMessageInfo();
-      let feishuThreadId = ctx.threadId ?? rootMessageThreadId ?? rootMsg?.threadId;
+      const feishuThreadId = ctx.threadId ?? rootMessageThreadId ?? rootMsg?.threadId;
       if (feishuThreadId) {
         log(`feishu[${account.accountId}]: resolved thread ID: ${feishuThreadId}`);
       }

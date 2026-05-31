@@ -1,5 +1,6 @@
 import { resolveFiniteTimeoutDelayMs } from "./timeouts.js";
 
+/** Readiness probe outcome with timing data for diagnosing event-loop stalls. */
 export type EventLoopReadyResult = {
   ready: boolean;
   elapsedMs: number;
@@ -8,7 +9,8 @@ export type EventLoopReadyResult = {
   aborted: boolean;
 };
 
-type EventLoopReadyOptions = {
+/** Controls how aggressively the client waits for low-drift timer checks before starting IO. */
+export type EventLoopReadyOptions = {
   maxWaitMs?: number;
   intervalMs?: number;
   driftThresholdMs?: number;
@@ -25,13 +27,14 @@ function resolvePositiveInteger(value: number | undefined, fallback: number): nu
   return Number.isFinite(value) && value !== undefined ? Math.max(1, Math.floor(value)) : fallback;
 }
 
+/** Waits until timer drift stays low for consecutive checks, or aborts/times out. */
 export async function waitForEventLoopReady(
   options: EventLoopReadyOptions = {},
 ): Promise<EventLoopReadyResult> {
   const maxWaitMs = resolveFiniteTimeoutDelayMs(options.maxWaitMs, DEFAULT_MAX_WAIT_MS, {
     minMs: 0,
   });
-  const intervalMs = resolvePositiveInteger(options.intervalMs, DEFAULT_INTERVAL_MS);
+  const intervalMs = resolveFiniteTimeoutDelayMs(options.intervalMs, DEFAULT_INTERVAL_MS);
   const driftThresholdMs = resolvePositiveInteger(
     options.driftThresholdMs,
     DEFAULT_DRIFT_THRESHOLD_MS,

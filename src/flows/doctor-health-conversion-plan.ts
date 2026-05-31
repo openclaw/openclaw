@@ -54,8 +54,8 @@ export const doctorHealthConversionRules = [
   {
     contributionId: "doctor:structured-health-repairs",
     conversion: "terminal-side-effect",
-    target: ["doctor-health-repair-runner"],
-    rule: "Delete this bridge after converted checks are registered directly; repair orchestration belongs outside the contribution list.",
+    target: ["doctor-health-repair-runner", "core/doctor/ui-protocol-freshness"],
+    rule: "Delete this bridge after converted checks are registered directly; repair orchestration belongs outside the contribution list. UI freshness is registered for lint/dry-run effects while legacy doctor still owns real repair.",
   },
   {
     contributionId: "doctor:legacy-state",
@@ -178,6 +178,12 @@ export const doctorHealthConversionRules = [
     conversion: "detect-only",
     target: ["core/doctor/tool-result-cap"],
     rule: "Detect explicit live tool-result cap overrides that are stale or ineffective; preserve deep-mode effective cap output as finding metadata.",
+  },
+  {
+    contributionId: "doctor:provider-catalog-projection",
+    conversion: "detect-only",
+    target: ["core/doctor/provider-catalog-projection"],
+    rule: "Validate provider catalog hooks against unified text catalog projection and report malformed plugin catalog rows during doctor.",
   },
   {
     contributionId: "doctor:runtime-tool-schemas",

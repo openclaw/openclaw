@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
 import { captureEnv } from "../test-utils/env.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const FOREGROUND_TEST_YIELD_MS = 120_000;
+const ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL", "SSLKEYLOGFILE"] as const;
 type GetShellPathFromLoginShell = typeof import("../infra/shell-env.js").getShellPathFromLoginShell;
 const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
@@ -35,10 +36,11 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => ({
     spawn: async (input: {
       argv?: string[];
+      ptyCommand?: string;
       env?: NodeJS.ProcessEnv;
       onStdout?: (chunk: string) => void;
     }) => {
-      const command = input.argv?.at(-1) ?? "";
+      const command = input.ptyCommand ?? input.argv?.at(-1) ?? "";
       const env = input.env ?? {};
       if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
@@ -46,7 +48,7 @@ vi.mock("../process/supervisor/index.js", () => ({
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
       } else if (command.includes("$PATH")) {
         input.onStdout?.(env.PATH ?? "");
-      } else if (command === "echo ok") {
+      } else if (command.includes("echo ok")) {
         input.onStdout?.("ok\n");
       }
       return {
@@ -136,8 +138,16 @@ describe("exec PATH login shell merge", () => {
     ({ createExecTool } = await import("./bash-tools.exec.js"));
   });
 
+  afterAll(() => {
+    vi.doUnmock("../infra/shell-env.js");
+    vi.doUnmock("../infra/exec-approvals.js");
+    vi.doUnmock("../process/supervisor/index.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL"]);
+    envSnapshot = captureEnv([...ENV_KEYS]);
+    process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
     shellEnvMocks.getShellPathFromLoginShell.mockReset();
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
@@ -146,6 +156,28 @@ describe("exec PATH login shell merge", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+  });
+
+  it("strips malformed XML arg-value suffixes from exec command and routing options", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-xml-"));
+    try {
+      const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+      const malformedArgs = {
+        command: "echo ok</arg_value>>",
+        workdir: `${tempDir}</arg_value>>`,
+        host: "gateway</arg_value>>",
+        security: "full</arg_value>>",
+        ask: "off</arg_value>>",
+        node: "ignored-node</arg_value>>",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      } as unknown as Parameters<typeof tool.execute>[1];
+      const result = await tool.execute("call-xml-suffix", malformedArgs);
+      const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+      expect(value).toBe("ok");
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("merges login-shell PATH for host=gateway", async () => {
@@ -260,6 +292,17 @@ describe("exec PATH login shell merge", () => {
 });
 
 describe("exec host env validation", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv([...ENV_KEYS]);
+    process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
   it("blocks LD_/DYLD_ env vars on host execution", async () => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
 

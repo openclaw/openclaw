@@ -175,6 +175,7 @@ vi.mock("../process/supervisor/index.js", () => {
           stdin: undefined,
           wait: async () => {
             await immediate();
+            await immediate();
             if (deferredOutput) {
               input.onStdout?.(deferredOutput);
             }
@@ -217,8 +218,8 @@ const NOTIFY_POLL_OPTIONS = {
   timeout: NOTIFY_EVENT_TIMEOUT_MS,
   interval: POLL_INTERVAL_MS,
 };
-const SHELL_ENV_KEYS = ["SHELL"] as const;
-const PATH_SHELL_ENV_KEYS = ["PATH", "SHELL"] as const;
+const SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "SHELL"] as const;
+const PATH_SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL"] as const;
 const PROCESS_STATUS_RUNNING = "running";
 const PROCESS_STATUS_COMPLETED = "completed";
 const PROCESS_STATUS_FAILED = "failed";
@@ -266,6 +267,7 @@ const createNotifyOnExitExecTool = (overrides: Partial<ExecToolConfig> = {}) =>
     allowBackground: true,
     backgroundMs: 0,
     notifyOnExit: true,
+    notifyOnExitEmptySuccess: true,
     sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
     ...overrides,
   });
@@ -348,6 +350,7 @@ async function pollProcessSession(params: {
   };
 }
 function applyDefaultShellEnv() {
+  process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
   if (!isWin && defaultShell) {
     process.env.SHELL = defaultShell;
   }
@@ -638,9 +641,7 @@ const runLongLogExpectationCase = async ({
   expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
 const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoopCase) => {
-  const tool = createNotifyOnExitExecTool(
-    notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
-  );
+  const tool = createNotifyOnExitExecTool({ notifyOnExitEmptySuccess });
 
   const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
@@ -771,6 +772,8 @@ describe("exec exit codes", () => {
 });
 
 describe("exec notifyOnExit", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
   beforeEach(() => {
     resetHeartbeatWakeStateForTests();
   });

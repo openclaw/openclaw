@@ -22,6 +22,12 @@ export type ChatQueueItem = {
   sendRunId?: string;
   sendState?: "sending" | "waiting-reconnect" | "failed";
   sessionKey?: string;
+  agentId?: string;
+};
+
+export type ChatSessionRefreshTarget = {
+  sessionKey: string;
+  agentId?: string;
 };
 
 export const CRON_CHANNEL_LAST = "last";

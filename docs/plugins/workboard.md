@@ -42,14 +42,19 @@ view shows a plugin-unavailable state instead of local card data.
 Each card stores:
 
 - title and notes
-- status: `backlog`, `todo`, `running`, `review`, `blocked`, or `done`
+- status: `triage`, `backlog`, `todo`, `scheduled`, `ready`, `running`,
+  `review`, `blocked`, or `done`
 - priority: `low`, `normal`, `high`, or `urgent`
 - labels
 - optional agent id
 - optional linked session, run, task, or source URL
 - optional execution metadata for a Codex or Claude session started from the card
-- compact metadata for attempts, comments, links, proof, templates, archive state, and stale-session detection
-- recent card events such as created, moved, linked, attempt, proof, archive, stale, or agent-updated changes
+- compact metadata for attempts, comments, links, proof, artifacts, automation,
+  attachments, worker logs, worker protocol state, claims, diagnostics,
+  notifications, templates, archive state, and stale-session detection
+- recent card events such as created, moved, linked, claimed, heartbeat,
+  attempt, proof, artifact, diagnostic, notification, dispatch, archive, stale,
+  or agent-updated changes
 
 Cards are stored in the plugin's Gateway state. They are local to the Gateway
 state directory and move with the rest of that Gateway's OpenClaw state.
@@ -79,6 +84,168 @@ run id, and lifecycle status on the card. Codex executions use
 Each linked execution also records an attempt summary on the same card record.
 The attempt summary keeps the engine, mode, model, run id, timestamps, status,
 and rolling failure count so repeated failures remain visible on the board.
+
+## Agent coordination
+
+Workboard also exposes optional agent tools for board-aware workflows:
+
+- `workboard_list` lists compact cards with claim and diagnostic state, with an
+  optional board filter.
+- `workboard_read` returns one card plus bounded worker context built from notes,
+  attempts, comments, links, proof, artifacts, parent results, recent assignee
+  work, and active diagnostics.
+- `workboard_create` creates a card with optional parents, tenant, skills,
+  board, workspace metadata, idempotency key, runtime limit, and retry budget.
+- `workboard_link` links a parent card to a child card. Children stay in `todo`
+  until every parent reaches `done`; then dispatch promotion moves them to
+  `ready`.
+- `workboard_claim` claims a card for the calling agent and moves backlog, todo,
+  or ready cards into `running`.
+- `workboard_heartbeat` refreshes the claim heartbeat during longer runs.
+- `workboard_release` releases the claim after completion, pause, or handoff and
+  can move the card to a next status.
+- `workboard_complete` and `workboard_block` are structured lifecycle tools for
+  final summaries, proof, artifacts, created-card manifests, and blocker
+  reasons. Created-card manifests must reference cards linked back to the
+  completed card, which keeps phantom children out of summaries.
+- `workboard_attachment_add`, `workboard_attachment_read`, and
+  `workboard_attachment_delete` store small card attachments in plugin SQLite
+  state, index them on the card, and expose them in worker context.
+- `workboard_worker_log` and `workboard_protocol_violation` record worker log
+  lines and block cards when an automated worker stops without calling
+  `workboard_complete` or `workboard_block`.
+- `workboard_board_create`, `workboard_board_archive`, and
+  `workboard_board_delete` manage persisted board metadata such as display name,
+  description, archive state, and default workspace.
+- `workboard_runs` returns the persisted run-attempt history stored on a card.
+- `workboard_specify` turns a rough triage or backlog card into a clarified
+  `todo` card and records the specification summary on the card.
+- `workboard_decompose` fans a parent orchestration card into linked children,
+  inherits board and tenant metadata, and can complete the parent with a
+  created-card manifest.
+- `workboard_notify_subscribe`, `workboard_notify_list`,
+  `workboard_notify_events`, `workboard_notify_advance`, and
+  `workboard_notify_unsubscribe` manage notification subscriptions in plugin
+  state. Event reads are replay-safe; the advance tool moves the durable cursor
+  so callers can resume without losing or double-reading completed, failed, or
+  stale card events.
+- `workboard_boards`, `workboard_stats`, `workboard_promote`,
+  `workboard_reassign`, `workboard_reclaim`, `workboard_comment`,
+  `workboard_proof`, `workboard_unblock`, and `workboard_dispatch` let an agent
+  inspect board namespaces, view queue stats, recover stuck work, add handoff
+  notes, attach proof or artifact references, move blocked work back to `todo`,
+  and nudge dependency promotion or stale-claim cleanup.
+
+Claimed cards reject agent-tool mutations from other agents unless the caller
+has the claim token returned by `workboard_claim`. Dashboard operators still use
+the normal Gateway RPC surface and can recover or reassign cards.
+
+Workboard stores durable board data in a plugin-owned relational SQLite database
+under the OpenClaw state directory. Boards, cards, labels, lifecycle events,
+run attempts, comments, dependency links, proof, artifact references,
+attachment metadata and blobs, diagnostics, notifications, worker logs,
+protocol state, and subscriptions are persisted in Workboard tables instead of
+plugin key-value entries. A card export still preserves the board narrative
+without inlining attachment blob contents.
+
+Installations that used Workboard in the `.28` release can run
+`openclaw doctor --fix` to migrate the shipped legacy plugin-state namespaces
+(`workboard.cards`, `workboard.boards`, and `workboard.notify`) into the
+relational database. If a legacy `workboard.attachments` namespace is present,
+doctor migrates those attachment blobs too.
+
+Workboard diagnostics are computed from local card metadata. The built-in checks
+flag assigned cards that wait too long, running cards without recent heartbeat,
+blocked cards that need attention, repeated failures, done cards without proof,
+and running cards that only have a loose session link.
+
+Dispatch is intentionally Gateway-local. It does not spawn arbitrary operating
+system processes; normal OpenClaw subagent sessions still own execution. A
+dispatch nudge promotes dependency-ready cards, records dispatch metadata on
+ready cards, blocks expired claims or timed-out runs, marks board-configured
+triage cards as orchestration candidates, then claims a small batch of ready
+cards and starts worker runs through the Gateway subagent runtime. Workers get
+bounded card context plus the claim token they need to heartbeat, complete, or
+block the card through the Workboard tools.
+
+### Dispatch worker selection
+
+Each dispatch pass starts at most three workers by default. Ready cards are
+ordered by priority, position, and creation time, then filtered to avoid
+duplicate active ownership. A dispatch starts only one card for a given owner or
+agent in the same pass, and it skips owners that already have running or review
+work on the board.
+
+Archived cards, cards with active claims, and cards without `ready` status are
+not selected for worker starts. They can still be affected by the data side of
+dispatch when stale claims, dependency promotion, or timeout cleanup applies.
+
+### Worker prompt and lifecycle
+
+The worker prompt includes the card title, bounded notes and context, the
+assigned board, and the Workboard worker protocol. It also includes the claim
+owner and claim token so the worker can call `workboard_heartbeat`,
+`workboard_complete`, or `workboard_block` without another actor taking over the
+card.
+
+When a worker starts successfully, Workboard stores the session key, run id,
+engine, mode, model label, status, and worker log on the card. The session key
+is deterministic for the board and card, which makes repeated dispatches route
+back to the same worker lane instead of creating unrelated sessions.
+
+If a worker cannot be started after a card is claimed, Workboard blocks the
+card, clears the claim, records the run-start failure, and appends a worker log
+line. That failure is visible in the dashboard, CLI JSON, agent tools, and card
+diagnostics.
+
+### Dispatch entry points
+
+Ready-card worker starts can happen from:
+
+- the dashboard dispatch action
+- `openclaw workboard dispatch`
+- `/workboard dispatch` on a command-capable channel
+
+All three entry points use the Gateway subagent runtime when the Gateway is
+available. The CLI has one extra operator fallback: if the Gateway is offline or
+does not expose the Workboard dispatch method and no explicit `--url` or
+`--token` target was provided, it runs data-only dispatch against local SQLite
+state. That fallback can promote dependencies, clean stale claims, and block
+timed-out runs, but it cannot start workers.
+
+Board metadata can include orchestration settings such as `autoDecompose`,
+`autoDecomposePerDispatch`, `defaultAssignee`, and `orchestratorProfile`.
+OpenClaw records the orchestration intent and exposes it in worker context; the
+actual specification and decomposition still happens through the normal
+Workboard tools.
+
+## CLI and slash command
+
+The plugin registers a root CLI command:
+
+```bash
+openclaw workboard list
+openclaw workboard create "Fix stale card lifecycle" --priority high --labels bug,workboard
+openclaw workboard show <card-id>
+openclaw workboard dispatch
+```
+
+`openclaw workboard dispatch` calls the running Gateway so worker starts use the
+same subagent runtime as the dashboard. If the Gateway is unavailable, it falls
+back to data-only dispatch so dependency promotion, stale-claim cleanup, and
+timeout blocking can still run. Auth, permission, and validation failures still
+surface as command errors, as do failures for explicit `--url` or `--token`
+targets.
+
+The `/workboard` slash command supports the same compact operator path:
+`/workboard list`, `/workboard show <card-id>`, `/workboard create <title>`, and
+`/workboard dispatch`. List and show are read operations for authorized command
+senders. Create and dispatch require owner status on chat surfaces or a Gateway
+client with `operator.write` or `operator.admin`.
+
+See [Workboard CLI](/cli/workboard) for command flags, JSON output, Gateway
+fallback behavior, unambiguous id-prefix handling, dispatch selection rules, and
+troubleshooting.
 
 ## Session lifecycle sync
 
@@ -136,7 +303,14 @@ The plugin registers Gateway RPC methods under the `workboard.*` namespace:
 
 - `workboard.cards.list` requires `operator.read`
 - `workboard.cards.export` requires `operator.read`
-- create, update, move, delete, comment, link, proof, and archive methods require `operator.write`
+- `workboard.cards.diagnostics` requires `operator.read`
+- `workboard.cards.diagnostics.refresh` requires `operator.write`
+- attachment list/get and notification event reads require `operator.read`
+- notification cursor advancement requires `operator.write`
+- create, update, move, delete, comment, link, dependency link, proof, artifact,
+  attachment add/delete, worker log, protocol violation, claim, heartbeat,
+  release, complete, block, unblock, dispatch, bulk, and archive methods require
+  `operator.write`
 
 Browsers connected with read-only operator access can inspect the board but
 cannot mutate cards.
@@ -190,9 +364,26 @@ Workboard creates links to normal dashboard sessions. Check the card's agent id
 and linked session, then open the Sessions or Chat view to inspect the actual
 run state.
 
+### Dispatch does not start a worker
+
+Confirm there is at least one `ready` card without an active claim:
+
+```bash
+openclaw workboard list --status ready
+```
+
+If the CLI reports data-only dispatch, start or restart the Gateway and retry.
+Data-only dispatch updates local board state but cannot start subagent worker
+runs.
+
+Cards can also be skipped when another card for the same owner or agent is
+already running or waiting for review. Complete, block, or release that active
+work before dispatching more work for the same owner.
+
 ## Related
 
 - [Control UI](/web/control-ui)
+- [Workboard CLI](/cli/workboard)
 - [Plugins](/tools/plugin)
 - [Manage plugins](/plugins/manage-plugins)
 - [Sessions](/concepts/session)

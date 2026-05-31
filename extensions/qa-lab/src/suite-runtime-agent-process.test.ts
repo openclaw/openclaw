@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -112,6 +113,37 @@ describe("qa suite runtime agent process helpers", () => {
       "/tmp/runtime",
     );
     expect((spawnCall?.[2] as { env?: unknown } | undefined)?.env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("caps oversized qa cli timeout timers", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const child = createSpawnedProcess();
+      spawnMock.mockReturnValue(child);
+
+      const pending = runQaCli(
+        {
+          repoRoot: "/repo",
+          gateway: {
+            tempRoot: "/tmp/runtime",
+            runtimeEnv: { PATH: "/usr/bin" },
+          },
+          primaryModel: "openai/gpt-5.5",
+          alternateModel: "openai/gpt-5.5-mini",
+          providerMode: "mock-openai",
+        } as never,
+        ["qa", "suite"],
+        { timeoutMs: Number.MAX_SAFE_INTEGER },
+      );
+
+      await waitForSpawnCount(1);
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      child.stdout.emit("data", Buffer.from("ok\n"));
+      child.emit("exit", 0);
+      await expect(pending).resolves.toBe("ok");
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("merges isolated env overrides into qa cli runs", async () => {
@@ -406,6 +438,20 @@ describe("qa suite runtime agent process helpers", () => {
       "agent.wait",
       { runId: "run-3", timeoutMs: 30_000 },
       { timeoutMs: 35_000 },
+    );
+  });
+
+  it("caps the gateway client timeout when waiting for oversized agent runs", async () => {
+    const gatewayCall = vi.fn(async () => ({ status: "ok" }));
+
+    await expect(
+      waitForAgentRun({ gateway: { call: gatewayCall } } as never, "run-oversized", 9e15),
+    ).resolves.toEqual({ status: "ok" });
+
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "agent.wait",
+      { runId: "run-oversized", timeoutMs: 9e15 },
+      { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });
 

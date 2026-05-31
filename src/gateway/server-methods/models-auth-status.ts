@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
@@ -21,19 +22,26 @@ import {
   warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
 import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
-import type { UsageProviderId, UsageWindow } from "../../infra/provider-usage.types.js";
+import type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+  UsageWindow,
+} from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
+const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["deepseek"]);
+
+type ProviderUsageStatus = Pick<ProviderUsageSnapshot, "windows" | "summary" | "plan">;
 
 /**
  * Models-auth status wire types. Mirrored in ui/src/ui/types.ts via an
@@ -66,6 +74,7 @@ export type ModelAuthStatusProvider = {
   profiles: ModelAuthStatusProfile[];
   usage?: {
     windows: UsageWindow[];
+    summary?: string;
     plan?: string;
   };
 };
@@ -123,6 +132,9 @@ function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps 
   };
 }
 
+// Auth profiles can be adopted by a provider-specific owner agent dir. Logout
+// must remove every owning store or stale profiles reappear on the next status
+// read and provider-auth warmup.
 async function removeProviderAuthProfilesAcrossOwnerStores(params: {
   provider: string;
   agentDir: string;
@@ -149,18 +161,17 @@ async function removeProviderAuthProfilesAcrossOwnerStores(params: {
   return true;
 }
 
+// UI expiry fields are emitted only when both timestamp and remaining duration
+// are valid, keeping profile/provider expiry shapes all-or-nothing.
 function buildExpiry(
   remainingMs: number | undefined,
   expiresAt: number | undefined,
 ): ModelAuthExpiry | undefined {
-  if (
-    typeof expiresAt !== "number" ||
-    !Number.isFinite(expiresAt) ||
-    typeof remainingMs !== "number"
-  ) {
+  const normalizedExpiresAt = asDateTimestampMs(expiresAt);
+  if (normalizedExpiresAt === undefined || typeof remainingMs !== "number") {
     return undefined;
   }
-  return { at: expiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
+  return { at: normalizedExpiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
 }
 
 function providerDisplayName(provider: string): string {
@@ -227,7 +238,7 @@ export function aggregateOAuthStatus(
   }
   const expirable = oauth
     .map((p) => p.expiresAt)
-    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    .filter((v): v is number => asDateTimestampMs(v) !== undefined);
   const expiresAt = expirable.length > 0 ? Math.min(...expirable) : undefined;
   const remainingMs = expiresAt !== undefined ? expiresAt - now : undefined;
   return { status, expiresAt, remainingMs };
@@ -235,10 +246,15 @@ export function aggregateOAuthStatus(
 
 function mapProvider(
   prov: AuthProviderHealth,
-  usageByProvider: Map<string, { windows: UsageWindow[]; plan?: string }>,
+  usageByProvider: Map<string, ProviderUsageStatus>,
   expectsOAuthSet: Set<string>,
 ): ModelAuthStatusProvider {
-  const usageKey = resolveUsageProviderId(prov.provider);
+  const usageProfile =
+    prov.profiles.find((profile) => profile.type === "oauth" || profile.type === "token") ??
+    prov.profiles.find((profile) => profile.type === "api_key");
+  const usageKey = resolveUsageProviderId(prov.provider, {
+    credentialType: usageProfile?.type,
+  });
   const usage = usageKey ? usageByProvider.get(usageKey) : undefined;
   const rollup = aggregateOAuthStatus(prov, Date.now(), expectsOAuthSet.has(prov.provider));
   return {
@@ -252,7 +268,13 @@ function mapProvider(
       status: prof.status,
       expiry: buildExpiry(prof.remainingMs, prof.expiresAt),
     })),
-    usage: usage ? { windows: usage.windows, plan: usage.plan } : undefined,
+    usage: usage
+      ? {
+          windows: usage.windows,
+          ...(usage.summary ? { summary: usage.summary } : {}),
+          ...(usage.plan ? { plan: usage.plan } : {}),
+        }
+      : undefined,
   };
 }
 
@@ -417,6 +439,8 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     try {
       const cfg = context.getRuntimeConfig();
       const agentDir = resolveDefaultAgentDir(cfg);
+      // Use the external-profile-aware store for status reads so the dashboard
+      // reflects CLI-discovered credentials without persisting them here.
       const store = ensureAuthProfileStore(agentDir, {
         externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
       });
@@ -427,17 +451,26 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         providers: configured.providers.length > 0 ? configured.providers : undefined,
       });
 
-      // Usage queries only for refreshable credentials.
+      // Usage queries usually need refreshable credentials. Keep API-key status
+      // enrichment explicit so static auth providers are not polled by default.
       const usageProviderIds = [
         ...new Set(
           authHealth.profiles
-            .filter((p) => p.type === "oauth" || p.type === "token")
-            .map((p) => resolveUsageProviderId(p.provider))
+            .filter((p) => {
+              if (p.type === "oauth" || p.type === "token") {
+                return true;
+              }
+              const usageProvider = resolveUsageProviderId(p.provider, {
+                credentialType: p.type,
+              });
+              return usageProvider ? apiKeyUsageStatusProviders.has(usageProvider) : false;
+            })
+            .map((p) => resolveUsageProviderId(p.provider, { credentialType: p.type }))
             .filter((id): id is UsageProviderId => Boolean(id)),
         ),
       ];
 
-      const usageByProvider = new Map<string, { windows: UsageWindow[]; plan?: string }>();
+      const usageByProvider = new Map<string, ProviderUsageStatus>();
       if (usageProviderIds.length > 0) {
         try {
           const usage = await loadProviderUsageSummary({
@@ -446,7 +479,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
             timeoutMs: 3500,
           });
           for (const snap of usage.providers) {
-            usageByProvider.set(snap.provider, { windows: snap.windows, plan: snap.plan });
+            usageByProvider.set(snap.provider, {
+              windows: snap.windows,
+              ...(snap.summary ? { summary: snap.summary } : {}),
+              ...(snap.plan ? { plan: snap.plan } : {}),
+            });
           }
         } catch (err) {
           // Usage data is auxiliary — failing here must not block auth status,

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import * as fences from "../markdown/fences.js";
+import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
@@ -153,9 +153,15 @@ const newlineModeFenceCases = (() => {
       expected: [fence],
     },
     {
-      name: "splits between fence and following paragraph",
+      name: "keeps short fenced block and following paragraph together",
       text: `${fence}\n\nAfter`,
       limit: 1000,
+      expected: [`${fence}\n\nAfter`],
+    },
+    {
+      name: "splits oversized fenced block away from following paragraph",
+      text: `${fence}\n\nAfter`,
+      limit: fence.length + 1,
       expected: [fence, "After"],
     },
     {
@@ -331,7 +337,7 @@ describe("resolveTextChunkLimit", () => {
       expected: 4000,
     },
     {
-      name: "honors webchat textChunkLimit override from config",
+      name: "ignores retired webchat textChunkLimit channel config",
       cfg: {
         channels: {
           webchat: { textChunkLimit: 16000 },
@@ -340,7 +346,7 @@ describe("resolveTextChunkLimit", () => {
       provider: "webchat" as const,
       accountId: undefined,
       options: undefined,
-      expected: 16000,
+      expected: 4000,
     },
     {
       name: "falls back to default when webchat has no override",
@@ -523,10 +529,10 @@ describe("chunkTextWithMode", () => {
       expected: ["Line one\nLine two"],
     },
     {
-      name: "newline mode (blank-line split)",
+      name: "newline mode packs short blank-line-separated paragraphs",
       text: "Para one\n\nPara two",
       mode: "newline" as const,
-      expected: ["Para one", "Para two"],
+      expected: ["Para one\n\nPara two"],
     },
   ] as const)(
     "applies mode-specific chunking behavior: $name",
@@ -558,10 +564,10 @@ describe("chunkMarkdownTextWithMode", () => {
       expected: ["Line one\nLine two"],
     },
     {
-      name: "newline mode splits by blank line",
+      name: "newline mode packs short blank-line-separated paragraphs",
       text: "Para one\n\nPara two",
       mode: "newline" as const,
-      expected: ["Para one", "Para two"],
+      expected: ["Para one\n\nPara two"],
     },
   ] as const)("applies markdown/newline mode behavior: $name", ({ text, mode, expected, name }) => {
     expectChunkModeCase({
@@ -580,6 +586,13 @@ describe("chunkMarkdownTextWithMode", () => {
       expect(chunkMarkdownTextWithMode(text, limit, "newline"), name).toEqual(expected);
     },
   );
+
+  it("packs multiple paragraphs up to the limit in newline mode", () => {
+    expect(chunkMarkdownTextWithMode("Alpha\n\nBeta\n\nGamma", 14, "newline")).toEqual([
+      "Alpha\n\nBeta",
+      "Gamma",
+    ]);
+  });
 });
 
 describe("resolveChunkMode", () => {
@@ -608,7 +621,7 @@ describe("resolveChunkMode", () => {
       cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
       provider: "webchat",
       accountId: undefined,
-      expected: "newline",
+      expected: "length",
     },
   ] as const)(
     "resolves default/provider/account/internal chunk mode for $provider $accountId",

@@ -2,6 +2,7 @@ import type { FileSystem, JsonlSessionMetadata, SessionTreeEntry } from "../type
 import { SessionError, toError } from "../types.js";
 import { getFileSystemResultOrThrow } from "./repo-utils.js";
 import { BaseSessionStorage, leafIdAfterEntry } from "./storage-base.js";
+import { parseSessionTimestampMs } from "./timestamps.js";
 
 type JsonlSessionStorageFileSystem = Pick<
   FileSystem,
@@ -64,6 +65,9 @@ function parseHeaderLine(line: string, filePath: string): SessionHeader {
   if (typeof parsed.timestamp !== "string" || !parsed.timestamp) {
     throw invalidSession(filePath, "session header is missing timestamp");
   }
+  if (parseSessionTimestampMs(parsed.timestamp) === undefined) {
+    throw invalidSession(filePath, "session header has invalid timestamp");
+  }
   if (typeof parsed.cwd !== "string" || !parsed.cwd) {
     throw invalidSession(filePath, "session header is missing cwd");
   }
@@ -102,6 +106,9 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
   if (typeof parsed.timestamp !== "string" || !parsed.timestamp) {
     throw invalidEntry(filePath, lineNumber, "is missing timestamp");
   }
+  if (parseSessionTimestampMs(parsed.timestamp) === undefined) {
+    throw invalidEntry(filePath, lineNumber, "has invalid timestamp");
+  }
   if (parsed.type === "leaf" && parsed.targetId !== null && typeof parsed.targetId !== "string") {
     throw invalidEntry(filePath, lineNumber, "has invalid targetId");
   }
@@ -118,6 +125,7 @@ function headerToSessionMetadata(header: SessionHeader, path: string): JsonlSess
   };
 }
 
+/** Read only the JSONL session header and convert it to session metadata. */
 export async function loadJsonlSessionMetadata(
   fs: JsonlSessionStorageFileSystem,
   filePath: string,
@@ -161,6 +169,7 @@ async function loadJsonlStorage(
   return { header, entries, leafId };
 }
 
+/** Append-only JSONL-backed storage for one session tree. */
 export class JsonlSessionStorage extends BaseSessionStorage<JsonlSessionMetadata> {
   private readonly fs: JsonlSessionStorageFileSystem;
   private readonly filePath: string;
@@ -185,6 +194,7 @@ export class JsonlSessionStorage extends BaseSessionStorage<JsonlSessionMetadata
     return new JsonlSessionStorage(fs, filePath, loaded.header, loaded.entries, loaded.leafId);
   }
 
+  /** Create a new JSONL file with a session header and no entries. */
   static async create(
     fs: JsonlSessionStorageFileSystem,
     filePath: string,

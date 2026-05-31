@@ -43,7 +43,7 @@ describe("gateway chat.inject transcript writes", () => {
       expect(last.type).toBe("message");
 
       // The regression we saw: raw jsonl appends omitted this field entirely.
-      expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(true);
+      expect(Object.hasOwn(last, "parentId")).toBe(true);
       expect(last).toHaveProperty("id");
       expect(last).toHaveProperty("message");
     } finally {
@@ -89,7 +89,7 @@ describe("gateway chat.inject transcript writes", () => {
       expect(last.type).toBe("message");
       expect(last).toHaveProperty("id", messageId);
       expect(last).toHaveProperty("message");
-      expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(false);
+      expect(Object.hasOwn(last, "parentId")).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -101,12 +101,14 @@ describe("gateway chat.inject transcript writes", () => {
       sessionId: "sess-redact",
     });
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-    const updates: Array<{ message?: unknown }> = [];
+    const updates: Array<{ message?: unknown; sessionKey?: string; agentId?: string }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
 
     try {
       const appended = await appendInjectedAssistantMessageToTranscript({
         transcriptPath,
+        sessionKey: "global",
+        agentId: "work",
         message: `Here is your key: ${fakeApiKey}`,
         config: { logging: { redactSensitive: "tools" } },
       });
@@ -114,6 +116,7 @@ describe("gateway chat.inject transcript writes", () => {
       expect(appended.ok).toBe(true);
       expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({ sessionKey: "global", agentId: "work" });
 
       const lines = readTranscriptLines(transcriptPath);
       const last = JSON.parse(lines.at(-1) as string) as { message?: unknown };

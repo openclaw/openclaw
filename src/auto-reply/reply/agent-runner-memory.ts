@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import {
@@ -12,7 +16,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
@@ -39,10 +43,6 @@ import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -247,6 +247,7 @@ function resolveFollowupContextConfigProvider(params: {
   return resolveContextConfigProviderForRuntime({
     provider,
     runtimeId: resolveFollowupAgentRuntimeId(params),
+    config: params.cfg,
   });
 }
 
@@ -1091,6 +1092,8 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await applySessionStoreEntryPatch({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
+          skipMaintenance: true,
+          takeCacheOwnership: true,
           patch: { totalTokens: transcriptPromptTokens, totalTokensFresh: true },
         });
         if (updatedEntry) {
@@ -1174,6 +1177,7 @@ export async function runMemoryFlushIfNeeded(params: {
   if (params.sessionKey) {
     memoryDeps.registerAgentRunContext(flushRunId, {
       sessionKey: params.sessionKey,
+      ...(activeSessionEntry?.sessionId ? { sessionId: activeSessionEntry.sessionId } : {}),
       verboseLevel: params.resolvedVerboseLevel,
     });
   }
@@ -1318,6 +1322,8 @@ export async function runMemoryFlushIfNeeded(params: {
         const updatedEntry = await memoryDeps.updateSessionStoreEntry({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
+          skipMaintenance: true,
+          takeCacheOwnership: true,
           update: async () => ({
             memoryFlushAt: memoryDeps.now(),
             memoryFlushCompactionCount: flushedCompactionCount,

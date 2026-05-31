@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -481,7 +481,7 @@ function collectCodeFiles(dir: string): string[] {
   return files;
 }
 
-function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: string }> {
+function collectDeprecatedTestBarrelImports(): string[] {
   const leaks: Array<{ file: string; specifier: string }> = [];
   const importPatterns = [
     /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']/g,
@@ -509,7 +509,7 @@ function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: 
       }
     }
   }
-  return leaks;
+  return leaks.map((entry) => `${entry.file}: ${entry.specifier}`).toSorted();
 }
 
 function collectDeprecatedPackageTestingBridgeDrift(): string[] {
@@ -724,6 +724,17 @@ function collectExtensionProductionSdkSubpathImports(subpaths: ReadonlySet<strin
 }
 
 describe("plugin-sdk package contract guardrails", () => {
+  let deprecatedTestBarrelImports: string[] = [];
+  let unusedReservedSdkSubpaths: string[] = [];
+
+  beforeAll(() => {
+    deprecatedTestBarrelImports = collectDeprecatedTestBarrelImports();
+    const usedReserved = new Set(collectReservedSdkSubpathImports());
+    unusedReservedSdkSubpaths = reservedBundledPluginSdkEntrypoints.filter(
+      (entrypoint) => !usedReserved.has(entrypoint),
+    );
+  });
+
   it("lists package guardrail scan inputs from git without walking roots", () => {
     expectNoReaddirSyncDuring(() => {
       const pluginIds = collectBundledPluginIds();
@@ -939,7 +950,7 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps real tests off deprecated plugin-sdk testing barrels", () => {
-    expect(collectDeprecatedTestBarrelImports()).toStrictEqual([]);
+    expect(deprecatedTestBarrelImports).toStrictEqual([]);
   });
 
   it("keeps the package testing barrel as a single deprecated bridge", () => {
@@ -959,12 +970,7 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps reserved SDK compatibility subpaths actively used", () => {
-    const usedReserved = new Set(collectReservedSdkSubpathImports());
-    const unusedReserved = reservedBundledPluginSdkEntrypoints.filter(
-      (entrypoint) => !usedReserved.has(entrypoint),
-    );
-
-    expect(unusedReserved).toStrictEqual([]);
+    expect(unusedReservedSdkSubpaths).toStrictEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
@@ -34,6 +35,7 @@ export type ResolverContext = {
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   cache: SecretRefResolveCache;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   warnings: SecretResolverWarning[];
   warningKeys: Set<string>;
   assignments: SecretAssignment[];
@@ -45,11 +47,13 @@ export type { SecretRefResolveCache } from "./resolve-types.js";
 export function createResolverContext(params: {
   sourceConfig: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): ResolverContext {
   return {
     sourceConfig: params.sourceConfig,
     env: params.env,
     cache: {},
+    ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
     warnings: [],
     warningKeys: new Set(),
     assignments: [],
@@ -137,7 +141,7 @@ export function applyResolvedAssignments(params: {
 }
 
 export function hasOwnProperty(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 export function isEnabledFlag(value: unknown): boolean {

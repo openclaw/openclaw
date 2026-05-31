@@ -32,6 +32,7 @@ function createNoopHeartbeatRunner(): HeartbeatRunner {
   };
 }
 
+/** Starts cron without making gateway startup wait for cron initialization. */
 export function startGatewayCronWithLogging(params: {
   cron: { start: () => Promise<void> };
   logCron: { error: (message: string) => void };
@@ -51,6 +52,7 @@ function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles |
   }
 }
 
+/** Runs maintenance that is intentionally delayed until after the gateway is ready. */
 export async function runGatewayPostReadyMaintenance(params: {
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
@@ -79,6 +81,7 @@ export async function runGatewayPostReadyMaintenance(params: {
   params.recordPostReadyMemory();
 }
 
+/** Schedules post-ready maintenance and cancels/cleans handles if shutdown wins the race. */
 export function scheduleGatewayPostReadyMaintenance(params: {
   delayMs: number;
   isClosing: () => boolean;
@@ -104,6 +107,8 @@ export function scheduleGatewayPostReadyMaintenance(params: {
         }
         const maintenance = await params.startMaintenance();
         if (params.isClosing()) {
+          // Maintenance can allocate intervals before shutdown is observed; clear them here
+          // instead of handing live timers to a closing gateway.
           clearGatewayMaintenanceHandles(maintenance);
           return null;
         }
@@ -136,6 +141,8 @@ function recoverPendingOutboundDeliveries(params: {
   cfg: OpenClawConfig;
   log: GatewayRuntimeServiceLogger;
 }): void {
+  // Recovery is best-effort background work; startup must continue even if outbound modules fail
+  // to import or queued delivery replay fails.
   void (async () => {
     const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
     const { deliverOutboundPayloadsInternal } = await import("../infra/outbound/deliver.js");
@@ -153,6 +160,8 @@ function recoverPendingSessionDeliveries(params: {
   log: GatewayRuntimeServiceLogger;
   maxEnqueuedAt: number;
 }): void {
+  // Delay session continuation recovery so the gateway has time to publish ready state and
+  // request routing before replaying restart-sentinel deliveries.
   const timer = setTimeout(() => {
     void (async () => {
       const { recoverPendingRestartContinuationDeliveries } =
@@ -178,6 +187,8 @@ function startGatewayModelPricingRefreshOnDemand(params: {
   }
   let stopped = false;
   let stopRefresh: (() => void) | undefined;
+  // Import pricing refresh lazily; many gateway starts never use model-pricing metadata.
+  // The stopped flag closes the race where shutdown happens before the import resolves.
   void (async () => {
     const { startGatewayModelPricingRefresh } = await import("./model-pricing-cache.js");
     if (stopped) {
@@ -199,6 +210,7 @@ function startGatewayModelPricingRefreshOnDemand(params: {
   };
 }
 
+/** Activates background gateway services after core runtime startup is ready. */
 export function activateGatewayScheduledServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
@@ -211,6 +223,8 @@ export function activateGatewayScheduledServices(params: {
   pluginLookUpTable?: PluginMetadataRegistryView;
 }): { heartbeatRunner: HeartbeatRunner; stopModelPricingRefresh: () => void } {
   if (params.minimalTestGateway) {
+    // Minimal gateways keep handles callable but inert so tests can share shutdown paths with
+    // production starts without launching background loops.
     return { heartbeatRunner: createNoopHeartbeatRunner(), stopModelPricingRefresh: () => {} };
   }
   const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });

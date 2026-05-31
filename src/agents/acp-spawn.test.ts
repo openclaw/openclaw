@@ -910,7 +910,7 @@ describe("spawnAcpDirect", () => {
       {
         task: "Investigate flaky tests",
         agentId: "codex",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
       {
@@ -922,11 +922,134 @@ describe("spawnAcpDirect", () => {
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       runtimeOptions: {
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
         thinking: "high",
       },
     });
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
+  });
+
+  it("applies existing subagent model and model-profile thinking defaults to ACP runtime options", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+            model: "openai/gpt-5.4",
+          },
+          models: {
+            "openai/gpt-5.4": {
+              params: { thinking: "high" },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "openai/gpt-5.4",
+        thinking: "high",
+      },
+    });
+  });
+
+  it("uses configured runtime=acp agent defaults before launching the external ACP agent", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "codex-acp",
+            runtime: {
+              type: "acp",
+              acp: { agent: "codex" },
+            },
+            subagents: {
+              model: "openai/gpt-5.5",
+              thinking: "low",
+            },
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex-acp",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    expectInitializeSessionFields({
+      agent: "codex",
+      runtimeOptions: {
+        model: "openai/gpt-5.5",
+        thinking: "low",
+      },
+    });
+  });
+
+  it("does not treat a configured runtime=acp agent primary model as an ACP startup model", async () => {
+    replaceSpawnConfig({
+      ...createDefaultSpawnConfig(),
+      agents: {
+        list: [
+          {
+            id: "codex-acp",
+            runtime: {
+              type: "acp",
+              acp: { agent: "codex" },
+            },
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+        defaults: {
+          subagents: {
+            allowAgents: ["codex"],
+            maxSpawnDepth: 2,
+          },
+        },
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex-acp",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const initInput = expectInitializeSessionFields({ agent: "codex" });
+    expect(initInput.runtimeOptions).toBeUndefined();
   });
 
   it("applies ACP spawn run timeout to runtime options and dispatch", async () => {
@@ -993,6 +1116,45 @@ describe("spawnAcpDirect", () => {
     );
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
     expectGatewayMethodNotCalled("agent");
+  });
+
+  it("forwards prepared image attachments through the gateway agent call", async () => {
+    const imageBase64 = Buffer.from("png-bytes").toString("base64");
+    const result = await spawnAcpDirect(
+      {
+        task: "describe the image",
+        agentId: "codex",
+        attachments: [{ mediaType: "image/png", data: imageBase64 }],
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params?.attachments).toEqual([
+      {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: imageBase64 },
+      },
+    ]);
+  });
+
+  it("omits attachments from gateway call when none are provided", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expectAcceptedSpawn(result);
+    const agentCall = findAgentGatewayCall();
+    expect(agentCall?.params).not.toHaveProperty("attachments");
   });
 
   it("maps OpenClaw ACP runtime agent aliases to their configured harness id", async () => {

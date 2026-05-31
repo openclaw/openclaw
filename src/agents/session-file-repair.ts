@@ -208,8 +208,8 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
   };
   return (
     message.role === "assistant" &&
-    message.api === "openai-codex-responses" &&
-    message.provider === "openai-codex" &&
+    message.api === "openai-chatgpt-responses" &&
+    message.provider === "openai" &&
     message.stopReason !== "error" &&
     message.stopReason !== "aborted"
   );

@@ -2,7 +2,10 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
-import { listSkillCommandsForAgents, resolveSkillCommandInvocation } from "../skill-commands.js";
+import {
+  listSkillCommandsForAgents,
+  resolveSkillCommandInvocation,
+} from "../../skills/discovery/chat-commands.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
@@ -21,8 +24,14 @@ import { resolveReplyToMode } from "./reply-threading.js";
 export { handleContextCommand } from "./commands-context-command.js";
 export { handleWhoamiCommand } from "./commands-whoami.js";
 
-async function resolveSkillCommands(params: HandleCommandsParams) {
-  if (params.skillCommands !== undefined) {
+async function resolveSkillCommands(
+  params: HandleCommandsParams,
+  options?: { requireFullList?: boolean },
+) {
+  if (
+    params.skillCommands !== undefined &&
+    (!options?.requireFullList || params.skillCommands.length > 0 || !params.loadSkillCommands)
+  ) {
     return params.skillCommands;
   }
   if (params.loadSkillCommands) {
@@ -134,7 +143,7 @@ export const handleSkillCommandUsage: CommandHandler = async (params, allowTextC
   }
 
   const [, rawName] = normalized.match(/^\/skill(?:\s+([^\s]+))?/u) ?? [];
-  const skillCommands = await resolveSkillCommands(params);
+  const skillCommands = await resolveSkillCommands(params, { requireFullList: true });
   if (
     rawName &&
     resolveSkillCommandInvocation({ commandBodyNormalized: normalized, skillCommands })

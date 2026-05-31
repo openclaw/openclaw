@@ -532,9 +532,9 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.5",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         content: [
           { type: "text", text: "Process List" },
           {
@@ -593,9 +593,9 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: {
         role: "assistant",
-        provider: "openai-codex",
+        provider: "openai",
         model: "gpt-5.5",
-        api: "openai-codex-responses",
+        api: "openai-chatgpt-responses",
         content: [{ type: "toolCall", id: "call_exec|fc_1", name: "exec", arguments: {} }],
         stopReason: "toolUse",
       },
@@ -636,9 +636,9 @@ describe("repairSessionFileIfNeeded", () => {
         timestamp: new Date().toISOString(),
         message: {
           role: "assistant",
-          provider: "openai-codex",
+          provider: "openai",
           model: "gpt-5.5",
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           content: [
             { type: "toolCall", id: `call_${stopReason}|fc_1`, name: "exec", arguments: {} },
           ],

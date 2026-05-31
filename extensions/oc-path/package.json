@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/oc-path",
-  "version": "2026.5.28",
+  "version": "2026.5.31",
   "private": true,
   "description": "OpenClaw oc:// workspace path plugin",
   "type": "module",
@@ -12,10 +12,10 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*"
+    "openclaw": "2026.5.28"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.28"
+    "openclaw": ">=2026.5.31"
   },
   "peerDependenciesMeta": {
     "openclaw": {

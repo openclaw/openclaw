@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
@@ -14,7 +15,6 @@ import {
   getQueueSize,
   isGatewayDraining,
 } from "../../process/command-queue.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -335,6 +335,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           sessionFile: params.sessionFile,
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          agentId: params.agentId,
           config: params.config,
           request,
         });
@@ -641,7 +642,6 @@ function scheduleDeferredTurnMaintenance(
     });
     return undefined;
   }
-  let state!: DeferredTurnMaintenanceRunState;
   const trackedPromise = runPromise
     .catch((err) => {
       params.onScheduleFailure?.(err);
@@ -669,7 +669,7 @@ function scheduleDeferredTurnMaintenance(
         await disposeDeferredMaintenanceContextEngine(discardedRerunParams.contextEngine);
       }
     });
-  state = {
+  const state: DeferredTurnMaintenanceRunState = {
     promise: trackedPromise,
     rerunRequested: false,
     latestParams: { ...params, sessionKey },

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js";
 
@@ -52,6 +53,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
+let pollingSessionTesting: typeof import("./polling-session.js").testing;
 let claimTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").claimTelegramSpooledUpdate;
 let isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess: typeof import("./telegram-ingress-spool.js").isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess;
 let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdateClaims;
@@ -459,6 +461,7 @@ function startIsolatedIngressSession(params: {
   log?: (message: string) => void;
   stop?: () => Promise<void>;
   spooledUpdateHandlerTimeoutMs?: number;
+  spooledUpdateHandlerAbortGraceMs?: number;
 }) {
   const worker = createIdleIngressWorker();
   const bot = {
@@ -482,6 +485,9 @@ function startIsolatedIngressSession(params: {
       ...(params.spooledUpdateHandlerTimeoutMs !== undefined
         ? { spooledUpdateHandlerTimeoutMs: params.spooledUpdateHandlerTimeoutMs }
         : {}),
+      ...(params.spooledUpdateHandlerAbortGraceMs !== undefined
+        ? { spooledUpdateHandlerAbortGraceMs: params.spooledUpdateHandlerAbortGraceMs }
+        : {}),
     },
   });
   return {
@@ -494,7 +500,8 @@ function startIsolatedIngressSession(params: {
 
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
-    ({ TelegramPollingSession } = await import("./polling-session.js"));
+    ({ TelegramPollingSession, testing: pollingSessionTesting } =
+      await import("./polling-session.js"));
     ({
       claimTelegramSpooledUpdate,
       isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
@@ -2155,7 +2162,7 @@ describe("TelegramPollingSession", () => {
       const runPromise = session.runUntilAbort();
       await vi.waitFor(() => expect(events).toEqual(["first:42"]));
 
-      await vi.advanceTimersByTimeAsync(150);
+      await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => expect(worker.createWorker).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => expect(events).toEqual(["first:42", "second:43"]));
       await runPromise;
@@ -2239,6 +2246,12 @@ describe("TelegramPollingSession", () => {
       vi.useRealTimers();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("caps oversized spooled update handler abort grace timers", async () => {
+    expect(
+      pollingSessionTesting.resolveSpooledUpdateHandlerAbortGraceMs(Number.MAX_SAFE_INTEGER),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("does not drain more updates on the old bot while a timeout restart is pending", async () => {

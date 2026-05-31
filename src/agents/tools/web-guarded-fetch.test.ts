@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
 import {
@@ -119,6 +120,21 @@ describe("web-guarded-fetch", () => {
       async () => undefined,
     );
     expect(firstFetchCall().timeoutMs).toBe(2500);
+  });
+
+  it("caps oversized timeoutSeconds before guarded fetch dispatch", async () => {
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
+      response: new Response("ok", { status: 200 }),
+      finalUrl: "https://example.com",
+      release: async () => {},
+    });
+
+    await withStrictWebToolsEndpoint(
+      { url: "https://example.com", timeoutSeconds: Number.MAX_SAFE_INTEGER },
+      async () => undefined,
+    );
+
+    expect(firstFetchCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("rejects malformed timeouts before guarded fetch dispatch", async () => {

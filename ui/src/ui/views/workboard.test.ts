@@ -53,8 +53,44 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Wire dashboard tab");
     expect(container.textContent).toContain("Running");
     expect(container.textContent).toContain("Dashboard session");
-    expect(container.querySelectorAll(".workboard-column")).toHaveLength(6);
+    expect(container.querySelectorAll(".workboard-column")).toHaveLength(9);
     expect(container.querySelector(".workboard-card__priority")?.textContent).toContain("high");
+  });
+
+  it("does not render Invalid Date for Date-invalid card timestamps", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Bad timestamp card",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 8_640_000_000_000_001,
+        events: [{ id: "event-1", kind: "edited", at: 8_640_000_000_000_001 }],
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Bad timestamp card");
+    expect(container.textContent).not.toContain("Invalid Date");
   });
 
   it("opens linked cards from the card surface without hijacking action buttons", () => {
@@ -334,6 +370,12 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
 
     expect(container.querySelector('[role="dialog"]')?.textContent).toContain("Card Chase");
+    expect(container.querySelector("workboard-3d-game")?.getAttribute("player-index")).toBe("0");
+    expect(container.querySelector("workboard-3d-game")?.getAttribute("aria-hidden")).toBe("true");
+    expect(container.querySelector('[role="grid"]')?.getAttribute("aria-label")).toBe(
+      "Card Chase board",
+    );
+    expect(container.querySelector('[role="gridcell"][aria-label="Agent 1"]')).not.toBeNull();
     const controls = container.querySelector<HTMLElement>(".workboard-game__controls");
     controls
       ?.querySelector<HTMLButtonElement>('button[aria-label="Move right"]')
@@ -341,6 +383,8 @@ describe("renderWorkboard", () => {
     render(renderWorkboard(props), container);
 
     expect(state.gamePlayerIndex).toBe(1);
+    expect(container.querySelector("workboard-3d-game")?.getAttribute("player-index")).toBe("1");
+    expect(container.querySelector('[role="gridcell"][aria-label="Agent 2"]')).not.toBeNull();
     expect(container.querySelector(".workboard-game__stats")?.textContent).toContain("Moves 1");
   });
 
