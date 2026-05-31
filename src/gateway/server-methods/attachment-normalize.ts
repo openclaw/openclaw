@@ -1,5 +1,6 @@
 import type { ChatAttachment } from "../chat-attachments.js";
 
+/** RPC attachment payload shape accepted by chat-like gateway methods. */
 export type RpcAttachmentInput = {
   type?: unknown;
   mimeType?: unknown;
@@ -23,6 +24,7 @@ function normalizeAttachmentContent(content: unknown): string | undefined {
   return undefined;
 }
 
+/** Convert permissive RPC attachment payloads into the bounded chat attachment shape. */
 export function normalizeRpcAttachmentsToChatAttachments(
   attachments: RpcAttachmentInput[] | undefined,
 ): ChatAttachment[] {
