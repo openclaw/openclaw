@@ -147,6 +147,26 @@ async function archiveLegacySource(params: {
   }
 }
 
+async function ensureStoreCapacity<T>(params: {
+  files: Array<{ accountId: string }>;
+  store: { entries: () => Promise<Array<{ key: string; value: T }>> };
+  maxEntries: number;
+  label: string;
+  warnings: string[];
+}): Promise<Set<string> | null> {
+  const existingKeys = new Set((await params.store.entries()).map((entry) => entry.key));
+  const missingKeys = new Set(
+    params.files.map((file) => file.accountId).filter((key) => !existingKeys.has(key)),
+  );
+  if (missingKeys.size > params.maxEntries - existingKeys.size) {
+    params.warnings.push(
+      `Skipped migrating ${params.label} because plugin state has room for ${params.maxEntries - existingKeys.size} of ${missingKeys.size} missing entries; left legacy sources in place`,
+    );
+    return null;
+  }
+  return existingKeys;
+}
+
 export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "nostr-bus-state-json-to-plugin-state",
@@ -178,10 +198,21 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         namespace: BUS_STATE_NAMESPACE,
         maxEntries: MAX_NOSTR_STATE_ENTRIES,
       });
+      const existingKeys = await ensureStoreCapacity({
+        files,
+        store,
+        maxEntries: MAX_NOSTR_STATE_ENTRIES,
+        label: "Nostr bus state",
+        warnings,
+      });
+      if (!existingKeys) {
+        return { changes, warnings };
+      }
       let imported = 0;
       for (const file of files) {
-        if (!(await store.lookup(file.accountId))) {
+        if (!existingKeys.has(file.accountId)) {
           await store.register(file.accountId, file.value as NostrBusState);
+          existingKeys.add(file.accountId);
           imported++;
         }
         await archiveLegacySource({
@@ -229,10 +260,21 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         namespace: PROFILE_STATE_NAMESPACE,
         maxEntries: MAX_NOSTR_STATE_ENTRIES,
       });
+      const existingKeys = await ensureStoreCapacity({
+        files,
+        store,
+        maxEntries: MAX_NOSTR_STATE_ENTRIES,
+        label: "Nostr profile state",
+        warnings,
+      });
+      if (!existingKeys) {
+        return { changes, warnings };
+      }
       let imported = 0;
       for (const file of files) {
-        if (!(await store.lookup(file.accountId))) {
+        if (!existingKeys.has(file.accountId)) {
           await store.register(file.accountId, file.value as NostrProfileState);
+          existingKeys.add(file.accountId);
           imported++;
         }
         await archiveLegacySource({

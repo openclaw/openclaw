@@ -109,14 +109,24 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         namespace: SESSION_TOGGLES_NAMESPACE,
         maxEntries: MAX_TOGGLE_ENTRIES,
       });
+      const existingKeys = new Set((await store.entries()).map((entry) => entry.key));
+      const missingEntries = entries.filter(
+        (entry) => !existingKeys.has(activeMemoryToggleKey(entry.sessionKey)),
+      );
+      if (missingEntries.length > MAX_TOGGLE_ENTRIES - existingKeys.size) {
+        warnings.push(
+          `Skipped Active Memory session toggle migration because plugin state has room for ${MAX_TOGGLE_ENTRIES - existingKeys.size} of ${missingEntries.length} missing entries; left legacy source in place`,
+        );
+        return { changes, warnings };
+      }
       let imported = 0;
       for (const entry of entries) {
         const key = activeMemoryToggleKey(entry.sessionKey);
-        const existing = await store.lookup(key);
-        if (existing) {
+        if (existingKeys.has(key)) {
           continue;
         }
         await store.register(key, entry);
+        existingKeys.add(key);
         imported++;
       }
       if (imported > 0) {

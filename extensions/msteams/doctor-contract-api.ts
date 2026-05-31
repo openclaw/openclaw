@@ -168,6 +168,20 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         namespace: LEARNINGS_NAMESPACE,
         maxEntries: MAX_LEARNING_ENTRIES,
       });
+      const existingEntries = await store.entries();
+      const existingKeys = new Set(existingEntries.map((entry) => entry.key));
+      const importableFiles = files.filter((file) => file.sessionKey);
+      const missingKeys = new Set(
+        importableFiles
+          .map((file) => encodeSessionKey(file.sessionKey ?? ""))
+          .filter((key) => !existingKeys.has(key)),
+      );
+      if (missingKeys.size > MAX_LEARNING_ENTRIES - existingKeys.size) {
+        warnings.push(
+          `Skipped Microsoft Teams feedback-learning migration because plugin state has room for ${MAX_LEARNING_ENTRIES - existingKeys.size} of ${missingKeys.size} missing entries; left legacy sources in place`,
+        );
+        return { changes, warnings };
+      }
       let imported = 0;
       for (const file of files) {
         if (!file.sessionKey) {
