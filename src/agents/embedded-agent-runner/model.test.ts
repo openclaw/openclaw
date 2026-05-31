@@ -557,6 +557,17 @@ describe("resolveModel", () => {
   });
 
   it("falls back to bundled static catalog rows without agent discovery", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "openai",
       id: "gpt-5.3-codex",
@@ -573,8 +584,9 @@ describe("resolveModel", () => {
     const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
     const runProviderDynamicModel = vi.fn(() => undefined);
 
-    const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", undefined, {
+    const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", cfg, {
       allowBundledStaticCatalogFallback: true,
+      preferBundledStaticCatalogTransport: true,
       runtimeHooks: {
         ...baseRuntimeHooks,
         prepareProviderDynamicModel,
@@ -592,6 +604,13 @@ describe("resolveModel", () => {
       maxTokens: 128_000,
     });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledTimes(1);
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.3-codex",
+        cfg,
+      }),
+    );
     expect(prepareProviderDynamicModel).toHaveBeenCalled();
     expect(runProviderDynamicModel).toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();

@@ -566,6 +566,7 @@ describe("runEmbeddedAgent", () => {
       expect.objectContaining({
         skipAgentDiscovery: true,
         allowBundledStaticCatalogFallback: true,
+        preferBundledStaticCatalogTransport: true,
       }),
     );
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();

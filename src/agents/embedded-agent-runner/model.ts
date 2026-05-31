@@ -558,6 +558,7 @@ function applyConfiguredProviderOverrides(params: {
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
   preferDiscoveredModelMetadata?: boolean;
+  preferDiscoveredTransport?: boolean;
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
@@ -659,15 +660,22 @@ function applyConfiguredProviderOverrides(params: {
     input: metadataOverrideModel?.input,
     fallbackInput: discoveredModel.input,
   });
+  const providerDefaultApi = resolveConfiguredProviderDefaultApi(providerConfig);
+  const resolvedTransportApi =
+    metadataOverrideModel?.api ??
+    (params.preferDiscoveredTransport
+      ? (discoveredModel.api ?? providerConfig.api ?? providerDefaultApi)
+      : (providerConfig.api ?? discoveredModel.api ?? providerDefaultApi));
+  const resolvedTransportBaseUrl =
+    metadataOverrideModel?.baseUrl ??
+    (params.preferDiscoveredTransport
+      ? (discoveredModel.baseUrl ?? providerConfig.baseUrl)
+      : (providerConfig.baseUrl ?? discoveredModel.baseUrl));
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
-    api:
-      metadataOverrideModel?.api ??
-      providerConfig.api ??
-      discoveredModel.api ??
-      resolveConfiguredProviderDefaultApi(providerConfig),
-    baseUrl: metadataOverrideModel?.baseUrl ?? providerConfig.baseUrl ?? discoveredModel.baseUrl,
+    api: resolvedTransportApi,
+    baseUrl: resolvedTransportBaseUrl,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
@@ -1239,6 +1247,7 @@ export function resolveModelWithRegistry(params: {
   authProfileId?: string;
   preferredProfile?: string;
   runtimeHooks?: ProviderRuntimeHooks;
+  skipConfiguredFallback?: boolean;
 }): Model | undefined {
   const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
   const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
@@ -1280,7 +1289,7 @@ export function resolveModelWithRegistry(params: {
     return pluginDynamicModel;
   }
 
-  return resolveConfiguredFallbackModel(scopedParams);
+  return params.skipConfiguredFallback ? undefined : resolveConfiguredFallbackModel(scopedParams);
 }
 
 export function resolveModel(
@@ -1355,6 +1364,7 @@ export async function resolveModelAsync(
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
     allowBundledStaticCatalogFallback?: boolean;
+    preferBundledStaticCatalogTransport?: boolean;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
@@ -1453,6 +1463,7 @@ export async function resolveModelAsync(
       runtimeHooks,
       workspaceDir,
       preferDiscoveredModelMetadata: true,
+      preferDiscoveredTransport: options?.preferBundledStaticCatalogTransport,
     });
     return normalizeResolvedModel({
       provider: normalizedRef.provider,
@@ -1489,6 +1500,7 @@ export async function resolveModelAsync(
       authProfileId: options?.authProfileId,
       preferredProfile: options?.preferredProfile,
       runtimeHooks,
+      ...(options?.allowBundledStaticCatalogFallback ? { skipConfiguredFallback: true } : {}),
     });
   };
   const providerRuntimeMetadataShouldWin = shouldCompareProviderRuntimeResolvedModel({
@@ -1512,6 +1524,16 @@ export async function resolveModelAsync(
   }
   if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
     model = resolveStaticCatalogFallbackModel();
+  }
+  if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
+    model = resolveConfiguredFallbackModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      cfg,
+      agentDir: resolvedAgentDir,
+      workspaceDir,
+      runtimeHooks,
+    });
   }
   if (model && options?.allowBundledStaticCatalogFallback) {
     const staticMediaInput = resolveStaticCatalogModel()?.mediaInput;
