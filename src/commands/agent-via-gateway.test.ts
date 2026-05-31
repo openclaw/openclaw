@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
@@ -243,6 +244,12 @@ describe("agentCliCommand", () => {
       const request = requireFirstCallArg(callGateway, "gateway") as { timeoutMs?: number };
       expect(request.timeoutMs).toBe(2_147_000_000);
     });
+  });
+
+  it("clamps oversized gateway timeout seconds", () => {
+    expect(agentViaGatewayTesting.resolveGatewayAgentTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
   });
 
   it("rejects partial gateway timeout values", async () => {

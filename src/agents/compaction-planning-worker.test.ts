@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.js";
 import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
 import type { AgentMessage } from "./runtime/index.js";
@@ -48,6 +49,21 @@ describe("compaction planning worker", () => {
     }
     expect(value.chunks.flat().map((message) => message.timestamp)).toEqual([1, 2, 3]);
     expect(value.chunks.length).toBeGreaterThan(1);
+  });
+
+  it("clamps oversized worker timeouts before scheduling", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await compactionPlanningWorkerTesting.runCompactionPlanningWorker({
+      input: {
+        kind: "summaryChunks",
+        messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
+        maxChunkTokens: 1200,
+      },
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("classifies missing worker runtime as unavailable", async () => {

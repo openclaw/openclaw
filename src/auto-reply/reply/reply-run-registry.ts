@@ -4,6 +4,7 @@ import {
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 
 export type ReplyRunKey = string;
 
@@ -473,7 +474,10 @@ export const replyRunRegistry: ReplyRunRegistry = {
         },
       };
       if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-        waiter.timer = setTimeout(() => waiter.finish(false), Math.max(100, timeoutMs));
+        waiter.timer = setTimeout(
+          () => waiter.finish(false),
+          resolveTimerTimeoutMs(timeoutMs, 100, 100),
+        );
       }
       if (opts?.signal) {
         abortHandler = () => waiter.finish(false);

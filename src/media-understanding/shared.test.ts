@@ -163,6 +163,20 @@ describe("provider operation deadlines", () => {
     await expect(wait).resolves.toBeUndefined();
   });
 
+  it("caps oversized provider poll waits without an operation deadline", async () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const wait = waitProviderOperationPollInterval({
+      deadline: createProviderOperationDeadline({ label: "video generation" }),
+      pollIntervalMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await expect(wait).resolves.toBeUndefined();
+  });
+
   it("polls provider status JSON until a payload is complete", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

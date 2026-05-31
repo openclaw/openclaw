@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { loadJsonFile, repairJsonFilePermissions, saveJsonFile } from "../../infra/json-file.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { isRecord } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
@@ -186,10 +187,12 @@ function shouldUseMainOwnerForLocalOAuthCredential(params: {
   if (isDeepStrictEqual(params.local, params.main)) {
     return true;
   }
-  return (
-    Number.isFinite(params.main.expires) &&
-    (!Number.isFinite(params.local.expires) || params.main.expires >= params.local.expires)
-  );
+  const mainExpires = asDateTimestampMs(params.main.expires);
+  if (mainExpires === undefined) {
+    return false;
+  }
+  const localExpires = asDateTimestampMs(params.local.expires);
+  return localExpires === undefined || mainExpires >= localExpires;
 }
 
 function resolveRuntimeAuthProfileStore(

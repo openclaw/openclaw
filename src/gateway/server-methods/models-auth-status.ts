@@ -33,6 +33,7 @@ import type {
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -161,11 +162,7 @@ function buildExpiry(
   remainingMs: number | undefined,
   expiresAt: number | undefined,
 ): ModelAuthExpiry | undefined {
-  if (
-    typeof expiresAt !== "number" ||
-    !Number.isFinite(expiresAt) ||
-    typeof remainingMs !== "number"
-  ) {
+  if (asDateTimestampMs(expiresAt) === undefined || typeof remainingMs !== "number") {
     return undefined;
   }
   return { at: expiresAt, remainingMs, label: formatRemainingShort(remainingMs) };
@@ -235,7 +232,7 @@ export function aggregateOAuthStatus(
   }
   const expirable = oauth
     .map((p) => p.expiresAt)
-    .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    .filter((v): v is number => asDateTimestampMs(v) !== undefined);
   const expiresAt = expirable.length > 0 ? Math.min(...expirable) : undefined;
   const remainingMs = expiresAt !== undefined ? expiresAt - now : undefined;
   return { status, expiresAt, remainingMs };

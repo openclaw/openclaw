@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { loadModelCatalogForBrowse } from "./model-catalog-browse.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
@@ -105,5 +106,27 @@ describe("loadModelCatalogForBrowse", () => {
 
     await expect(resultPromise).resolves.toBe(readOnlyCatalog);
     expect(onTimeout).not.toHaveBeenCalled();
+  });
+
+  it("caps oversized browse timeouts before scheduling the fallback timer", async () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const loadCatalog = vi.fn(
+      () =>
+        new Promise<ModelCatalogEntry[]>((resolve) => {
+          setTimeout(() => resolve(readOnlyCatalog), 5);
+        }),
+    );
+
+    const resultPromise = loadModelCatalogForBrowse({
+      cfg: config(),
+      loadCatalog,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(5);
+
+    await expect(resultPromise).resolves.toBe(readOnlyCatalog);
   });
 });
