@@ -49,9 +49,9 @@ describe("agent-events sequencing", () => {
     expect(seen.find((evt) => evt.stream === "item")?.sessionId).toBeUndefined();
   });
 
-  test("refreshes the stamped sessionId after a mid-run session rotation (#88538)", () => {
+  test("refreshes the stamped sessionId when run context is re-registered (#88538)", () => {
     registerAgentRunContext("run-1", { sessionKey: "main", sessionId: "start-id" });
-    // A legitimate compaction rotation re-registers the run with its new session.
+    // Callers that already persisted a rotation can re-register the new owner.
     registerAgentRunContext("run-1", { sessionId: "rotated-id" });
     let stamped: string | undefined;
     const stop = onAgentEvent((evt) => {
