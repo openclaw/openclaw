@@ -4112,9 +4112,9 @@ public struct AgentSummary: Codable, Sendable {
         workspace: String?,
         model: [String: AnyCodable]?,
         agentruntime: [String: AnyCodable]?,
-        thinkinglevels: [[String: AnyCodable]]?,
-        thinkingoptions: [String]?,
-        thinkingdefault: String?)
+        thinkinglevels: [[String: AnyCodable]]? = nil,
+        thinkingoptions: [String]? = nil,
+        thinkingdefault: String? = nil)
     {
         self.id = id
         self.name = name

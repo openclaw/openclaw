@@ -1511,6 +1511,26 @@ describe("gateway session utils", () => {
     );
     expect(agent?.thinkingOptions).toEqual(agent?.thinkingLevels?.map((level) => level.label));
   });
+
+  test("listAgentsForGateway uses the model catalog for per-agent thinking metadata", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          model: { primary: "local/custom-reasoner" },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg, [
+      { provider: "local", id: "custom-reasoner", reasoning: true },
+    ]);
+    const agent = result.agents.find((row) => row.id === "main");
+
+    expect(agent?.thinkingDefault).toBe("medium");
+    expect(agent?.thinkingLevels?.map((level) => level.id)).toContain("medium");
+  });
 });
 
 describe("resolveSessionModelRef", () => {
