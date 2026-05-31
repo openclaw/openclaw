@@ -64,7 +64,7 @@
   border: 1px solid var(--border);
   border-top: none;
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: var(--bg-elevated);
+  background: var(--card);
   align-items: start;
 }
 
@@ -165,7 +165,7 @@
 }
 
 .sw-row.is-selected {
-  background: var(--bg-elevated);
+  background: color-mix(in srgb, var(--bg-elevated) 58%, var(--card) 42%);
   border-left-color: var(--accent);
 }
 
@@ -257,7 +257,7 @@
   display: flex;
   gap: 14px;
   align-items: flex-start;
-  background: var(--bg-elevated);
+  background: var(--card);
 }
 
 .sw-detail__head-left {
