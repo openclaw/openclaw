@@ -1,0 +1,264 @@
+services:
+  openclaw-gateway:
+    environment:
+      OPENCLAW_CONFIG_PATH: ${OPENCLAW_CONTAINER_CONFIG_PATH:-/home/node/.openclaw/openclaw.json}
+      OPENCLAW_INCLUDE_ROOTS: ${OPENCLAW_CONTAINER_INCLUDE_ROOTS:-}
+      OPENCLAW_CONTAINER_PYTHON: ${OPENCLAW_CONTAINER_PYTHON:-/usr/bin/python3}
+      OPENCLAW_AGENT_VENV_ROOT: ${OPENCLAW_AGENT_VENV_ROOT:-/home/node/.openclaw/python-venvs}
+      OPENCLAW_FULL_LOCAL_PATH_MAP: ${OPENCLAW_FULL_LOCAL_PATH_MAP:-/home/node/.openclaw/full-local/path-map.json}
+      OPENCLAW_NATIVE_AGENT_IDS: ${OPENCLAW_NATIVE_AGENT_IDS:-}
+      OPENCLAW_GATEWAY_PASSWORD: ${OPENCLAW_GATEWAY_PASSWORD:-}
+      OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS: ${OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS:-300000}
+    volumes:
+      - ${OPENCLAW_CONFIG_SOURCE_DIR:-${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}}:/home/node/openclaw-source-config:ro
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_2:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-2
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_3:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-3
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_4:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-4
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_5:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-5
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_6:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-6
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_7:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-7
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_8:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-8
+      - ${OPENCLAW_CUSTOM_SWARM_DIR:-./.local/openclaw-custom-swarm}:/home/node/custom-swarm
+    networks:
+      - openclaw-net
+
+  openclaw-cli:
+    environment:
+      OPENCLAW_CONFIG_PATH: ${OPENCLAW_CONTAINER_CONFIG_PATH:-/home/node/.openclaw/openclaw.json}
+      OPENCLAW_INCLUDE_ROOTS: ${OPENCLAW_CONTAINER_INCLUDE_ROOTS:-}
+      OPENCLAW_CONTAINER_PYTHON: ${OPENCLAW_CONTAINER_PYTHON:-/usr/bin/python3}
+      OPENCLAW_AGENT_VENV_ROOT: ${OPENCLAW_AGENT_VENV_ROOT:-/home/node/.openclaw/python-venvs}
+      OPENCLAW_FULL_LOCAL_PATH_MAP: ${OPENCLAW_FULL_LOCAL_PATH_MAP:-/home/node/.openclaw/full-local/path-map.json}
+      OPENCLAW_NATIVE_AGENT_IDS: ${OPENCLAW_NATIVE_AGENT_IDS:-}
+      OPENCLAW_GATEWAY_PASSWORD: ${OPENCLAW_GATEWAY_PASSWORD:-}
+      OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS: ${OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS:-300000}
+    volumes:
+      - ${OPENCLAW_CONFIG_SOURCE_DIR:-${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}}:/home/node/openclaw-source-config:ro
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_2:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-2
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_3:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-3
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_4:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-4
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_5:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-5
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_6:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-6
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_7:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-7
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_8:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-8
+      - ${OPENCLAW_CUSTOM_SWARM_DIR:-./.local/openclaw-custom-swarm}:/home/node/custom-swarm
+
+  openclaw-sentinel:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    profiles: ["local-sidecars", "sentinel"]
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: ${OPENCLAW_CONTAINER_CONFIG_PATH:-/home/node/.openclaw/openclaw.json}
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_INCLUDE_ROOTS: ${OPENCLAW_CONTAINER_INCLUDE_ROOTS:-}
+      OPENCLAW_CONTAINER_PYTHON: ${OPENCLAW_CONTAINER_PYTHON:-/usr/bin/python3}
+      OPENCLAW_AGENT_VENV_ROOT: ${OPENCLAW_AGENT_VENV_ROOT:-/home/node/.openclaw/python-venvs}
+      OPENCLAW_FULL_LOCAL_PATH_MAP: ${OPENCLAW_FULL_LOCAL_PATH_MAP:-/home/node/.openclaw/full-local/path-map.json}
+      OPENCLAW_NATIVE_AGENT_IDS: ${OPENCLAW_NATIVE_AGENT_IDS:-}
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_SENTINEL_HOST: ${OPENCLAW_SENTINEL_HOST:-0.0.0.0}
+      OPENCLAW_SENTINEL_LISTEN_PORT: ${OPENCLAW_SENTINEL_LISTEN_PORT:-18888}
+      OPENCLAW_SENTINEL_REQUIRE_TOKEN: ${OPENCLAW_SENTINEL_REQUIRE_TOKEN:-1}
+      OPENCLAW_SENTINEL_TOKEN: ${OPENCLAW_SENTINEL_TOKEN:-}
+      OPENCLAW_SENTINEL_KEY_RPM: ${OPENCLAW_SENTINEL_KEY_RPM:-}
+      OPENCLAW_SENTINEL_KEY_RPM_WINDOW_MS: ${OPENCLAW_SENTINEL_KEY_RPM_WINDOW_MS:-}
+      OPENCLAW_SENTINEL_KEY_RATE_LIMIT_COOLDOWN_MS: ${OPENCLAW_SENTINEL_KEY_RATE_LIMIT_COOLDOWN_MS:-}
+      OPENCLAW_SENTINEL_MAX_ATTEMPTS: ${OPENCLAW_SENTINEL_MAX_ATTEMPTS:-}
+      OPENCLAW_SENTINEL_RESEED_NVIDIA_VAULT: ${OPENCLAW_SENTINEL_RESEED_NVIDIA_VAULT:-}
+      OPENCLAW_FULL_LOCAL_RESEED_NVIDIA_VAULT: ${OPENCLAW_FULL_LOCAL_RESEED_NVIDIA_VAULT:-}
+      OPENCLAW_NVIDIA_VAULT_PATH: ${OPENCLAW_NVIDIA_VAULT_PATH:-/home/node/.openclaw/workspace_nvidia_key_sentinel/vault.json}
+      NVIDIA_API_KEYS: ${NVIDIA_API_KEYS:-${NVIDIA_API_KEY:-}}
+      TZ: ${OPENCLAW_TZ:-UTC}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_CONFIG_SOURCE_DIR:-${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}}:/home/node/openclaw-source-config:ro
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_2:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-2
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_3:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-3
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_4:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-4
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_5:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-5
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_6:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-6
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_7:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-7
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_8:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-8
+      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
+    ports:
+      - "${OPENCLAW_SENTINEL_PUBLISH_HOST:-127.0.0.1}:${OPENCLAW_SENTINEL_PORT:-18888}:${OPENCLAW_SENTINEL_LISTEN_PORT:-18888}"
+    init: true
+    restart: unless-stopped
+    entrypoint: ["sh", "-lc"]
+    command:
+      - |
+        default_vault="/home/node/.openclaw/workspace_nvidia_key_sentinel/vault.json"
+        if [ -n "$$OPENCLAW_NVIDIA_VAULT_PATH" ] && [ "$$OPENCLAW_NVIDIA_VAULT_PATH" != "$$default_vault" ]; then
+          mkdir -p "$$(dirname "$$OPENCLAW_NVIDIA_VAULT_PATH")" "$$(dirname "$$default_vault")"
+          if [ -f "$$default_vault" ] && [ ! -f "$$OPENCLAW_NVIDIA_VAULT_PATH" ]; then
+            cp "$$default_vault" "$$OPENCLAW_NVIDIA_VAULT_PATH"
+          fi
+          rm -f "$$default_vault"
+          ln -s "$$OPENCLAW_NVIDIA_VAULT_PATH" "$$default_vault"
+        fi
+        validator="scripts/docker/sidecars/nvidia-key-validator.cjs"
+        node "$$validator"
+        exec node extensions/nvidia/sentinel-gateway.cjs
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const port=process.env.OPENCLAW_SENTINEL_LISTEN_PORT||'18888'; fetch('http://127.0.0.1:'+port+'/readyz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - openclaw-net
+
+  openclaw-signal-hub:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    profiles: ["local-sidecars", "swarm"]
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: ${OPENCLAW_CONTAINER_CONFIG_PATH:-/home/node/.openclaw/openclaw.json}
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_INCLUDE_ROOTS: ${OPENCLAW_CONTAINER_INCLUDE_ROOTS:-}
+      OPENCLAW_CONTAINER_PYTHON: ${OPENCLAW_CONTAINER_PYTHON:-/usr/bin/python3}
+      OPENCLAW_AGENT_VENV_ROOT: ${OPENCLAW_AGENT_VENV_ROOT:-/home/node/.openclaw/python-venvs}
+      OPENCLAW_FULL_LOCAL_PATH_MAP: ${OPENCLAW_FULL_LOCAL_PATH_MAP:-/home/node/.openclaw/full-local/path-map.json}
+      OPENCLAW_NATIVE_AGENT_IDS: ${OPENCLAW_NATIVE_AGENT_IDS:-}
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-ws://openclaw-gateway:18789}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_GATEWAY_PASSWORD: ${OPENCLAW_GATEWAY_PASSWORD:-}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-1}
+      OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS: ${OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS:-300000}
+      OPENCLAW_CLI_PATH: /app/openclaw.mjs
+      SWARM_NODE_TYPE: ${SWARM_NODE_TYPE:-linux-container}
+      SWARM_BLACKBOARD_JOURNAL_MODE: ${SWARM_BLACKBOARD_JOURNAL_MODE:-DELETE}
+      SWARM_BLACKBOARD_BUSY_TIMEOUT_MS: ${SWARM_BLACKBOARD_BUSY_TIMEOUT_MS:-10000}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      NVIDIA_API_KEYS: ${OPENCLAW_SIGNAL_HUB_NVIDIA_API_KEYS:-${NVIDIA_API_KEYS:-}}
+      TZ: ${OPENCLAW_TZ:-UTC}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_CONFIG_SOURCE_DIR:-${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}}:/home/node/openclaw-source-config:ro
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_2:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-2
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_3:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-3
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_4:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-4
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_5:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-5
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_6:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-6
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_7:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-7
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_8:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-8
+      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_AUTH_PROFILE_SECRET_DIR:-${HOME:-/tmp}/.openclaw-auth-profile-secrets}:/home/node/.config/openclaw
+      - ${OPENCLAW_CUSTOM_SWARM_DIR:-./.local/openclaw-custom-swarm}:/home/node/custom-swarm
+    init: true
+    restart: unless-stopped
+    command: ["node", "scripts/docker/sidecars/signal-hub.cjs"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          'const fs=require(''fs''),os=require(''os''),path=require(''path''); const {DatabaseSync}=require(''node:sqlite''); const dbPath=path.join(os.homedir(),''.openclaw'',''swarm_blackboard.db''); if(!fs.existsSync(dbPath)) process.exit(1); let db; try { db=new DatabaseSync(dbPath); db.exec(''PRAGMA busy_timeout=1000; PRAGMA query_only=ON;''); const rows=db.prepare("SELECT name FROM sqlite_master WHERE type=''table'' AND name IN (''tickets'',''ticket_events'')").all(); process.exit(rows.length===2?0:1); } catch (err) { console.error(err.message); process.exit(1); } finally { try { db?.close?.(); } catch {} }',
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 240s
+    depends_on:
+      - openclaw-gateway
+    networks:
+      - openclaw-net
+
+  openclaw-obsidian-syncer:
+    image: ${OPENCLAW_IMAGE:-openclaw:local}
+    profiles: ["local-sidecars", "obsidian"]
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: ${OPENCLAW_CONTAINER_CONFIG_PATH:-/home/node/.openclaw/openclaw.json}
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_INCLUDE_ROOTS: ${OPENCLAW_CONTAINER_INCLUDE_ROOTS:-}
+      OPENCLAW_CONTAINER_PYTHON: ${OPENCLAW_CONTAINER_PYTHON:-/usr/bin/python3}
+      OPENCLAW_AGENT_VENV_ROOT: ${OPENCLAW_AGENT_VENV_ROOT:-/home/node/.openclaw/python-venvs}
+      OPENCLAW_FULL_LOCAL_PATH_MAP: ${OPENCLAW_FULL_LOCAL_PATH_MAP:-/home/node/.openclaw/full-local/path-map.json}
+      OPENCLAW_NATIVE_AGENT_IDS: ${OPENCLAW_NATIVE_AGENT_IDS:-}
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_URL: ${OPENCLAW_GATEWAY_URL:-ws://openclaw-gateway:18789}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
+      OPENCLAW_GATEWAY_PASSWORD: ${OPENCLAW_GATEWAY_PASSWORD:-}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-1}
+      OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS: ${OPENCLAW_MEMORY_WIKI_GATEWAY_TIMEOUT_MS:-300000}
+      OPENCLAW_MEMORY_WIKI_SYNC_INTERVAL_SECONDS: ${OPENCLAW_MEMORY_WIKI_SYNC_INTERVAL_SECONDS:-300}
+      TZ: ${OPENCLAW_TZ:-UTC}
+    volumes:
+      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_CONFIG_SOURCE_DIR:-${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}}:/home/node/openclaw-source-config:ro
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_2:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-2
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_3:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-3
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_4:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-4
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_5:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-5
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_6:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-6
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_7:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-7
+      - ${OPENCLAW_EXTRA_AGENT_ROOT_DIR_8:-${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}}:/home/node/openclaw-extra-agent-root-8
+      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CUSTOM_SWARM_DIR:-./.local/openclaw-custom-swarm}:/home/node/custom-swarm
+    init: true
+    restart: unless-stopped
+    entrypoint: ["sh", "-lc"]
+    command:
+      - |
+        set -eu
+        interval="$${OPENCLAW_MEMORY_WIKI_SYNC_INTERVAL_SECONDS:-300}"
+        stamp="/tmp/openclaw-obsidian-syncer.last-ok"
+        while true; do
+          node openclaw.mjs wiki bridge import
+          node openclaw.mjs wiki compile
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$$stamp"
+          sleep "$$interval"
+        done
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const fs=require('fs'); const stamp='/tmp/openclaw-obsidian-syncer.last-ok'; const interval=Number(process.env.OPENCLAW_MEMORY_WIKI_SYNC_INTERVAL_SECONDS||300); const maxMs=Math.max(120000, interval*2000); try { const st=fs.statSync(stamp); process.exit(Date.now()-st.mtimeMs <= maxMs ? 0 : 1); } catch { process.exit(1); }",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    depends_on:
+      - openclaw-gateway
+    networks:
+      - openclaw-net
+
+networks:
+  openclaw-net:
+    driver: bridge

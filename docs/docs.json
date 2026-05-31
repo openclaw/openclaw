@@ -1345,6 +1345,7 @@
                   "tools/goal",
                   "tools/steer",
                   "tools/subagents",
+                  "tools/capability-agents",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
@@ -1810,6 +1811,7 @@
                   "reference/token-use",
                   "reference/secretref-credential-surface",
                   "reference/prompt-caching",
+                  "reference/agent-os-contract",
                   "reference/api-usage-costs",
                   "reference/transcript-hygiene",
                   "reference/memory-config",

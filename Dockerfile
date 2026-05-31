@@ -173,7 +173,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl git hostname lsof openssl procps python3 tini && \
+      ca-certificates curl git hostname lsof openssl procps python3 python3-pip python3-venv tini && \
     update-ca-certificates
 
 RUN chown node:node /app
@@ -189,11 +189,16 @@ COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
+COPY --from=runtime-assets --chown=node:node /app/scripts/docker/sidecars ./scripts/docker/sidecars
+COPY --from=runtime-assets --chown=node:node /app/scripts/lib/agent-os-contracts.cjs ./scripts/lib/agent-os-contracts.cjs
+COPY --from=runtime-assets --chown=node:node /app/scripts/lib/proof-events.cjs ./scripts/lib/proof-events.cjs
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
 # first-run network fetch when invoking pnpm.
 ENV COREPACK_HOME=/usr/local/share/corepack
+ENV OPENCLAW_CONTAINER_PYTHON=/usr/bin/python3 \
+    OPENCLAW_AGENT_VENV_ROOT=/home/node/.openclaw/python-venvs
 RUN install -d -m 0755 "$COREPACK_HOME" && \
     corepack enable && \
     for attempt in 1 2 3 4 5; do \
