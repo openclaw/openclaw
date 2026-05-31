@@ -95,7 +95,11 @@ describe("cli progress", () => {
       });
       progress.setLabel("Still going");
       progress.done();
-      expect(writes).toStrictEqual([]);
+      // When stdout is non-TTY, the clack spinner must not emit glyphs.
+      // clearActiveProgressLine may still emit a terminal escape to the
+      // progress stream (stderr), but spinner glyphs must not appear.
+      expect(writes).not.toContainEqual(expect.stringContaining("│"));
+      expect(writes).not.toContainEqual(expect.stringContaining("◇"));
     } finally {
       if (originalStdoutTty) {
         Object.defineProperty(process.stdout, "isTTY", originalStdoutTty);

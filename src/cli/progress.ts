@@ -104,9 +104,10 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
 
   // Clack spinner() writes directly to process.stdout, so suppress it when
   // stdout is not a TTY (piped or redirected) even if the progress stream is TTY.
-  // This prevents spinner glyphs from leaking into --json or piped output.
-  const stdoutSafe = process.stdout.isTTY !== false;
-  const spin = allowSpinner && stdoutSafe ? spinner() : null;
+  // This prevents spinner glyphs (│, ◇) from leaking into --json or piped output.
+  // Use ?? true rather than !== false to avoid oxlint boolean-compare warnings.
+  const stdoutTty = process.stdout.isTTY ?? true;
+  const spin = allowSpinner && stdoutTty ? spinner() : null;
   const renderLine = allowLine
     ? () => {
         if (!started) {
