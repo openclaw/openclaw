@@ -44,6 +44,8 @@ public final class OpenClawChatViewModel {
         didSet { self.pendingRunCount = self.pendingRuns.count }
     }
 
+    private var pendingLocalUserEchoMessageIDsByRunID: [String: UUID] = [:]
+
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
@@ -279,6 +281,7 @@ public final class OpenClawChatViewModel {
             self.messages = Self.reconcileMessageIDs(
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
+            self.prunePendingLocalUserEchoMessageIDs()
             self.sessionId = payload.sessionId
             if !self.prefersExplicitThinkingLevel,
                let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
@@ -393,24 +396,28 @@ public final class OpenClawChatViewModel {
         return [role, toolCallId, toolName, contentFingerprint].joined(separator: "|")
     }
 
-    // Reuse the most recent local user row with identical content for an incoming
-    // user echo: keep its id so SwiftUI does not drop/re-create the row, but adopt
-    // the server's canonical fields. Returns nil when the incoming message is not a
-    // user turn, or when no local row matches (a user turn from another client),
-    // both of which must follow the normal append/reconcile path.
-    private static func adoptLocalUserEcho(
-        in messages: [OpenClawChatMessage],
-        incoming: OpenClawChatMessage) -> [OpenClawChatMessage]?
-    {
-        guard let incomingKey = Self.userRefreshIdentityKey(for: incoming) else { return nil }
-        guard let matchIndex = messages.lastIndex(where: { existing in
-            Self.userRefreshIdentityKey(for: existing) == incomingKey
+    private func prunePendingLocalUserEchoMessageIDs() {
+        guard !self.pendingLocalUserEchoMessageIDsByRunID.isEmpty else { return }
+        let visibleMessageIDs = Set(self.messages.map(\.id))
+        self.pendingLocalUserEchoMessageIDsByRunID = self.pendingLocalUserEchoMessageIDsByRunID.filter {
+            self.pendingRuns.contains($0.key) && visibleMessageIDs.contains($0.value)
+        }
+    }
+
+    private func adoptPendingLocalUserEcho(incoming: OpenClawChatMessage) -> Bool {
+        guard let incomingKey = Self.userRefreshIdentityKey(for: incoming) else { return false }
+        guard let matchIndex = self.messages.lastIndex(where: { existing in
+            self.pendingLocalUserEchoMessageIDsByRunID.values.contains(existing.id)
+                && Self.userRefreshIdentityKey(for: existing) == incomingKey
         }) else {
-            return nil
+            return false
         }
 
-        let existing = messages[matchIndex]
-        var updated = messages
+        let existing = self.messages[matchIndex]
+        self.pendingLocalUserEchoMessageIDsByRunID = self.pendingLocalUserEchoMessageIDsByRunID.filter {
+            $0.value != existing.id
+        }
+        var updated = self.messages
         updated[matchIndex] = OpenClawChatMessage(
             id: existing.id,
             role: incoming.role,
@@ -421,7 +428,9 @@ public final class OpenClawChatViewModel {
             usage: incoming.usage,
             stopReason: incoming.stopReason,
             errorMessage: incoming.errorMessage)
-        return Self.dedupeMessages(updated)
+        self.messages = Self.dedupeMessages(updated)
+        self.prunePendingLocalUserEchoMessageIDs()
+        return true
     }
 
     private static func reconcileMessageIDs(
@@ -650,12 +659,14 @@ public final class OpenClawChatViewModel {
                     arguments: nil))
         }
         let userMessageTimestamp = Date().timeIntervalSince1970 * 1000
+        let userMessageID = UUID()
         self.messages.append(
             OpenClawChatMessage(
-                id: UUID(),
+                id: userMessageID,
                 role: "user",
                 content: userContent,
                 timestamp: userMessageTimestamp))
+        self.pendingLocalUserEchoMessageIDsByRunID[runId] = userMessageID
 
         // Clear input immediately for responsive UX (before network await)
         self.input = ""
@@ -676,8 +687,10 @@ public final class OpenClawChatViewModel {
                 "chat.ui transport send accepted sessionKey=\(sessionKey) "
                     + "localRunId=\(runId) remoteRunId=\(response.runId)")
             if response.runId != runId {
+                let pendingUserMessageID = self.pendingLocalUserEchoMessageIDsByRunID.removeValue(forKey: runId)
                 self.clearPendingRun(runId)
                 self.pendingRuns.insert(response.runId)
+                self.pendingLocalUserEchoMessageIDsByRunID[response.runId] = pendingUserMessageID
                 self.armPendingRunTimeout(runId: response.runId)
             }
             await self.refreshHistoryAfterRun()
@@ -695,6 +708,7 @@ public final class OpenClawChatViewModel {
                     userMessageTimestamp: userMessageTimestamp)
             }
         } catch {
+            self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
             self.clearPendingRun(runId)
             self.errorText = error.localizedDescription
             self.logDiagnostic(
@@ -778,6 +792,7 @@ public final class OpenClawChatViewModel {
         self.onSessionChanged?(next)
         self.modelSelectionID = Self.defaultModelSelectionID
         self.messages = []
+        self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         self.sessionId = nil
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
@@ -1300,11 +1315,9 @@ public final class OpenClawChatViewModel {
         // just sent. performSend already appended an optimistic row carrying a
         // local client timestamp, while the echo carries a server timestamp, so
         // the timestamp-keyed identity/dedupe paths below never collapse them.
-        // Adopt the server record onto the matching optimistic row instead of
-        // appending a duplicate. Assistant and tool messages return nil here and
-        // fall through, so live updates keep streaming during pending runs.
-        if let adopted = Self.adoptLocalUserEcho(in: self.messages, incoming: sanitized) {
-            self.messages = adopted
+        // Adopt the server record only onto a still-visible row created by this
+        // client's pending send; same-content user turns from other clients must append.
+        if self.adoptPendingLocalUserEcho(incoming: sanitized) {
             return
         }
 
@@ -1603,6 +1616,7 @@ public final class OpenClawChatViewModel {
             self.messages = Self.reconcileRunRefreshMessages(
                 previous: self.messages,
                 incoming: Self.decodeMessages(payload.messages ?? []))
+            self.prunePendingLocalUserEchoMessageIDs()
             self.sessionId = payload.sessionId
             if !self.prefersExplicitThinkingLevel,
                let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
@@ -1635,6 +1649,7 @@ public final class OpenClawChatViewModel {
     private func clearPendingRun(_ runId: String) {
         let wasPending = self.pendingRuns.contains(runId)
         self.pendingRuns.remove(runId)
+        self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
         self.pendingRunTimeoutTasks[runId]?.cancel()
         self.pendingRunTimeoutTasks[runId] = nil
         if wasPending {
@@ -1651,6 +1666,7 @@ public final class OpenClawChatViewModel {
         }
         self.pendingRunTimeoutTasks.removeAll()
         self.pendingRuns.removeAll()
+        self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         if let reason, !reason.isEmpty {
             self.errorText = reason
             for runId in runIds {

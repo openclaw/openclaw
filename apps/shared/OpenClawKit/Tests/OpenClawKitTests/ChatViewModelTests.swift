@@ -1200,6 +1200,47 @@ extension TestChatTransportState {
         })
     }
 
+    @Test func appendsSameContentUserTranscriptWhenItIsNotLocalEcho() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [
+                historyPayload(messages: [
+                    chatTextMessage(role: "user", text: "repeat", timestamp: now),
+                ]),
+            ])
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap history loaded") {
+            await MainActor.run { vm.messages.count == 1 }
+        }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: OpenClawChatMessage(
+                        role: "user",
+                        content: [
+                            OpenClawChatMessageContent(
+                                type: "text",
+                                text: "repeat",
+                                mimeType: nil,
+                                fileName: nil,
+                                content: nil),
+                        ],
+                        timestamp: now + 1_000),
+                    messageId: "msg-repeat-2",
+                    messageSeq: 2)))
+
+        try await waitUntil("repeated user transcript appended") {
+            await MainActor.run {
+                vm.messages.filter { msg in
+                    msg.role == "user" && msg.content.first?.text == "repeat"
+                }.count == 2
+            }
+        }
+    }
+
     @Test func ignoresExternalSessionUserMessageForOtherSession() async throws {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
