@@ -599,6 +599,13 @@
   padding: 4px 0;
 }
 
+.sw-modal__search:focus,
+.sw-modal__search:focus-visible {
+  outline: none;
+  border: none;
+  box-shadow: none;
+}
+
 .sw-modal__search::placeholder {
   color: var(--muted);
 }
