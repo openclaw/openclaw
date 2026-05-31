@@ -158,6 +158,79 @@ describe("normalizeMessageActionInput", () => {
       expectedFields: { target: "C123", channelId: "C123" },
       absentFields: ["to"],
     },
+    {
+      input: {
+        action: "channel-info",
+        args: {
+          channelId: "1507887702379335791",
+        },
+      },
+      expectedFields: {
+        target: "1507887702379335791",
+        channelId: "1507887702379335791",
+      },
+      absentFields: ["to"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
+          channel: "discord",
+          channelId: "1507887702379335791",
+          limit: 50,
+        },
+      },
+      expectedFields: {
+        target: "channel:1507887702379335791",
+        to: "channel:1507887702379335791",
+        limit: 50,
+      },
+      absentFields: ["channelId"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
+          channel: "discord",
+          channelId: "channel:1507887702379335791",
+          limit: 50,
+        },
+      },
+      expectedFields: {
+        target: "channel:1507887702379335791",
+        to: "channel:1507887702379335791",
+        limit: 50,
+      },
+      absentFields: ["channelId"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
+          channel: "discord",
+          channelId: "discord:channel:1507887702379335791",
+        },
+      },
+      expectedFields: {
+        target: "discord:channel:1507887702379335791",
+        to: "discord:channel:1507887702379335791",
+      },
+      absentFields: ["channelId"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
+          channel: "discord",
+          channelId: "group:1507887702379335791",
+        },
+      },
+      expectedFields: {
+        target: "group:1507887702379335791",
+        to: "group:1507887702379335791",
+      },
+      absentFields: ["channelId"],
+    },
   ] satisfies NormalizeMessageActionInputCase[])(
     "normalizes message action input for %j",
     ({ input, expectedFields, absentFields }) => {
