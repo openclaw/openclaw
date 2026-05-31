@@ -4,7 +4,10 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
-import { hydrateSessionStoreSkillPromptRefs, resolveSessionSkillPromptBlobPath } from "../config/sessions/skill-prompt-blobs.js";
+import {
+  hydrateSessionStoreSkillPromptRefs,
+  resolveSessionSkillPromptBlobPath,
+} from "../config/sessions/skill-prompt-blobs.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -68,6 +71,14 @@ function collectResolvedSkillPaths(value: unknown): string[] {
     }
     if (typeof skill.baseDir === "string" && skill.baseDir.trim()) {
       paths.push(path.join(skill.baseDir.trim(), "SKILL.md"));
+    }
+    if (isRecord(skill.sourceInfo)) {
+      if (typeof skill.sourceInfo.path === "string" && skill.sourceInfo.path.trim()) {
+        paths.push(skill.sourceInfo.path.trim());
+      }
+      if (typeof skill.sourceInfo.baseDir === "string" && skill.sourceInfo.baseDir.trim()) {
+        paths.push(path.join(skill.sourceInfo.baseDir.trim(), "SKILL.md"));
+      }
     }
   }
   return paths;
@@ -277,10 +288,7 @@ function loadSessionStoreForSnapshotScan(storePath: string): Record<string, Sess
  * Replace stale paths in raw text content (blob files or inline prompts).
  * Handles raw, JSON-escaped, and XML-escaped forms.
  */
-function replaceStalePathsInText(
-  text: string,
-  finding: StaleSessionSnapshotPathFinding,
-): string {
+function replaceStalePathsInText(text: string, finding: StaleSessionSnapshotPathFinding): string {
   const jsonEscaped = JSON.stringify(finding.cachedPath).slice(1, -1);
   const jsonEscapedExpected = JSON.stringify(finding.expectedPath).slice(1, -1);
   const xmlEscaped = finding.cachedPath
@@ -429,11 +437,14 @@ export async function noteSessionSnapshotHealth(params?: {
               if (!isRecord(entry)) {
                 continue;
               }
-              for (const field of ["filePath", "baseDir"] as const) {
-                if (typeof entry[field] !== "string") {
-                  continue;
+              const replaceResolvedSkillField = (
+                target: Record<string, unknown>,
+                field: string,
+              ) => {
+                if (typeof target[field] !== "string") {
+                  return;
                 }
-                let value = entry[field];
+                let value = target[field];
                 const original = value;
                 const candidates = [
                   { cached: jsonEscaped, expected: jsonEscapedExpected },
@@ -445,7 +456,10 @@ export async function noteSessionSnapshotHealth(params?: {
                       const cachedDir = finding.cachedPath.slice(0, -suffix.length);
                       const expectedDir = finding.expectedPath.slice(0, -suffix.length);
                       candidates.push(
-                        { cached: JSON.stringify(cachedDir).slice(1, -1), expected: JSON.stringify(expectedDir).slice(1, -1) },
+                        {
+                          cached: JSON.stringify(cachedDir).slice(1, -1),
+                          expected: JSON.stringify(expectedDir).slice(1, -1),
+                        },
                         { cached: cachedDir, expected: expectedDir },
                       );
                     }
@@ -457,9 +471,18 @@ export async function noteSessionSnapshotHealth(params?: {
                   }
                 }
                 if (value !== original) {
-                  entry[field] = value;
+                  target[field] = value;
                   storeCount++;
                   modified = true;
+                }
+              };
+
+              for (const field of ["filePath", "baseDir"]) {
+                replaceResolvedSkillField(entry, field);
+              }
+              if (isRecord(entry.sourceInfo)) {
+                for (const field of ["path", "baseDir"]) {
+                  replaceResolvedSkillField(entry.sourceInfo, field);
                 }
               }
             }
