@@ -9,6 +9,68 @@ async function makeFixtureRoot(prefix: string): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), `doctor-post-upgrade-${prefix}-`));
 }
 
+describe("runPostUpgradeProbes — plugin.index_unavailable", () => {
+  it("returns a structured finding when the installed plugin index is missing", async () => {
+    const root = await makeFixtureRoot("index-missing");
+    try {
+      const report = await runPostUpgradeProbes({
+        installsPath: path.join(root, "plugins", "installs.json"),
+      });
+
+      expect(report.probesRun).toContain("plugin.index_unavailable");
+      expect(report.findings).toEqual([
+        expect.objectContaining({
+          level: "error",
+          code: "plugin.index_unavailable",
+        }),
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a structured finding when the installed plugin index is malformed", async () => {
+    const root = await makeFixtureRoot("index-malformed");
+    try {
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(installsPath, "{ not json", "utf-8");
+
+      const report = await runPostUpgradeProbes({ installsPath });
+
+      expect(report.probesRun).toContain("plugin.index_unavailable");
+      expect(report.findings).toEqual([
+        expect.objectContaining({
+          level: "error",
+          code: "plugin.index_unavailable",
+        }),
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a structured finding when an installed plugin record is malformed", async () => {
+    const root = await makeFixtureRoot("record-malformed");
+    try {
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(installsPath, JSON.stringify({ plugins: [{}] }), "utf-8");
+
+      const report = await runPostUpgradeProbes({ installsPath });
+
+      expect(report.findings).toEqual([
+        expect.objectContaining({
+          level: "error",
+          code: "plugin.index_unavailable",
+        }),
+      ]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
   it("flags an enabled plugin whose declared entry does not exist on disk", async () => {
     const root = await makeFixtureRoot("entry-unresolved");

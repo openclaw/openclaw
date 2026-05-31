@@ -197,7 +197,9 @@ expect.
 chained after a build or upgrade. Findings are emitted to stdout; the command
 exits with code 1 if any finding has `level: "error"`. Add `--json` to receive a
 machine-readable envelope (`{ probesRun, findings }`) suitable for CI, the
-community `fork-upgrade` skill, and other post-upgrade smoke tooling.
+community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the
+installed plugin index is missing or malformed, JSON mode still emits that
+envelope with a `plugin.index_unavailable` error finding.
 
 Notes:
 

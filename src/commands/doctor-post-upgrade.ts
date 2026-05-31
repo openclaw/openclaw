@@ -1,9 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { type PackageManifest } from "../plugins/manifest.js";
+import type { PackageManifest } from "../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../plugins/package-entry-resolution.js";
-import type { PostUpgradeFinding, PostUpgradeReport } from "./doctor-post-upgrade.types.js";
+import {
+  POST_UPGRADE_PROBE_CODES,
+  type PostUpgradeFinding,
+  type PostUpgradeReport,
+} from "./doctor-post-upgrade.types.js";
 
 type InstalledPluginRecord = {
   pluginId: string;
@@ -15,6 +19,57 @@ type InstalledPluginRecord = {
 };
 
 type InstallsJson = { plugins: InstalledPluginRecord[] };
+
+function buildReport(findings: PostUpgradeFinding[]): PostUpgradeReport {
+  return { probesRun: [...POST_UPGRADE_PROBE_CODES], findings };
+}
+
+function isInstallsJson(value: unknown): value is InstallsJson {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { plugins?: unknown }).plugins) &&
+    (value as { plugins: unknown[] }).plugins.every(isInstalledPluginRecord)
+  );
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isPackageJsonRef(value: unknown): value is InstalledPluginRecord["packageJson"] {
+  return (
+    value === undefined ||
+    (typeof value === "object" &&
+      value !== null &&
+      typeof (value as { path?: unknown }).path === "string")
+  );
+}
+
+function isInstalledPluginRecord(value: unknown): value is InstalledPluginRecord {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const record = value as InstalledPluginRecord;
+  return (
+    typeof record.pluginId === "string" &&
+    typeof record.rootDir === "string" &&
+    typeof record.enabled === "boolean" &&
+    isPackageJsonRef(record.packageJson) &&
+    isOptionalString(record.manifestPath) &&
+    isOptionalString(record.manifestHash)
+  );
+}
+
+async function readInstallsJson(installsPath: string): Promise<InstallsJson | null> {
+  try {
+    const installsRaw = await fs.readFile(installsPath, "utf-8");
+    const installs = JSON.parse(installsRaw) as unknown;
+    return isInstallsJson(installs) ? installs : null;
+  } catch {
+    return null;
+  }
+}
 
 async function readInstalledPackageJson(
   rootDir: string,
@@ -38,8 +93,16 @@ export async function runPostUpgradeProbes(params: {
   installsPath: string;
 }): Promise<PostUpgradeReport> {
   const findings: PostUpgradeFinding[] = [];
-  const installsRaw = await fs.readFile(params.installsPath, "utf-8");
-  const installs = JSON.parse(installsRaw) as InstallsJson;
+  const installs = await readInstallsJson(params.installsPath);
+  if (!installs) {
+    findings.push({
+      level: "error",
+      code: "plugin.index_unavailable",
+      message:
+        "Installed plugin index is missing, unreadable, or malformed. Run `openclaw plugins registry --refresh` to rebuild it before post-upgrade validation.",
+    });
+    return buildReport(findings);
+  }
 
   for (const record of installs.plugins) {
     if (!record.enabled) {
@@ -90,5 +153,5 @@ export async function runPostUpgradeProbes(params: {
     }
   }
 
-  return { probesRun: ["plugin.entry_unresolved", "plugin.manifest_drift"], findings };
+  return buildReport(findings);
 }
