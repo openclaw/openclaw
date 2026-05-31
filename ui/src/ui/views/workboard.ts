@@ -28,6 +28,7 @@ import { formatDateMs } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { icons } from "../icons.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../types.ts";
+import "./workboard-3d-game.ts";
 
 type WorkboardProps = {
   host: object;
@@ -441,6 +442,28 @@ function renderGameArrow(
   `;
 }
 
+function gameCellLabel(state: WorkboardUiState, index: number) {
+  const label =
+    index === state.gamePlayerIndex
+      ? t("workboard.gameAgent")
+      : index === WORKBOARD_GAME_GOAL
+        ? t("workboard.gameLaunch")
+        : WORKBOARD_GAME_BLOCKERS.has(index)
+          ? t("workboard.gameBlockedCell")
+          : t("workboard.gameOpenCell");
+  return `${label} ${index + 1}`;
+}
+
+function renderAccessibleGameGrid(state: WorkboardUiState) {
+  return html`
+    <div class="workboard-game__accessible-grid" role="grid" aria-label=${t("workboard.gameBoard")}>
+      ${Array.from({ length: WORKBOARD_GAME_SIZE * WORKBOARD_GAME_SIZE }, (_, index) => {
+        return html`<span role="gridcell" aria-label=${gameCellLabel(state, index)}></span>`;
+      })}
+    </div>
+  `;
+}
+
 function renderGameModal(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
   if (!state.gameOpen) {
@@ -500,30 +523,16 @@ function renderGameModal(props: WorkboardProps) {
           <span>${t("workboard.gameMoves", { count: String(state.gameMoves) })}</span>
           <span>${t("workboard.gameWins", { count: String(state.gameWins) })}</span>
         </div>
-        <div class="workboard-game__grid" role="grid" aria-label=${t("workboard.gameBoard")}>
-          ${Array.from({ length: WORKBOARD_GAME_SIZE * WORKBOARD_GAME_SIZE }, (_, index) => {
-            const player = index === state.gamePlayerIndex;
-            const goal = index === WORKBOARD_GAME_GOAL;
-            const blocker = WORKBOARD_GAME_BLOCKERS.has(index);
-            return html`
-              <div
-                class="workboard-game__cell ${player ? "workboard-game__cell--player" : ""} ${goal
-                  ? "workboard-game__cell--goal"
-                  : ""} ${blocker ? "workboard-game__cell--blocker" : ""}"
-                role="gridcell"
-                aria-label=${player
-                  ? t("workboard.gameAgent")
-                  : goal
-                    ? t("workboard.gameLaunch")
-                    : blocker
-                      ? t("workboard.gameBlockedCell")
-                      : t("workboard.gameOpenCell")}
-              >
-                ${player ? "A" : goal ? "L" : blocker ? "" : ""}
-              </div>
-            `;
-          })}
-        </div>
+        <workboard-3d-game
+          class="workboard-game__scene"
+          board-size=${String(WORKBOARD_GAME_SIZE)}
+          goal-index=${String(WORKBOARD_GAME_GOAL)}
+          player-index=${String(state.gamePlayerIndex)}
+          blockers=${[...WORKBOARD_GAME_BLOCKERS].join(",")}
+          wins=${String(state.gameWins)}
+          aria-hidden="true"
+        ></workboard-3d-game>
+        ${renderAccessibleGameGrid(state)}
         <div class="workboard-game__controls" aria-label=${t("workboard.gameControls")}>
           ${renderGameArrow(
             t("workboard.gameMoveUp"),

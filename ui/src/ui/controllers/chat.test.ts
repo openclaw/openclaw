@@ -1770,6 +1770,66 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatLoading).toBe(false);
   });
 
+  it("coalesces duplicate in-flight history loads for the selected session", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const firstLoad = loadChatHistory(state);
+    const secondLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    history.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
+      thinkingLevel: "low",
+    });
+    await firstLoad;
+    await secondLoad;
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "ready" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatLoading).toBe(false);
+  });
+
+  it("starts a fresh same-session history load after local messages change", async () => {
+    const staleRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const freshRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi
+      .fn()
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => freshRequest.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const staleLoad = loadChatHistory(state);
+    state.chatMessages = [{ role: "user", content: [{ type: "text", text: "new local ask" }] }];
+    const freshLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    staleRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "old history" }] }],
+    });
+    await staleLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "user", content: [{ type: "text", text: "new local ask" }] },
+    ]);
+
+    freshRequest.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh history" }] }],
+    });
+    await freshLoad;
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
+    ]);
+  });
+
   it("ignores stale history responses after switching sessions", async () => {
     const mainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
     const otherRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();

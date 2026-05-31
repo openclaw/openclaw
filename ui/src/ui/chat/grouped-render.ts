@@ -24,7 +24,7 @@ import { extractThinkingCached, formatReasoningMarkdown } from "./message-extrac
 import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import {
-  extractToolCards,
+  extractToolCardsCached,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
@@ -1499,7 +1499,7 @@ function renderGroupedMessage(
     typeof m.toolCallId === "string" ||
     typeof m.tool_call_id === "string";
 
-  const toolCards = (opts.showToolCalls ?? true) ? extractToolCards(message, messageKey) : [];
+  const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message, messageKey) : [];
   const hasToolCards = toolCards.length > 0;
   const imageRenderOptions = {
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],

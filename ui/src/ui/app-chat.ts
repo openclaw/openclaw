@@ -1390,12 +1390,17 @@ export async function refreshChat(
     sessionsRefresh,
     previousSessionsResult,
   );
-  const secondaryRefresh = Promise.allSettled([
-    sessionsRefresh,
-    refreshChatAvatar(host),
-    refreshChatModels(host),
-    refreshChatCommands(host),
-  ]).finally(requestUpdate);
+  const secondaryRefresh = Promise.allSettled([sessionsRefresh]).finally(requestUpdate);
+  scheduleChatMetadataRefresh(() => {
+    if (host.sessionKey !== refreshedSessionKey || !host.connected) {
+      return;
+    }
+    void Promise.allSettled([
+      refreshChatAvatar(host),
+      refreshChatModels(host),
+      refreshChatCommands(host),
+    ]).finally(requestUpdate);
+  });
   void historyRefresh;
   void secondaryRefresh;
   if (opts?.awaitHistory === true) {
@@ -1403,6 +1408,16 @@ export async function refreshChat(
     return;
   }
   await Promise.resolve();
+}
+
+function scheduleChatMetadataRefresh(callback: () => void) {
+  const requestIdleCallback =
+    typeof globalThis.requestIdleCallback === "function" ? globalThis.requestIdleCallback : null;
+  if (requestIdleCallback) {
+    requestIdleCallback(callback, { timeout: 750 });
+    return;
+  }
+  globalThis.setTimeout(callback, 50);
 }
 
 async function refreshChatModels(host: ChatHost) {
@@ -1438,9 +1453,16 @@ function beginChatAvatarRequest(host: ChatHost): number {
   return nextVersion;
 }
 
-function shouldApplyChatAvatarResult(host: ChatHost, version: number, sessionKey: string): boolean {
+function shouldApplyChatAvatarResult(
+  host: ChatHost,
+  version: number,
+  sessionKey: string,
+  agentId: string | null,
+): boolean {
   return (
-    chatAvatarRequestVersions.get(host as object) === version && host.sessionKey === sessionKey
+    chatAvatarRequestVersions.get(host as object) === version &&
+    host.sessionKey === sessionKey &&
+    resolveAgentIdForSession(host) === agentId
   );
 }
 
@@ -1448,6 +1470,9 @@ function resolveAgentIdForSession(host: ChatHost): string | null {
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (parsed?.agentId) {
     return parsed.agentId;
+  }
+  if (isGlobalSessionKey(host.sessionKey)) {
+    return resolveSelectedGlobalAgentId(host) || DEFAULT_AGENT_ID;
   }
   return readHelloDefaultAgentId(host) || DEFAULT_AGENT_ID;
 }
@@ -1531,7 +1556,7 @@ export async function refreshChatAvatar(host: ChatHost) {
   const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
   if (!agentId) {
-    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       clearChatAvatarState(host);
     }
     return;
@@ -1542,7 +1567,7 @@ export async function refreshChatAvatar(host: ChatHost) {
   const url = buildAvatarMetaUrl(host.basePath, agentId);
   try {
     const res = await fetch(url, { method: "GET", ...(headers ? { headers } : {}) });
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       return;
     }
     if (!res.ok) {
@@ -1555,7 +1580,7 @@ export async function refreshChatAvatar(host: ChatHost) {
       avatarStatus?: unknown;
       avatarReason?: unknown;
     };
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       return;
     }
     setChatAvatarMeta(host, data);
@@ -1573,19 +1598,19 @@ export async function refreshChatAvatar(host: ChatHost) {
       ...(headers ? { headers } : {}),
     });
     if (!avatarRes.ok) {
-      if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+      if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
         clearChatAvatarUrl(host);
       }
       return;
     }
     const blobUrl = URL.createObjectURL(await avatarRes.blob());
-    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (!shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       URL.revokeObjectURL(blobUrl);
       return;
     }
     setChatAvatarUrl(host, blobUrl);
   } catch {
-    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey)) {
+    if (shouldApplyChatAvatarResult(host, requestVersion, sessionKey, agentId)) {
       clearChatAvatarState(host);
     }
   }

@@ -49,7 +49,7 @@ function shouldApplyChatHistoryResult(
   state: ChatState,
   version: number,
   sessionKey: string,
-  agentId?: string | null,
+  agentId?: string,
 ): boolean {
   if (!isLatestChatHistoryRequest(state, version) || state.sessionKey !== sessionKey) {
     return false;
@@ -394,15 +394,55 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
+type InFlightChatHistoryRequest = {
+  client: NonNullable<ChatState["client"]>;
+  key: string;
+  messages: unknown[];
+  promise: Promise<void>;
+};
+
+const inFlightChatHistoryRequests = new WeakMap<ChatState, InFlightChatHistoryRequest>();
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
   const sessionKey = state.sessionKey;
-  const requestVersion = beginChatHistoryRequest(state);
   const requestAgentId = isSelectedGlobalEventSessionKey(sessionKey)
     ? resolveSelectedAgentId(state)
-    : null;
+    : undefined;
+  const requestKey = `${sessionKey}\0${requestAgentId ?? ""}`;
+  const inFlight = inFlightChatHistoryRequests.get(state);
+  if (
+    inFlight?.key === requestKey &&
+    inFlight.client === state.client &&
+    inFlight.messages === state.chatMessages
+  ) {
+    return inFlight.promise;
+  }
+  const promise = loadChatHistoryUncached(state, state.client, sessionKey, requestAgentId).finally(
+    () => {
+      if (inFlightChatHistoryRequests.get(state)?.promise === promise) {
+        inFlightChatHistoryRequests.delete(state);
+      }
+    },
+  );
+  inFlightChatHistoryRequests.set(state, {
+    client: state.client,
+    key: requestKey,
+    messages: state.chatMessages,
+    promise,
+  });
+  return promise;
+}
+
+async function loadChatHistoryUncached(
+  state: ChatState,
+  client: NonNullable<ChatState["client"]>,
+  sessionKey: string,
+  requestAgentId: string | undefined,
+) {
+  const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
@@ -413,7 +453,7 @@ export async function loadChatHistory(state: ChatState) {
     let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
     for (;;) {
       try {
-        res = await state.client.request<{
+        res = await client.request<{
           messages?: Array<unknown>;
           sessionId?: string;
           thinkingLevel?: string;
