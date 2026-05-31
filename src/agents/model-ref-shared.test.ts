@@ -29,6 +29,23 @@ describe("normalizeStaticProviderModelId", () => {
     );
   });
 
+  it("strips a redundant anthropic/ self-prefix from catalog-keyed model ids", () => {
+    // agents.defaults.models keys are stored provider-qualified
+    // (e.g. "anthropic/claude-haiku-4-5"). The native anthropic registry is
+    // keyed on the bare id, so the self-prefix must be stripped to avoid the
+    // doubled-prefix lookup "anthropic/anthropic/claude-haiku-4-5".
+    expect(normalizeStaticProviderModelId("anthropic", "anthropic/claude-haiku-4-5")).toBe(
+      "claude-haiku-4-5",
+    );
+    // Bare ids and aliases keep working after the strip.
+    expect(normalizeStaticProviderModelId("anthropic", "anthropic/sonnet-4.6")).toBe(
+      "claude-sonnet-4-6",
+    );
+    expect(normalizeStaticProviderModelId("anthropic", "claude-haiku-4-5")).toBe(
+      "claude-haiku-4-5",
+    );
+  });
+
   it("applies shipped bundled provider model aliases without manifest lookup", () => {
     expect(normalizeStaticProviderModelId("anthropic", "sonnet-4.6")).toBe("claude-sonnet-4-6");
     expect(normalizeStaticProviderModelId("vercel-ai-gateway", "sonnet-4.6")).toBe(

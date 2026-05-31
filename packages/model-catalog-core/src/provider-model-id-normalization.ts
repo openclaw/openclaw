@@ -113,13 +113,17 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
     return trimmed && !trimmed.includes("/") ? `openrouter/${trimmed}` : model;
   }
   if (normalizedProvider === "anthropic") {
+    const prefix = "anthropic/";
+    const bareModel = normalizeLowercaseStringOrEmpty(model).startsWith(prefix)
+      ? model.slice(prefix.length)
+      : model;
     const anthropicAliases: Record<string, string> = {
       "opus-4.8": "claude-opus-4-8",
       opus: "claude-opus-4-8",
       "opus-4.6": "claude-opus-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
-    return anthropicAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+    return anthropicAliases[normalizeLowercaseStringOrEmpty(bareModel)] ?? bareModel;
   }
   if (normalizedProvider === "vercel-ai-gateway") {
     const vercelAliases: Record<string, string> = {
