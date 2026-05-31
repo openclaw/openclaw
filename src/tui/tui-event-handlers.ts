@@ -420,8 +420,13 @@ export function createEventHandlers(context: EventHandlerContext) {
 
   const maybeRefreshHistoryForRun = (
     runId: string,
-    opts?: { allowLocalWithoutDisplayableFinal?: boolean; hasDisplayableFinal?: boolean },
+    opts?: {
+      allowLocalWithoutDisplayableFinal?: boolean;
+      hasDisplayableFinal?: boolean;
+      wasPendingChatRun?: boolean;
+    },
   ) => {
+    const isPendingChatRun = opts?.wasPendingChatRun === true || state.pendingChatRunId === runId;
     const isLocalRun = isLocalRunId?.(runId) ?? false;
     if (isLocalRun) {
       forgetLocalRunId?.(runId);
@@ -436,15 +441,15 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
     }
+    if (!isPendingChatRun && (state.pendingChatRunId || state.pendingOptimisticUserMessage)) {
+      pendingHistoryRefresh = true;
+      return;
+    }
     // When the final event already produced displayable output, skip the
     // reload. loadHistory() does clearAll() + rebuild from server, but the
     // server may not have persisted this message yet, causing the
     // just-rendered final message to vanish (#87922).
     if (opts?.hasDisplayableFinal) {
-      return;
-    }
-    if (state.pendingChatRunId || state.pendingOptimisticUserMessage) {
-      pendingHistoryRefresh = true;
       return;
     }
     if (hasConcurrentActiveRun(runId)) {
@@ -611,6 +616,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!evt.message) {
         maybeRefreshHistoryForRun(evt.runId, {
           allowLocalWithoutDisplayableFinal: true,
+          wasPendingChatRun: isPendingChatRun,
         });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
@@ -618,7 +624,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (isCommandMessage(evt.message)) {
-        maybeRefreshHistoryForRun(evt.runId);
+        maybeRefreshHistoryForRun(evt.runId, { wasPendingChatRun: isPendingChatRun });
         const text = extractTextFromMessage(evt.message);
         if (text) {
           chatLog.addSystem(text);
@@ -648,6 +654,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       // the just-rendered final message to vanish (#87922).
       maybeRefreshHistoryForRun(evt.runId, {
         hasDisplayableFinal: !suppressEmptyExternalPlaceholder,
+        wasPendingChatRun: isPendingChatRun,
       });
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
