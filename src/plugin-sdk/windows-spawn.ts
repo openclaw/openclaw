@@ -160,7 +160,9 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
 }
 
 function isAbsoluteEntrypointPath(candidate: string): boolean {
-  return path.isAbsolute(candidate) || /^[A-Za-z]:[\\/]/.test(candidate) || candidate.startsWith("\\\\");
+  return (
+    path.isAbsolute(candidate) || /^[A-Za-z]:[\\/]/.test(candidate) || candidate.startsWith("\\\\")
+  );
 }
 
 function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
