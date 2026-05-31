@@ -7,11 +7,14 @@ import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
 
+/** Mutable cron session entry updated by an isolated run before persistence. */
 export type MutableCronSessionEntry = SessionEntry;
+/** Resolved cron session plus its mutable backing store and active entry. */
 export type MutableCronSession = ReturnType<typeof resolveCronSession> & {
   store: MutableSessionStore;
   sessionEntry: MutableCronSessionEntry;
 };
+/** Live provider/model/auth-profile selection reported by the running session. */
 export type CronLiveSelection = LiveSessionModelSelection;
 
 type UpdateSessionStore = (
@@ -19,6 +22,7 @@ type UpdateSessionStore = (
   update: (store: MutableSessionStore) => void,
 ) => Promise<void>;
 
+/** Persists the currently selected mutable cron session entry to the session store. */
 export type PersistCronSessionEntry = () => Promise<void>;
 
 function cronTranscriptExists(entry: SessionEntry): boolean {
