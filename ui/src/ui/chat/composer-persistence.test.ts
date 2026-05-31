@@ -189,4 +189,27 @@ describe("chat composer persistence", () => {
       ),
     ).toBeNull();
   });
+
+  it("does not restore steered messages tied to a previous active run", () => {
+    persistChatComposerState(
+      createState({
+        chatQueue: [
+          {
+            id: "steered-1",
+            text: "stale steer",
+            createdAt: 1,
+            kind: "steered",
+            pendingRunId: "run-before-refresh",
+          },
+        ],
+      }),
+    );
+
+    expect(
+      loadChatComposerSnapshot(
+        { settings: { gatewayUrl: "ws://gateway.test/control" } },
+        "agent:lily:main",
+      ),
+    ).toBeNull();
+  });
 });

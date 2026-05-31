@@ -165,6 +165,9 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
   if (!id || (!text.trim() && !item.attachments?.length)) {
     return null;
   }
+  if (item.pendingRunId) {
+    return null;
+  }
   if (item.sendState === "sending") {
     return null;
   }
@@ -188,7 +191,6 @@ function serializeQueueItem(item: ChatQueueItem): ChatQueueItem | null {
     ...(typeof item.refreshSessions === "boolean" ? { refreshSessions: item.refreshSessions } : {}),
     ...(item.localCommandArgs ? { localCommandArgs: item.localCommandArgs } : {}),
     ...(item.localCommandName ? { localCommandName: item.localCommandName } : {}),
-    ...(item.pendingRunId ? { pendingRunId: item.pendingRunId } : {}),
     ...(item.sessionKey ? { sessionKey: item.sessionKey } : {}),
     ...(item.agentId ? { agentId: item.agentId } : {}),
     ...(sendState ? { sendState } : {}),
@@ -251,10 +253,6 @@ function normalizeQueueItem(value: unknown): ChatQueueItem | null {
   const localCommandName = normalizeOptionalString(entry.localCommandName);
   if (localCommandName) {
     item.localCommandName = localCommandName;
-  }
-  const pendingRunId = normalizeOptionalString(entry.pendingRunId);
-  if (pendingRunId) {
-    item.pendingRunId = pendingRunId;
   }
   const sessionKey = normalizeOptionalString(entry.sessionKey);
   if (sessionKey) {
