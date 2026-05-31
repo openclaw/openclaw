@@ -1351,6 +1351,53 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
+  it("preserves prior assistant reasoning for OpenAI-compatible replay with reasoning model metadata", async () => {
+    setNonGoogleModelApi();
+
+    const messages = castAgentMessages([
+      makeUserMessage("first"),
+      makeAssistantMessage([
+        {
+          type: "thinking",
+          thinking: "private reasoning",
+          thinkingSignature: "reasoning_content",
+        },
+        { type: "text", text: "visible answer" },
+      ]),
+      makeUserMessage("second"),
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-completions",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
+      model: {
+        id: "Qwen3.6-27B",
+        name: "Qwen3.6 27B",
+        provider: "vllm",
+        api: "openai-completions",
+        baseUrl: "https://example.invalid",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
+      },
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
+      {
+        type: "thinking",
+        thinking: "private reasoning",
+        thinkingSignature: "reasoning_content",
+      },
+      { type: "text", text: "visible answer" },
+    ]);
+  });
+
   it.each([
     ["Kimi K2.6", "custom-openai-proxy", "moonshotai/kimi-k2.6"],
     ["MiMo V2.6 Pro", "custom-openai-proxy", "xiaomi/mimo-v2.6-pro"],

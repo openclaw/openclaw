@@ -6696,7 +6696,6 @@ describe("openai transport stream", () => {
     });
   });
 
-
   it("strips tool call blocks when provider signals finish_reason stop", async () => {
     const model = {
       id: "llama-3.3-70b",
@@ -6913,8 +6912,6 @@ describe("openai transport stream", () => {
     expect(output.content).toHaveLength(1);
     expect((output.content[0] as { type?: string }).type).toBe("text");
   });
-
-
 
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {
     const model = {
@@ -8259,6 +8256,19 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     maxTokens: 32_000,
   } satisfies Model<"openai-completions">;
 
+  const customQwenReasoningModel = {
+    id: "Qwen3.6-35B-A3B",
+    name: "Qwen3.6 35B",
+    api: "openai-completions",
+    provider: "custom-openai-proxy",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
   const kimiCodingProxyModel = {
     ...customKimiProxyModel,
     id: "kimi-for-coding",
@@ -8427,6 +8437,17 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
 
     expect(assistant).not.toHaveProperty("reasoning_text");
     expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it("preserves reasoning_content replay for custom reasoning model metadata", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customQwenReasoningModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
   });
 
   it("preserves DeepSeek-style reasoning_content replay for Xiaomi MiMo", () => {
