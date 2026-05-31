@@ -4,6 +4,7 @@ import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
@@ -46,6 +47,11 @@ export type MediaGenerationTaskHandle = {
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
+
+export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
+  const normalizedSessionKey = sessionKey?.trim();
+  return Boolean(normalizedSessionKey && !isCronRunSessionKey(normalizedSessionKey));
+}
 
 export type MediaGenerationExecutionResult = {
   provider: string;
