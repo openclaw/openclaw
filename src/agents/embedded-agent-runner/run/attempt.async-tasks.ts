@@ -1,7 +1,10 @@
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
-import { findTaskByRunId, listTaskRecords } from "../../../tasks/task-registry.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
+import {
+  findTaskByRunIdForStatus,
+  listTasksForOwnerOrRequesterSessionKeyForStatus,
+} from "../../../tasks/task-status-access.js";
 
 export type AsyncStartedToolMeta = {
   toolName?: string;
@@ -98,14 +101,8 @@ function collectAsyncTaskRunIds(
   if (!normalizedSessionKey) {
     return runIds;
   }
-  for (const task of listTaskRecords()) {
+  for (const task of listTasksForOwnerOrRequesterSessionKeyForStatus(normalizedSessionKey)) {
     if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
-      continue;
-    }
-    if (
-      task.requesterSessionKey !== normalizedSessionKey &&
-      task.ownerKey !== normalizedSessionKey
-    ) {
       continue;
     }
     if (isTerminalTaskStatus(task.status)) {
@@ -123,7 +120,7 @@ function findTerminalTasks(runIds: readonly string[]): {
   const pendingRunIds: string[] = [];
   const terminalTasks: TaskRecord[] = [];
   for (const runId of runIds) {
-    const task = findTaskByRunId(runId);
+    const task = findTaskByRunIdForStatus(runId);
     if (task && isTerminalTaskStatus(task.status)) {
       terminalTasks.push(task);
       continue;
@@ -138,7 +135,7 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   toolMetas: readonly AsyncStartedToolMeta[];
 }): boolean {
   const sessionKey = params.sessionKey?.trim();
-  if (!isCronRunSessionKey(sessionKey)) {
+  if (!sessionKey || !isCronRunSessionKey(sessionKey)) {
     return false;
   }
   if (
@@ -148,11 +145,10 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   ) {
     return true;
   }
-  return listTaskRecords().some(
+  return listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey).some(
     (task) =>
       COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "") &&
       !isTerminalTaskStatus(task.status) &&
-      (task.requesterSessionKey === sessionKey || task.ownerKey === sessionKey) &&
       Boolean(task.runId?.trim()),
   );
 }
