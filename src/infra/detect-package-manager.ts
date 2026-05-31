@@ -6,6 +6,18 @@ import { readPackageManagerSpec } from "./package-json.js";
 
 type DetectedPackageManager = "pnpm" | "bun" | "npm";
 
+/**
+ * Lock files that serve as ground-truth evidence of the package manager
+ * actually used to install the package.  npm global installs ship
+ * `npm-shrinkwrap.json` rather than `package-lock.json`, so both must be
+ * recognised.
+ */
+const LOCK_FILE_MANAGERS: Array<{ files: readonly string[]; manager: DetectedPackageManager }> = [
+  { files: ["pnpm-lock.yaml"], manager: "pnpm" },
+  { files: ["bun.lock", "bun.lockb"], manager: "bun" },
+  { files: ["package-lock.json", "npm-shrinkwrap.json"], manager: "npm" },
+];
+
 async function exists(p: string): Promise<boolean> {
   try {
     await fs.access(p);
