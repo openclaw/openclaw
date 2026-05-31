@@ -246,6 +246,14 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       tempPaths,
       attemptOverrides: {
         disableTools: false,
+        contextTokenBudget: 32_000,
+        model: {
+          api: "openai-completions",
+          provider: "openai",
+          compat: {},
+          contextWindow: 128_000,
+          input: ["text"],
+        } as never,
         config: {
           tools: {
             toolSearch: true,
@@ -262,6 +270,103 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
     expect(options.includeToolSearchControls).toBe(true);
     expect(options.toolSearchCatalogRef).toEqual({});
+    expect(options.modelContextTokens).toBe(32_000);
+    expect(options.modelContextWindowTokens).toBe(32_000);
+  });
+
+  it("uses per-agent context caps for embedded OpenClaw tool construction", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        contextTokenBudget: 128_000,
+        model: {
+          api: "openai-completions",
+          provider: "openai",
+          compat: {},
+          contextWindow: 128_000,
+          input: ["text"],
+        } as never,
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: "auto",
+              },
+            },
+            list: [
+              {
+                id: "main",
+                contextTokens: 32_000,
+              },
+            ],
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
+    const options = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(options.modelContextTokens).toBe(32_000);
+    expect(options.modelContextWindowTokens).toBe(32_000);
+  });
+
+  it("lets per-agent context caps override smaller defaults for embedded tools", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        contextTokenBudget: 32_000,
+        contextWindowInfo: {
+          tokens: 32_000,
+          referenceTokens: 128_000,
+          source: "agentContextTokens",
+        },
+        model: {
+          api: "openai-completions",
+          provider: "openai",
+          compat: {},
+          contextWindow: 128_000,
+          input: ["text"],
+        } as never,
+        config: {
+          agents: {
+            defaults: {
+              contextTokens: 32_000,
+              experimental: {
+                localModelLean: "auto",
+              },
+            },
+            list: [
+              {
+                id: "main",
+                contextTokens: 128_000,
+              },
+            ],
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    const options = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(options.modelContextTokens).toBe(128_000);
+    expect(options.modelContextWindowTokens).toBe(128_000);
   });
 
   it("quarantines unsupported tool schemas before creating the model session", async () => {

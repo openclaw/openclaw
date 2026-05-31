@@ -31,21 +31,44 @@ export function resolveContextWindowInfo(params: {
   modelContextWindow?: number;
   defaultTokens: number;
 }): ContextWindowInfo {
+  const runtimeModelContextTokens = normalizePositiveInt(params.modelContextTokens);
+  const runtimeModelContextWindow = normalizePositiveInt(params.modelContextWindow);
+  const runtimeModelContextLimit =
+    runtimeModelContextTokens && runtimeModelContextWindow
+      ? Math.min(runtimeModelContextTokens, runtimeModelContextWindow)
+      : (runtimeModelContextTokens ?? runtimeModelContextWindow);
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
       | Record<
           string,
-          { models?: Array<{ id?: string; contextTokens?: number; contextWindow?: number }> }
+          {
+            contextTokens?: number;
+            contextWindow?: number;
+            models?: Array<{ id?: string; contextTokens?: number; contextWindow?: number }>;
+          }
         >
       | undefined;
     const providerEntry = findNormalizedProviderValue(providers, params.provider);
     const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
     const match = models.find((m) => m?.id === params.modelId);
-    return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
+    const matchContextTokens = normalizePositiveInt(match?.contextTokens);
+    const providerContextTokens = normalizePositiveInt(providerEntry?.contextTokens);
+    const matchContextWindow = normalizePositiveInt(match?.contextWindow);
+    const providerContextWindow = normalizePositiveInt(providerEntry?.contextWindow);
+    const providerContextTokenLimit =
+      matchContextWindow ?? providerContextWindow ?? runtimeModelContextLimit;
+    const cappedProviderContextTokens =
+      providerContextTokens && providerContextTokenLimit
+        ? Math.min(providerContextTokens, providerContextTokenLimit)
+        : providerContextTokens;
+    return (
+      matchContextTokens ??
+      cappedProviderContextTokens ??
+      matchContextWindow ??
+      providerContextWindow
+    );
   })();
-  const fromModel =
-    normalizePositiveInt(params.modelContextTokens) ??
-    normalizePositiveInt(params.modelContextWindow);
+  const fromModel = runtimeModelContextLimit;
   const defaultTokens =
     normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
   const baseInfo = fromModelsConfig

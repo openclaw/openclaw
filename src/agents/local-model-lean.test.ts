@@ -32,6 +32,78 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "exec"]);
   });
 
+  it("enables auto lean mode only for small resolved context caps", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: "auto",
+          },
+        },
+      },
+    };
+    const toolList = tools(["read", "browser", "cron", "message", "exec"]);
+
+    expect(isLocalModelLeanEnabled({ config: cfg, modelContextTokens: 65_536 })).toBe(true);
+    expect(
+      filterLocalModelLeanTools({
+        tools: toolList,
+        config: cfg,
+        modelContextTokens: 65_536,
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "exec"]);
+    expect(isLocalModelLeanEnabled({ config: cfg, modelContextTokens: 65_537 })).toBe(false);
+    expect(
+      filterLocalModelLeanTools({
+        tools: toolList,
+        config: cfg,
+        modelContextTokens: 65_537,
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "browser", "cron", "message", "exec"]);
+    expect(isLocalModelLeanEnabled({ config: cfg })).toBe(false);
+  });
+
+  it("falls back to context window tokens for auto lean mode", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: "auto",
+          },
+        },
+      },
+    };
+
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        config: cfg,
+        modelContextWindowTokens: 32_000,
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "exec"]);
+  });
+
+  it("uses the smallest positive resolved cap for auto lean mode", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: "auto",
+          },
+        },
+      },
+    };
+
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        config: cfg,
+        modelContextTokens: 128_000,
+        modelContextWindowTokens: 32_000,
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "exec"]);
+  });
+
   it("lets an agent opt out of an inherited global lean setting", () => {
     const cfg: OpenClawConfig = {
       agents: {

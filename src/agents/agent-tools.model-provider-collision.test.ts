@@ -164,6 +164,94 @@ describe("applyModelProviderToolPolicy", () => {
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
   });
 
+  it("drops heavyweight tools for auto lean mode on small context models", () => {
+    const filtered = testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: "auto",
+              },
+            },
+          },
+        },
+        modelProvider: "ollama",
+        modelApi: "ollama",
+        modelId: "qwen3:8b",
+        modelContextTokens: 32_000,
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "exec"]);
+  });
+
+  it("keeps heavyweight tools for auto lean mode on larger context models", () => {
+    const filtered = testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: "auto",
+              },
+            },
+          },
+        },
+        modelProvider: "ollama",
+        modelApi: "ollama",
+        modelId: "llama3.3:70b",
+        modelContextTokens: 128_000,
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "browser", "cron", "message", "exec"]);
+  });
+
+  it("drops heavyweight tools for auto lean mode when runtime context caps a large model", () => {
+    const filtered = testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: "auto",
+              },
+            },
+          },
+        },
+        modelProvider: "ollama",
+        modelApi: "ollama",
+        modelId: "qwen3:8b",
+        modelContextTokens: 128_000,
+        modelContextWindowTokens: 32_000,
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "exec"]);
+  });
+
   it("drops heavyweight tools when lean local-model mode is enabled for the current agent", () => {
     const filtered = testing.applyModelProviderToolPolicy(
       [

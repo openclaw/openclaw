@@ -18,6 +18,7 @@ export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" |
 export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
 export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
+export type LocalModelLeanSetting = boolean | "auto";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -270,7 +271,7 @@ export type AgentDefaultsConfig = {
      * Drop heavyweight non-essential default tools for weaker or smaller local
      * model backends. Experimental preview only.
      */
-    localModelLean?: boolean;
+    localModelLean?: LocalModelLeanSetting;
   };
   /**
    * Agent-visible bootstrap truncation warning mode:

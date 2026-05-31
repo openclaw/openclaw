@@ -243,6 +243,8 @@ function applyModelProviderToolPolicy(
     agentId?: string;
     sessionKey?: string;
     agentDir?: string;
+    modelContextTokens?: number;
+    modelContextWindowTokens?: number;
     modelCompat?: ModelCompatConfig;
     suppressManagedWebSearch?: boolean;
   },
@@ -252,6 +254,8 @@ function applyModelProviderToolPolicy(
     config: params?.config,
     agentId: params?.agentId,
     sessionKey: params?.sessionKey,
+    modelContextTokens: params?.modelContextTokens,
+    modelContextWindowTokens: params?.modelContextWindowTokens,
   });
 
   if (
@@ -434,6 +438,8 @@ export function createOpenClawCodingTools(options?: {
   modelApi?: string;
   /** Model context window in tokens (used to scale read-tool output budget). */
   modelContextWindowTokens?: number;
+  /** Effective runtime context cap in tokens, after config/provider limits. */
+  modelContextTokens?: number;
   /** Resolved runtime model compatibility hints. */
   modelCompat?: ModelCompatConfig;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
@@ -1061,6 +1067,8 @@ export function createOpenClawCodingTools(options?: {
     agentId: options?.agentId,
     sessionKey: options?.sessionKey,
     agentDir: options?.agentDir,
+    modelContextTokens: options?.modelContextTokens,
+    modelContextWindowTokens: options?.modelContextWindowTokens,
     modelCompat: options?.modelCompat,
     suppressManagedWebSearch: options?.suppressManagedWebSearch,
   });

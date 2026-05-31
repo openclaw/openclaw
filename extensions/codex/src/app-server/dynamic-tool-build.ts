@@ -10,7 +10,7 @@ import {
   supportsModelTools,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentConfig, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import { readCodexPluginConfig, type CodexPluginConfig } from "./config.js";
 import {
@@ -81,6 +81,45 @@ export function resolveOpenClawCodingToolsSessionKeys(
     runSessionKey:
       params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
   };
+}
+
+function readCodexToolModelContextTokens(params: EmbeddedRunAttemptParams): number | undefined {
+  const modelContextTokens = (params.model as { contextTokens?: unknown }).contextTokens;
+  if (typeof modelContextTokens === "number" && Number.isFinite(modelContextTokens)) {
+    return modelContextTokens;
+  }
+  return undefined;
+}
+
+function readCodexToolAgentContextTokens(params: EmbeddedRunAttemptParams, agentId: string) {
+  if (!params.config) {
+    return undefined;
+  }
+  const agentContextTokens = resolveAgentConfig(params.config, agentId)?.contextTokens;
+  if (typeof agentContextTokens !== "number" || !Number.isFinite(agentContextTokens)) {
+    return undefined;
+  }
+  const int = Math.floor(agentContextTokens);
+  return int > 0 ? int : undefined;
+}
+
+function resolveCodexToolModelContextTokens(
+  params: EmbeddedRunAttemptParams,
+  agentId: string,
+): number | undefined {
+  const baseContextTokens =
+    params.contextTokenBudget ??
+    params.contextWindowInfo?.tokens ??
+    readCodexToolModelContextTokens(params) ??
+    params.model.contextWindow;
+  const defaultUncappedContextTokens =
+    params.contextWindowInfo?.source === "agentContextTokens"
+      ? (params.contextWindowInfo.referenceTokens ?? baseContextTokens)
+      : baseContextTokens;
+  const agentContextTokens = readCodexToolAgentContextTokens(params, agentId);
+  return agentContextTokens && defaultUncappedContextTokens
+    ? Math.min(agentContextTokens, defaultUncappedContextTokens)
+    : (agentContextTokens ?? baseContextTokens);
 }
 
 export function resolveCodexAppServerHookChannelId(
@@ -182,6 +221,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
   toolBuildStages.mark("load-agent-harness-tools");
   const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
+  const modelContextTokens = resolveCodexToolModelContextTokens(params, input.sessionAgentId);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
     ...buildEmbeddedAttemptToolRunContext(params),
@@ -229,7 +269,8 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
         ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
         : undefined,
     modelApi: params.model.api,
-    modelContextWindowTokens: params.model.contextWindow,
+    modelContextTokens,
+    modelContextWindowTokens: modelContextTokens ?? params.model.contextWindow,
     modelAuthMode: resolveModelAuthMode(
       params.model.provider,
       params.config,

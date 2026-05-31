@@ -763,9 +763,15 @@ export async function runEmbeddedAgent(
         });
       }
       let runtimeModel = model;
+      const { sessionAgentId } = resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+        agentId: params.agentId,
+      });
 
       const resolvedRuntimeModel = resolveEffectiveRuntimeModel({
         cfg: params.config,
+        agentId: sessionAgentId,
         provider,
         contextConfigProvider: resolveContextConfigProviderForRuntime({
           provider: modelConfigProvider,
@@ -1124,11 +1130,6 @@ export async function runEmbeddedAgent(
         : attemptAuthProfileStore;
       const harnessBuildsOpenClawTools =
         agentHarness.id === "codex" || agentHarness.id === "copilot";
-      const { sessionAgentId } = resolveSessionAgentIds({
-        sessionKey: params.sessionKey,
-        config: params.config,
-        agentId: params.agentId,
-      });
       const configuredExecutionContract = resolveAgentExecutionContract(
         params.config,
         sessionAgentId,

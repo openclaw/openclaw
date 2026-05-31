@@ -166,4 +166,35 @@ describe("resolveEffectiveRuntimeModel", () => {
     });
     expect(result.effectiveModel.contextWindow).toBe(272_000);
   });
+
+  it("lets per-agent contextTokens override a smaller default context cap", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          contextTokens: 32_000,
+        },
+        list: [
+          {
+            id: "main",
+            contextTokens: 128_000,
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const result = resolveEffectiveRuntimeModel({
+      cfg,
+      agentId: "main",
+      provider: "codex",
+      modelId: "gpt-5.5",
+      runtimeModel: createRuntimeModel(),
+    });
+
+    expect(result.ctxInfo).toEqual({
+      source: "agentContextTokens",
+      tokens: 128_000,
+      referenceTokens: 272_000,
+    });
+    expect(result.effectiveModel.contextWindow).toBe(128_000);
+  });
 });

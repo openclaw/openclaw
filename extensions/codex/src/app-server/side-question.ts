@@ -519,6 +519,110 @@ function buildSideRunAttemptParams(
   return sideParams as unknown as EmbeddedRunAttemptParams;
 }
 
+function normalizePositiveContextTokens(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const int = Math.floor(value);
+  return int > 0 ? int : undefined;
+}
+
+function normalizeContextKey(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function readSideQuestionProviderConfig(
+  params: AgentHarnessSideQuestionParams,
+): Record<string, unknown> | undefined {
+  const providers = params.cfg.models?.providers as Record<string, unknown> | undefined;
+  const providerKey = normalizeContextKey(params.provider);
+  if (!providers || !providerKey) {
+    return undefined;
+  }
+  return Object.entries(providers).find(
+    ([key]) => normalizeContextKey(key) === providerKey,
+  )?.[1] as Record<string, unknown> | undefined;
+}
+
+function readSideQuestionModelConfig(
+  providerConfig: Record<string, unknown> | undefined,
+  params: AgentHarnessSideQuestionParams,
+): Record<string, unknown> | undefined {
+  const models = providerConfig?.models;
+  if (!Array.isArray(models)) {
+    return undefined;
+  }
+  const providerKey = normalizeContextKey(params.provider);
+  const modelKey = normalizeContextKey(params.model);
+  const providerPrefixedKey = normalizeContextKey(`${providerKey}/${params.model}`);
+  return models.find((model) => {
+    if (!model || typeof model !== "object") {
+      return false;
+    }
+    const key = normalizeContextKey((model as { id?: string }).id);
+    return key === modelKey || key === providerPrefixedKey;
+  }) as Record<string, unknown> | undefined;
+}
+
+function readSideQuestionAgentConfig(
+  params: AgentHarnessSideQuestionParams,
+  sessionAgentId: string,
+): Record<string, unknown> | undefined {
+  const agents = params.cfg.agents?.list;
+  if (!Array.isArray(agents)) {
+    return undefined;
+  }
+  const agentKey = normalizeContextKey(sessionAgentId);
+  return agents.find((agent) => {
+    if (!agent || typeof agent !== "object") {
+      return false;
+    }
+    return normalizeContextKey((agent as { id?: string }).id) === agentKey;
+  }) as Record<string, unknown> | undefined;
+}
+
+function resolveSideQuestionModelContextTokens(
+  params: AgentHarnessSideQuestionParams,
+  runtimeModel: { contextTokens?: unknown; contextWindow?: unknown },
+  sessionAgentId: string,
+) {
+  const providerConfig = readSideQuestionProviderConfig(params);
+  const modelConfig = readSideQuestionModelConfig(providerConfig, params);
+  const agentConfig = readSideQuestionAgentConfig(params, sessionAgentId);
+  const modelContextTokens = normalizePositiveContextTokens(modelConfig?.contextTokens);
+  const providerContextTokens = normalizePositiveContextTokens(providerConfig?.contextTokens);
+  const modelContextWindow = normalizePositiveContextTokens(modelConfig?.contextWindow);
+  const providerContextWindow = normalizePositiveContextTokens(providerConfig?.contextWindow);
+  const runtimeContextTokens = normalizePositiveContextTokens(runtimeModel.contextTokens);
+  const runtimeContextWindow = normalizePositiveContextTokens(runtimeModel.contextWindow);
+  const runtimeContextLimit =
+    runtimeContextTokens && runtimeContextWindow
+      ? Math.min(runtimeContextTokens, runtimeContextWindow)
+      : (runtimeContextTokens ?? runtimeContextWindow);
+  const providerContextTokenLimit =
+    modelContextWindow ?? providerContextWindow ?? runtimeContextLimit;
+  const cappedProviderContextTokens =
+    providerContextTokens && providerContextTokenLimit
+      ? Math.min(providerContextTokens, providerContextTokenLimit)
+      : providerContextTokens;
+  const configuredContextTokens =
+    modelContextTokens ??
+    cappedProviderContextTokens ??
+    modelContextWindow ??
+    providerContextWindow;
+  const baseContextTokens = configuredContextTokens ?? runtimeContextLimit;
+  const sessionContextTokens = normalizePositiveContextTokens(params.sessionEntry.contextTokens);
+  const resolvedAgentContextTokens = normalizePositiveContextTokens(
+    agentConfig?.contextTokens ?? params.cfg.agents?.defaults?.contextTokens,
+  );
+  const contextLimits = [
+    baseContextTokens,
+    sessionContextTokens,
+    resolvedAgentContextTokens,
+  ].filter((value): value is number => value !== undefined);
+  return contextLimits.length > 0 ? Math.min(...contextLimits) : undefined;
+}
+
 async function createCodexSideToolBridge(input: {
   params: AgentHarnessSideQuestionParams;
   cwd: string;
@@ -540,6 +644,11 @@ async function createCodexSideToolBridge(input: {
       sessionKey: sandboxSessionKey,
       workspaceDir: input.cwd,
     });
+    const modelContextTokens = resolveSideQuestionModelContextTokens(
+      input.params,
+      runtimeModel,
+      input.sessionAgentId,
+    );
     const allTools = createOpenClawCodingTools({
       agentId: input.sessionAgentId,
       sessionKey: sandboxSessionKey,
@@ -565,7 +674,8 @@ async function createCodexSideToolBridge(input: {
           ? (runtimeModel.compat as never)
           : undefined,
       modelApi: runtimeModel.api,
-      modelContextWindowTokens: runtimeModel.contextWindow,
+      modelContextTokens,
+      modelContextWindowTokens: modelContextTokens,
       modelAuthMode: resolveModelAuthMode(runtimeModel.provider, input.params.cfg, undefined, {
         workspaceDir: input.cwd,
       }),

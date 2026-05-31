@@ -166,6 +166,15 @@ describe("agent defaults schema", () => {
     expect(result.experimental?.localModelLean).toBe(true);
   });
 
+  it('accepts experimental.localModelLean: "auto"', () => {
+    const result = AgentDefaultsSchema.parse({
+      experimental: {
+        localModelLean: "auto",
+      },
+    })!;
+    expect(result.experimental?.localModelLean).toBe("auto");
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");

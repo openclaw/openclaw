@@ -80,7 +80,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
-import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import {
   applyAgentAutoCompactionGuard,
   applyAgentCompactionSettingsFromConfig,
@@ -218,6 +218,7 @@ import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
+import { readAgentModelContextTokens } from "../model-context-tokens.js";
 import {
   collectPromptCacheToolNames,
   beginPromptCacheObservation,
@@ -822,6 +823,27 @@ export async function runEmbeddedAttempt(
     config: params.config,
     agentId: params.agentId,
   });
+  const baseEffectiveModelContextTokens =
+    params.contextTokenBudget ??
+    readAgentModelContextTokens(params.model) ??
+    params.model.contextWindow;
+  const defaultUncappedModelContextTokens =
+    params.contextWindowInfo?.source === "agentContextTokens"
+      ? (params.contextWindowInfo.referenceTokens ?? baseEffectiveModelContextTokens)
+      : baseEffectiveModelContextTokens;
+  const resolvedAgentContextTokens = params.config
+    ? resolveAgentConfig(params.config, sessionAgentId)?.contextTokens
+    : undefined;
+  const agentContextTokens =
+    typeof resolvedAgentContextTokens === "number" && Number.isFinite(resolvedAgentContextTokens)
+      ? Math.floor(resolvedAgentContextTokens)
+      : undefined;
+  const effectiveModelContextTokens =
+    agentContextTokens && agentContextTokens > 0 && defaultUncappedModelContextTokens
+      ? Math.min(agentContextTokens, defaultUncappedModelContextTokens)
+      : (agentContextTokens ?? baseEffectiveModelContextTokens);
+  const effectiveModelContextWindowTokens =
+    effectiveModelContextTokens ?? params.model.contextWindow;
   const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
     config: params.config,
     sessionAgentId,
@@ -1147,7 +1169,8 @@ export async function runEmbeddedAttempt(
             modelId: params.modelId,
             modelCompat: extractModelCompat(params.model),
             modelApi: params.model.api,
-            modelContextWindowTokens: params.model.contextWindow,
+            modelContextTokens: effectiveModelContextTokens,
+            modelContextWindowTokens: effectiveModelContextWindowTokens,
             modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
               workspaceDir: effectiveWorkspace,
             }),
@@ -1441,6 +1464,8 @@ export async function runEmbeddedAttempt(
       tools: [...tools, ...normalizedBundledTools],
       config: params.config,
       agentId: sessionAgentId,
+      modelContextTokens: effectiveModelContextTokens,
+      modelContextWindowTokens: effectiveModelContextWindowTokens,
     });
     const uncompactedToolSchemaProjection = filterRuntimeCompatibleTools(
       projectedUncompactedEffectiveTools,
@@ -1512,6 +1537,8 @@ export async function runEmbeddedAttempt(
       tools: toolSearch.tools,
       config: params.config,
       agentId: sessionAgentId,
+      modelContextTokens: effectiveModelContextTokens,
+      modelContextWindowTokens: effectiveModelContextWindowTokens,
     });
     const toolSearchSchemaProjection = filterRuntimeCompatibleTools(projectedToolSearchTools);
     logRuntimeToolSchemaQuarantine({
@@ -2355,6 +2382,8 @@ export async function runEmbeddedAttempt(
         localModelLean: isLocalModelLeanEnabled({
           config: params.config,
           agentId: sessionAgentId,
+          modelContextTokens: effectiveModelContextTokens,
+          modelContextWindowTokens: effectiveModelContextWindowTokens,
         }),
         toolCount: effectiveTools.length,
         clientToolCount: clientToolDefs.length,

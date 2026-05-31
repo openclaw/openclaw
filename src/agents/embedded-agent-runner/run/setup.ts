@@ -5,6 +5,7 @@ import type {
   PluginHookBeforeModelResolveAttachment,
   PluginHookBeforeModelResolveEvent,
 } from "../../../plugins/types.js";
+import { resolveAgentConfig } from "../../agent-scope.js";
 import {
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
@@ -117,6 +118,7 @@ export function buildBeforeModelResolveAttachments(
 
 export function resolveEffectiveRuntimeModel(params: {
   cfg: OpenClawConfig | undefined;
+  agentId?: string;
   provider: string;
   contextConfigProvider?: string;
   modelId: string;
@@ -125,7 +127,7 @@ export function resolveEffectiveRuntimeModel(params: {
   ctxInfo: ContextWindowInfo;
   effectiveModel: ProviderRuntimeModel;
 } {
-  const ctxInfo = resolveContextWindowInfo({
+  const baseCtxInfo = resolveContextWindowInfo({
     cfg: params.cfg,
     provider: params.contextConfigProvider ?? params.provider,
     modelId: params.modelId,
@@ -133,6 +135,27 @@ export function resolveEffectiveRuntimeModel(params: {
     modelContextWindow: params.runtimeModel.contextWindow,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
+  const agentContextTokens =
+    params.cfg && params.agentId
+      ? resolveAgentConfig(params.cfg, params.agentId)?.contextTokens
+      : undefined;
+  const normalizedAgentContextTokens =
+    typeof agentContextTokens === "number" && Number.isFinite(agentContextTokens)
+      ? Math.floor(agentContextTokens)
+      : undefined;
+  const defaultUncappedTokens =
+    baseCtxInfo.source === "agentContextTokens"
+      ? (baseCtxInfo.referenceTokens ?? baseCtxInfo.tokens)
+      : baseCtxInfo.tokens;
+  const ctxInfo =
+    normalizedAgentContextTokens && normalizedAgentContextTokens > 0
+      ? {
+          ...baseCtxInfo,
+          tokens: Math.min(normalizedAgentContextTokens, defaultUncappedTokens),
+          referenceTokens: defaultUncappedTokens,
+          source: "agentContextTokens" as const,
+        }
+      : baseCtxInfo;
 
   // Apply contextTokens cap to model so session runtime's auto-compaction
   // threshold uses the effective limit, not the native context window.

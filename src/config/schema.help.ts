@@ -252,7 +252,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].experimental":
     "Per-agent experimental flags. Omitted fields inherit agents.defaults.experimental.",
   "agents.list[].experimental.localModelLean":
-    "Per-agent override for lean local-model mode. Enable it for one smaller local-model agent without trimming tools from every agent.",
+    'Per-agent override for lean local-model mode. Set true to force the trim for one smaller local-model agent, "auto" to trim only when the resolved model context cap is a binary 64K window or smaller, or false to opt out of an inherited default.',
   "agents.defaults.contextLimits":
     "Focused per-agent-context budget defaults for selected high-volume excerpts and injected prompt blocks. Use this to tune bounded read/injection sizes without reopening any unbounded call paths.",
   "agents.defaults.contextLimits.memoryGetMaxChars":
@@ -1127,7 +1127,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.experimental":
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.localModelLean":
-    "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
+    'Experimental local-model prompt trim. Set true to drop heavyweight default tools like browser, cron, and message for weaker local-model backends, or "auto" to do so only for resolved model context caps at a binary 64K window or smaller.',
   "agents.defaults.bootstrapPromptTruncationWarning":
     'Inject agent-visible warning text when bootstrap files are truncated: "off", "once", or "always" (default).',
   "agents.defaults.startupContext":

@@ -30,7 +30,7 @@ Treat them differently from normal config:
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
+`agents.defaults.experimental.localModelLean` is a pressure-release valve for weaker local-model setups. Set it to `true` to always drop three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Set it to `"auto"` to apply that same trim only when the resolved model context cap is a binary 64K window or smaller. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable, auto-select, or disable the same behavior for one configured agent.
 
 ### Why these three tools
 
@@ -50,6 +50,8 @@ Enable lean mode when you have already proved the model can talk to the Gateway 
 2. A normal agent turn fails with malformed tool calls, oversized prompts, or the model ignoring its tools.
 3. Toggling `localModelLean: true` clears the failure.
 
+Use `localModelLean: "auto"` when you want the safety valve on small-context models without trimming larger models that can handle the full default runtime. Auto mode stays off when OpenClaw cannot resolve a positive model context cap; use `true` for those models if you need to force the trim.
+
 ### When to leave it off
 
 If your backend handles the full default runtime cleanly, leave this off. Lean mode is a workaround, not a default. It exists because some local stacks need a smaller tool surface to behave; hosted models and well-resourced local rigs do not.
@@ -63,7 +65,7 @@ Lean mode also does not replace `tools.profile`, `tools.allow`/`tools.deny`, or 
   agents: {
     defaults: {
       experimental: {
-        localModelLean: true,
+        localModelLean: "auto",
       },
     },
   },

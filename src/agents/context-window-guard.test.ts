@@ -113,6 +113,168 @@ describe("context-window-guard", () => {
     });
   });
 
+  it("uses provider-level contextTokens as the model config cap", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            contextTokens: 32_000,
+            models: [
+              {
+                id: "qwen3:8b",
+                name: "Qwen 3 8B",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "ollama",
+      modelId: "qwen3:8b",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 32_000,
+    });
+  });
+
+  it("does not let provider-level contextTokens exceed a matched model contextWindow", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            contextTokens: 128_000,
+            models: [
+              {
+                id: "tiny",
+                name: "Tiny",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_000,
+                maxTokens: 256,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "ollama",
+      modelId: "tiny",
+      modelContextWindow: 128_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 32_000,
+    });
+  });
+
+  it("does not let provider-level contextTokens exceed runtime model metadata", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            contextTokens: 128_000,
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "ollama",
+      modelId: "dynamic-32k",
+      modelContextTokens: 128_000,
+      modelContextWindow: 32_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 32_000,
+    });
+  });
+
+  it("does not let provider-level contextTokens exceed provider contextWindow", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            contextTokens: 128_000,
+            contextWindow: 32_000,
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "ollama",
+      modelId: "dynamic-32k",
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 32_000,
+    });
+  });
+
+  it("uses provider contextWindow before runtime metadata for provider contextTokens", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            contextTokens: 96_000,
+            contextWindow: 128_000,
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "ollama",
+      modelId: "dynamic-32k",
+      modelContextWindow: 32_000,
+      defaultTokens: 200_000,
+    });
+
+    expect(info).toEqual({
+      source: "modelsConfig",
+      tokens: 96_000,
+    });
+  });
+
   it("does not read models config context windows across provider id variants", () => {
     const cfg = {
       models: {
