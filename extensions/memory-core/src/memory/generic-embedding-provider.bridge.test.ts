@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   EmbeddingInput,
   EmbeddingProviderCallOptions,
+  EmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/embedding-providers";
 import {
   createPluginRegistryFixture,
@@ -25,6 +26,11 @@ type CapturedCall = {
   kind: "embed" | "embedBatch";
   input: EmbeddingInput | EmbeddingInput[];
   options: EmbeddingProviderCallOptions | undefined;
+};
+
+type GenericBatchRuntime = EmbeddingProviderRuntime & {
+  sourceWideBatchEmbed: true;
+  batchEmbed: (batch: { chunks: Array<{ text: string }> }) => Promise<number[][]>;
 };
 
 let embeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
@@ -107,7 +113,7 @@ describe("memory-core generic embedding provider bridge", () => {
                   model: options.model,
                   dimensions: options.dimensions,
                 },
-              },
+              } as GenericBatchRuntime,
             };
           },
         });

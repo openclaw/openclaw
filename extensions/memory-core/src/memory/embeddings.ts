@@ -17,6 +17,8 @@ export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
 export type EmbeddingProviderRequest = string;
 type EmbeddingProviderFallback = string;
+type GenericEmbeddingProviderBatchRuntime = GenericEmbeddingProviderRuntime &
+  Pick<MemoryEmbeddingProviderRuntime, "sourceWideBatchEmbed" | "batchEmbed">;
 export type EmbeddingProviderRuntime = MemoryEmbeddingProviderRuntime;
 
 export type EmbeddingProviderResult = {
@@ -69,6 +71,7 @@ function adaptGenericRuntime(
   if (!runtime) {
     return undefined;
   }
+  const batchRuntime = runtime as GenericEmbeddingProviderBatchRuntime;
   return {
     id: runtime.id,
     ...(runtime.cacheKeyData ? { cacheKeyData: runtime.cacheKeyData } : {}),
@@ -78,8 +81,8 @@ function adaptGenericRuntime(
     ...(typeof runtime.inlineBatchTimeoutMs === "number"
       ? { inlineBatchTimeoutMs: runtime.inlineBatchTimeoutMs }
       : {}),
-    ...(runtime.sourceWideBatchEmbed === true ? { sourceWideBatchEmbed: true } : {}),
-    ...(runtime.batchEmbed ? { batchEmbed: runtime.batchEmbed } : {}),
+    ...(batchRuntime.sourceWideBatchEmbed === true ? { sourceWideBatchEmbed: true } : {}),
+    ...(batchRuntime.batchEmbed ? { batchEmbed: batchRuntime.batchEmbed } : {}),
   };
 }
 

@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
+import type { MemoryEmbeddingBatchOptions } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
 import {
@@ -27,6 +28,11 @@ type FixtureResponse = {
     prompt_tokens?: number;
     total_tokens?: number;
   };
+};
+
+type OpenAICompatibleBatchRuntime = {
+  sourceWideBatchEmbed?: boolean;
+  batchEmbed?: (batch: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 
 const servers: Array<{ close: () => Promise<void> }> = [];
@@ -225,9 +231,10 @@ describe("openai-compatible generic embedding provider", () => {
       }),
     );
 
+    const runtime = result.runtime as OpenAICompatibleBatchRuntime | undefined;
     expect(result.provider?.id).toBe("openai-compatible");
-    expect(result.runtime?.sourceWideBatchEmbed).toBe(true);
-    expect(result.runtime?.batchEmbed).toEqual(expect.any(Function));
+    expect(runtime?.sourceWideBatchEmbed).toBe(true);
+    expect(runtime?.batchEmbed).toEqual(expect.any(Function));
     expect(result.runtime?.cacheKeyData).toMatchObject({
       provider: "openai-compatible",
       baseUrl: server.baseUrl,
@@ -275,9 +282,10 @@ describe("openai-compatible generic embedding provider", () => {
         remote: { baseUrl: server.baseUrl },
       }),
     );
+    const runtime = result.runtime as OpenAICompatibleBatchRuntime | undefined;
 
     await expect(
-      result.runtime?.batchEmbed?.({
+      runtime?.batchEmbed?.({
         agentId: "main",
         chunks: [{ text: "alpha" }, { text: "beta" }],
         wait: true,
@@ -318,9 +326,10 @@ describe("openai-compatible generic embedding provider", () => {
         remote: { baseUrl: server.baseUrl },
       }),
     );
+    const runtime = result.runtime as OpenAICompatibleBatchRuntime | undefined;
 
     await expect(
-      result.runtime?.batchEmbed?.({
+      runtime?.batchEmbed?.({
         agentId: "main",
         chunks: [{ text: "alpha" }, { text: "beta" }],
         wait: true,

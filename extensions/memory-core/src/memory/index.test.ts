@@ -503,7 +503,8 @@ describe("memory index", () => {
   });
 
   it("bounds source-wide memory batches", async () => {
-    for (let index = 0; index < 1024; index += 1) {
+    const batchFileLimit = 2048;
+    for (let index = 0; index < batchFileLimit; index += 1) {
       await fs.writeFile(
         path.join(memoryDir, `2026-02-${String(index + 1).padStart(4, "0")}.md`),
         `# Log\nBounded memory line ${index}.`,
@@ -519,9 +520,9 @@ describe("memory index", () => {
       await manager.sync({ reason: "test" });
 
       expect(providerRuntimeBatchCalls).toHaveLength(2);
-      expect(providerRuntimeBatchCalls[0]).toHaveLength(1024);
+      expect(providerRuntimeBatchCalls[0]).toHaveLength(batchFileLimit);
       expect(providerRuntimeBatchCalls[1]).toHaveLength(1);
-      expect(providerRuntimeBatchCalls.flat()).toHaveLength(1025);
+      expect(providerRuntimeBatchCalls.flat()).toHaveLength(batchFileLimit + 1);
     } finally {
       await manager.close?.();
     }

@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./post-json.js", () => ({
   postJson: vi.fn(),
@@ -47,13 +47,11 @@ describe("postJsonWithRetry", () => {
   let postJsonWithRetry: typeof import("./batch-http.js").postJsonWithRetry;
   let retryAsyncMock: ReturnType<typeof vi.fn>;
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ postJsonWithRetry } = await import("./batch-http.js"));
     const postJsonModule = await import("./post-json.js");
     postJsonMock = vi.mocked(postJsonModule.postJson);
-  });
-
-  beforeEach(() => {
     vi.clearAllMocks();
     retryAsyncMock = vi.fn(async (run: () => Promise<unknown>) => await run());
   });

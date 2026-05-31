@@ -55,7 +55,7 @@ const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
-const SOURCE_WIDE_BATCH_MAX_FILES = 1024;
+const SOURCE_WIDE_BATCH_MAX_FILES = 2048;
 const SOURCE_WIDE_BATCH_MAX_CHUNKS = 4096;
 
 const log = createSubsystemLogger("memory");
@@ -89,14 +89,14 @@ function countBatchSources(items: Array<{ source: MemorySource }>): Record<strin
 }
 
 function formatBatchSourceLabel(counts: Record<string, number>): string {
-  const sources = Object.keys(counts).sort();
+  const sources = Object.keys(counts).toSorted();
   return sources.length > 0 ? sources.join("+") : "unknown";
 }
 
 function formatBatchSourceCounts(counts: Record<string, number>): string {
   return (
     Object.entries(counts)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([source, count]) => `${source}=${count}`)
       .join(",") || "none"
   );

@@ -15,28 +15,11 @@ export type EmbeddingProviderCallOptions = {
   inputType?: "query" | "document" | "semantic" | "classification" | "clustering";
 };
 
-export type EmbeddingProviderBatchChunk = {
-  text: string;
-  embeddingInput?: EmbeddingInput;
-};
-
-export type EmbeddingProviderBatchOptions = {
-  agentId: string;
-  chunks: EmbeddingProviderBatchChunk[];
-  wait: boolean;
-  concurrency: number;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  debug: (message: string, data?: Record<string, unknown>) => void;
-};
-
 export type EmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
   inlineQueryTimeoutMs?: number;
   inlineBatchTimeoutMs?: number;
-  sourceWideBatchEmbed?: boolean;
-  batchEmbed?: (options: EmbeddingProviderBatchOptions) => Promise<number[][] | null>;
 };
 
 export type EmbeddingProvider = {

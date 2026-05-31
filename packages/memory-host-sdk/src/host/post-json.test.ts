@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { postJson } from "./post-json.js";
-import { withRemoteHttpResponse } from "./remote-http.js";
 
 vi.mock("./remote-http.js", () => ({
   withRemoteHttpResponse: vi.fn(),
 }));
 
-const remoteHttpMock = vi.mocked(withRemoteHttpResponse);
+let postJson: typeof import("./post-json.js").postJson;
+let remoteHttpMock: ReturnType<
+  typeof vi.mocked<typeof import("./remote-http.js").withRemoteHttpResponse>
+>;
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), { status });
@@ -35,7 +36,11 @@ function streamingTextResponse(params: {
 }
 
 describe("postJson", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    const remoteHttpModule = await import("./remote-http.js");
+    ({ postJson } = await import("./post-json.js"));
+    remoteHttpMock = vi.mocked(remoteHttpModule.withRemoteHttpResponse);
     vi.clearAllMocks();
   });
 
