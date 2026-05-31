@@ -86,6 +86,7 @@ private enum class Tab(
   ProvidersModels(key = "providers-models", label = "Providers"),
 }
 
+/** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
 fun ShellScreen(
   viewModel: MainViewModel,
@@ -101,6 +102,8 @@ fun ShellScreen(
 
     LaunchedEffect(requestedHomeDestination) {
       val destination = requestedHomeDestination ?: return@LaunchedEffect
+      // HomeDestination is a one-shot command from launch intents and settings
+      // actions; consume it after translating to local shell state.
       activeTab =
         when (destination) {
           HomeDestination.Connect -> Tab.Overview
@@ -232,6 +235,8 @@ fun ShellScreen(
       }
 
       pendingTrust?.let { prompt ->
+        // Gateway certificate trust is modal across the shell so navigation
+        // cannot hide a changed TLS identity prompt.
         GatewayTrustDialog(
           prompt = prompt,
           onAccept = viewModel::acceptGatewayTrustPrompt,
@@ -242,6 +247,7 @@ fun ShellScreen(
   }
 }
 
+/** Modal trust decision for first-seen or changed gateway TLS fingerprints. */
 @Composable
 private fun GatewayTrustDialog(
   prompt: NodeRuntime.GatewayTrustPrompt,
@@ -421,6 +427,7 @@ private data class ModuleRow(
   val settingsRoute: SettingsRoute? = null,
 )
 
+/** Floating overview shortcut that keeps chat one tap away from module lists. */
 @Composable
 private fun OverviewChatButton(
   onClick: () -> Unit,
@@ -561,6 +568,7 @@ private data class RecentSessionListItem(
   val metadata: String,
 )
 
+/** Recent sessions panel that preserves the session key behind display labels. */
 @Composable
 private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
