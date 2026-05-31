@@ -955,12 +955,14 @@ describe("explicit live model discovery scope", () => {
   });
 
   it("does not preserve the cloud env marker for local Ollama endpoints", () => {
-    for (const apiKey of [
+    const remoteApiKeyRefs: SecretInput[] = [
       OLLAMA_REMOTE_API_KEY_ENV,
       "$OLLAMA_API_KEY",
       "${OLLAMA_API_KEY}",
       { source: "env", provider: "default", id: OLLAMA_REMOTE_API_KEY_ENV },
-    ]) {
+    ];
+
+    for (const apiKey of remoteApiKeyRefs) {
       const cfg = {
         plugins: {
           bundledDiscovery: "compat",
