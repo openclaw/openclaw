@@ -1012,7 +1012,7 @@ describe("preflightDiscordMessage", () => {
     expect(handleDiscordDmCommandDecisionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sender: {
-          id: "pk-member-1",
+          id: "pk:pk-member-1",
           tag: "Echo",
           name: "Echo",
         },

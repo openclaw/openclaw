@@ -24,6 +24,10 @@ async function loadDiscordSendRuntime() {
   return await discordSendRuntimePromise;
 }
 
+function resolveDiscordDmPairingSenderId(sender: DiscordSenderIdentity): string {
+  return sender.isPluralKit ? `pk:${sender.id}` : sender.id;
+}
+
 export async function resolveDiscordDmPreflightAccess(params: {
   preflight: DiscordMessagePreflightParams;
   author: User;
@@ -85,7 +89,7 @@ export async function resolveDiscordDmPreflightAccess(params: {
     // subsequent inbound messages. Previously this used the raw gateway
     // author id, which only matched non-PK users.
     sender: {
-      id: params.sender.id,
+      id: resolveDiscordDmPairingSenderId(params.sender),
       tag: params.sender.tag ?? formatDiscordUserTag(params.author),
       name: params.sender.name ?? params.author.username ?? undefined,
     },
