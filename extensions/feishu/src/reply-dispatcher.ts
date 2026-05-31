@@ -609,7 +609,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (streamingEnabled && renderMode === "card") {
           startStreaming();
         }
-        await typingCallbacks?.onReplyStart?.();
+        await Promise.resolve(typingCallbacks?.onReplyStart?.());
       },
       deliver: async (payload: ReplyPayload, info) => {
         if (info?.kind === "final") {
