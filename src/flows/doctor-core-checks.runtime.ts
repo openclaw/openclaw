@@ -128,9 +128,19 @@ function collectProviderCatalogModelFindings(params: {
   models: unknown;
 }): HealthFinding[] {
   const findings: HealthFinding[] = [];
-  let modelsIsArray: boolean;
+  let models: unknown[];
   try {
-    modelsIsArray = Array.isArray(params.models);
+    if (!Array.isArray(params.models)) {
+      return [
+        providerCatalogProjectionFinding({
+          providerId: params.providerId,
+          pluginId: params.pluginId,
+          message: `Provider catalog ${params.providerId} models value is invalid during doctor validation.`,
+          error: new Error("models must be an array"),
+        }),
+      ];
+    }
+    models = params.models;
   } catch (error) {
     return [
       providerCatalogProjectionFinding({
@@ -141,19 +151,9 @@ function collectProviderCatalogModelFindings(params: {
       }),
     ];
   }
-  if (!modelsIsArray) {
-    return [
-      providerCatalogProjectionFinding({
-        providerId: params.providerId,
-        pluginId: params.pluginId,
-        message: `Provider catalog ${params.providerId} models value is invalid during doctor validation.`,
-        error: new Error("models must be an array"),
-      }),
-    ];
-  }
   let indexes: number[];
   try {
-    indexes = [...params.models.keys()];
+    indexes = [...models.keys()];
   } catch (error) {
     return [
       providerCatalogProjectionFinding({
@@ -167,7 +167,7 @@ function collectProviderCatalogModelFindings(params: {
   for (const index of indexes) {
     let model: unknown;
     try {
-      model = params.models[index];
+      model = models[index];
     } catch (error) {
       findings.push(
         providerCatalogProjectionFinding({
