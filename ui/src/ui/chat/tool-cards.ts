@@ -238,7 +238,12 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
   return normalized.slice(0, 120);
 }
 
-function findFirstUnmatchedCard(cards: ToolCard[], id: string, name: string): ToolCard | undefined {
+function findFirstUnmatchedCard(
+  cards: ToolCard[],
+  id: string,
+  name: string,
+  fallbackMatchedCards: WeakSet<ToolCard>,
+): ToolCard | undefined {
   let nameOnlyCandidate: ToolCard | undefined;
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
@@ -248,7 +253,12 @@ function findFirstUnmatchedCard(cards: ToolCard[], id: string, name: string): To
     if (card.id === id) {
       return card;
     }
-    if (!nameOnlyCandidate && card.name === name && !card.outputText) {
+    if (
+      !nameOnlyCandidate &&
+      card.name === name &&
+      card.outputText === undefined &&
+      !fallbackMatchedCards.has(card)
+    ) {
       nameOnlyCandidate = card;
     }
   }
@@ -260,6 +270,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);
   const cards: ToolCard[] = [];
+  const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
 
   for (let index = 0; index < content.length; index++) {
@@ -284,11 +295,12 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
     if (kind === "toolresult" || kind === "tool_result") {
       const name = typeof item.name === "string" ? item.name : "tool";
       const cardId = resolveToolCardId(item, m, index, prefix);
-      const existing = findFirstUnmatchedCard(cards, cardId, name);
+      const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
+        fallbackMatchedCards.add(existing);
         existing.outputText = text;
         existing.preview = preview;
         if (isError !== undefined) {

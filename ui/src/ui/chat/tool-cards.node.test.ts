@@ -171,6 +171,43 @@ describe("tool-card extraction", () => {
     expect(cards[1]?.outputText).toBe("B contents");
   });
 
+  it("does not reuse nameless same-name calls after an empty result", () => {
+    const cards = extractToolCards(
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            name: "read",
+            input: { path: "empty.txt" },
+          },
+          {
+            type: "tool_use",
+            name: "read",
+            input: { path: "next.txt" },
+          },
+          {
+            type: "tool_result",
+            name: "read",
+            text: "",
+          },
+          {
+            type: "tool_result",
+            name: "read",
+            text: "Next contents",
+          },
+        ],
+      },
+      "msg:empty-result",
+    );
+
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.inputText).toBe('{\n  "path": "empty.txt"\n}');
+    expect(cards[0]?.outputText).toBe("");
+    expect(cards[1]?.inputText).toBe('{\n  "path": "next.txt"\n}');
+    expect(cards[1]?.outputText).toBe("Next contents");
+  });
+
   it("extracts tool result output from text block content arrays", () => {
     const cards = extractToolCards(
       {
