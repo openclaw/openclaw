@@ -36,8 +36,8 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
 
   // OpenAI
   gpt: "openai/gpt-5.5",
-  "gpt-mini": "openai/gpt-5.4-mini",
-  "gpt-nano": "openai/gpt-5.4-nano",
+  "gpt-mini": "openai/gpt-5.5-mini",
+  "gpt-nano": "openai/gpt-5.5-nano",
 
   // Google Gemini (3.x — flash-lite is GA; pro and flash are still preview)
   gemini: "google/gemini-3.1-pro-preview",

@@ -866,11 +866,7 @@ Azure OpenAI uses native transport and compat behavior but does not receive
 OpenClaw's hidden attribution headers — see the **Native vs OpenAI-compatible
 routes** accordion under [Advanced configuration](#advanced-configuration).
 
-For chat or Responses traffic on Azure (beyond image generation), use the
-onboarding flow or a dedicated Azure provider config — `openai.baseUrl` alone
-does not pick up the Azure API/auth shape. A separate
-`azure-openai-responses/*` provider exists; see
-the Server-side compaction accordion below.
+For chat/completions traffic on Azure (including `gpt-5.5` family), you can configure the standard `openai` provider block in `openclaw.json` with your Azure resource URL in `baseUrl`, `"api": "openai-completions"`, and specify your `api-version` under `params`. OpenClaw will automatically route completions to your Azure deployment.
 </Note>
 
 ## Advanced configuration

@@ -523,6 +523,7 @@ function createClient(
     Object.assign(headers, optionsHeaders);
   }
 
+  const isAzure = typeof model.baseUrl === "string" && model.baseUrl.toLowerCase().includes(".openai.azure.com");
   const defaultHeaders =
     model.provider === "cloudflare-ai-gateway"
       ? {
@@ -530,13 +531,38 @@ function createClient(
           Authorization: headers.Authorization ?? null,
           "cf-aig-authorization": `Bearer ${apiKey}`,
         }
-      : headers;
+      : {
+          ...headers,
+          ...(isAzure ? { "api-key": apiKey } : {}),
+        };
+
+  const defaultQuery: Record<string, string> = {};
+  if (model.params && typeof model.params === "object") {
+    for (const [key, val] of Object.entries(model.params)) {
+      if (typeof val === "string") {
+        defaultQuery[key] = val;
+      } else if (typeof val === "number" || typeof val === "boolean") {
+        defaultQuery[key] = String(val);
+      }
+    }
+  }
+
+  console.log('[DEBUG createClient]', {
+    provider: model.provider,
+    id: model.id,
+    api: model.api,
+    baseUrl: model.baseUrl,
+    isAzure,
+    defaultHeaders: { ...defaultHeaders, 'api-key': defaultHeaders['api-key'] ? 'REDACTED' : undefined, Authorization: defaultHeaders.Authorization ? 'REDACTED' : undefined },
+    defaultQuery,
+  });
 
   return new OpenAI({
     apiKey,
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    ...(Object.keys(defaultQuery).length > 0 ? { defaultQuery } : {}),
   });
 }
 
