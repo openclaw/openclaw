@@ -159,6 +159,7 @@ private data class CommandItem(
   val icon: ImageVector,
   val onClick: () -> Unit,
 ) {
+  /** Matches palette queries against both action title and explanatory subtitle. */
   fun matches(query: String): Boolean = query.isEmpty() || title.lowercase().contains(query) || subtitle.lowercase().contains(query)
 }
 
@@ -309,6 +310,7 @@ private fun providerCommandSubtitle(
   return "Configure model access"
 }
 
+/** Falls back to the canonical main-session label when gateway display names are blank. */
 private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"
 
 /** Formats command-palette session timestamps for compact rows. */

@@ -312,12 +312,14 @@ private enum class SessionFilter {
   Live,
 }
 
+/** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> "No sessions yet"
     SessionFilter.Live -> "No live session"
   }
 
+/** Empty-state body selected by the active session browser filter. */
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> "Start a new conversation and it will show up here."
@@ -335,4 +337,5 @@ private fun relativeSessionTime(updatedAtMs: Long): String {
   return "${hours / 24}d"
 }
 
+/** Falls back to the canonical main-session label when gateway display names are blank. */
 private fun displaySessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"
