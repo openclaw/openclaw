@@ -72,6 +72,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
+/** Mobile settings surface for device permissions, forwarding, location, and app preferences. */
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
   val context = LocalContext.current
@@ -131,6 +132,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
     }
   val quietHoursCanEnable = notificationForwardingEnabled && quietHoursDraftValid
+  // Compare stored values against normalized drafts so equivalent HH:mm input
+  // does not keep the save button enabled.
   val quietHoursDraftDirty =
     notificationForwardingQuietStart != (normalizedQuietStartDraft ?: notificationQuietStartDraft.trim()) ||
       notificationForwardingQuietEnd != (normalizedQuietEndDraft ?: notificationQuietEndDraft.trim())
@@ -344,6 +347,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
     val observer =
       LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_RESUME) {
+          // Permission and role screens live outside Compose; refresh all derived
+          // toggles whenever Android returns to this settings surface.
           micPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
@@ -1217,12 +1222,14 @@ fun SettingsSheet(viewModel: MainViewModel) {
   }
 }
 
+/** App entry shown in the notification-forwarding package picker. */
 data class InstalledApp(
   val label: String,
   val packageName: String,
   val isSystemApp: Boolean,
 )
 
+/** Reads launcher, recent-notification, and configured packages for the picker. */
 private fun queryInstalledApps(
   context: Context,
   configuredPackages: Set<String>,
@@ -1273,6 +1280,7 @@ private fun queryInstalledApps(
     .toList()
 }
 
+/** Merges package sources while excluding OpenClaw from its own forwarding filter. */
 internal fun resolveNotificationCandidatePackages(
   launcherPackages: Set<String>,
   recentPackages: List<String>,
