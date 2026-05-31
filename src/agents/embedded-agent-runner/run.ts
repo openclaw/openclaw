@@ -717,7 +717,26 @@ export async function runEmbeddedAgent(
         }
       }
       if (!modelResolution && pluginHarnessOwnsTransport) {
-        modelResolution = firstModelResolution;
+        for (const candidateProvider of modelResolutionProviders) {
+          const staticCatalogResolution = await resolveModelAsync(
+            candidateProvider,
+            modelId,
+            agentDir,
+            params.config,
+            {
+              skipAgentDiscovery: true,
+              allowBundledStaticCatalogFallback: true,
+              workspaceDir: resolvedWorkspace,
+              authProfileId: params.authProfileId,
+            },
+          );
+          if (staticCatalogResolution.model) {
+            resolvedModelProvider = candidateProvider;
+            modelResolution = staticCatalogResolution;
+            break;
+          }
+        }
+        modelResolution ??= firstModelResolution;
       }
       if (!modelResolution) {
         await ensureOpenClawModelsJson(params.config, agentDir, {
