@@ -354,6 +354,95 @@ describe("command gating", () => {
     expect(debugResult?.reply?.text).toContain("Debug overrides");
   });
 
+  it("redacts secret-shaped fields from full /config show replies", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "OPENCLAW_CONFIG_SHOW_CANARY_TOKEN_65623",
+            password: "OPENCLAW_CONFIG_SHOW_CANARY_PASSWORD_65623",
+          },
+          bind: "127.0.0.1",
+          port: 3210,
+        },
+        providers: {
+          openai: {
+            apiKey: "OPENCLAW_CONFIG_SHOW_CANARY_API_KEY_65623",
+            baseUrl: "https://api.example.test",
+            model: "gpt-test",
+          },
+        },
+        channels: {
+          telegram: {
+            botToken: "1234567890TELEGRAM_BOT_TOKEN",
+            enabled: true,
+          },
+          slack: {
+            token: {
+              source: "env",
+              provider: "default",
+              id: "SLACK_BOT_TOKEN",
+            },
+          },
+        },
+      },
+    });
+    const params = buildParams("/config show", {
+      commands: { config: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = true;
+
+    const result = await handleConfigCommand(params, true);
+    const output = result?.reply?.text ?? "";
+
+    expect(output).toContain("gateway");
+    expect(output).toContain("token");
+    expect(output).toContain("password");
+    expect(output).toContain("apiKey");
+    expect(output).toContain("OPENCLAW...EN_65623");
+    expect(output).toContain("OPENCLAW...RD_65623");
+    expect(output).toContain("OPENCLAW...EY_65623");
+    expect(output).toContain("SLACK_BOT_TOKEN");
+    expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_TOKEN_65623");
+    expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_PASSWORD_65623");
+    expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_API_KEY_65623");
+    expect(output).toContain('"mode": "token"');
+    expect(output).toContain('"bind": "127.0.0.1"');
+    expect(output).toContain('"port": 3210');
+    expect(output).toContain('"enabled": true');
+    expect(output).toContain('"model": "gpt-test"');
+    expect(output).toContain('"baseUrl": "https://api.example.test"');
+  });
+
+  it("redacts secret-shaped values from path-specific /config show replies", async () => {
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "OPENCLAW_CONFIG_SHOW_CANARY_TOKEN_65623",
+          },
+        },
+      },
+    });
+    const params = buildParams("/config show gateway.auth.token", {
+      commands: { config: true, text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.command.senderIsOwner = true;
+
+    const result = await handleConfigCommand(params, true);
+    const output = result?.reply?.text ?? "";
+
+    expect(output).toContain("Config gateway.auth.token");
+    expect(output).toContain("OPENCLAW...EN_65623");
+    expect(output).not.toContain("OPENCLAW_CONFIG_SHOW_CANARY_TOKEN_65623");
+  });
+
   it("returns explicit unauthorized replies for native privileged commands", async () => {
     const configParams = buildParams("/config show", {
       commands: { config: true, text: true },

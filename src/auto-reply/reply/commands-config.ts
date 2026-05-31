@@ -9,6 +9,7 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
+import { maskApiKey } from "../../utils/mask-api-key.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import {
@@ -26,6 +27,77 @@ import {
 } from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 import { parseDebugCommand } from "./debug-commands.js";
+
+const SECRET_CONFIG_SHOW_KEYS = new Set([
+  "apikey",
+  "key",
+  "token",
+  "password",
+  "secret",
+  "clientsecret",
+  "bottoken",
+  "webhooksecret",
+  "credential",
+  "credentials",
+  "privatekey",
+]);
+
+const SECRET_REF_VISIBLE_KEYS = new Set(["source", "provider", "id"]);
+
+function normalizeConfigShowKey(key: string): string {
+  return key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function isSecretShapedConfigShowKey(key: string | undefined): boolean {
+  if (!key) {
+    return false;
+  }
+  const normalized = normalizeConfigShowKey(key);
+  return (
+    SECRET_CONFIG_SHOW_KEYS.has(normalized) ||
+    normalized.endsWith("apikey") ||
+    normalized.endsWith("token") ||
+    normalized.includes("password") ||
+    normalized.endsWith("secret") ||
+    normalized.endsWith("privatekey") ||
+    normalized.endsWith("credential") ||
+    normalized.endsWith("credentials")
+  );
+}
+
+function isSecretRefDisplayObject(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & { source: string; id: string } {
+  return typeof value.source === "string" && typeof value.id === "string";
+}
+
+function redactConfigShowValue(
+  value: unknown,
+  path: readonly string[] = [],
+  parentKeyIsSecret = false,
+): unknown {
+  const keyIsSecret = parentKeyIsSecret || isSecretShapedConfigShowKey(path[path.length - 1]);
+  if (typeof value === "string") {
+    return keyIsSecret ? maskApiKey(value) : value;
+  }
+  if (value === null || value === undefined || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactConfigShowValue(item, path, keyIsSecret));
+  }
+  const record = value as Record<string, unknown>;
+  const isSecretRef = isSecretRefDisplayObject(record);
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    if (isSecretRef && SECRET_REF_VISIBLE_KEYS.has(key)) {
+      result[key] = child;
+      continue;
+    }
+    result[key] = redactConfigShowValue(child, [...path, key], keyIsSecret);
+  }
+  return result;
+}
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -122,7 +194,8 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         };
       }
       const value = getConfigValueAtPath(parsedBase, parsedPath.path);
-      const rendered = JSON.stringify(value ?? null, null, 2);
+      const displayValue = redactConfigShowValue(value ?? null, parsedPath.path);
+      const rendered = JSON.stringify(displayValue, null, 2);
       return {
         shouldContinue: false,
         reply: {
@@ -130,7 +203,7 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
         },
       };
     }
-    const json = JSON.stringify(parsedBase, null, 2);
+    const json = JSON.stringify(redactConfigShowValue(parsedBase), null, 2);
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config (raw):\n\`\`\`json\n${json}\n\`\`\`` },
