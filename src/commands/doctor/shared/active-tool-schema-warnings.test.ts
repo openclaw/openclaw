@@ -105,6 +105,33 @@ describe("active tool schema doctor warnings", () => {
     ]);
   });
 
+  it("warns about unreadable active tool entries without crashing", () => {
+    const healthy = tool("message", { type: "object", properties: {} });
+    toolState.tools = new Proxy([healthy] as AnyAgentTool[], {
+      get(target, property, receiver) {
+        if (property === "0") {
+          throw new Error("fuzzplugin tool entry getter exploded");
+        }
+        if (property === "1") {
+          return healthy;
+        }
+        if (property === "length") {
+          return 2;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(
+      collectActiveToolSchemaProjectionWarnings({
+        cfg: {},
+        env: { HOME: "/tmp/openclaw-test" },
+      }),
+    ).toEqual([
+      '- agents.main: active tool "tool[0]" has unsupported runtime input schema (tool[0] is unreadable). OpenClaw will quarantine this tool at runtime; fix or disable the plugin, or remove the tool from active allowlists.',
+    ]);
+  });
+
   it("does not validate disabled plugin mode", () => {
     toolState.tools = [tool("dofbot_move_angles", { type: "array", items: { type: "number" } })];
     toolState.pluginIds = { dofbot_move_angles: "dofbot" };

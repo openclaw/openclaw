@@ -171,6 +171,7 @@ export {
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
 export {
+  filterProviderNormalizableTools,
   inspectRuntimeToolInputSchemas,
   projectRuntimeToolInputSchema,
   type RuntimeToolInputSchemaJson,

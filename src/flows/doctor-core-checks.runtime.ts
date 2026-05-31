@@ -547,7 +547,12 @@ function toolSchemaDiagnosticToFinding(params: {
   tools: readonly AnyAgentTool[];
   diagnostic: RuntimeToolSchemaDiagnostic;
 }): HealthFinding {
-  const tool = params.tools[params.diagnostic.toolIndex];
+  let tool: AnyAgentTool | undefined;
+  try {
+    tool = params.tools[params.diagnostic.toolIndex];
+  } catch {
+    tool = undefined;
+  }
   const pluginId = tool ? getPluginToolMeta(tool)?.pluginId : undefined;
   const owner = pluginId ? ` from plugin ${pluginId}` : "";
   const agent = `Agent ${params.agentId} `;
@@ -601,6 +606,7 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
     modelId: params.modelRef.model,
     warn: () => {},
   });
+  const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const normalizedTools = normalizeAgentRuntimeTools({
     tools: activeBundleTools,
     provider: params.modelRef.provider,
@@ -610,11 +616,22 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
     modelId: params.modelRef.model,
     modelApi: params.model.api,
     model: params.model,
+    onPreNormalizationSchemaDiagnostics: (diagnostics) =>
+      preNormalizationDiagnostics.push(...diagnostics),
   });
-  return collectToolSchemaFindings({
-    agentId: params.agentId,
-    tools: normalizedTools,
-  });
+  return [
+    ...preNormalizationDiagnostics.map((diagnostic) =>
+      toolSchemaDiagnosticToFinding({
+        agentId: params.agentId,
+        tools: activeBundleTools,
+        diagnostic,
+      }),
+    ),
+    ...collectToolSchemaFindings({
+      agentId: params.agentId,
+      tools: normalizedTools,
+    }),
+  ];
 }
 
 function bundleMcpRuntimeLoadFailureFinding(error: unknown): HealthFinding {
@@ -797,6 +814,7 @@ export async function collectRuntimeToolSchemaFindings(
         allowGatewaySubagentBinding: true,
         emitBeforeToolCallDiagnostics: false,
       });
+      const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
       const normalizedTools = normalizeAgentRuntimeTools({
         tools,
         provider: modelRef.provider,
@@ -806,8 +824,17 @@ export async function collectRuntimeToolSchemaFindings(
         modelId: modelRef.model,
         modelApi: model.api,
         model,
+        onPreNormalizationSchemaDiagnostics: (diagnostics) =>
+          preNormalizationDiagnostics.push(...diagnostics),
       });
       findings.push(
+        ...preNormalizationDiagnostics.map((diagnostic) =>
+          toolSchemaDiagnosticToFinding({
+            agentId,
+            tools,
+            diagnostic,
+          }),
+        ),
         ...collectToolSchemaFindings({
           agentId,
           tools: normalizedTools,
