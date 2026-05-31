@@ -21,6 +21,7 @@ describe("snes-studio-hardware-proof", () => {
         PATH: "/opt/homebrew/bin:/usr/local/bin",
       },
       (path) => path === "/Users/openclaw/Applications/Snes9x.app/Contents/MacOS/Snes9x",
+      "darwin",
     );
 
     expect(detected.snes9x).toBe("/Users/openclaw/Applications/Snes9x.app/Contents/MacOS/Snes9x");

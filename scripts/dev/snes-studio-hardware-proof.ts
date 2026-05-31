@@ -24,6 +24,7 @@ import {
 } from "../../packages/snes-studio-core/src/index.ts";
 
 type FileExists = (path: string) => boolean;
+type RuntimePlatform = ReturnType<typeof platform>;
 type ProcessRunner = (
   command: string,
   args: string[],
@@ -98,9 +99,13 @@ function pathEntries(env: NodeJS.ProcessEnv = process.env): string[] {
   return (env.PATH ?? "").split(delimiter).filter(Boolean);
 }
 
-function emulatorExecutableCandidates(name: SnesEmulatorKind, env: NodeJS.ProcessEnv): string[] {
+function emulatorExecutableCandidates(
+  name: SnesEmulatorKind,
+  env: NodeJS.ProcessEnv,
+  runtimePlatform: RuntimePlatform,
+): string[] {
   const fromPath = pathEntries(env).map((entry) => join(entry, name));
-  if (platform() !== "darwin") {
+  if (runtimePlatform !== "darwin") {
     return fromPath;
   }
   const appName =
@@ -122,19 +127,23 @@ function emulatorExecutableCandidates(name: SnesEmulatorKind, env: NodeJS.Proces
 export function detectSnesEmulators(
   env: NodeJS.ProcessEnv = process.env,
   fileExists: FileExists = existsSync,
+  runtimePlatform: RuntimePlatform = platform(),
 ): SnesEmulatorKind[] {
   return (
-    Object.keys(detectSnesEmulatorExecutables(env, fileExists)) as SnesEmulatorKind[]
+    Object.keys(
+      detectSnesEmulatorExecutables(env, fileExists, runtimePlatform),
+    ) as SnesEmulatorKind[]
   ).toSorted();
 }
 
 export function detectSnesEmulatorExecutables(
   env: NodeJS.ProcessEnv = process.env,
   fileExists: FileExists = existsSync,
+  runtimePlatform: RuntimePlatform = platform(),
 ): Partial<Record<SnesEmulatorKind, string>> {
   const detected: Partial<Record<SnesEmulatorKind, string>> = {};
   for (const name of ["ares", "bsnes", "mesen", "snes9x"] as const) {
-    const executable = emulatorExecutableCandidates(name, env).find((candidate) =>
+    const executable = emulatorExecutableCandidates(name, env, runtimePlatform).find((candidate) =>
       fileExists(candidate),
     );
     if (executable) {
