@@ -71,6 +71,7 @@ export {
 
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
+export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
@@ -1355,6 +1356,33 @@ export function formatAssistantErrorText(
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+}
+
+export function isRawAssistantErrorPassthrough(params: {
+  friendlyError?: string;
+  rawError?: string;
+}): boolean {
+  const friendlyError = params.friendlyError?.trim();
+  const rawError = params.rawError?.trim();
+  if (!friendlyError || !rawError) {
+    return false;
+  }
+  return (
+    friendlyError === rawError ||
+    (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`)
+  );
+}
+
+export function formatUserFacingAssistantErrorText(
+  msg: AssistantMessage,
+  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+): string {
+  const friendlyError = formatAssistantErrorText(msg, opts);
+  const rawError = msg.errorMessage?.trim();
+  const safeFriendlyError = isRawAssistantErrorPassthrough({ friendlyError, rawError })
+    ? undefined
+    : friendlyError;
+  return (safeFriendlyError || GENERIC_ASSISTANT_ERROR_TEXT).trim();
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {

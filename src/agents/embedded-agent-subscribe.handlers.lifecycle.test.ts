@@ -86,6 +86,35 @@ function firstWarnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unkno
 }
 
 describe("handleAgentEnd", () => {
+  it("suppresses raw assistant error messages in user-facing lifecycle events", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "SECRET_CANARY_69737",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+
+    await handleAgentEnd(ctx);
+
+    const meta = firstWarnMeta(ctx);
+    expect(meta.error).not.toContain("SECRET_CANARY_69737");
+    expect(meta.error).toBe("LLM request failed.");
+    const userFacingLifecycleText = JSON.stringify(onAgentEvent.mock.calls);
+    expect(userFacingLifecycleText).not.toContain("SECRET_CANARY_69737");
+    expect(userFacingLifecycleText).toContain("LLM request failed.");
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "LLM request failed.",
+      },
+    });
+  });
+
   it("logs the resolved error message when run ends with assistant error", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(
@@ -205,13 +234,13 @@ describe("handleAgentEnd", () => {
 
     const meta = firstWarnMeta(ctx);
     expect(meta.event).toBe("embedded_run_agent_end");
-    expect(meta.error).toBe("x-api-key: ***");
+    expect(meta.error).toBe("LLM request failed.");
     expect(meta.rawErrorPreview).toBe("x-api-key: ***");
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "x-api-key: ***",
+        error: "LLM request failed.",
       },
     });
   });

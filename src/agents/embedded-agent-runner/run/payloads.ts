@@ -25,8 +25,8 @@ import { extractAssistantTextForPhase } from "../../../shared/chat-message-conte
 import { parseInlineDirectives } from "../../../utils/directive-tags.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
-  formatAssistantErrorText,
   formatRawAssistantErrorForUi,
+  formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
   isRawApiErrorPayload,
   normalizeTextForComparison,
@@ -299,7 +299,7 @@ export function buildEmbeddedRunPayloads(params: {
     assistantForPayload && lastAssistantNeedsErrorSurface
       ? suppressAssistantArtifacts
         ? undefined
-        : formatAssistantErrorText(assistantForPayload, {
+        : formatUserFacingAssistantErrorText(assistantForPayload, {
             cfg: params.config,
             sessionKey: params.sessionKey,
             provider: params.provider,
