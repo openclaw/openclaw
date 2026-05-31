@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/amazon-bedrock-mantle-provider",
-  "version": "2026.5.31",
+  "version": "2026.5.31-beta.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/amazon-bedrock-mantle-provider",
-      "version": "2026.5.31",
+      "version": "2026.5.31-beta.1",
       "dependencies": {
         "@anthropic-ai/sdk": "0.100.1",
         "@aws/bedrock-token-generator": "1.1.0"
