@@ -668,8 +668,11 @@ describe("resolvePluginTools optional tools", () => {
     const observed: Array<{ phase: string; pluginId?: string }> = [];
 
     class AccessorTool {
+      #name = "class_tool";
+      #parameters = { type: "object", properties: {} };
+
       get name() {
-        return "class_tool";
+        return this.#name;
       }
 
       get description() {
@@ -677,7 +680,7 @@ describe("resolvePluginTools optional tools", () => {
       }
 
       get parameters() {
-        return { type: "object", properties: {} };
+        return this.#parameters;
       }
 
       prepareArguments(args: unknown) {
