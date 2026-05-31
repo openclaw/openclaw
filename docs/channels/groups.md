@@ -2,6 +2,7 @@
 summary: "Group chat behavior across surfaces (Discord/iMessage/Matrix/Microsoft Teams/Signal/Slack/Telegram/WhatsApp/Zalo)"
 read_when:
   - Changing group chat behavior or mention gating
+  - Scoping mentionPatterns to specific group conversations
 title: "Groups"
 sidebarTitle: "Groups"
 ---
@@ -358,10 +359,89 @@ Replying to a bot message counts as an implicit mention when the channel support
 }
 ```
 
+## Scope configured mention patterns
+
+Configured `mentionPatterns` are regex fallback triggers. Use them when the
+platform does not expose a native bot mention, or when you want plain text such
+as `openclaw:` to count as a mention. Native platform mentions are separate:
+when Discord, Slack, Telegram, Matrix, or another channel can prove the message
+explicitly mentioned the bot, that native mention still triggers even if
+configured regex patterns are denied.
+
+By default, configured mention patterns apply everywhere that channel passes
+provider and conversation facts into mention detection. To keep broad patterns
+from waking the agent in every group, scope them per channel with
+`channels.<channel>.mentionPatterns`.
+
+Use `mode: "deny"` when regex mention patterns should be off by default for a
+channel, then opt in specific rooms with `allowIn`:
+
+```json5
+{
+  messages: {
+    groupChat: {
+      mentionPatterns: ["\\bopenclaw\\b", "\\bops bot\\b"],
+    },
+  },
+  channels: {
+    slack: {
+      mentionPatterns: {
+        mode: "deny",
+        allowIn: ["C0123OPS"],
+      },
+    },
+  },
+}
+```
+
+Use the default `mode: "allow"` (or omit `mode`) when regex mention patterns
+should apply broadly, then turn them off in noisy rooms with `denyIn`:
+
+```json5
+{
+  messages: {
+    groupChat: {
+      mentionPatterns: ["\\bopenclaw\\b"],
+    },
+  },
+  channels: {
+    telegram: {
+      mentionPatterns: {
+        denyIn: ["-1001234567890", "-1001234567890:topic:42"],
+      },
+    },
+  },
+}
+```
+
+Policy resolution:
+
+| Field           | Effect                                                                                                                |
+| --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `mode: "allow"` | Regex mention patterns are enabled unless the conversation ID is in `denyIn`. This is the default.                    |
+| `mode: "deny"`  | Regex mention patterns are disabled unless the conversation ID is in `allowIn`.                                       |
+| `allowIn`       | Conversation IDs where regex mention patterns are enabled in deny mode.                                               |
+| `denyIn`        | Conversation IDs where regex mention patterns are disabled. `denyIn` wins over `allowIn` if both include the same ID. |
+
+Supported scoped regex policy today:
+
+| Channel  | IDs used in `allowIn` / `denyIn`                             |
+| -------- | ------------------------------------------------------------ |
+| Discord  | Discord channel IDs.                                         |
+| Matrix   | Matrix room IDs.                                             |
+| Slack    | Slack channel IDs.                                           |
+| Telegram | Group chat IDs, or `chatId:topic:threadId` for forum topics. |
+| WhatsApp | WhatsApp conversation IDs such as `123@g.us`.                |
+
+Account-level channel configs can set the same policy under
+`channels.<channel>.accounts.<accountId>.mentionPatterns` when that channel
+supports multiple accounts. Account policy takes precedence over the top-level
+channel policy for that account.
+
 <AccordionGroup>
   <Accordion title="Mention gating notes">
     - `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored.
-    - Surfaces that provide explicit mentions still pass; patterns are a fallback.
+    - Surfaces that provide explicit mentions still pass; configured regex patterns are a fallback.
     - `channels.<channel>.mentionPatterns.mode: "deny"` disables configured mention patterns by default for that channel; opt selected conversations back in with `allowIn`.
     - `channels.<channel>.mentionPatterns.denyIn` disables configured mention patterns for specific conversation IDs while native platform @mentions still pass.
     - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
