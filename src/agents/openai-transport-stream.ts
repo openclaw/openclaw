@@ -2545,6 +2545,7 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
+  let sawStopFinishReason = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   const finishCurrentBlock = () => {
@@ -2693,6 +2694,9 @@ async function processOpenAICompletionsStream(
     if (choice.finish_reason) {
       const finishReasonResult = mapStopReason(choice.finish_reason);
       output.stopReason = finishReasonResult.stopReason;
+      if (finishReasonResult.stopReason === "stop") {
+        sawStopFinishReason = true;
+      }
       if (finishReasonResult.errorMessage) {
         output.errorMessage = finishReasonResult.errorMessage;
       }
@@ -2804,8 +2808,14 @@ async function processOpenAICompletionsStream(
   currentBlock = null;
   flushPendingPostToolCallDeltas();
   const hasToolCalls = output.content.some((block) => block.type === "toolCall");
+  const hasVisibleText = output.content.some(
+    (block) => block.type === "text" && block.text.trim().length > 0,
+  );
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
+  }
+  if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
+    output.stopReason = "toolUse";
   }
   if (hasToolCalls && output.stopReason !== "toolUse") {
     output.content = output.content.filter((block) => block.type !== "toolCall");

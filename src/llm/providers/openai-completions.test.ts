@@ -138,7 +138,23 @@ describe("OpenAI-compatible completions params", () => {
 });
 
 describe("openai-completions stop-reason tool-call guard", () => {
-  it("strips toolCall blocks when finish_reason is stop but tool_calls were accumulated", async () => {
+  it("promotes silent tool_calls with finish_reason stop to toolUse", async () => {
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_1", "bash", '{"cmd":"ls"}'),
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("toolUse");
+    const toolCalls = result.content.filter((b) => b.type === "toolCall");
+    expect(toolCalls).toHaveLength(1);
+  });
+
+  it("strips toolCall blocks when finish_reason is stop after visible text", async () => {
     mockChunksRef.chunks = [
       makeTextChunk("Hello"),
       makeToolCallChunk("call_1", "bash", '{"cmd":"ls"}'),
