@@ -29,15 +29,12 @@ function encodeSessionKey(sessionKey: string): string {
 
 describe("msteams doctor state migration", () => {
   let stateDir = "";
-  let storePath = "";
   let env: NodeJS.ProcessEnv;
 
   beforeEach(async () => {
     resetPluginStateStoreForTests();
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-doctor-"));
-    storePath = path.join(stateDir, "sessions");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    await fs.mkdir(storePath, { recursive: true });
   });
 
   afterEach(async () => {
@@ -45,25 +42,42 @@ describe("msteams doctor state migration", () => {
   });
 
   it("imports legacy feedback learnings into plugin state", async () => {
-    const sessionKey = "msteams:user1";
-    const sourcePath = path.join(storePath, `${encodeSessionKey(sessionKey)}.learnings.json`);
-    await fs.writeFile(sourcePath, JSON.stringify(["Be concise", "Use examples"]));
+    const agentStoreTemplate = path.join(stateDir, "agents", "{agentId}", "sessions");
+    const mainStorePath = path.join(stateDir, "agents", "main", "sessions");
+    const workStorePath = path.join(stateDir, "agents", "work", "sessions");
+    const encodedSessionKey = "msteams:user1";
+    const sanitizedSessionKey = "msteams:user2";
+    const encodedSourcePath = path.join(
+      mainStorePath,
+      `${encodeSessionKey(encodedSessionKey)}.learnings.json`,
+    );
+    const sanitizedSourcePath = path.join(workStorePath, "msteams_user2.learnings.json");
+    await fs.mkdir(mainStorePath, { recursive: true });
+    await fs.mkdir(workStorePath, { recursive: true });
+    await fs.writeFile(encodedSourcePath, JSON.stringify(["Be concise", "Use examples"]));
+    await fs.writeFile(sanitizedSourcePath, JSON.stringify(["Prefer cards"]));
 
     const migration = stateMigrations[0];
     await expect(
       migration.detectLegacyState({
-        config: { session: { store: storePath } },
+        config: {
+          session: { store: agentStoreTemplate },
+          agents: { list: [{ id: "work" }] },
+        },
         env,
         stateDir,
         oauthDir: path.join(stateDir, "oauth"),
         context: createDoctorContext(env),
       }),
     ).resolves.toMatchObject({
-      preview: [expect.stringContaining("1 file")],
+      preview: [expect.stringContaining("2 files")],
     });
 
     const result = await migration.migrateLegacyState({
-      config: { session: { store: storePath } },
+      config: {
+        session: { store: agentStoreTemplate },
+        agents: { list: [{ id: "work" }] },
+      },
       env,
       stateDir,
       oauthDir: path.join(stateDir, "oauth"),
@@ -72,21 +86,26 @@ describe("msteams doctor state migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      expect.stringContaining("Migrated 1 Microsoft Teams feedback-learning entry"),
+      expect.stringContaining("Migrated 2 Microsoft Teams feedback-learning entries"),
+      expect.stringContaining("Archived Microsoft Teams feedback-learning legacy source"),
       expect.stringContaining("Archived Microsoft Teams feedback-learning legacy source"),
     ]);
-    await expect(fs.access(sourcePath)).rejects.toThrow();
-    await expect(fs.access(`${sourcePath}.migrated`)).resolves.toBeUndefined();
-    await expect(
-      createDoctorContext(env)
-        .openPluginStateKeyedStore({
-          namespace: "feedback-learnings",
-          maxEntries: 10_000,
-        })
-        .lookup(encodeSessionKey(sessionKey)),
-    ).resolves.toMatchObject({
-      sessionKey,
+    await expect(fs.access(encodedSourcePath)).rejects.toThrow();
+    await expect(fs.access(sanitizedSourcePath)).rejects.toThrow();
+    await expect(fs.access(`${encodedSourcePath}.migrated`)).resolves.toBeUndefined();
+    await expect(fs.access(`${sanitizedSourcePath}.migrated`)).resolves.toBeUndefined();
+
+    const store = createDoctorContext(env).openPluginStateKeyedStore({
+      namespace: "feedback-learnings",
+      maxEntries: 10_000,
+    });
+    await expect(store.lookup(encodeSessionKey(encodedSessionKey))).resolves.toMatchObject({
+      sessionKey: encodedSessionKey,
       learnings: ["Be concise", "Use examples"],
+    });
+    await expect(store.lookup(encodeSessionKey(sanitizedSessionKey))).resolves.toMatchObject({
+      sessionKey: sanitizedSessionKey,
+      learnings: ["Prefer cards"],
     });
   });
 });
