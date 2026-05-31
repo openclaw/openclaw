@@ -473,13 +473,23 @@ export function createDiscordDraftPreviewController(params: {
 
 function normalizeReasoningProgressLine(text: string): string {
   return text
-    .replace(/^\s*(?:>\s*)?(?:Reasoning:\s*|Thinking(?::\s*|\.{1,3}\s*|\s*(?:\r?\n|\r)\s*))/i, "")
+    .replace(
+      /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i,
+      "",
+    )
     .replace(/\s+/g, " ")
     .trim();
 }
 
+function normalizeReasoningProgressInput(text: string): string {
+  const normalized = normalizeReasoningProgressLine(text);
+  const italic = normalized.match(/^_(.*)_$/u);
+  return (italic?.[1] ?? normalized).trim();
+}
+
 function formatReasoningProgressDisplayLine(text: string, maxChars: number): string {
-  const formatted = normalizeReasoningProgressLine(formatReasoningMessage(text));
+  const normalizedText = normalizeReasoningProgressInput(text);
+  const formatted = normalizeReasoningProgressLine(formatReasoningMessage(normalizedText));
   if (!formatted) {
     return "";
   }
@@ -556,7 +566,7 @@ function mergeReasoningProgressText(
 }
 
 function isReasoningSnapshotText(text: string): boolean {
-  return /^\s*(?:>\s*)?(?:Reasoning:\s*|Thinking(?::\s*|\.{1,3}\s*|\s*(?:\r?\n|\r)\s*))/i.test(
+  return /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i.test(
     text,
   );
 }
