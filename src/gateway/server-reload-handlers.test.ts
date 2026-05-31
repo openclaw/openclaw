@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
   createGatewayReloadHandlers,
@@ -24,28 +26,48 @@ type GmailWatcherRestartParams = {
 type StartGmailWatcherWithLogs = (params: GmailWatcherRestartParams) => Promise<void>;
 type StopGmailWatcher = () => Promise<void>;
 
-const hoisted = vi.hoisted(() => ({
-  startGmailWatcherWithLogs: vi.fn<StartGmailWatcherWithLogs>(async () => {}),
-  stopGmailWatcher: vi.fn<StopGmailWatcher>(async () => {}),
-  activeTaskCount: { value: 0 },
-  activeTaskBlockers: [] as Array<{
-    taskId: string;
-    status: "queued" | "running";
-    runtime: "subagent" | "acp" | "cli" | "cron";
-    runId?: string;
-    label?: string;
-    title?: string;
-  }>,
-  activeEmbeddedRunCount: { value: 0 },
-  activeEmbeddedRunSessionIds: [] as string[],
-  activeEmbeddedRunSessionKeys: [] as string[],
-  markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
-  runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
-  reloadEvents: [] as string[],
-  resetModelCatalogCache: vi.fn(() => {}),
-  clearCurrentProviderAuthState: vi.fn(() => {}),
-  warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
-  disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
+const hoisted = vi.hoisted(() => {
+  const reloadEvents: string[] = [];
+  const builtCrons: Array<{ start: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }> = [];
+  const buildGatewayCronService = vi.fn(() => {
+    const cron = {
+      start: vi.fn(async () => {
+        reloadEvents.push("cron-start");
+      }),
+      stop: vi.fn(),
+    };
+    builtCrons.push(cron);
+    return { cron, storePath: "/tmp/cron.json", cronEnabled: true };
+  });
+  return {
+    startGmailWatcherWithLogs: vi.fn<StartGmailWatcherWithLogs>(async () => {}),
+    stopGmailWatcher: vi.fn<StopGmailWatcher>(async () => {}),
+    activeTaskCount: { value: 0 },
+    activeTaskBlockers: [] as Array<{
+      taskId: string;
+      status: "queued" | "running";
+      runtime: "subagent" | "acp" | "cli" | "cron";
+      runId?: string;
+      label?: string;
+      title?: string;
+    }>,
+    activeEmbeddedRunCount: { value: 0 },
+    activeEmbeddedRunSessionIds: [] as string[],
+    activeEmbeddedRunSessionKeys: [] as string[],
+    markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
+    runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
+    reloadEvents,
+    builtCrons,
+    buildGatewayCronService,
+    resetModelCatalogCache: vi.fn(() => {}),
+    clearCurrentProviderAuthState: vi.fn(() => {}),
+    warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
+    disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
+  };
+});
+
+vi.mock("./server-cron.js", () => ({
+  buildGatewayCronService: hoisted.buildGatewayCronService,
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
@@ -123,13 +145,18 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 
-function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
+type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlers>[0];
+
+function createReloadHandlersForTest(
+  logReload = { info: vi.fn(), warn: vi.fn() },
+  overrides: Partial<ReloadHandlerParams> = {},
+) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const heartbeatRunner = {
     stop: vi.fn(),
     updateConfig: vi.fn(),
   };
-  return createGatewayReloadHandlers({
+  const params: ReloadHandlerParams = {
     deps: {} as never,
     broadcast: vi.fn(),
     getState: () => ({
@@ -154,7 +181,9 @@ function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() 
     logCron: { error: vi.fn() },
     logReload,
     createHealthMonitor: () => null,
-  });
+    ...overrides,
+  };
+  return createGatewayReloadHandlers(params);
 }
 
 afterEach(() => {
@@ -169,11 +198,119 @@ afterEach(() => {
   hoisted.markRestartAbortedMainSessions.mockClear();
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
   hoisted.reloadEvents.length = 0;
+  hoisted.builtCrons.length = 0;
+  hoisted.buildGatewayCronService.mockClear();
   hoisted.resetModelCatalogCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
   hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+});
+
+function createCronReloadPlan(overrides: Partial<GatewayReloadPlan> = {}): GatewayReloadPlan {
+  return {
+    changedPaths: ["cron.jobs"],
+    restartGateway: false,
+    restartReasons: [],
+    hotReasons: ["cron.jobs"],
+    reloadHooks: false,
+    restartGmailWatcher: false,
+    restartCron: true,
+    restartHeartbeat: false,
+    restartHealthMonitor: false,
+    reloadPlugins: false,
+    restartChannels: new Set(),
+    disposeMcpRuntimes: false,
+    noopPaths: [],
+    ...overrides,
+  };
+}
+
+describe("gateway cron hot reload handlers", () => {
+  it("waits for channel delivery readiness before starting restarted cron", async () => {
+    vi.useFakeTimers();
+    let connected = false;
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const oldCron = { start: vi.fn(async () => {}), stop: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload, {
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: { cron: oldCron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
+        channelHealthMonitor: null,
+      }),
+      getRuntimeSnapshot: () =>
+        createRuntimeSnapshot({
+          discord: {
+            default: {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected,
+            },
+          },
+        }),
+      channelReadinessTimeoutMs: 50,
+      channelReadinessPollIntervalMs: 5,
+    });
+
+    const reload = applyHotReload(createCronReloadPlan(), {});
+    await vi.advanceTimersByTimeAsync(5);
+
+    expect(oldCron.stop).toHaveBeenCalledTimes(1);
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
+    expect(hoisted.builtCrons[0]?.start).not.toHaveBeenCalled();
+
+    connected = true;
+    await vi.advanceTimersByTimeAsync(5);
+    await reload;
+
+    expect(hoisted.builtCrons[0]?.start).toHaveBeenCalledTimes(1);
+    expect(logReload.warn).not.toHaveBeenCalled();
+  });
+
+  it("starts restarted cron after channel readiness timeout", async () => {
+    vi.useFakeTimers();
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { applyHotReload } = createReloadHandlersForTest(logReload, {
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      getRuntimeSnapshot: () =>
+        createRuntimeSnapshot({
+          discord: {
+            default: {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected: false,
+            },
+          },
+        }),
+      channelReadinessTimeoutMs: 10,
+      channelReadinessPollIntervalMs: 5,
+    });
+
+    const reload = applyHotReload(createCronReloadPlan(), {});
+    await vi.advanceTimersByTimeAsync(10);
+    await reload;
+
+    expect(hoisted.builtCrons[0]?.start).toHaveBeenCalledTimes(1);
+    expect(logReload.warn).toHaveBeenCalledWith(
+      "gateway cron starting before channel delivery readiness; unconnected channel accounts: discord/default",
+    );
+  });
 });
 
 describe("gateway hot reload model state", () => {
@@ -807,6 +944,168 @@ describe("gateway channel hot reload handlers", () => {
       }
     }
   }
+
+  it("starts restarted cron after channel reload completes", async () => {
+    const setState = vi.fn();
+    const startChannel = vi.fn(async (_channel: ChannelKind) => {});
+    const stopChannel = vi.fn(async (_channel: ChannelKind) => {});
+    const { applyHotReload } = createReloadHandlersForTest(undefined, {
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState,
+      startChannel,
+      stopChannel,
+      getRuntimeSnapshot: () =>
+        createRuntimeSnapshot({
+          discord: {
+            default: {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected: true,
+            },
+          },
+        }),
+      channelReadinessTimeoutMs: 50,
+      channelReadinessPollIntervalMs: 5,
+    });
+
+    await withChannelReloadsEnabled(async () => {
+      await applyHotReload(
+        createCronReloadPlan({
+          changedPaths: ["channels.discord.enabled", "cron.jobs"],
+          hotReasons: ["channels", "cron.jobs"],
+          restartChannels: new Set(["discord"]),
+        }),
+        {},
+      );
+    });
+
+    expect(stopChannel).toHaveBeenCalledWith("discord", undefined, { manual: false });
+    expect(startChannel).toHaveBeenCalledWith("discord");
+    const [builtCron] = hoisted.builtCrons;
+    if (!builtCron) {
+      throw new Error("Expected cron service to be rebuilt");
+    }
+    expect(startChannel).toHaveBeenCalledBefore(builtCron.start);
+    expect(builtCron.start).toHaveBeenCalledTimes(1);
+    expect(setState).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts restarted cron without readiness wait when channel reload is skipped", async () => {
+    const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const startChannel = vi.fn(async (_channel: ChannelKind) => {});
+    const { applyHotReload } = createReloadHandlersForTest(logReload, {
+      startChannel,
+      getRuntimeSnapshot: () =>
+        createRuntimeSnapshot({
+          discord: {
+            default: {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected: false,
+            },
+          },
+        }),
+      channelReadinessTimeoutMs: 0,
+    });
+
+    try {
+      await applyHotReload(
+        createCronReloadPlan({
+          changedPaths: ["channels.discord.enabled", "cron.jobs"],
+          hotReasons: ["channels", "cron.jobs"],
+          restartChannels: new Set(["discord"]),
+        }),
+        {},
+      );
+    } finally {
+      if (previousSkipChannels === undefined) {
+        delete process.env.OPENCLAW_SKIP_CHANNELS;
+      } else {
+        process.env.OPENCLAW_SKIP_CHANNELS = previousSkipChannels;
+      }
+    }
+
+    expect(startChannel).not.toHaveBeenCalled();
+    expect(hoisted.builtCrons[0]?.start).toHaveBeenCalledTimes(1);
+    expect(logReload.warn).not.toHaveBeenCalled();
+  });
+
+  it("restores the old cron when channel reload failure aborts a cron restart", async () => {
+    const setState = vi.fn();
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const oldCron = { start: vi.fn(async () => {}), stop: vi.fn() };
+    const stopChannel = vi.fn(async (_channel: ChannelKind) => {});
+    const startChannel = vi.fn(async (channel: ChannelKind) => {
+      if (channel === "telegram") {
+        throw new Error("start failed");
+      }
+    });
+    const { applyHotReload } = createReloadHandlersForTest(undefined, {
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: oldCron,
+          storePath: "/tmp/cron.json",
+          cronEnabled: true,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState,
+      startChannel,
+      stopChannel,
+      logChannels,
+      getRuntimeSnapshot: () =>
+        createRuntimeSnapshot({
+          telegram: {
+            default: {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected: true,
+            },
+          },
+        }),
+      channelReadinessTimeoutMs: 50,
+      channelReadinessPollIntervalMs: 5,
+    });
+
+    await withChannelReloadsEnabled(async () => {
+      await expect(
+        applyHotReload(
+          createCronReloadPlan({
+            changedPaths: ["channels.telegram.enabled", "cron.jobs"],
+            hotReasons: ["channels", "cron.jobs"],
+            restartChannels: new Set(["telegram"]),
+          }),
+          {},
+        ),
+      ).rejects.toThrow("failed to restart channels during hot reload: telegram");
+    });
+
+    expect(oldCron.stop).toHaveBeenCalledTimes(1);
+    expect(oldCron.start).toHaveBeenCalledTimes(1);
+    expect(hoisted.builtCrons[0]?.start).not.toHaveBeenCalled();
+    expect(setState).not.toHaveBeenCalled();
+  });
 
   it("continues restarting later channels after a hot-reload stop failure", async () => {
     const events: string[] = [];
@@ -1494,3 +1793,12 @@ describe("gateway plugin hot reload handlers", () => {
     expect(setState).toHaveBeenCalledTimes(1);
   });
 });
+
+function createRuntimeSnapshot(
+  channelAccounts: Partial<Record<string, Record<string, ChannelAccountSnapshot>>>,
+): ChannelRuntimeSnapshot {
+  return {
+    channels: {},
+    channelAccounts: channelAccounts as ChannelRuntimeSnapshot["channelAccounts"],
+  };
+}

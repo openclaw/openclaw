@@ -37,6 +37,7 @@ import {
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
+import { waitForConfiguredChannelDeliveryReadiness } from "./cron-channel-readiness.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -158,6 +159,10 @@ type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
+  getRuntimeSnapshot?: GatewayChannelManager["getRuntimeSnapshot"];
+  channelReadinessTimeoutMs?: number;
+  channelReadinessPollIntervalMs?: number;
+  isClosing?: () => boolean;
   createGmailRestartAbortController?: () => GatewayGmailRestartAbortController;
   clearGmailRestartAbortController?: (controller: GatewayGmailRestartAbortController) => void;
   onCronRestart?: () => void;
@@ -165,7 +170,7 @@ type GatewayReloadHandlerParams = {
 
 type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
-  "createHealthMonitor" | "logReload"
+  "createHealthMonitor" | "getRuntimeSnapshot" | "isClosing" | "logReload"
 > & {
   minimalTestGateway: boolean;
   initialConfig: OpenClawConfig;
@@ -332,6 +337,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const channelsToRestart = new Set(plan.restartChannels);
     const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
+    let startRebuiltCron: (() => Promise<void>) | null = null;
     const shouldSkipChannelRestart = () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
@@ -409,10 +415,32 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         deps: params.deps,
         broadcast: params.broadcast,
       });
-      startGatewayCronWithLogging({
-        cron: nextState.cronState.cron,
-        logCron: params.logCron,
-      });
+      startRebuiltCron = async () => {
+        if (params.getRuntimeSnapshot && !shouldSkipChannelRestart()) {
+          await waitForConfiguredChannelDeliveryReadiness({
+            getRuntimeSnapshot: params.getRuntimeSnapshot,
+            ...(params.channelReadinessTimeoutMs !== undefined
+              ? { timeoutMs: params.channelReadinessTimeoutMs }
+              : {}),
+            ...(params.channelReadinessPollIntervalMs !== undefined
+              ? { pollIntervalMs: params.channelReadinessPollIntervalMs }
+              : {}),
+            ...(params.isClosing ? { isClosing: params.isClosing } : {}),
+            log: params.logReload,
+          });
+        }
+        if (params.isClosing?.() === true) {
+          return;
+        }
+        startGatewayCronWithLogging({
+          cron: nextState.cronState.cron,
+          logCron: params.logCron,
+        });
+      };
+      if (channelsToRestart.size === 0) {
+        await startRebuiltCron();
+        startRebuiltCron = null;
+      }
     }
 
     if (plan.restartHealthMonitor) {
@@ -491,11 +519,21 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
         });
         if (restartFailures.length > 0) {
+          if (startRebuiltCron) {
+            startGatewayCronWithLogging({
+              cron: state.cronState.cron,
+              logCron: params.logCron,
+            });
+          }
           throw new Error(
             `failed to restart channels during hot reload: ${restartFailures.join(", ")}`,
           );
         }
       }
+    }
+
+    if (startRebuiltCron) {
+      await startRebuiltCron();
     }
 
     applyGatewayLaneConcurrency(nextConfig);
@@ -643,6 +681,8 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
       }
     },
     ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
+    getRuntimeSnapshot: params.channelManager.getRuntimeSnapshot,
+    isClosing: () => stopped,
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
         cfg: config,

@@ -2,7 +2,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
+import { waitForConfiguredChannelDeliveryReadiness } from "./cron-channel-readiness.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
+import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 export {
   startGatewayChannelHealthMonitor,
@@ -59,6 +61,11 @@ export async function runGatewayPostReadyMaintenance(params: {
   shouldStartCron: () => boolean;
   markCronStartHandled: () => void;
   cron: { start: () => Promise<void> };
+  getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
+  shouldSkipChannelReadiness?: () => boolean;
+  channelReadinessTimeoutMs?: number;
+  channelReadinessPollIntervalMs?: number;
+  isClosing?: () => boolean;
   logCron: { error: (message: string) => void };
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
@@ -72,6 +79,23 @@ export async function runGatewayPostReadyMaintenance(params: {
     params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
   }
   if (params.shouldStartCron()) {
+    if (params.getRuntimeSnapshot && params.shouldSkipChannelReadiness?.() !== true) {
+      await waitForConfiguredChannelDeliveryReadiness({
+        getRuntimeSnapshot: params.getRuntimeSnapshot,
+        ...(params.channelReadinessTimeoutMs !== undefined
+          ? { timeoutMs: params.channelReadinessTimeoutMs }
+          : {}),
+        ...(params.channelReadinessPollIntervalMs !== undefined
+          ? { pollIntervalMs: params.channelReadinessPollIntervalMs }
+          : {}),
+        ...(params.isClosing ? { isClosing: params.isClosing } : {}),
+        log: params.log,
+      });
+    }
+    if (!params.shouldStartCron()) {
+      params.recordPostReadyMemory();
+      return;
+    }
     params.markCronStartHandled();
     startGatewayCronWithLogging({
       cron: params.cron,
@@ -91,6 +115,10 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   shouldStartCron: () => boolean;
   markCronStartHandled: () => void;
   cron: { start: () => Promise<void> };
+  getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
+  shouldSkipChannelReadiness?: () => boolean;
+  channelReadinessTimeoutMs?: number;
+  channelReadinessPollIntervalMs?: number;
   logCron: { error: (message: string) => void };
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
@@ -124,6 +152,17 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       shouldStartCron: () => !params.isClosing() && params.shouldStartCron(),
       markCronStartHandled: params.markCronStartHandled,
       cron: params.cron,
+      ...(params.getRuntimeSnapshot ? { getRuntimeSnapshot: params.getRuntimeSnapshot } : {}),
+      ...(params.shouldSkipChannelReadiness
+        ? { shouldSkipChannelReadiness: params.shouldSkipChannelReadiness }
+        : {}),
+      ...(params.channelReadinessTimeoutMs !== undefined
+        ? { channelReadinessTimeoutMs: params.channelReadinessTimeoutMs }
+        : {}),
+      ...(params.channelReadinessPollIntervalMs !== undefined
+        ? { channelReadinessPollIntervalMs: params.channelReadinessPollIntervalMs }
+        : {}),
+      isClosing: params.isClosing,
       logCron: params.logCron,
       log: params.log,
       recordPostReadyMemory: () => {

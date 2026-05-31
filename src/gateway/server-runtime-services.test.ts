@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -251,6 +253,120 @@ describe("server-runtime-services", () => {
     expect(recordPostReadyMemory).toHaveBeenCalledTimes(1);
   });
 
+  it("defers post-ready cron startup until configured channels are connected", async () => {
+    vi.useFakeTimers();
+    const cron = { start: vi.fn(async () => undefined) };
+    const log = createLog();
+    let connected = false;
+
+    const run = runGatewayPostReadyMaintenance({
+      startMaintenance: vi.fn(async () => null),
+      applyMaintenance: vi.fn(),
+      shouldStartCron: () => true,
+      markCronStartHandled: vi.fn(),
+      cron,
+      getRuntimeSnapshot: () =>
+        createRuntimeSnapshot({
+          discord: {
+            default: {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected,
+            },
+          },
+        }),
+      channelReadinessTimeoutMs: 50,
+      channelReadinessPollIntervalMs: 5,
+      logCron: { error: vi.fn() },
+      log,
+      recordPostReadyMemory: vi.fn(),
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    expect(cron.start).not.toHaveBeenCalled();
+    connected = true;
+    await vi.advanceTimersByTimeAsync(5);
+    await run;
+
+    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("starts post-ready cron after channel readiness timeout", async () => {
+    vi.useFakeTimers();
+    const cron = { start: vi.fn(async () => undefined) };
+    const log = createLog();
+
+    const run = runGatewayPostReadyMaintenance({
+      startMaintenance: vi.fn(async () => null),
+      applyMaintenance: vi.fn(),
+      shouldStartCron: () => true,
+      markCronStartHandled: vi.fn(),
+      cron,
+      getRuntimeSnapshot: () =>
+        createRuntimeSnapshot({
+          discord: {
+            default: {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected: false,
+            },
+          },
+        }),
+      channelReadinessTimeoutMs: 10,
+      channelReadinessPollIntervalMs: 5,
+      logCron: { error: vi.fn() },
+      log,
+      recordPostReadyMemory: vi.fn(),
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    await run;
+
+    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      "gateway cron starting before channel delivery readiness; unconnected channel accounts: discord/default",
+    );
+  });
+
+  it("starts post-ready cron without waiting when channel readiness is skipped", async () => {
+    const cron = { start: vi.fn(async () => undefined) };
+    const log = createLog();
+
+    await runGatewayPostReadyMaintenance({
+      startMaintenance: vi.fn(async () => null),
+      applyMaintenance: vi.fn(),
+      shouldStartCron: () => true,
+      markCronStartHandled: vi.fn(),
+      cron,
+      getRuntimeSnapshot: () =>
+        createRuntimeSnapshot({
+          discord: {
+            default: {
+              accountId: "default",
+              enabled: true,
+              configured: true,
+              running: true,
+              connected: false,
+            },
+          },
+        }),
+      shouldSkipChannelReadiness: () => true,
+      channelReadinessTimeoutMs: 10,
+      channelReadinessPollIntervalMs: 5,
+      logCron: { error: vi.fn() },
+      log,
+      recordPostReadyMemory: vi.fn(),
+    });
+
+    expect(cron.start).toHaveBeenCalledTimes(1);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
   it("returns a cancellable post-ready maintenance timer", async () => {
     vi.useFakeTimers();
     const startMaintenance = vi.fn(async () => null);
@@ -378,5 +494,14 @@ function createMaintenanceHandles() {
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: setInterval(() => undefined, 60_000),
+  };
+}
+
+function createRuntimeSnapshot(
+  channelAccounts: Partial<Record<string, Record<string, ChannelAccountSnapshot>>>,
+): ChannelRuntimeSnapshot {
+  return {
+    channels: {},
+    channelAccounts: channelAccounts as ChannelRuntimeSnapshot["channelAccounts"],
   };
 }
