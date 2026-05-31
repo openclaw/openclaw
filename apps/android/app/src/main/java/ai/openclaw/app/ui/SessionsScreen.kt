@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** Session browser for recent and currently-live chat sessions. */
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
@@ -81,6 +82,8 @@ internal fun SessionsScreen(
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
+      // Sessions are cheap to refresh on entry; subsequent sorting/filtering is
+      // local to avoid re-querying while the user explores the list.
       viewModel.refreshChatSessions(limit = 200)
     }
   }
@@ -321,6 +324,7 @@ private fun emptySessionBody(filter: SessionFilter): String =
     SessionFilter.Live -> "Open Chat to start or resume the current session."
   }
 
+/** Formats session timestamps for compact mobile metadata. */
 private fun relativeSessionTime(updatedAtMs: Long): String {
   val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L

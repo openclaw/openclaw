@@ -50,6 +50,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+/** Full-screen command palette for navigation and recent-session search. */
 @Composable
 internal fun CommandPalette(
   viewModel: MainViewModel,
@@ -295,6 +296,7 @@ private fun CommandSectionLabel(title: String) {
   }
 }
 
+/** Builds provider quick-action metadata from current gateway/catalog state. */
 private fun providerCommandSubtitle(
   isConnected: Boolean,
   providers: List<GatewayModelProviderSummary>,
@@ -309,6 +311,7 @@ private fun providerCommandSubtitle(
 
 private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: "Main session"
 
+/** Formats command-palette session timestamps for compact rows. */
 private fun commandRelativeTime(updatedAtMs: Long): String {
   val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
