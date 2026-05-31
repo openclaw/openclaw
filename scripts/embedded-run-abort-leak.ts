@@ -257,10 +257,14 @@ function runOnce(mode: Mode, scopeBytes: number, iter: number): void {
 
 async function settleAndGc(): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
-    await new Promise<void>((r) => setImmediate(r));
+    await new Promise<void>((r) => {
+      setImmediate(r);
+    });
     globalThis.gc?.();
   }
-  await new Promise<void>((r) => setTimeout(r, 100));
+  await new Promise<void>((r) => {
+    setTimeout(r, 100);
+  });
   globalThis.gc?.();
 }
 

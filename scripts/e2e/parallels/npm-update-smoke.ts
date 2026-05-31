@@ -666,7 +666,9 @@ class NpmUpdateSmoke {
   private async monitorJobs(label: string, jobs: Job[]): Promise<void> {
     const pending = new Set(jobs.map((job) => job.label));
     while (pending.size > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 15_000);
+      });
       for (const job of jobs) {
         if (!pending.has(job.label)) {
           continue;

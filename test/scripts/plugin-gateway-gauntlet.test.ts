@@ -568,7 +568,9 @@ describe("plugin gateway gauntlet helpers", () => {
     expect(row.spawnError?.code).toBe("ETIMEDOUT");
     expect(row.wallMs).toBeLessThan(5_000);
     const afterReturn = await fs.readFile(markerPath, "utf8");
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });
 

@@ -786,7 +786,9 @@ export async function waitForLog(
     if (pattern.test(text)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   const text = readLogTail(logPath);
   throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
@@ -1220,7 +1222,9 @@ async function runRemoteCommand(params: {
       if (attempt === 4 || !isTransientSshFailure(error)) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, attempt * 3000);
+      });
     }
   }
   throw lastError;
@@ -2425,9 +2429,13 @@ async function main() {
       ],
       { cwd: root, stdio: "inherit" },
     );
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 3_000);
+    });
     await sshRun(root, inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
-    const recordCode = await new Promise<number | null>((resolve) => recording.on("exit", resolve));
+    const recordCode = await new Promise<number | null>((resolve) => {
+      recording.on("exit", resolve);
+    });
     if (recordCode !== 0) {
       throw new Error(`Crabbox recording failed with exit code ${recordCode ?? "unknown"}.`);
     }

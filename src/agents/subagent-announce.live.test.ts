@@ -42,7 +42,9 @@ const REQUEST_TIMEOUT_MS = 8 * 60_000;
 const WAIT_TIMEOUT_MS = 8 * 60_000;
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 type LiveSubagentModelConfig = {

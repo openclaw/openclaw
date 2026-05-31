@@ -427,7 +427,9 @@ describe("streamWithIdleTimeout", () => {
         return {
           async next() {
             if (count < 3) {
-              await new Promise((r) => setTimeout(r, 10)); // 10ms delay
+              await new Promise((r) => {
+                setTimeout(r, 10);
+              }); // 10ms delay
               return { done: false, value: { text: String(count++) } };
             }
             return { done: true, value: undefined };

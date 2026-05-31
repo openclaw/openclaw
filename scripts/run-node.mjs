@@ -667,7 +667,10 @@ const parsePositiveIntegerEnv = (env, name, fallback) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const resolveRunNodeOutputLogPath = (deps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();

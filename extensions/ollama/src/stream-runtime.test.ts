@@ -1869,7 +1869,9 @@ describe("createOllamaStreamFn streaming events", () => {
       expect(
         await Promise.race([
           pendingStartEvent.then(() => "event" as const),
-          new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 100)),
+          new Promise<"timeout">((resolve) => {
+            setTimeout(() => resolve("timeout"), 100);
+          }),
         ]),
       ).toBe("timeout");
 

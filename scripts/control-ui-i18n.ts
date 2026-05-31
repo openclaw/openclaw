@@ -601,7 +601,9 @@ function buildBatchPrompt(items: readonly TranslationBatchItem[]): string {
 }
 
 function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function formatDuration(ms: number): string {

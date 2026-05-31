@@ -66,7 +66,9 @@ async function waitForCronListRequest(
     if (match) {
       return match;
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
   }
   throw new Error(`No matching cron.list request found: ${JSON.stringify(requests)}`);
 }

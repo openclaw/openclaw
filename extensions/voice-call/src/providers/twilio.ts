@@ -768,7 +768,9 @@ export class TwilioProvider implements VoiceCallProvider {
         // Drift-corrected pacing: schedule against an absolute clock to avoid cumulative delay.
         const waitMs = nextChunkDueAt - Date.now();
         if (waitMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, Math.ceil(waitMs)));
+          await new Promise((resolve) => {
+            setTimeout(resolve, Math.ceil(waitMs));
+          });
         }
         nextChunkDueAt += CHUNK_DELAY_MS;
         if (signal.aborted) {

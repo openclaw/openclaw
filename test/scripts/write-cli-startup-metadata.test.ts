@@ -56,7 +56,9 @@ describe("write-cli-startup-metadata", () => {
     const result = await __testing.mapWithConcurrency([1, 2, 3, 4, 5], 2, async (value) => {
       active += 1;
       peakActive = Math.max(peakActive, active);
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1);
+      });
       active -= 1;
       return `rendered-${value}`;
     });

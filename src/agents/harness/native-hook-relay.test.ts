@@ -751,7 +751,9 @@ describe("native hook relay registry", () => {
       },
     });
     await staleRequest.connected;
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
 
     const second = registerNativeHookRelay({
       provider: "codex",
@@ -911,7 +913,9 @@ describe("native hook relay registry", () => {
       allowedEvents: ["pre_tool_use"],
       generationMismatchGraceMs: 1,
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
 
     await expect(
       invokeNativeHookRelayBridge({
@@ -941,7 +945,9 @@ describe("native hook relay registry", () => {
     });
     const before = await waitForNativeHookRelayBridgeRecord(relay.relayId);
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
     relay.renew(20_000);
 
     const after = await waitForNativeHookRelayBridgeRecord(relay.relayId);

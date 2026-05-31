@@ -593,7 +593,9 @@ describe("AcpSessionManager turn results", () => {
             if (closed) {
               return;
             }
-            await new Promise((resolve) => setTimeout(resolve, 1));
+            await new Promise((resolve) => {
+              setTimeout(resolve, 1);
+            });
           }
         })(),
         result: Promise.resolve({
@@ -766,7 +768,9 @@ describe("AcpSessionManager turn results", () => {
             if (closed) {
               return;
             }
-            await new Promise((resolve) => setTimeout(resolve, 1));
+            await new Promise((resolve) => {
+              setTimeout(resolve, 1);
+            });
           }
         })(),
         result: Promise.resolve({

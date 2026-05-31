@@ -193,7 +193,7 @@ describe("drainActiveSessionsForShutdown", () => {
   it("returns timedOut=true while still starting later emissions when one handler hangs", async () => {
     runSessionEndMock.mockImplementation(async (event: SessionEndHookEvent) => {
       if (event.sessionId === "sess-A") {
-        await new Promise<void>(() => undefined);
+        await new Promise<void>(() => {});
       }
     });
     emitGatewaySessionStartPluginHook({

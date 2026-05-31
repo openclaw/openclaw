@@ -161,12 +161,12 @@ export async function dispatchOutbound(
               }
               return r;
             }),
-            new Promise<OutboundResult>((resolve) =>
+            new Promise<OutboundResult>((resolve) => {
               setTimeout(() => {
                 ac.abort();
                 resolve({ channel: "qqbot", error: "timeout" });
-              }, TOOL_MEDIA_SEND_TIMEOUT),
-            ),
+              }, TOOL_MEDIA_SEND_TIMEOUT);
+            }),
           ]);
           if (result.error) {
             log?.error(`Tool fallback error: ${result.error}`);

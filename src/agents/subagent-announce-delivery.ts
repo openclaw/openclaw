@@ -426,7 +426,9 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
     return;
   }
   if (!signal) {
-    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, ms);
+    });
     return;
   }
   if (signal.aborted) {

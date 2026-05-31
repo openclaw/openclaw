@@ -54,7 +54,10 @@ describe("Parallels update job timeout", () => {
     const result = runTimedUpdateJob({
       append: (chunk) => chunks.push(chunk),
       label: "macOS",
-      run: () => new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+      run: () =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, 1000);
+        }),
       timeoutDescription: "1s plus cleanup backstop",
       timeoutMs: 1200,
       writeLog,
@@ -74,7 +77,7 @@ describe("Parallels update job timeout", () => {
     const result = runTimedUpdateJob({
       append: (chunk) => chunks.push(chunk),
       label: "Windows",
-      run: () => new Promise(() => undefined),
+      run: () => new Promise(() => {}),
       timeoutDescription: "1s",
       timeoutMs: 1000,
       writeLog,

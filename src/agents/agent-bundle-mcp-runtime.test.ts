@@ -201,7 +201,9 @@ async function waitForFileText(
     } catch {
       // The server may not have written the log file yet.
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(
     `Timed out waiting for ${expectedText} in ${filePath}; saw ${JSON.stringify(lastText)}`,
@@ -218,7 +220,9 @@ async function waitForPredicate(
     if (predicate()) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error(`Timed out waiting for ${description}`);
 }
@@ -725,7 +729,12 @@ describe("session MCP runtime", () => {
       }
     } finally {
       await runtime.dispose();
-      await Promise.race([catalogResult, new Promise((resolve) => setTimeout(resolve, 1000))]);
+      await Promise.race([
+        catalogResult,
+        new Promise((resolve) => {
+          setTimeout(resolve, 1000);
+        }),
+      ]);
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });

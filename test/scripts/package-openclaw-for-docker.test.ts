@@ -20,7 +20,9 @@ function isProcessAlive(pid: number): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {

@@ -211,7 +211,9 @@ const realSetTimeout = globalThis.setTimeout.bind(globalThis);
 let dateOnlyFakeClockActive = false;
 
 function waitForRealTimer(ms: number) {
-  return new Promise<void>((resolve) => realSetTimeout(resolve, ms));
+  return new Promise<void>((resolve) => {
+    realSetTimeout(resolve, ms);
+  });
 }
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
@@ -5149,7 +5151,9 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(mockCallArg(respond, 0, 3)).toEqual({ runId });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalledTimes(1));
     await pending;

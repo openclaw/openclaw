@@ -254,7 +254,9 @@ export async function createBootstrapWorkspace(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function shouldRetryCliCronMcpProbeReply(text: string): boolean {

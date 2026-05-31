@@ -440,7 +440,9 @@ describe("createDiscordGatewayPlugin", () => {
     process.on("unhandledRejection", onUnhandledRejection);
     try {
       startIgnoredGatewayRegistration(plugin);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(unhandledReasons).toHaveLength(0);
       const registration = waitForDiscordGatewayPluginRegistration(plugin);

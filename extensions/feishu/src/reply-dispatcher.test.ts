@@ -1805,7 +1805,9 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const fallbackPromise = result.ensureNoVisibleReplyFallback("zero-final-count");
 
     for (let attempt = 0; attempt < 20 && closeMock.mock.calls.length === 0; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     }
     expect(closeMock).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();

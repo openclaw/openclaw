@@ -138,7 +138,9 @@ function isTarEofRaceError(err: unknown): boolean {
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export type BackupTarRetryLogger = (message: string) => void;

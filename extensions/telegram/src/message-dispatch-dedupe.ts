@@ -106,7 +106,9 @@ function dedupeBucketLockKey(bucketKey: string): string {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function pruneDedupeBucketEntries(entries: Record<string, number>, now: number): void {

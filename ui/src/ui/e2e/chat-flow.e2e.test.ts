@@ -41,7 +41,9 @@ async function waitForRequests(
     if (requests.length >= count) {
       return requests;
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
   }
   throw new Error(`Timed out waiting for ${count} ${method} requests`);
 }

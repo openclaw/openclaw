@@ -424,7 +424,9 @@ describe("resolveConnectAuthDecision", () => {
     const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => {
       activeBootstrapChecks += 1;
       maxActiveBootstrapChecks = Math.max(maxActiveBootstrapChecks, activeBootstrapChecks);
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 5);
+      });
       activeBootstrapChecks -= 1;
       return { ok: false, reason: "bootstrap_token_invalid" };
     });

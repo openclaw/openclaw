@@ -44,7 +44,9 @@ function logCliCronProbe(step: string, details?: Record<string, unknown>): void 
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function pollCliCronJobVisible(params: {

@@ -191,7 +191,7 @@ function createHost(): TestGatewayHost {
     execApprovalBusy: false,
     execApprovalError: null,
     updateAvailable: null,
-    updateComplete: new Promise(() => undefined),
+    updateComplete: new Promise(() => {}),
   } as unknown as TestGatewayHost;
 }
 

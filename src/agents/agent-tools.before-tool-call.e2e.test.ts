@@ -103,7 +103,10 @@ describe("before_tool_call loop detection behavior", () => {
         emitted.push(evt);
       }
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {
@@ -118,7 +121,10 @@ describe("before_tool_call loop detection behavior", () => {
     const stop = onInternalDiagnosticEvent((evt) => {
       emitted.push(evt);
     });
-    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    const flush = () =>
+      new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     try {
       await run(emitted, flush);
     } finally {

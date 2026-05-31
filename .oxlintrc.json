@@ -22,6 +22,7 @@
     "eslint/no-object-constructor": "error",
     "eslint/no-param-reassign": "error",
     "eslint/no-proto": "error",
+    "eslint/no-promise-executor-return": "error",
     "eslint/no-regex-spaces": "error",
     "eslint/no-return-assign": "error",
     "eslint/no-sequences": "error",

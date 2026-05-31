@@ -495,7 +495,9 @@ test("sessions.reset closes child ACP runtimes concurrently so stuck children do
     if (req?.sessionKey === "agent:main:main") {
       return;
     }
-    await new Promise<void>((resolve) => releaseChildren.push(resolve));
+    await new Promise<void>((resolve) => {
+      releaseChildren.push(resolve);
+    });
   });
 
   try {

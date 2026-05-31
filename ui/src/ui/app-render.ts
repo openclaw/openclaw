@@ -936,7 +936,9 @@ async function sendSkillWorkshopRevisionRequest(
 function waitForSkillWorkshopRevisionPrepare(startedAt: number): Promise<void> {
   const remainingMs = SKILL_WORKSHOP_REVISION_PREPARE_MIN_MS - (Date.now() - startedAt);
   return remainingMs > 0
-    ? new Promise((resolve) => globalThis.setTimeout(resolve, remainingMs))
+    ? new Promise((resolve) => {
+        globalThis.setTimeout(resolve, remainingMs);
+      })
     : Promise.resolve();
 }
 

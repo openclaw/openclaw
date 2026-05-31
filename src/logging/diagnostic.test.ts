@@ -52,7 +52,9 @@ function createEmitMemorySampleMock() {
 }
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {

@@ -56,7 +56,9 @@ type LoginQrRaceResult =
   | { outcome: "failed"; message: string };
 
 function waitForNextTask(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
@@ -541,9 +543,9 @@ export async function waitForWebLogin(
         message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
       };
     }
-    const timeout = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), remaining),
-    );
+    const timeout = new Promise<"timeout">((resolve) => {
+      setTimeout(() => resolve("timeout"), remaining);
+    });
     const result = await Promise.race([
       login.waitPromise.then(() => "done" as const),
       login.qrUpdatePromise.then(() => "qr-update" as const),

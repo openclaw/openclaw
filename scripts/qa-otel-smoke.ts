@@ -835,7 +835,9 @@ async function waitForLocalPort(port: number, timeoutMs: number, readFailure: ()
     if (failure) {
       throw new Error(failure);
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`timed out waiting for OpenTelemetry Collector on 127.0.0.1:${port}`);
 }
@@ -1045,7 +1047,9 @@ function isLatestGenAiModelCallSpan(span: CapturedSpan): boolean {
 }
 
 async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function hasRequiredSmokeSignals(receiver: ReturnType<typeof startLocalOtlpReceiver>): boolean {

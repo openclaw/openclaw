@@ -45,7 +45,9 @@ import type { BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;

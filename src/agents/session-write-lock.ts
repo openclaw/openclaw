@@ -53,7 +53,9 @@ const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
  * while lock contention callbacks run synchronous I/O.
  */
 function yieldEventLoop(): Promise<void> {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 // A payload-less lock can be left behind during the window between open("wx")
 // and the owner metadata write if the owner is suspended (CPU pressure,

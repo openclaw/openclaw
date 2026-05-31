@@ -420,7 +420,9 @@ describe("skill upload store", () => {
       slug: "sweep-trigger",
       sizeBytes: 1,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
@@ -467,7 +469,9 @@ describe("skill upload store", () => {
       sizeBytes: archive.length,
       idempotencyKey: "same-upload",
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();

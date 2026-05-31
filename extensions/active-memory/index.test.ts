@@ -2958,7 +2958,9 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedAgent.mockImplementationOnce(async (params: { timeoutMs?: number }) => {
-      await new Promise((resolve) => setTimeout(resolve, (params.timeoutMs ?? 0) + 5));
+      await new Promise((resolve) => {
+        setTimeout(resolve, (params.timeoutMs ?? 0) + 5);
+      });
       return {
         payloads: [{ text: "late timeout payload that should never become memory context" }],
         meta: { aborted: true },
@@ -3001,7 +3003,9 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedAgent.mockImplementationOnce(async () => {
-      await new Promise((resolve) => setTimeout(resolve, CONFIGURED_TIMEOUT_MS + 5));
+      await new Promise((resolve) => {
+        setTimeout(resolve, CONFIGURED_TIMEOUT_MS + 5);
+      });
       return { payloads: [{ text: "remember the ramen place" }] };
     });
 
@@ -3131,7 +3135,9 @@ describe("active-memory plugin", () => {
           },
         },
       ]);
-      await new Promise((resolve) => setTimeout(resolve, 35));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 35);
+      });
       return { payloads: [{ text: "User usually orders ramen." }] };
     });
 
@@ -3221,7 +3227,9 @@ describe("active-memory plugin", () => {
           },
         },
       ]);
-      await new Promise((resolve) => setTimeout(resolve, 35));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 35);
+      });
       return { payloads: [{ text: "User usually orders ramen after late flights." }] };
     });
 

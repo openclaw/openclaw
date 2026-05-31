@@ -262,7 +262,12 @@ async function terminatePids(
   deps: AcpxProcessCleanupDeps | undefined,
 ): Promise<number[]> {
   const killProcess = deps?.killProcess ?? ((pid, signal) => process.kill(pid, signal));
-  const sleep = deps?.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep =
+    deps?.sleep ??
+    ((ms) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   const terminated: number[] = [];
 
   for (const pid of pids) {

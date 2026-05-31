@@ -535,7 +535,9 @@ export async function buildCompactAnnounceStatsLine(params: {
       break;
     }
     if (!isFastTestMode()) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
     }
     entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
   }

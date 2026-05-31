@@ -430,7 +430,9 @@ process.on("message", (message) => {
     const closePromise = provider.close?.() ?? Promise.resolve();
     const closeResult = await Promise.race([
       closePromise.then(() => "closed" as const),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+      new Promise<"timeout">((resolve) => {
+        setTimeout(() => resolve("timeout"), 1_000);
+      }),
     ]);
 
     expect(closeResult).toBe("closed");

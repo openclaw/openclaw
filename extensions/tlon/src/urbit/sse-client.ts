@@ -387,7 +387,9 @@ export class UrbitSSEClient {
       );
       // Wait 10 seconds before resetting and trying again
       const extendedBackoff = 10000; // 10 seconds
-      await new Promise((resolve) => setTimeout(resolve, extendedBackoff));
+      await new Promise((resolve) => {
+        setTimeout(resolve, extendedBackoff);
+      });
       this.reconnectAttempts = 0; // Reset counter to continue trying
       this.logger.log?.("[SSE] Reconnection attempts reset, resuming reconnection...");
     }
@@ -402,7 +404,9 @@ export class UrbitSSEClient {
       `[SSE] Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms...`,
     );
 
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delay);
+    });
 
     try {
       this.channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;

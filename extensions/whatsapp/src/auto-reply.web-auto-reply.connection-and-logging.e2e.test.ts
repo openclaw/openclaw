@@ -362,7 +362,9 @@ describe("web auto-reply connection", () => {
 
     const completedQuickly = await Promise.race([
       run.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 60)),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 60);
+      }),
     ]);
 
     if (!completedQuickly) {

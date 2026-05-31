@@ -494,7 +494,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
       expect(releaseSecondMutation).toBeTypeOf("function");
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
 
     releaseSecondMutation?.();

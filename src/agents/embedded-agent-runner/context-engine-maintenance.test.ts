@@ -861,7 +861,9 @@ describe("runContextEngineMaintenance", () => {
             if (Date.now() - startedAt >= 2_000) {
               throw error;
             }
-            await new Promise<void>((resolve) => setTimeout(resolve, 5));
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 5);
+            });
           }
         }
       };

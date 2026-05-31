@@ -581,7 +581,9 @@ export async function clickViaPlaywright(opts: {
             abortPromise,
             reconcileRemoteDialog,
           );
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
         }
         if (opts.doubleClick) {
           await awaitActionWithAbort(

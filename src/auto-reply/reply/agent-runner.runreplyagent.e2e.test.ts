@@ -282,7 +282,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
     });
 
     const pending = run();
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     active.updateSessionId("post-compact-session");
     sessionStore.main = {
       sessionId: "post-compact-session",

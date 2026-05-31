@@ -501,12 +501,20 @@ describe("MediaStreamHandler security hardening", () => {
       const first = new WebSocket(server.url, {
         headers: { "x-forwarded-for": "198.51.100.10" },
       });
-      await withTimeout(new Promise((resolve) => first.once("open", resolve)));
+      await withTimeout(
+        new Promise((resolve) => {
+          first.once("open", resolve);
+        }),
+      );
 
       const second = new WebSocket(server.url, {
         headers: { "x-forwarded-for": "203.0.113.20" },
       });
-      await withTimeout(new Promise((resolve) => second.once("open", resolve)));
+      await withTimeout(
+        new Promise((resolve) => {
+          second.once("open", resolve);
+        }),
+      );
 
       expect(first.readyState).toBe(WebSocket.OPEN);
       expect(second.readyState).toBe(WebSocket.OPEN);

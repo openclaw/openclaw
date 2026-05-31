@@ -235,7 +235,9 @@ async function clearStaleApnsRegistrationIfNeeded(
 }
 
 async function delayMs(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function isForegroundRestrictedIosCommand(command: string): boolean {

@@ -898,7 +898,9 @@ async function sendGroupMessage(
 }
 
 async function waitForTelegramPollRetryDelay(remainingMs: number) {
-  await new Promise((resolve) => setTimeout(resolve, Math.min(250, Math.max(100, remainingMs))));
+  await new Promise((resolve) => {
+    setTimeout(resolve, Math.min(250, Math.max(100, remainingMs)));
+  });
 }
 
 async function waitForObservedMessage(params: {
@@ -1120,7 +1122,9 @@ async function waitForTelegramChannelRunning(
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`telegram account "${accountId}" did not become ready`);
 }

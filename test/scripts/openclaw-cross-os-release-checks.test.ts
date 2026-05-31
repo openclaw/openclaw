@@ -731,7 +731,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         }),
       ]);
       await Promise.race([
-        new Promise<void>((resolve) => socket.once("close", resolve)),
+        new Promise<void>((resolve) => {
+          socket.once("close", resolve);
+        }),
         delay(1_000).then(() => {
           throw new Error("socket close timed out");
         }),

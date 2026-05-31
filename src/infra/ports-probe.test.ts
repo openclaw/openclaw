@@ -23,7 +23,9 @@ async function withListeningServer(cb: (address: net.AddressInfo) => Promise<voi
   try {
     await cb(address);
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 

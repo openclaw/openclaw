@@ -1465,7 +1465,9 @@ describe("embedded attempt session lock lifecycle", () => {
         }),
     );
 
-    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 25);
+    });
     releaseHookAppend();
     await Promise.all([hookAppend, promptAppend]);
 

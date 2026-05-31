@@ -1068,7 +1068,9 @@ export function getTaskRegistryMaintenanceDiagnostics(): TaskRegistryMaintenance
  * synchronous task-registry maintenance work.
  */
 function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function startScheduledSweep() {

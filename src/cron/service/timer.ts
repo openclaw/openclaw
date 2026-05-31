@@ -1329,7 +1329,9 @@ export async function executeJobCore(
   });
   const waitWithAbort = async (ms: number) => {
     if (!abortSignal) {
-      await new Promise<void>((resolve) => setTimeout(resolve, ms));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      });
       return;
     }
     if (abortSignal.aborted) {

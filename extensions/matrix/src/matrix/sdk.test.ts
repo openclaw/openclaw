@@ -1848,13 +1848,13 @@ describe("MatrixClient crypto bootstrapping", () => {
       localTimeoutMs: 1,
     });
     vi.spyOn(client, "getRoomKeyBackupStatus").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
     vi.spyOn(client, "getDeviceVerificationStatus").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
     vi.spyOn(client, "listOwnDevices").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
 
     const status = await client.getOwnDeviceVerificationStatus();

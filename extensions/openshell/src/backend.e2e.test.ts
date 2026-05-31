@@ -270,7 +270,9 @@ HTTPServer(("0.0.0.0", 8000), Handler).serve_forever()
         },
       };
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
 
   await runCommand({

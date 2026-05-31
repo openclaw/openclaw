@@ -725,7 +725,9 @@ async function saveSessionStoreUnlocked(
           return;
         }
         if (i < 4) {
-          await new Promise((r) => setTimeout(r, 50 * (i + 1)));
+          await new Promise((r) => {
+            setTimeout(r, 50 * (i + 1));
+          });
           continue;
         }
         // Final attempt failed - skip this save. The writer queue ensures

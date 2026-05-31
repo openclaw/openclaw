@@ -120,8 +120,12 @@ async function getConnectedNodeId(ws: WebSocket): Promise<string> {
 }
 
 async function waitForMacrotasks(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Promise<{

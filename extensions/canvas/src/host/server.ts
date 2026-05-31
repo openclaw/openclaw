@@ -443,7 +443,9 @@ export async function createCanvasHostHandler(
         }
       }
       if (wss) {
-        await new Promise<void>((resolve) => wss.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
       }
     },
   };
@@ -528,9 +530,9 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
       if (ownsHandler) {
         await handler.close();
       }
-      await new Promise<void>((resolve, reject) =>
-        server.close((err) => (err ? reject(err) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
     },
   };
 }

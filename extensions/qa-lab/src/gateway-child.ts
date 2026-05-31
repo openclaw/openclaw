@@ -376,7 +376,9 @@ async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number)
     return true;
   }
   return await Promise.race([
-    new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+    new Promise<boolean>((resolve) => {
+      child.once("exit", () => resolve(true));
+    }),
     sleep(timeoutMs).then(() => false),
   ]);
 }

@@ -1394,7 +1394,9 @@ export async function startGatewayPostAttachRuntime(
       if (!hasGatewayStartHooks(sidecarsResult.pluginRegistry)) {
         return;
       }
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       const hookRunner = await runtimeDeps.getGlobalHookRunner();
       if (hookRunner?.hasHooks("gateway_start")) {
         const { withPluginHttpRouteRegistry } = await import("../plugins/http-registry.js");

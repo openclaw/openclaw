@@ -729,7 +729,9 @@ describe("runCopilotAttempt", () => {
     });
     const session = await sessionCreated.promise;
     for (let i = 0; i < 100 && session.sendAndWait.mock.calls.length === 0; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
     }
     expect(session.sendAndWait).toHaveBeenCalledTimes(1);
 

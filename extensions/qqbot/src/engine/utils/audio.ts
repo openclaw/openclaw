@@ -326,7 +326,9 @@ export async function waitForFile(
         return 0;
       }
     }
-    await new Promise((r) => setTimeout(r, pollMs));
+    await new Promise((r) => {
+      setTimeout(r, pollMs);
+    });
   }
 
   try {

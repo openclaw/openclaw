@@ -288,7 +288,9 @@ export function parseRunIdFromDispatchOutput(output) {
 }
 
 async function wait(ms) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function findNewRunId(repo, workflowFile, workflowName, beforeIds) {

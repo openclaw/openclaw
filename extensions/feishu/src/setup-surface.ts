@@ -420,7 +420,9 @@ async function runNewAppFlow(params: {
 
   // ----- Apply credentials & security policy -----
   const configProgress = prompter.progress(t("wizard.feishu.configuring"));
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 50);
+  });
 
   if (appId && appSecret) {
     next = patchFeishuConfig(next, targetAccountId, {

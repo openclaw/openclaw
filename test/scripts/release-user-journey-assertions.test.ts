@@ -60,7 +60,9 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
     socket.on("error", () => undefined);
     socket.on("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address() as AddressInfo;
   return {
     port: address.port,
@@ -68,9 +70,9 @@ async function startTcpFixtureServer(handler: (socket: Socket) => void): Promise
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     },
   };
 }

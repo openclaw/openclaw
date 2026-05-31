@@ -656,7 +656,9 @@ async function waitForDiscordVoiceState(params: {
     } catch (error) {
       lastError = formatErrorMessage(error);
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   const stateDetails = lastState
     ? `last voice state channel=${lastState.channel_id ?? "none"} user=${lastState.user_id ?? "unknown"}`
@@ -1061,7 +1063,9 @@ async function observeStatusReactionTimeline(params: {
     if (params.expectedSequence.every((emoji) => seenSequence.includes(emoji))) {
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   return {
     expectedSequence: params.expectedSequence,
@@ -1159,7 +1163,9 @@ async function pollChannelMessages(params: {
         return { message: observedMessage, afterSnowflake };
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Discord message`);
 }
@@ -1185,7 +1191,9 @@ async function pollThreadReplyMessage(params: {
     if (match) {
       return match;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   return undefined;
 }
@@ -1369,7 +1377,9 @@ async function waitForDiscordChannelRunning(
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   const details = lastStatus
     ? ` (last status: running=${String(lastStatus.running)} connected=${String(lastStatus.connected)} restartPending=${String(lastStatus.restartPending)} lastConnectedAt=${String(lastStatus.lastConnectedAt)} lastError=${lastStatus.lastError ?? "null"} lastDisconnect=${JSON.stringify(lastStatus.lastDisconnect)})`
@@ -1533,7 +1543,9 @@ async function assertDiscordApplicationCommandsRegistered(params: {
     if (missing.length === 0) {
       return { commandNames: lastNames };
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(
     `missing Discord native command(s): ${params.expectedCommandNames

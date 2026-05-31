@@ -55,7 +55,9 @@ function createDeferred<T>() {
 }
 
 async function flushAsyncWork() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 describe("createCopilotAgentHarness", () => {

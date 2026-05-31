@@ -42,7 +42,9 @@ import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 async function startWsServer() {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-  await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+  await new Promise<void>((resolve) => {
+    wss.once("listening", () => resolve());
+  });
   const port = (wss.address() as { port: number }).port;
   return { wss, port, url: `ws://127.0.0.1:${port}/devtools/browser/TEST` };
 }
@@ -55,7 +57,9 @@ describe("cdp.helpers internal", () => {
     registerManagedProxyBrowserCdpBypassMock.mockReset();
     registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
     if (wss) {
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
       wss = null;
     }
   });
@@ -307,7 +311,9 @@ describe("cdp.helpers internal", () => {
           cb(true);
         },
       });
-      await new Promise<void>((resolve) => wss?.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.once("listening", () => resolve());
+      });
       const port = (wss.address() as { port: number }).port;
       let callbackCount = 0;
       wss.on("connection", (socket) => {
@@ -341,7 +347,9 @@ describe("cdp.helpers internal", () => {
           cb(false, 429, "too many requests");
         },
       });
-      await new Promise<void>((resolve) => wss?.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.once("listening", () => resolve());
+      });
       const port = (wss.address() as { port: number }).port;
 
       await expect(

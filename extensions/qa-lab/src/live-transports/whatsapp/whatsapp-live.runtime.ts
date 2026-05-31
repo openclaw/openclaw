@@ -535,7 +535,9 @@ async function waitForWhatsAppChannelRunning(
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 750));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 750);
+    });
   }
   throw new Error(
     `whatsapp account "${accountId}" did not become ready` +
@@ -555,9 +557,9 @@ async function waitForWhatsAppChannelStable(gateway: WhatsAppQaGateway, accountI
     if (connectedForMs >= WHATSAPP_QA_READY_STABILITY_MS) {
       return;
     }
-    await new Promise((resolve) =>
-      setTimeout(resolve, Math.max(750, WHATSAPP_QA_READY_STABILITY_MS - connectedForMs)),
-    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.max(750, WHATSAPP_QA_READY_STABILITY_MS - connectedForMs));
+    });
   }
   throw new Error(
     `whatsapp account "${accountId}" did not remain ready for ${WHATSAPP_QA_READY_STABILITY_MS}ms`,
@@ -636,7 +638,9 @@ async function startWhatsAppQaDriverSessionWithRetry(params: { authDir: string }
       ) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS));
+      await new Promise((resolve) => {
+        setTimeout(resolve, WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS);
+      });
     }
   }
   throw new Error("unreachable WhatsApp QA driver retry loop exit");
@@ -1022,7 +1026,9 @@ async function runWhatsAppScenario(params: {
     if (scenarioRun.quietInput) {
       const quietStartedAt = new Date();
       await params.driver.sendText(target, scenarioRun.quietInput);
-      await new Promise((resolve) => setTimeout(resolve, scenarioRun.quietWindowMs ?? 5_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, scenarioRun.quietWindowMs ?? 5_000);
+      });
       const unexpectedReply = params.driver.getObservedMessages().find((message) => {
         if (new Date(message.observedAt).getTime() < quietStartedAt.getTime()) {
           return false;
@@ -1041,7 +1047,9 @@ async function runWhatsAppScenario(params: {
     const requestStartedAt = new Date();
     await params.driver.sendText(target, scenarioRun.input);
     if (!scenarioRun.expectReply) {
-      await new Promise((resolve) => setTimeout(resolve, params.scenario.timeoutMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, params.scenario.timeoutMs);
+      });
       return {
         id: params.scenario.id,
         title: params.scenario.title,
@@ -1309,9 +1317,9 @@ export async function runWhatsAppQaLive(params: {
             isTransientWhatsAppQaDriverError(error)
           ) {
             driverAttempt += 1;
-            await new Promise((resolve) =>
-              setTimeout(resolve, WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS),
-            );
+            await new Promise((resolve) => {
+              setTimeout(resolve, WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS);
+            });
             try {
               activeDriver = await restartWhatsAppQaDriverSession({
                 authDir: driverAuthDir,

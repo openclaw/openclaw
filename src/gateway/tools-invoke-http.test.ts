@@ -257,7 +257,9 @@ afterAll(async () => {
   if (!server) {
     return;
   }
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   sharedServer = undefined;
 });
 

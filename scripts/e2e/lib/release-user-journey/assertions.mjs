@@ -289,7 +289,9 @@ async function waitClickClackSocket() {
         return;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`Timed out waiting for ClickClack websocket connection at ${baseUrl}`);
 }
@@ -315,7 +317,9 @@ async function waitClickClackReply() {
         return;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   const state = fs.existsSync(statePath) ? fs.readFileSync(statePath, "utf8") : "<missing>";
   throw new Error(`Timed out waiting for ClickClack reply marker ${marker}. State: ${state}`);

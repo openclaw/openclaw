@@ -38,7 +38,9 @@ const log = createSubsystemLogger("agents/cli-runner");
 const cliRunnerDeps = {
   claudeCliSessionTranscriptHasContent: claudeCliSessionTranscriptHasContentImpl,
   delay: async (delayMs: number) => {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
   },
 };
 
@@ -49,7 +51,9 @@ export function setCliRunnerTestDeps(overrides: Partial<typeof cliRunnerDeps>): 
 export function restoreCliRunnerTestDeps(): void {
   cliRunnerDeps.claudeCliSessionTranscriptHasContent = claudeCliSessionTranscriptHasContentImpl;
   cliRunnerDeps.delay = async (delayMs: number) => {
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
   };
 }
 

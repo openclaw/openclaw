@@ -350,7 +350,9 @@ export function createProfileTabOps({
           triggerManagedTabLimit(found.targetId);
           return assignTabAlias({ profileState, tab: found, label: opts?.label });
         }
-        await new Promise((r) => setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS));
+        await new Promise((r) => {
+          setTimeout(r, OPEN_TAB_DISCOVERY_POLL_MS);
+        });
       }
       triggerManagedTabLimit(createdViaCdp);
       return assignTabAlias({

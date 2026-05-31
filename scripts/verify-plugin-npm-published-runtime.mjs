@@ -230,7 +230,9 @@ function npmViewReadme(spec) {
 }
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export function readPositiveIntEnv(name, fallback, env = process.env) {

@@ -716,7 +716,7 @@ describe("memory plugin e2e", () => {
   test("returns unavailable when memory_recall embedding does not settle", async () => {
     vi.useFakeTimers();
     const ensureGlobalUndiciEnvProxyDispatcher = vi.fn();
-    const post = vi.fn(() => new Promise(() => undefined));
+    const post = vi.fn(() => new Promise(() => {}));
     const loadLanceDbModule = vi.fn(async () => ({
       connect: vi.fn(async () => ({
         tableNames: vi.fn(async () => ["memories"]),

@@ -779,7 +779,7 @@ describe("kitchen-sink RPC process sampling", () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      text: () => new Promise(() => undefined),
+      text: () => new Promise(() => {}),
     });
 
     const result = fetchJson("http://127.0.0.1:19680/readyz", {

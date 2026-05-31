@@ -63,7 +63,9 @@ export function normalizeE164(number: string): string {
 
 /** Promise-based sleep that clamps timer inputs through the shared timeout resolver. */
 export function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0)));
+  return new Promise((resolve) => {
+    setTimeout(resolve, resolveTimerTimeoutMs(ms, 0, 0));
+  });
 }
 
 function isHighSurrogate(codeUnit: number): boolean {

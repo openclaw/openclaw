@@ -242,7 +242,9 @@ function resolveSetupTokenSource(): TokenSource {
 }
 
 async function sleep(ms: number): Promise<void> {
-  return await new Promise((resolve) => setTimeout(resolve, ms));
+  return await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function withTimeout<T>(
@@ -493,7 +495,9 @@ async function startGatewayProcess(params: {
         child.kill("SIGINT");
       }
       const exited = await withTimeout(
-        new Promise<boolean>((resolve) => child.once("exit", () => resolve(true))),
+        new Promise<boolean>((resolve) => {
+          child.once("exit", () => resolve(true));
+        }),
         1_500,
         () => false,
       );

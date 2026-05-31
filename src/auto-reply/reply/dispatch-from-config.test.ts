@@ -1203,7 +1203,9 @@ describe("dispatchReplyFromConfig", () => {
 
       const result = await Promise.race([
         resultPromise,
-        new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 1_000)),
+        new Promise<"timed-out">((resolve) => {
+          setTimeout(() => resolve("timed-out"), 1_000);
+        }),
       ]);
       if (result === "timed-out") {
         activeOperation.complete();
@@ -1254,7 +1256,9 @@ describe("dispatchReplyFromConfig", () => {
     try {
       const result = await Promise.race([
         resultPromise,
-        new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 1_000)),
+        new Promise<"blocked">((resolve) => {
+          setTimeout(() => resolve("blocked"), 1_000);
+        }),
       ]);
 
       expect(result).toBe("blocked");

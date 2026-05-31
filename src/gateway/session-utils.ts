@@ -2763,7 +2763,9 @@ export async function listSessionsFromStoreAsync(params: {
     // Yield to the event loop between batches so WebSocket heartbeats,
     // channel I/O, and concurrent RPC calls are not starved.
     if ((i + 1) % SESSIONS_LIST_YIELD_BATCH_SIZE === 0 && i + 1 < entries.length) {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
   }
 

@@ -97,7 +97,9 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<v
     if (Date.now() - startedAt > timeoutMs) {
       throw new Error("Timed out waiting for condition");
     }
-    await new Promise((resolve) => scheduleNativeTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      scheduleNativeTimeout(resolve, 10);
+    });
   }
 }
 
@@ -723,7 +725,9 @@ describe("QmdMemoryManager", () => {
     void createPromise.then(() => {
       created = true;
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(created).toBe(false);
     (releaseUpdate as (() => void) | null)?.();
     const manager = await createPromise;

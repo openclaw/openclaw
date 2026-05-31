@@ -312,7 +312,9 @@ describeLive("openai plugin live", () => {
 
     try {
       await session.connect();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       expect(errors).toStrictEqual([]);
       expect(session.isConnected()).toBe(true);
     } finally {

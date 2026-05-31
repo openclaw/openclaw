@@ -582,7 +582,9 @@ export function registerControlUiAndPairingSuite(): void {
           ws,
           (o) => o.type === "event" && o.event === "connect.challenge",
         );
-        await new Promise<void>((resolve) => ws.once("open", resolve));
+        await new Promise<void>((resolve) => {
+          ws.once("open", resolve);
+        });
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
         expect(typeof nonce).toBe("string");
@@ -1617,7 +1619,9 @@ export function registerControlUiAndPairingSuite(): void {
         socket,
         (o) => o.type === "event" && o.event === "connect.challenge",
       );
-      await new Promise<void>((resolve) => socket.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        socket.once("open", resolve);
+      });
       const challenge = await challengePromise;
       const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
       expect(typeof nonce).toBe("string");

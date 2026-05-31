@@ -284,7 +284,9 @@ export async function loginMiniMaxPortalOAuth(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remainingMs)));
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.min(pollIntervalMs, remainingMs));
+    });
     pollIntervalMs = Math.max(pollIntervalMs, 2000);
   }
 

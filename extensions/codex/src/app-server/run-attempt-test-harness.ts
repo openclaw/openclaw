@@ -85,7 +85,9 @@ async function drainActiveAppServerAttemptsForTest(): Promise<void> {
   }
   await Promise.race([
     Promise.allSettled(attempts.map((attempt) => attempt.promise)),
-    new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+    new Promise<void>((resolve) => {
+      setTimeout(resolve, 5_000);
+    }),
   ]);
 }
 

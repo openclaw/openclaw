@@ -169,7 +169,9 @@ export async function probeTelegram(
           }
           const delayMs = Math.min(retryDelayMs, remainingAfterAttemptMs);
           if (delayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            await new Promise((resolve) => {
+              setTimeout(resolve, delayMs);
+            });
           }
         }
       }

@@ -947,7 +947,9 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
           break;
         }
         const delay = resolveCdpConnectRetryDelayMs(attempt);
-        await new Promise((r) => setTimeout(r, delay));
+        await new Promise((r) => {
+          setTimeout(r, delay);
+        });
       }
     }
     if (lastErr instanceof Error) {

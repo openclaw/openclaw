@@ -1692,7 +1692,9 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(
           `qmd update retry ${attempt}/${maxAttempts - 1} after failure (${reason}): ${String(err)}`,
         );
-        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, delayMs);
+        });
       }
     }
   }
@@ -3049,7 +3051,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     await Promise.race([
       pending.catch(() => undefined),
-      new Promise<void>((resolve) => setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS)),
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, SEARCH_PENDING_UPDATE_WAIT_MS);
+      }),
     ]);
   }
 

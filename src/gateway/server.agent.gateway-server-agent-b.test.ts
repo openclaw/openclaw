@@ -480,7 +480,9 @@ describe("gateway server agent", () => {
 
       const writeWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
       trackConnectChallengeNonce(writeWs);
-      await new Promise<void>((resolve) => writeWs.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        writeWs.once("open", resolve);
+      });
       await connectOk(writeWs, { scopes: ["operator.write"] });
 
       const directReset = await rpcReq(writeWs, "sessions.reset", { key: "main" });
@@ -581,7 +583,9 @@ describe("gateway server agent", () => {
       const dial = async () => {
         const wsLocal = new WebSocket(`ws://127.0.0.1:${portLocal}`);
         trackConnectChallengeNonce(wsLocal);
-        await new Promise<void>((resolve) => wsLocal.once("open", resolve));
+        await new Promise<void>((resolve) => {
+          wsLocal.once("open", resolve);
+        });
         await connectOk(wsLocal);
         return wsLocal;
       };

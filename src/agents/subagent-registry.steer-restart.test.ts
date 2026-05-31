@@ -186,7 +186,9 @@ describe("subagent registry steer restarts", () => {
   });
 
   const flushAnnounce = async () => {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   };
   const waitForRegistrySideEffect = async (assertion: () => void) => {
     await vi.waitFor(assertion, { interval: 1, timeout: 1_000 });

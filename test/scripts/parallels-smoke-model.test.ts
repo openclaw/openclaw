@@ -105,11 +105,13 @@ function withEnv<T>(env: Record<string, string>, callback: () => T): T {
 
 async function unusedLoopbackPort(): Promise<number> {
   const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address();
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
   if (!address || typeof address === "string") {
     throw new Error("Expected TCP server address.");
   }

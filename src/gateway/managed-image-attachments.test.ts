@@ -196,7 +196,9 @@ async function requestManagedImage(params: {
     })();
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
   const address = server.address() as AddressInfo;
 
   try {
@@ -229,9 +231,9 @@ async function requestManagedImage(params: {
 
     return { result, auth };
   } finally {
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
   }
 }
 
@@ -511,7 +513,9 @@ describe("createManagedOutgoingImageBlocks", () => {
       res.end(imageBuffer);
     });
 
-    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
     const address = upstream.address() as AddressInfo;
     setMediaStoreNetworkDepsForTest({
       resolvePinnedHostname: async (hostname) => ({
@@ -552,9 +556,9 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(await fs.readFile(record.original.path)).toEqual(imageBuffer);
     } finally {
       setMediaStoreNetworkDepsForTest();
-      await new Promise<void>((resolve, reject) =>
-        upstream.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        upstream.close((error) => (error ? reject(error) : resolve()));
+      });
       if (previousStateDir == null) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -679,7 +683,9 @@ describe("createManagedOutgoingImageBlocks", () => {
       res.setHeader("content-type", "image/png");
       res.end(imageBuffer);
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const address = server.address() as AddressInfo;
     setMediaStoreNetworkDepsForTest({
       resolvePinnedHostname: async (hostname) => ({
@@ -700,9 +706,9 @@ describe("createManagedOutgoingImageBlocks", () => {
       expect(requireBlock(blocks).type).toBe("image");
     } finally {
       setMediaStoreNetworkDepsForTest();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
       if (previousStateDir == null) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {

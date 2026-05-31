@@ -817,7 +817,7 @@ describe("runCodexAppServerAttempt", () => {
           onTimeout: async () => {
             await releaseCodexSandboxExecServerEnvironment(sandbox);
           },
-          operation: async () => new Promise<never>(() => undefined),
+          operation: async () => new Promise<never>(() => {}),
         }),
       ).rejects.toThrow("codex app-server startup timed out");
 
@@ -1111,7 +1111,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -1684,7 +1686,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -1725,7 +1729,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -1762,7 +1768,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -1801,7 +1809,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
 
@@ -1846,7 +1856,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
 
@@ -1891,7 +1903,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
 
@@ -2134,7 +2148,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2189,7 +2205,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2266,7 +2284,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2454,7 +2474,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2483,7 +2505,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -2526,7 +2550,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -2566,7 +2592,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     const result = await run;
 
@@ -2609,7 +2637,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -2851,7 +2881,9 @@ describe("runCodexAppServerAttempt", () => {
 
       const result = await run;
       expect(result.aborted).toBe(true);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
       expect(unhandledRejections).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
@@ -2943,7 +2975,9 @@ describe("runCodexAppServerAttempt", () => {
       { turnTerminalIdleTimeoutMs: 60_000 },
     );
     await bufferedTerminal;
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     harness.close();
 
     const result = await run;
@@ -2983,7 +3017,9 @@ describe("runCodexAppServerAttempt", () => {
       turnTerminalIdleTimeoutMs: 60_000,
     });
     await harness.waitForMethod("turn/start");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
@@ -3076,7 +3112,9 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
 
     await harness.notify({
@@ -3120,7 +3158,9 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
     expect(
       warn.mock.calls.some(([message]) =>
@@ -3800,7 +3840,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("times out app-server startup before thread setup can hang forever", async () => {
-    setCodexAppServerClientFactoryForTest(() => new Promise<never>(() => undefined));
+    setCodexAppServerClientFactoryForTest(() => new Promise<never>(() => {}));
     const params = createParams(
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
@@ -3834,7 +3874,9 @@ describe("runCodexAppServerAttempt", () => {
       interval: 1,
     });
     await waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -4307,7 +4349,7 @@ describe("runCodexAppServerAttempt", () => {
       const c = {
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
-            return await new Promise<never>(() => undefined);
+            return await new Promise<never>(() => {});
           }
           return {};
         }),
@@ -4502,7 +4544,9 @@ describe("runCodexAppServerAttempt", () => {
       interval: 1,
     });
     await waitForMethod("turn/start");
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await run;
 

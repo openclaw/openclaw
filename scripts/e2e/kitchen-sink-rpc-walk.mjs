@@ -713,7 +713,9 @@ export async function stopGateway(child, options = {}) {
   }
   const teardownGraceMs = Math.max(0, options.teardownGraceMs ?? GATEWAY_TEARDOWN_GRACE_MS);
   const killGraceMs = Math.max(0, options.killGraceMs ?? GATEWAY_TEARDOWN_KILL_GRACE_MS);
-  const exited = new Promise((resolve) => child.once("exit", resolve));
+  const exited = new Promise((resolve) => {
+    child.once("exit", resolve);
+  });
   const waitForExit = async (ms) =>
     hasChildExited(child)
       ? true

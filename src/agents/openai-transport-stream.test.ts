@@ -102,7 +102,7 @@ function neverYieldsStream(): AsyncIterable<unknown> {
   return {
     [Symbol.asyncIterator]() {
       return {
-        next: async () => await new Promise<IteratorResult<unknown>>(() => undefined),
+        next: async () => await new Promise<IteratorResult<unknown>>(() => {}),
         return: async () => ({ done: true, value: undefined }),
       };
     },
@@ -971,7 +971,9 @@ describe("openai transport stream", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -1114,7 +1116,9 @@ describe("openai transport stream", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -1193,7 +1197,9 @@ describe("openai transport stream", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -1271,7 +1277,9 @@ describe("openai transport stream", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {

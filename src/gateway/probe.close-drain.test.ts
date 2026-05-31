@@ -93,7 +93,9 @@ describe("probeGateway close drain", () => {
     });
 
     try {
-      await new Promise<void>((resolve) => wss.once("listening", resolve));
+      await new Promise<void>((resolve) => {
+        wss.once("listening", resolve);
+      });
       const port = (wss.address() as AddressInfo).port;
 
       const result = await probeGateway({

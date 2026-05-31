@@ -252,7 +252,9 @@ describe("watch-node script", () => {
     );
 
     resolveLoadChokidar({ watch });
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(watch).toHaveBeenCalledTimes(1);
 
     fakeProcess.emit("SIGINT");
@@ -336,7 +338,9 @@ describe("watch-node script", () => {
     const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
     gatewayA.emit("exit", 1, null);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(spawn).toHaveBeenCalledTimes(2);
     const doctorSpawnCall = requireMockCall(spawn, 1);
@@ -350,7 +354,9 @@ describe("watch-node script", () => {
     expect(requireSpawnOptions(spawn, 1).stdio).toBe("inherit");
 
     doctor.emit("exit", 0, null);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(spawn).toHaveBeenCalledTimes(3);
     const restartedGatewaySpawnCall = requireMockCall(spawn, 2);
@@ -396,7 +402,9 @@ describe("watch-node script", () => {
     const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
     childA.emit("exit", 143, null);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(2);
 
     fakeProcess.emit("SIGINT");
@@ -451,37 +459,51 @@ describe("watch-node script", () => {
     const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
 
     watcher.emit("change", "src/infra/watch-node.test.ts");
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
     watcher.emit("change", "src/infra/watch-node.test.tsx");
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
     watcher.emit("change", "src/infra/watch-node-test-helpers.ts");
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
     watcher.emit("change", VOICE_CALL_README);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(childA.kill).not.toHaveBeenCalled();
 
     watcher.emit("change", VOICE_CALL_MANIFEST);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(2);
 
     watcher.emit("change", VOICE_CALL_PACKAGE);
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(childB.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(3);
 
     watcher.emit("change", "src/infra/watch-node.ts");
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(childC.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(4);
 
@@ -629,7 +651,9 @@ describe("watch-node script", () => {
         spawn,
       });
 
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(signalProcess).toHaveBeenCalledWith(2121, "SIGTERM");
       expect(spawn).toHaveBeenCalledTimes(1);

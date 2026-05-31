@@ -30,7 +30,9 @@ const DEFAULT_RETRY_CONFIG = {
 };
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function asFiniteNumber(value: unknown): number | undefined {

@@ -949,7 +949,9 @@ async function waitForSlackScenarioReply(params: {
         { cause: error },
       );
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack message`);
 }
@@ -1012,7 +1014,9 @@ async function waitForSlackNoReply(params: {
     elapsedMs = Date.now() - startedAt;
     const remainingMs = params.timeoutMs - elapsedMs;
     if (remainingMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, remainingMs)));
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(1_000, remainingMs));
+      });
     }
     elapsedMs = Date.now() - startedAt;
   }
@@ -1134,7 +1138,9 @@ async function waitForSlackApprovalPrompt(params: {
         observedAt: new Date().toISOString(),
       };
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(
     [
@@ -1202,7 +1208,9 @@ async function waitForSlackApprovalResolvedUpdate(params: {
         };
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_000);
+    });
   }
   throw new Error(
     `timed out after ${params.timeoutMs}ms waiting for Slack ${params.approvalKind} approval resolution update`,
@@ -1252,7 +1260,9 @@ async function waitForSlackApprovalCheckpointAck(params: {
         throw error;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for ${params.ackPath}`);
 }
@@ -1572,7 +1582,9 @@ async function waitForSlackChannelRunning(
     } catch {
       // retry
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 500);
+    });
   }
   throw new Error(
     `slack account "${accountId}" did not become ready` +
@@ -1599,9 +1611,9 @@ async function waitForSlackChannelStable(
     if (readyForMs >= SLACK_QA_READY_STABILITY_MS) {
       return;
     }
-    await new Promise((resolve) =>
-      setTimeout(resolve, Math.max(500, SLACK_QA_READY_STABILITY_MS - readyForMs)),
-    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, Math.max(500, SLACK_QA_READY_STABILITY_MS - readyForMs));
+    });
   }
   throw new Error(
     `slack account "${accountId}" did not remain ready for ${SLACK_QA_READY_STABILITY_MS}ms`,
@@ -2018,7 +2030,9 @@ export async function runSlackQaLive(params: {
             await gatewayHarness.stop().catch((error) => {
               appendLiveLaneIssue(cleanupIssues, "gateway stop failed", error);
             });
-            await new Promise((resolve) => setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS));
+            await new Promise((resolve) => {
+              setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS);
+            });
           }
         }
         if (scenarioResults.at(-1)?.id === scenario.id) {

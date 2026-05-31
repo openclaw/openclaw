@@ -401,7 +401,9 @@ describe("tools.effective handler", () => {
     expect(firstRespondCall(stale.respond)?.[1]).toBe(stalePayload);
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
 
     const fresh = createInvokeParams({ sessionKey: "main:abc" });

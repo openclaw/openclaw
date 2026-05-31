@@ -270,9 +270,9 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
 }
 
 function delaySlackDnsRetry(attempt: number): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt)),
-  );
+  return new Promise((resolve) => {
+    setTimeout(resolve, SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt));
+  });
 }
 
 async function withSlackDnsRequestRetry<T>(operation: string, fn: () => Promise<T>): Promise<T> {

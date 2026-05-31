@@ -199,7 +199,9 @@ export async function hasAuthForModelProvider(params: {
       return preparedAnswer;
     }
   }
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
   if (
     hasRuntimeAvailableProviderAuth({
       provider,

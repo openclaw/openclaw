@@ -475,7 +475,9 @@ describe("monitorLineProvider lifecycle", () => {
     const firstRequests = Array.from({ length: limit }, () =>
       route.handler(createHeldPostRequest(), createRouteResponse()),
     );
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     const overflowResponse = createRouteResponse();
     await route.handler(createSignedPostRequest(), overflowResponse);

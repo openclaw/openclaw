@@ -30,7 +30,9 @@ async function collectModelCallEvents(run: () => Promise<void>): Promise<Diagnos
   });
   try {
     await run();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     return events;
   } finally {
     stop();
@@ -54,7 +56,9 @@ async function collectTrustedModelCallEvents(run: () => Promise<void>): Promise<
   });
   try {
     await run();
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     return events;
   } finally {
     stop();
@@ -723,7 +727,9 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     const events = await collectModelCallEvents(async () => {
       await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(events.map((event) => event.type)).toEqual([
       "model.call.started",

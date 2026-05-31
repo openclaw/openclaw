@@ -140,7 +140,9 @@ function startGoogleMeetNodeAudioInputLoop(params: {
           if (consecutiveInputErrors >= 5 || /unknown bridgeId|bridge is not open/i.test(message)) {
             await params.stop();
           } else {
-            await new Promise((resolve) => setTimeout(resolve, 250));
+            await new Promise((resolve) => {
+              setTimeout(resolve, 250);
+            });
           }
         }
       }

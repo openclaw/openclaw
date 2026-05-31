@@ -95,7 +95,9 @@ describe("tui session actions", () => {
     const first = refreshSessionInfo();
     const second = refreshSessionInfo();
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(listSessions).toHaveBeenCalledTimes(1);
     expect(listSessions).toHaveBeenNthCalledWith(1, {
       limit: TUI_SESSION_LOOKUP_LIMIT,
@@ -119,7 +121,9 @@ describe("tui session actions", () => {
       ],
     });
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(listSessions).toHaveBeenCalledTimes(2);
 
@@ -171,14 +175,18 @@ describe("tui session actions", () => {
     const second = refreshSessionInfo();
     const third = refreshSessionInfo();
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(listSessions).toHaveBeenCalledTimes(1);
 
     resolveFirst?.({
       defaults: {},
       sessions: [{ key: "agent:main:main", updatedAt: 1 }],
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     expect(listSessions).toHaveBeenCalledTimes(2);
 
     resolveSecond?.({

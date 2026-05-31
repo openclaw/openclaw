@@ -4982,9 +4982,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   it("falls back to gateway user persistence when successful runtime persistence fails", async () => {
     createTranscriptFixture("openclaw-chat-send-user-transcript-success-runtime-persist-failed-");
     mockState.triggerAgentRunStart = true;
-    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0),
-    );
+    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0);
+    });
     mockState.finalPayload = { text: "agent still answered" };
     const respond = vi.fn();
     const context = createChatContext();

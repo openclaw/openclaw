@@ -442,7 +442,9 @@ describe("gateway server chat", () => {
         headers: { origin: `http://127.0.0.1:${port}` },
       });
       trackConnectChallengeNonce(webchatWs);
-      await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        webchatWs?.once("open", resolve);
+      });
       await connectOk(webchatWs, {
         client: {
           id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -1350,7 +1352,9 @@ describe("gateway server chat", () => {
         try {
           scopedWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
           trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await new Promise<void>((resolve) => {
+            scopedWs?.once("open", resolve);
+          });
           await connectOk(scopedWs, {
             scopes: ["operator.write"],
           });
@@ -1395,7 +1399,9 @@ describe("gateway server chat", () => {
         try {
           scopedWs = new WebSocket(`ws://127.0.0.1:${portLocal}`);
           trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => scopedWs?.once("open", resolve));
+          await new Promise<void>((resolve) => {
+            scopedWs?.once("open", resolve);
+          });
           await connectOk(scopedWs, {
             scopes: ["operator.write"],
           });
@@ -1576,7 +1582,9 @@ describe("gateway server chat", () => {
       headers: { origin: `http://127.0.0.1:${port}` },
     });
     trackConnectChallengeNonce(webchatWs);
-    await new Promise<void>((resolve) => webchatWs.once("open", resolve));
+    await new Promise<void>((resolve) => {
+      webchatWs.once("open", resolve);
+    });
     await connectOk(webchatWs, {
       client: {
         id: GATEWAY_CLIENT_NAMES.WEBCHAT,

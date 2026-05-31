@@ -163,7 +163,7 @@ function settleAfterDelay(params: {
 }
 
 function waitForeverForPromptInput(): Promise<string> {
-  return new Promise<string>(() => undefined);
+  return new Promise<string>(() => {});
 }
 
 function createOpenAICodexOAuthError(
