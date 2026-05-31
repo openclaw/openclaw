@@ -787,6 +787,65 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
+  it("clears liveness when retry setup throws before task terminal update (#88205)", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runTurn.mockImplementationOnce(async function* () {
+        yield { type: "error" as const, message: "acpx exited with code 1" };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      let childReads = 0;
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          childReads += 1;
+          if (childReads > 2) {
+            throw new Error("session store unavailable");
+          }
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Retry cleanup",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: { sessionId: "parent-1", updatedAt: Date.now() },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await expect(
+        manager.runTurn({
+          cfg: baseCfg,
+          sessionKey: "agent:codex:acp:child-1",
+          text: "stale resume",
+          mode: "prompt",
+          requestId: "retry-cleanup-failure-acp-turn",
+        }),
+      ).rejects.toThrow("session store unavailable");
+
+      const childSessionKey = requireTaskByRunId("retry-cleanup-failure-acp-turn").childSessionKey;
+      if (!childSessionKey) {
+        throw new Error("Expected the ACP task record to carry a childSessionKey");
+      }
+      expect(isAcpTurnActive(childSessionKey)).toBe(false);
+    });
+  }, 300_000);
+
   it("rejects a queued turn promptly when its caller aborts before the actor is free", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
