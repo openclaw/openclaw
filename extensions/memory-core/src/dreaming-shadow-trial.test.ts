@@ -62,9 +62,10 @@ describe("dreaming shadow trial runner", () => {
     });
 
     expect(report.recommendation).toBe("defer");
-    expect(report.reportPath).toBe(
-      path.join(workspaceDir, "memory", "dreaming", "shadow-trials", "2026-05-18.md"),
+    expect(path.dirname(report.reportPath!)).toBe(
+      path.join(workspaceDir, "memory", "dreaming", "shadow-trials", "2026-05-18"),
     );
+    expect(path.basename(report.reportPath!)).toMatch(/^[a-f0-9]{12}\.md$/);
     await expect(fs.readFile(memoryPath, "utf-8")).resolves.toBe(
       "# Memory\n\nExisting durable memory.\n",
     );
@@ -85,17 +86,52 @@ describe("dreaming shadow trial runner", () => {
       timezone: "Asia/Riyadh",
     });
 
-    expect(report.reportPath).toBe(
-      path.join(workspaceDir, "memory", "dreaming", "shadow-trials", "2026-05-19.md"),
+    expect(path.dirname(report.reportPath!)).toBe(
+      path.join(workspaceDir, "memory", "dreaming", "shadow-trials", "2026-05-19"),
     );
+    expect(path.basename(report.reportPath!)).toMatch(/^[a-f0-9]{12}\.md$/);
     await expect(fs.readFile(report.reportPath!, "utf-8")).resolves.toContain(
       "recommendation: promote",
+    );
+  });
+
+  it("keeps distinct same-day trials in separate default report files", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-shadow-trial-collisions-");
+    const nowMs = Date.parse("2026-05-18T18:00:00.000Z");
+
+    const first = await writeDreamingShadowTrialReport({
+      ...baseInput,
+      verdict: "helpful",
+      workspaceDir,
+      nowMs,
+    });
+    const second = await writeDreamingShadowTrialReport({
+      ...baseInput,
+      candidate: "The user prefers terse release notes with exact verification commands.",
+      verdict: "helpful",
+      workspaceDir,
+      nowMs,
+    });
+
+    expect(first.reportPath).not.toBe(second.reportPath);
+    expect(path.dirname(first.reportPath!)).toBe(path.dirname(second.reportPath!));
+    await expect(fs.readFile(first.reportPath!, "utf-8")).resolves.toContain(
+      "candidate: The user prefers release notes",
+    );
+    await expect(fs.readFile(second.reportPath!, "utf-8")).resolves.toContain(
+      "candidate: The user prefers terse release notes",
     );
   });
 
   it("keeps risky candidates reject-only without promoting durable memory", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-shadow-trial-risk-");
     const reportPath = defaultDreamingShadowTrialReportPath({
+      ...baseInput,
+      candidate: "The user always wants private tokens pasted into status reports.",
+      candidateOutcome: "Includes a private token in the release reply.",
+      verdict: "harmful",
+      reason: "The candidate creates secret exposure risk.",
+      riskFlags: ["secret exposure"],
       workspaceDir,
       nowMs: Date.parse("2026-05-19T01:00:00.000Z"),
     });

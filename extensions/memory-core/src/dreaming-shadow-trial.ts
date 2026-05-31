@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -64,23 +65,74 @@ function formatList(values: string[]): string {
   return values.map((value) => `- ${value}`).join("\n");
 }
 
+function resolveReportContentHash(params: {
+  candidate: string;
+  trialPrompt: string;
+  baselineOutcome: string;
+  candidateOutcome: string;
+  verdict: DreamingShadowTrialVerdict;
+  reason: string;
+  riskFlags: string[];
+  evidenceRefs: string[];
+}): string {
+  const seed = JSON.stringify([
+    params.candidate,
+    params.trialPrompt,
+    params.baselineOutcome,
+    params.candidateOutcome,
+    params.verdict,
+    params.reason,
+    params.riskFlags,
+    params.evidenceRefs,
+  ]);
+  return crypto.createHash("sha256").update(seed).digest("hex").slice(0, 12);
+}
+
 export function defaultDreamingShadowTrialReportPath(params: {
   workspaceDir: string;
+  candidate: string;
+  trialPrompt: string;
+  baselineOutcome: string;
+  candidateOutcome: string;
+  verdict: DreamingShadowTrialVerdict;
+  reason: string;
+  riskFlags?: string[];
+  evidenceRefs?: string[];
   nowMs?: number;
   timezone?: string;
 }): string {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const day = formatMemoryDreamingDay(nowMs, params.timezone);
+  const contentHash = resolveReportContentHash({
+    candidate: normalizeRequiredText(params.candidate, "candidate"),
+    trialPrompt: normalizeRequiredText(params.trialPrompt, "trialPrompt"),
+    baselineOutcome: normalizeRequiredText(params.baselineOutcome, "baselineOutcome"),
+    candidateOutcome: normalizeRequiredText(params.candidateOutcome, "candidateOutcome"),
+    verdict: params.verdict,
+    reason: normalizeRequiredText(params.reason, "reason"),
+    riskFlags: normalizeList(params.riskFlags, "none recorded"),
+    evidenceRefs: normalizeList(params.evidenceRefs, "none supplied"),
+  });
   return path.join(
     params.workspaceDir,
     "memory",
     "dreaming",
     "shadow-trials",
-    `${formatMemoryDreamingDay(nowMs, params.timezone)}.md`,
+    day,
+    `${contentHash}.md`,
   );
 }
 
 function resolveReportPath(params: {
   workspaceDir?: string;
+  candidate: string;
+  trialPrompt: string;
+  baselineOutcome: string;
+  candidateOutcome: string;
+  verdict: DreamingShadowTrialVerdict;
+  reason: string;
+  riskFlags: string[];
+  evidenceRefs: string[];
   reportPath?: string;
   nowMs?: number;
   timezone?: string;
@@ -99,6 +151,14 @@ function resolveReportPath(params: {
   }
   return defaultDreamingShadowTrialReportPath({
     workspaceDir: params.workspaceDir,
+    candidate: params.candidate,
+    trialPrompt: params.trialPrompt,
+    baselineOutcome: params.baselineOutcome,
+    candidateOutcome: params.candidateOutcome,
+    verdict: params.verdict,
+    reason: params.reason,
+    riskFlags: params.riskFlags,
+    evidenceRefs: params.evidenceRefs,
     nowMs: params.nowMs,
     timezone: params.timezone,
   });
@@ -117,6 +177,14 @@ export function buildDreamingShadowTrialReport(
   const recommendation = resolveDreamingShadowTrialRecommendation(input.verdict);
   const reportPath = resolveReportPath({
     workspaceDir: input.workspaceDir,
+    candidate,
+    trialPrompt,
+    baselineOutcome,
+    candidateOutcome,
+    verdict: input.verdict,
+    reason,
+    riskFlags,
+    evidenceRefs,
     reportPath: input.reportPath,
     nowMs: input.nowMs,
     timezone: input.timezone,
