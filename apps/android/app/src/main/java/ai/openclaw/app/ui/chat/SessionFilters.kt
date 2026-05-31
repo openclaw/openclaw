@@ -32,6 +32,7 @@ fun friendlySessionName(key: String): String {
   return result.ifBlank { key }
 }
 
+/** Builds the selectable recent-session list while preserving the active session. */
 fun resolveSessionChoices(
   currentSessionKey: String,
   sessions: List<ChatSessionEntry>,

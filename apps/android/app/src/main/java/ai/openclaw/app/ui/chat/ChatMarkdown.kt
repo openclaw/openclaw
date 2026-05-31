@@ -98,6 +98,7 @@ private val markdownParser: Parser by lazy {
     .build()
 }
 
+/** Renders gateway/chat Markdown using the restricted mobile-safe feature set. */
 @Composable
 fun ChatMarkdown(
   text: String,
@@ -617,6 +618,7 @@ private fun standaloneDataImage(paragraph: Paragraph): ParsedDataImage? {
   return parseDataImageDestination(only.destination)
 }
 
+/** Parses a data:image Markdown destination when it is safe to render inline. */
 internal fun parseDataImageDestination(destination: String?): ParsedDataImage? {
   val raw = destination?.trim().orEmpty()
   if (raw.isEmpty()) return null
