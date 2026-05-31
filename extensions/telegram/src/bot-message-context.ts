@@ -471,6 +471,7 @@ export const buildTelegramMessageContext = async ({
     effectiveDmAllow: dmAllow.effectiveAllow,
     groupConfig,
     topicConfig,
+    providerMentionPatterns: cfg.channels?.telegram?.accounts?.[account.accountId]?.mentionPatterns,
     requireMention,
     options,
     groupHistories,
