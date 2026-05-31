@@ -34,6 +34,8 @@ const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
 const WORKSPACE_ATTESTATION_SUFFIX = ".attested";
 const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
+const WORKSPACE_ATTESTATION_HEADER = "openclaw-workspace-attestation:v1";
+const WORKSPACE_ATTESTATION_MAX_BYTES = 256;
 const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -357,7 +359,34 @@ async function hasRecentWorkspaceAttestation(attestationPath: string): Promise<b
     if (!stat.isFile()) {
       return false;
     }
+    if (!(await isWorkspaceAttestationMarker(attestationPath))) {
+      return false;
+    }
     return Date.now() - stat.mtimeMs <= WORKSPACE_ATTESTATION_RECENT_MS;
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+      throw err;
+    }
+    return false;
+  }
+}
+
+async function isWorkspaceAttestationMarker(attestationPath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(attestationPath);
+    if (!stat.isFile() || stat.size > WORKSPACE_ATTESTATION_MAX_BYTES) {
+      return false;
+    }
+    const raw = await fs.readFile(attestationPath, "utf-8");
+    if (raw.startsWith(`${WORKSPACE_ATTESTATION_HEADER}\n`)) {
+      return true;
+    }
+    const trimmed = raw.trim();
+    return (
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(trimmed) &&
+      !Number.isNaN(Date.parse(trimmed))
+    );
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code !== "ENOENT") {
@@ -369,11 +398,17 @@ async function hasRecentWorkspaceAttestation(attestationPath: string): Promise<b
 
 async function writeWorkspaceAttestation(attestationPath: string): Promise<void> {
   await fs.mkdir(path.dirname(attestationPath), { recursive: true });
+  const now = new Date();
   try {
     const stat = await fs.lstat(attestationPath);
     if (!stat.isFile()) {
       return;
     }
+    if (!(await isWorkspaceAttestationMarker(attestationPath))) {
+      return;
+    }
+    await fs.utimes(attestationPath, now, now);
+    return;
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code !== "ENOENT") {
@@ -385,11 +420,11 @@ async function writeWorkspaceAttestation(attestationPath: string): Promise<void>
     typeof syncFs.constants.O_NOFOLLOW === "number" ? syncFs.constants.O_NOFOLLOW : 0;
   const handle = await fs.open(
     attestationPath,
-    syncFs.constants.O_WRONLY | syncFs.constants.O_CREAT | syncFs.constants.O_TRUNC | noFollowFlag,
+    syncFs.constants.O_WRONLY | syncFs.constants.O_CREAT | syncFs.constants.O_EXCL | noFollowFlag,
     0o600,
   );
   try {
-    await handle.writeFile(`${new Date().toISOString()}\n`, "utf-8");
+    await handle.writeFile(`${WORKSPACE_ATTESTATION_HEADER}\n${now.toISOString()}\n`, "utf-8");
   } finally {
     await handle.close();
   }

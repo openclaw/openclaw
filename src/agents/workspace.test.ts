@@ -130,15 +130,50 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS));
   });
 
+  it("keeps ISO-only attestation markers from the previous branch format effective", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await fs.writeFile(`${tempDir}.attested`, `${new Date().toISOString()}\n`);
+    await fs.rm(tempDir, { recursive: true, force: true });
+
+    await expectWorkspaceVanished(
+      ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+    );
+  });
+
   it("allows a brand new workspace when the only attestation marker is stale", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await fs.rm(tempDir, { recursive: true, force: true });
     const staleDate = new Date(Date.now() - 25 * 60 * 60 * 1000);
-    await fs.writeFile(`${tempDir}.attested`, staleDate.toISOString());
     await fs.utimes(`${tempDir}.attested`, staleDate, staleDate);
 
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expectBootstrapSeeded(tempDir);
+  });
+
+  it("does not overwrite a sibling file that is not an OpenClaw attestation marker", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const attestationPath = `${tempDir}.attested`;
+    const siblingContent = "external attestation data\n";
+    await fs.writeFile(attestationPath, siblingContent);
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expectBootstrapSeeded(tempDir);
+    expect(await fs.readFile(attestationPath, "utf-8")).toBe(siblingContent);
+  });
+
+  it("does not read or overwrite a large sibling file at the marker path", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const attestationPath = `${tempDir}.attested`;
+    const siblingContent = "x".repeat(1024);
+    await fs.writeFile(attestationPath, siblingContent);
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expectBootstrapSeeded(tempDir);
+    expect(await fs.readFile(attestationPath, "utf-8")).toBe(siblingContent);
   });
 
   it.skipIf(process.platform === "win32")(
