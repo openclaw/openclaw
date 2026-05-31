@@ -3358,9 +3358,7 @@ describe("memory plugin e2e", () => {
     expect(result).toBe("");
   });
 
-  test("escapeMemoryForPrompt strips media attached annotations before escaping", async () => {
-    const { escapeMemoryForPrompt } = await import("./index.js");
-
+  test("escapeMemoryForPrompt strips media attached annotations before escaping", () => {
     expect(
       escapeMemoryForPrompt(
         "User sent image [media attached: /Users/alex/.openclaw/media/photo.jpg (image/jpeg)] and said hello",
