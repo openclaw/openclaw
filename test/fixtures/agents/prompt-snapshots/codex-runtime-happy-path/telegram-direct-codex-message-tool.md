@@ -645,6 +645,17 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
+        "mediaUrl": {
+          "description": "Alias for media.",
+          "type": "string"
+        },
+        "mediaUrls": {
+          "description": "Multiple media URLs/paths.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "message": {
           "type": "string"
         },
