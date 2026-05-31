@@ -2179,7 +2179,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(draftStream.update).toHaveBeenLastCalledWith({
       text: ["Shelling", "• tool one", "• tool two"].join("\n"),
       blocks: [
@@ -2205,6 +2205,48 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves text Slack progress lines after a draft boundary status update", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "item", progressText: "tool one" },
+      { kind: "item", progressText: "tool two" },
+      { kind: "assistant_start" },
+      { kind: "partial", text: "partial answer" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Working" } } },
+      }),
+    );
+
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Working", "• tool one", "• tool two"].join("\n"),
+    );
+  });
+
+  it("forces a new draft message on assistant boundaries in partial mode", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "partial", text: "first chunk" },
+      { kind: "assistant_start" },
+      { kind: "partial", text: "second chunk" },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
   it("can hide raw Slack command progress text by config", async () => {

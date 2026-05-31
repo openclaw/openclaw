@@ -240,7 +240,6 @@ describe("refreshChat", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
       limit: 100,
-      maxChars: 4000,
     });
     expect(request).not.toHaveBeenCalledWith("models.list", { view: "configured" });
     const sessionsListPayload = findRequestPayload(
@@ -286,7 +285,6 @@ describe("refreshChat", () => {
       sessionKey: "global",
       agentId: "work",
       limit: 100,
-      maxChars: 4000,
     });
     const sessionsListPayload = findRequestPayload(
       request as unknown as MockCallSource,
@@ -320,7 +318,6 @@ describe("refreshChat", () => {
       sessionKey: "agent:work:main",
       agentId: "work",
       limit: 100,
-      maxChars: 4000,
     });
     const sessionsListPayload = findRequestPayload(
       request as unknown as MockCallSource,
@@ -374,7 +371,6 @@ describe("refreshChat", () => {
       sessionKey: "global",
       agentId: "ops",
       limit: 100,
-      maxChars: 4000,
     });
     const sessionsListPayload = findRequestPayload(
       request as unknown as MockCallSource,
@@ -400,7 +396,6 @@ describe("refreshChat", () => {
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "unknown",
       limit: 100,
-      maxChars: 4000,
     });
     const sessionsListPayload = findRequestPayload(
       request as unknown as MockCallSource,
@@ -1869,7 +1864,6 @@ describe("handleSendChat", () => {
       sessionKey: "global",
       agentId: "work",
       limit: 100,
-      maxChars: 4000,
     });
     expect(host.chatMessages).toStrictEqual([]);
   });

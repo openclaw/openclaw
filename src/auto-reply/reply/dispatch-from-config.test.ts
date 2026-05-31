@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
+import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   clearApprovalNativeRouteStateForTest,
@@ -38,6 +39,9 @@ import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
+type ResolveInboundConversationParams = Parameters<
+  NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
+>[0];
 
 const mocks = vi.hoisted(() => ({
   routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
@@ -5207,6 +5211,126 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.kind).toBe("codex-app-server-session");
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("routes Discord thread plugin-owned bindings by raw thread id", async () => {
+    setNoAbort();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "discord" }),
+            messaging: {
+              resolveInboundConversation: ({
+                to,
+                conversationId,
+                threadId,
+                threadParentId,
+              }: ResolveInboundConversationParams) =>
+                threadId
+                  ? {
+                      conversationId: String(threadId),
+                      ...(threadParentId
+                        ? { parentConversationId: `channel:${threadParentId}` }
+                        : {}),
+                    }
+                  : { conversationId: to ?? conversationId },
+            },
+          },
+        },
+      ]),
+    );
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+      status: "handled",
+      result: { handled: true },
+    });
+    sessionBindingMocks.resolveByConversation.mockImplementation(
+      (ref: {
+        channel: string;
+        accountId: string;
+        conversationId: string;
+        parentConversationId?: string;
+      }) =>
+        ref.channel === "discord" &&
+        ref.accountId === "default" &&
+        ref.conversationId === "1510164477642014740"
+          ? ({
+              bindingId: "binding-discord-thread",
+              targetSessionKey: "plugin-binding:codex:thread",
+              targetKind: "session",
+              conversation: {
+                channel: "discord",
+                accountId: "default",
+                conversationId: "1510164477642014740",
+                parentConversationId: "channel:1510164477642014999",
+              },
+              status: "active",
+              boundAt: 1710000000000,
+              metadata: {
+                pluginBindingOwner: "plugin",
+                pluginId: "openclaw-codex-app-server",
+                pluginRoot: "/plugins/openclaw-codex-app-server",
+              },
+            } satisfies SessionBindingRecord)
+          : null,
+    );
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "channel:1510164477642014740",
+      To: "channel:1510164477642014740",
+      AccountId: "default",
+      SenderId: "user-9",
+      CommandAuthorized: true,
+      WasMentioned: false,
+      RawBody: "continue",
+      Body: "continue",
+      MessageSid: "msg-claim-discord-thread",
+      MessageThreadId: "1510164477642014740",
+      ThreadParentId: "1510164477642014999",
+      SessionKey: "agent:main:discord:channel:1510164477642014740",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "default",
+        conversationId: "1510164477642014740",
+        parentConversationId: "channel:1510164477642014999",
+      }),
+    );
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+      "openclaw-codex-app-server",
+      expect.objectContaining({
+        channel: "discord",
+        conversationId: "1510164477642014740",
+        parentConversationId: "channel:1510164477642014999",
+      }),
+      expect.objectContaining({
+        conversationId: "1510164477642014740",
+        parentConversationId: "channel:1510164477642014999",
+        pluginBinding: expect.objectContaining({ bindingId: "binding-discord-thread" }),
+      }),
+    );
     expect(replyResolver).not.toHaveBeenCalled();
   });
 

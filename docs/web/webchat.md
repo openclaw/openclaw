@@ -85,7 +85,7 @@ Full configuration: [Configuration](/gateway/configuration)
 
 WebChat options:
 
-- `gateway.webchat.chatHistoryMaxChars`: maximum character count for text fields in `chat.history` responses. When a transcript entry exceeds this limit, Gateway truncates long text fields and may replace oversized messages with a placeholder. Per-request `maxChars` can also be sent by the client to override this default for a single `chat.history` call.
+- `gateway.webchat.chatHistoryMaxChars`: maximum character count for text fields in `chat.history` responses. When a transcript entry exceeds this limit, Gateway truncates long text fields and may replace oversized messages with a placeholder. The bundled Control UI uses this Gateway default; API clients can still send per-request `maxChars` to override it for a single `chat.history` call. Legacy `channels.webchat` config is retired; run `openclaw doctor --fix` to remove it.
 
 Related global options:
 

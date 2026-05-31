@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
+import type { ChannelMessagingAdapter } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -17,6 +18,10 @@ import {
   toPluginMessageReceivedEvent,
   toPluginMessageSentEvent,
 } from "./message-hook-mappers.js";
+
+type ResolveInboundConversationParams = Parameters<
+  NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
+>[0];
 
 function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -78,6 +83,30 @@ describe("message hook mappers", () => {
                   return { conversationId: `user:${normalizedFrom}` };
                 }
                 return null;
+              },
+            },
+          },
+        },
+        {
+          pluginId: "thread-claim-chat",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "thread-claim-chat", label: "Thread claim chat" }),
+            messaging: {
+              resolveInboundConversation: ({
+                to,
+                threadId,
+                threadParentId,
+              }: ResolveInboundConversationParams) => {
+                if (threadId) {
+                  return {
+                    conversationId: String(threadId),
+                    ...(threadParentId
+                      ? { parentConversationId: `channel:${threadParentId}` }
+                      : {}),
+                  };
+                }
+                return to ? { conversationId: to } : null;
               },
             },
           },
@@ -338,6 +367,28 @@ describe("message hook mappers", () => {
       spanId: undefined,
       parentSpanId: undefined,
       callDepth: undefined,
+    });
+  });
+
+  it("passes thread parent ids to channel plugin claim resolvers", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        Provider: "thread-claim-chat",
+        Surface: "thread-claim-chat",
+        OriginatingChannel: "thread-claim-chat",
+        To: "channel:1510164477642014740",
+        OriginatingTo: "channel:1510164477642014740",
+        MessageThreadId: "1510164477642014740",
+        ThreadParentId: "1510164477642014999",
+        GroupChannel: "thread",
+        GroupSubject: "guild",
+      }),
+    );
+
+    expect(toPluginInboundClaimContext(canonical)).toMatchObject({
+      channelId: "thread-claim-chat",
+      conversationId: "1510164477642014740",
+      parentConversationId: "channel:1510164477642014999",
     });
   });
 

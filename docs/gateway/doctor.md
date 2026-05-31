@@ -255,6 +255,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `routing.groupChat.historyLimit` → `messages.groupChat.historyLimit`
     - `routing.groupChat.mentionPatterns` → `messages.groupChat.mentionPatterns`
     - `channels.telegram.requireMention` → `channels.telegram.groups."*".requireMention`
+    - `channels.webchat.textChunkLimit` → `gateway.webchat.chatHistoryMaxChars`; other retired `channels.webchat` fields are removed
     - `routing.queue` → `messages.queue`
     - `routing.bindings` → top-level `bindings`
     - `routing.agents`/`routing.defaultAgentId` → `agents.list` + `agents.list[].default`

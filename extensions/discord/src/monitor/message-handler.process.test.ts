@@ -1863,6 +1863,7 @@ describe("processDiscordMessage session routing", () => {
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: "agent:main:discord:channel:thread-1",
       MessageThreadId: "thread-1",
+      ThreadParentId: "parent-1",
       ModelParentSessionKey: "agent:main:discord:channel:parent-1",
     });
     expect(getLastDispatchCtx()?.ParentSessionKey).toBeUndefined();
