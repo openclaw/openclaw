@@ -1840,6 +1840,8 @@ importers:
         specifier: workspace:*
         version: link:../gateway-client
 
+  packages/snes-studio-core: {}
+
   packages/speech-core:
     dependencies:
       openclaw:

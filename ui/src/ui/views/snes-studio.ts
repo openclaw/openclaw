@@ -24,7 +24,6 @@ import {
   createSnesAgentDispatchRecord,
   createSnesAgentPatchProposalFromResult,
   createSnesAgentTeamPlan,
-  createSnesAgentTeamPreflight,
   createSnesAgentTeamReadinessPlan,
   createSnesAiBuildPlan,
   createSnesAiAuthoringPrompts,
@@ -94,7 +93,6 @@ import {
   SNES_AGENT_DISPATCH_QUEUE_KEY,
   SNES_AGENT_RESULT_EVENT,
   SNES_AGENT_RESULT_QUEUE_KEY,
-  SNES_AGENT_TEAM_PREFLIGHT_TIMEOUT_MS,
   SNES_IMPORTED_TILE_BRUSH_BASE,
   SNES_STUDIO_EDIT_GRID,
   stableProjectJson,
@@ -109,7 +107,6 @@ import {
   type SnesAgentTeamReadiness,
   type SnesAgentTeamReadinessReport,
   type SnesAgentTeamRun,
-  type SnesAgentTeamStageResult,
   type SnesAgentResultRecord,
   type SnesAgentPatchProposal,
   type SnesAgentProvider,
@@ -567,7 +564,6 @@ let arcadeAreaPromptDraft = "Add a coin trail here.";
 let pendingAreaPreview: SnesPendingAreaPreview | null = null;
 let showExpertStudio = false;
 let selectedCreateTarget: SnesCreateTarget = "full-game";
-let showAdvancedWorkbench = false;
 let objectCardFilter: SnesObjectCardFilter = "all";
 let objectCardSearchDraft = "";
 let selectedPanel: SnesStudioPanel = "project";
@@ -667,7 +663,6 @@ let lastRuntimeParityReport: SnesRuntimeParityReport | null = null;
 let lastRuntimeReplayInputs: SnesRuntimeInputFrame[] = [];
 let agentGatewaySessionKey = loadAgentGatewaySessionKey();
 let agentTeamRun: SnesAgentTeamRun | null = null;
-let agentTeamStageResults: SnesAgentTeamStageResult[] = [];
 let agentTeamAutoCheckStarted = false;
 let agentTeamReadinessReport: SnesAgentTeamReadinessReport | null = null;
 let lastEventSimulation: SnesEventSimulationResult | null = null;
@@ -930,7 +925,6 @@ export function resetSnesStudioStateForTests() {
   pendingAreaPreview = null;
   showExpertStudio = false;
   selectedCreateTarget = "full-game";
-  showAdvancedWorkbench = false;
   objectCardFilter = "all";
   objectCardSearchDraft = "";
   selectedPanel = "project";
@@ -995,7 +989,6 @@ export function resetSnesStudioStateForTests() {
   lastPlaytestFeedback = null;
   agentGatewaySessionKey = DEFAULT_AGENT_GATEWAY_SESSION_KEY;
   agentTeamRun = null;
-  agentTeamStageResults = [];
   agentTeamAutoCheckStarted = false;
   agentTeamReadinessReport = null;
   lastEventSimulation = null;
@@ -2495,38 +2488,6 @@ function addEntity(host: HostUpdate, kind: SnesSceneEntityKind) {
   pushConsole(host, `Added ${kind} entity to ${scene.name}.`);
 }
 
-function addNamedSceneEntity(
-  host: HostUpdate,
-  kind: SnesSceneEntityKind,
-  name: string,
-  options: { metaspriteTiles?: number; x?: number; y?: number } = {},
-) {
-  const scene = selectedScene();
-  if (!scene) {
-    return;
-  }
-  updateProject(host, (draft) => {
-    const draftScene = draft.scenes[selectedSceneIndex];
-    if (!draftScene) {
-      return;
-    }
-    const count = draftScene.entities.filter((entity) => entity.name.startsWith(name)).length + 1;
-    draftScene.entities.push({
-      id: `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${Date.now()}`,
-      kind,
-      name: `${name} ${count}`,
-      x: options.x ?? Math.min(224, 96 + count * 32),
-      y: options.y ?? (kind === "item" ? 112 : 176),
-      metaspriteTiles: options.metaspriteTiles ?? (kind === "item" ? 2 : 8),
-    });
-  });
-  pushConsole(host, `Added ${name.toLowerCase()} to ${scene.name}.`);
-}
-
-function addGuideEntity(host: HostUpdate) {
-  addNamedSceneEntity(host, "npc", "Guide", { metaspriteTiles: 4, x: 144, y: 176 });
-}
-
 function addScenePalettePiece(
   host: HostUpdate,
   piece: SnesScenePalettePiece,
@@ -3702,7 +3663,7 @@ function toggleGamePartLock(
 }
 
 function queueVisibleAgentRun(
-  host: HostUpdate,
+  _host: HostUpdate,
   provider: SnesAgentProvider,
   surface: SnesAiAuthoringSurface,
 ) {
@@ -4251,7 +4212,7 @@ function hotReloadRuntimeAfterEdit(host: HostUpdate, title: string, detail: stri
   host.requestUpdate?.();
 }
 
-function advanceLivePlaytest(host: HostUpdate) {
+function advanceLivePlaytest(_host: HostUpdate) {
   const runtime = currentRuntimeProject();
   const previous = previewSimulationState;
   const input = livePlaytestInputSnapshot();
@@ -5529,7 +5490,7 @@ function parseGatewayAgentPatchResult(
 }
 
 function extractGatewayRunId(response: unknown, depth = 0): string | null {
-  if (depth > 4 || response === null || response === undefined) {
+  if (depth > 5 || response === null || response === undefined) {
     return null;
   }
   if (typeof response === "string") {
@@ -5548,9 +5509,10 @@ function extractGatewayRunId(response: unknown, depth = 0): string | null {
   if (!record) {
     return null;
   }
-  const directRunId = record.runId;
-  if (typeof directRunId === "string" && directRunId.trim()) {
-    return directRunId.trim();
+  for (const key of ["runId", "id", "targetRunId"]) {
+    if (typeof record[key] === "string" && record[key].trim()) {
+      return record[key].trim();
+    }
   }
   for (const key of ["result", "response", "data", "payload"]) {
     const runId = extractGatewayRunId(record[key], depth + 1);
@@ -5609,169 +5571,6 @@ async function requestGatewayAgentPatch(
     { timeoutMs: 15000 },
   );
   return parseGatewayAgentPatchResult(history, currentProject, requestedAgent, surface);
-}
-
-function parseGatewayAgentTeamPreflightText(
-  text: string,
-  member: SnesAgentTeamMember,
-): SnesAgentTeamStageResult | null {
-  try {
-    const parsed = JSON.parse(unwrapJsonCodeFence(text)) as {
-      ready?: unknown;
-      role?: unknown;
-      summary?: unknown;
-      blocker?: unknown;
-    };
-    const roleMatches = parsed.role === undefined || parsed.role === member.role;
-    if (!roleMatches) {
-      return null;
-    }
-    if (parsed.ready === true) {
-      return {
-        role: member.role,
-        status: "ready",
-        summary:
-          typeof parsed.summary === "string"
-            ? parsed.summary
-            : `${member.title} is ready for SNES Studio.`,
-        responseText: text,
-      };
-    }
-    if (parsed.ready === false) {
-      return {
-        role: member.role,
-        status: "blocked",
-        summary:
-          typeof parsed.blocker === "string"
-            ? parsed.blocker
-            : `${member.title} returned a blocked readiness response.`,
-        responseText: text,
-      };
-    }
-  } catch {
-    // Continue scanning Gateway response candidates.
-  }
-  return null;
-}
-
-function parseGatewayAgentTeamPreflightResult(
-  response: unknown,
-  member: SnesAgentTeamMember,
-): SnesAgentTeamStageResult | null {
-  for (const candidate of collectGatewayResponseText(response)) {
-    const direct = parseGatewayAgentTeamPreflightText(candidate, member);
-    if (direct) {
-      return direct;
-    }
-    try {
-      const parsed = JSON.parse(unwrapJsonCodeFence(candidate)) as unknown;
-      for (const nested of collectGatewayResponseText(parsed)) {
-        const nestedResult = parseGatewayAgentTeamPreflightText(nested, member);
-        if (nestedResult) {
-          return nestedResult;
-        }
-      }
-    } catch {
-      // Continue scanning other response candidates.
-    }
-  }
-  return null;
-}
-
-async function requestGatewayAgentTeamPreflight(
-  host: HostUpdate & { client: SnesGatewayClient },
-  member: SnesAgentTeamMember,
-  checkedAt: string,
-): Promise<SnesAgentTeamStageResult> {
-  const handoff = createSnesAgentTeamPreflight(member, { createdAt: checkedAt });
-  const accepted = await host.client.request<unknown>(handoff.method, handoff.request, {
-    timeoutMs: 15000,
-  });
-  const immediate = parseGatewayAgentTeamPreflightResult(accepted, member);
-  if (immediate) {
-    return immediate;
-  }
-  const runId = extractGatewayRunId(accepted);
-  if (!runId) {
-    return {
-      role: member.role,
-      status: "blocked",
-      summary: `${member.title} did not return a Gateway run id.`,
-    };
-  }
-  const wait = await host.client.request<unknown>(
-    handoff.wait.method,
-    { runId, timeoutMs: handoff.wait.timeoutMs },
-    { timeoutMs: handoff.wait.timeoutMs + 5000 },
-  );
-  const waitResult = parseGatewayAgentTeamPreflightResult(wait, member);
-  if (waitResult) {
-    return waitResult;
-  }
-  const waitRecord = responseRecord(wait);
-  const waitStatus = typeof waitRecord?.status === "string" ? waitRecord.status : "";
-  if (waitStatus === "timeout" || waitStatus === "pending") {
-    return {
-      role: member.role,
-      status: "blocked",
-      summary: `${member.title} did not finish the Gateway readiness check within ${Math.round(
-        handoff.wait.timeoutMs / 1000,
-      )} seconds.`,
-    };
-  }
-  if (waitStatus === "error") {
-    return {
-      role: member.role,
-      status: "blocked",
-      summary:
-        typeof waitRecord?.message === "string"
-          ? waitRecord.message
-          : `${member.title} failed during agent.wait.`,
-    };
-  }
-  const history = await host.client.request<unknown>(
-    handoff.history.method,
-    {
-      sessionKey: handoff.sessionKey,
-      targetRunId: runId,
-      limit: handoff.history.limit,
-      maxChars: handoff.history.maxChars,
-    },
-    { timeoutMs: 15000 },
-  );
-  return (
-    parseGatewayAgentTeamPreflightResult(history, member) ?? {
-      role: member.role,
-      status: "blocked",
-      summary: `${member.title} did not return readiness JSON through chat.history.`,
-    }
-  );
-}
-
-async function requestGatewayAgentTeamPreflightWithTimeout(
-  host: HostUpdate & { client: SnesGatewayClient },
-  member: SnesAgentTeamMember,
-  checkedAt: string,
-): Promise<SnesAgentTeamStageResult> {
-  let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined;
-  const timeout = new Promise<SnesAgentTeamStageResult>((resolve) => {
-    timeoutId = globalThis.setTimeout(() => {
-      resolve({
-        role: member.role,
-        status: "blocked",
-        summary: `${member.title} did not finish within ${Math.round(
-          SNES_AGENT_TEAM_PREFLIGHT_TIMEOUT_MS / 1000,
-        )} seconds. Check that this agent lane is configured, idle, and able to return readiness JSON.`,
-      });
-    }, SNES_AGENT_TEAM_PREFLIGHT_TIMEOUT_MS + 5000);
-  });
-  try {
-    return await Promise.race([requestGatewayAgentTeamPreflight(host, member, checkedAt), timeout]);
-  } finally {
-    if (timeoutId) {
-      globalThis.clearTimeout(timeoutId);
-    }
-  }
 }
 
 function setAgentTeamMemberReadiness(
@@ -6039,7 +5838,6 @@ async function connectSnesAgentTeam(host: HostUpdate, options: { automatic?: boo
       checkedAt,
     })),
   };
-  agentTeamStageResults = [];
   agentTeamReadinessReport = {
     ...createSnesAgentTeamReadinessPlan(project, agentGatewaySessionKey, { checkedAt }),
     status: "checking",
@@ -12599,7 +12397,7 @@ function renderAiReviewDrawer(host: HostUpdate) {
   `;
 }
 
-function renderMakeSteps(host: HostUpdate) {
+function renderMakeSteps(_host: HostUpdate) {
   return html`
     <div class="snes-make-steps" aria-label="Fast game creation steps">
       <article>
@@ -12619,12 +12417,6 @@ function renderMakeSteps(host: HostUpdate) {
       </article>
     </div>
   `;
-}
-
-function showProjectEditor(host: HostUpdate) {
-  selectedMode = "edit";
-  selectedPanel = "project";
-  pushConsole(host, "Opened project settings.");
 }
 
 function recentActivityLines() {
@@ -12819,19 +12611,6 @@ function renderGamePartsMap(host: HostUpdate, compact = false) {
     </section>
   `;
 }
-
-function renderCreateCommandDock(host: HostUpdate) {
-  return html`
-    <section class="snes-command-dock" aria-label="Prompt any change">
-      <div>
-        <span class="snes-eyebrow">Ask AI</span>
-        <strong>Create or change any part of the game.</strong>
-      </div>
-      ${renderUniversalCreateBar(host, true)}
-    </section>
-  `;
-}
-
 function renderProjectAccess(host: HostUpdate) {
   const templates = createSnesProjectTemplates();
   return html`
@@ -12891,45 +12670,6 @@ function renderProjectAccess(host: HostUpdate) {
         </button>
       </div>
     </details>
-  `;
-}
-
-function openPromptTools(host: HostUpdate) {
-  selectedMode = "make";
-  selectedPanel = "prompt";
-  host.requestUpdate?.();
-}
-
-function renderQuickChangeTray(host: HostUpdate) {
-  return html`
-    <section class="snes-quick-change" aria-label="Quick change shortcuts">
-      <div>
-        <span class="snes-eyebrow">Change Anything</span>
-        <h3>Pick what you want to work on next</h3>
-      </div>
-      <div class="snes-quick-change__grid">
-        <button type="button" @click=${() => openPromptTools(host)}>Ask AI</button>
-        <button type="button" @click=${() => showProjectEditor(host)}>Game Settings</button>
-        <button type="button" @click=${() => selectPanel(host, "scene")}>Edit Current Level</button>
-        <button type="button" @click=${() => selectPanel(host, "assets")}>Art And Sound</button>
-        <button type="button" @click=${() => selectPanel(host, "scene")}>
-          Characters And Things
-        </button>
-        <button type="button" @click=${() => selectPanel(host, "story")}>Story Scenes</button>
-        <button type="button" @click=${() => selectPanel(host, "logic")}>Game Rules</button>
-        <button type="button" @click=${() => selectPanel(host, "export")}>
-          Export For Flash Cart
-        </button>
-        <button type="button" @click=${() => selectPanel(host, "agents")}>AI Helpers</button>
-        <button type="button" @click=${() => repairPlayablePreview(host)}>Make Playable</button>
-        <button type="button" @click=${() => createAndBuildPreviewRom(host)}>
-          Create Game File
-        </button>
-        <button type="button" class="danger" @click=${() => resetProject(host)}>
-          Reset Starter
-        </button>
-      </div>
-    </section>
   `;
 }
 
@@ -14930,7 +14670,7 @@ function renderQuickCreatePanel(host: HostUpdate) {
   `;
 }
 
-function renderSnesStudioLegacy(host: HostUpdate = {}) {
+export function renderSnesStudioLegacy(host: HostUpdate = {}) {
   ensureAgentResultListener(host);
   ensureKeyboardShortcuts(host);
   const readiness = buildSnesReadiness(project);
@@ -16873,7 +16613,7 @@ function renderGuidedGameBuilder(host: HostUpdate) {
   `;
 }
 
-function renderAiGameStage(host: HostUpdate) {
+export function renderAiGameStage(host: HostUpdate) {
   const selected = selectedSceneThing();
   return html`
     <main class="snes-ai-game-stage" aria-label="AI-first SNES game builder">

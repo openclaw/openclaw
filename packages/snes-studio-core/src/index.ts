@@ -8966,7 +8966,7 @@ function createMode1SceneGraphics(project: SnesStudioProject, backdropColor: num
   const builtinTiles = [
     makeTile(() => 0),
     makeTile((x, y) => (y <= 1 ? 2 : (x + y) % 3 === 0 ? 5 : 4)),
-    makeTile((x, y) => (y <= 2 ? 2 : y === 3 ? 3 : 0)),
+    makeTile((_x, y) => (y <= 2 ? 2 : y === 3 ? 3 : 0)),
     makeTile((x, y) => (Math.abs(x - 3.5) + Math.abs(y - 3.5) < 4 ? 6 : 0)),
     makeTile((x, y) => (x === y || x + y === 7 || (y > 1 && y < 6 && x > 1 && x < 6) ? 7 : 0)),
     makeTile((x, y) => (x > 1 && x < 6 && y > 0 && y < 7 ? 8 : 0)),
@@ -10250,6 +10250,18 @@ export function validateSnesPreviewRomArtifact(
   );
   validationCheck(
     checks,
+    "RUNTIME_DATA_MANIFEST",
+    "Build manifest records the embedded runtime project payload",
+    nestedNumber(runtimeData, "jsonSizeBytes") === runtimeJsonSize &&
+      nestedNumber(runtimeData, "checksum") === artifact.runtimeDataChecksum &&
+      nestedNumber(runtimeData, "offset") === RUNTIME_DATA_OFFSET &&
+      nestedNumber(runtimeData, "sizeBytes") === artifact.runtimeDataSizeBytes,
+    `Runtime data offset $${formatHex(RUNTIME_DATA_OFFSET, 5)}, size ${String(
+      runtimeData.sizeBytes ?? "missing",
+    )} bytes.`,
+  );
+  validationCheck(
+    checks,
     "MANIFEST_PARSE",
     "Build manifest parses as JSON",
     manifest !== null,
@@ -11248,7 +11260,12 @@ function collisionMaterialAtPixel(scene: SnesStudioScene, x: number, y: number):
   return scene.collisionMap[row * SNES_STUDIO_EDIT_GRID.width + column] ?? 0;
 }
 
-function solidCellAtPixel(scene: SnesStudioScene, x: number, y: number, falling = true): boolean {
+export function solidCellAtPixel(
+  scene: SnesStudioScene,
+  x: number,
+  y: number,
+  falling = true,
+): boolean {
   const material = collisionMaterialAtPixel(scene, x, y);
   return material === 1 || (material === 3 && falling);
 }
