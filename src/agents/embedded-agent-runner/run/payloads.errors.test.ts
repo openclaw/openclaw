@@ -251,6 +251,24 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "[[reply_to_current]]");
   });
 
+  it("suppresses raw aborted assistant error messages in user-facing reply payloads", () => {
+    const payloads = buildPayloads({
+      runAborted: true,
+      assistantTexts: [],
+      lastAssistant: makeAssistant({
+        stopReason: "aborted",
+        errorMessage: "SECRET_CANARY_69737",
+        content: [],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
+  });
+
   it("suppresses aborted assistant reasoning text as well as partial answer text", () => {
     const payloads = buildPayloads({
       runAborted: true,

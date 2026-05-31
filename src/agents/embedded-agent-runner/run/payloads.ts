@@ -296,11 +296,14 @@ export function buildEmbeddedRunPayloads(params: {
   const lastAssistantAborted = lastAssistantStopReason === "aborted";
   const runAborted = params.runAborted === true || lastAssistantAborted;
   const lastAssistantNeedsErrorSurface = lastAssistantErrored || lastAssistantAborted;
+  const rawErrorMessage = lastAssistantNeedsErrorSurface
+    ? normalizeOptionalString(assistantForPayload?.errorMessage)
+    : undefined;
   const errorText =
     assistantForPayload && lastAssistantNeedsErrorSurface
       ? suppressAssistantArtifacts
         ? undefined
-        : lastAssistantErrored
+        : lastAssistantErrored || rawErrorMessage
           ? formatUserFacingAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
@@ -314,9 +317,6 @@ export function buildEmbeddedRunPayloads(params: {
               model: params.model,
             })
       : undefined;
-  const rawErrorMessage = lastAssistantNeedsErrorSurface
-    ? normalizeOptionalString(assistantForPayload?.errorMessage)
-    : undefined;
   const rawErrorFingerprint = rawErrorMessage
     ? getApiErrorPayloadFingerprint(rawErrorMessage)
     : null;
