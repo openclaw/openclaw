@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { withBundledPluginEnablementCompat } from "../plugins/bundled-compat.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
@@ -366,9 +367,9 @@ function readConfiguredOllamaBaseUrl(provider: unknown): string {
 
 function resolveLiveOllamaProviderApiKey(params: {
   baseUrl: string;
-  existingApiKey: unknown;
+  existingApiKey: SecretInput | undefined;
   shouldPreserveConfiguredApiKey: boolean;
-}): unknown {
+}): SecretInput {
   if (isLocalOllamaBaseUrl(params.baseUrl)) {
     return params.shouldPreserveConfiguredApiKey &&
       params.existingApiKey !== undefined &&
@@ -381,17 +382,14 @@ function resolveLiveOllamaProviderApiKey(params: {
     : OLLAMA_REMOTE_API_KEY_ENV;
 }
 
-function isOllamaRemoteApiKeyReference(value: unknown): boolean {
+function isOllamaRemoteApiKeyReference(value: SecretInput): boolean {
   if (typeof value === "string") {
-    return value.trim() === OLLAMA_REMOTE_API_KEY_ENV;
+    if (value.trim() === OLLAMA_REMOTE_API_KEY_ENV) {
+      return true;
+    }
   }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  return (
-    readStringProperty(value, "source") === "env" &&
-    readStringProperty(value, "id") === OLLAMA_REMOTE_API_KEY_ENV
-  );
+  const ref = coerceSecretRef(value);
+  return ref?.source === "env" && ref.id.trim() === OLLAMA_REMOTE_API_KEY_ENV;
 }
 
 function readStringProperty(value: unknown, key: string): string {
@@ -959,6 +957,8 @@ describe("explicit live model discovery scope", () => {
   it("does not preserve the cloud env marker for local Ollama endpoints", () => {
     for (const apiKey of [
       OLLAMA_REMOTE_API_KEY_ENV,
+      "$OLLAMA_API_KEY",
+      "${OLLAMA_API_KEY}",
       { source: "env", provider: "default", id: OLLAMA_REMOTE_API_KEY_ENV },
     ]) {
       const cfg = {
