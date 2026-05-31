@@ -1085,6 +1085,12 @@ async function resolveEffectiveNpmRegistry(params: {
   if (params.manager === "bun") {
     return readBunRegistryEnv(params.env);
   }
+  if (params.manager === "pnpm") {
+    const registryEnv = readNpmRegistryEnv(params.env);
+    if (registryEnv) {
+      return registryEnv;
+    }
+  }
   const argv = resolvePackageManagerRegistryConfigArgs({ manager: params.manager });
   if (!argv) {
     return readNpmRegistryEnv(params.env);
