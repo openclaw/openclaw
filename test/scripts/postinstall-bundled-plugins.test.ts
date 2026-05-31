@@ -8,6 +8,7 @@ import {
   isSourceCheckoutRoot,
   isDirectPostinstallInvocation,
   pruneOpenClawCompileCache,
+  applyBaileysEncryptedStreamFinishHotfix,
   pruneInstalledPackageDist,
   pruneLegacyPluginRuntimeDepsState,
   pruneBundledPluginSourceNodeModules,
@@ -32,6 +33,21 @@ async function expectPathExists(filePath: string) {
 
 async function expectPathMissing(filePath: string) {
   await expect(fs.access(filePath)).rejects.toHaveProperty("code", "ENOENT");
+}
+
+async function writeBaileysMessagesMediaFixture(packageRoot: string, content: string) {
+  const targetPath = path.join(
+    packageRoot,
+    "node_modules",
+    "@whiskeysockets",
+    "baileys",
+    "lib",
+    "Utils",
+    "messages-media.js",
+  );
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.writeFile(targetPath, content, "utf8");
+  return targetPath;
 }
 
 async function writePluginPackage(
@@ -204,6 +220,40 @@ describe("bundled plugin postinstall", () => {
 
     expect(rmSync).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("recognizes Baileys media hotfixes already present in newer runtime code", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-baileys-hotfix-current-");
+    await writeBaileysMessagesMediaFixture(
+      packageRoot,
+      [
+        "import { once } from 'events';",
+        "async function encryptedStream() {",
+        "        encFileWriteStream.write(mac);",
+        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        await encFinishPromise;",
+        "        await originalFinishPromise;",
+        "        logger?.debug('encrypted data successfully');",
+        "}",
+        "export async function uploadWithFetch({ url, agent }) {",
+        "    const dispatcher = typeof agent?.dispatch === 'function' ? agent : undefined;",
+        "    const response = await fetch(url, {",
+        "        ...(dispatcher ? { dispatcher } : {}),",
+        "        method: 'POST'",
+        "    });",
+        "    return response;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const result = applyBaileysEncryptedStreamFinishHotfix({ packageRoot });
+
+    expect(result).toEqual({ applied: false, reason: "already_patched" });
   });
 
   it("does not classify published packages with source files as source checkouts", () => {

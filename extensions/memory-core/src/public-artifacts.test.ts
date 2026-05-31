@@ -37,6 +37,14 @@ describe("listMemoryCorePublicArtifacts", () => {
       "# Dream Report\n",
       "utf8",
     );
+    await fs.mkdir(path.join(workspaceDir, "memory", "session-rollups", "main"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "session-rollups", "main", "main.md"),
+      "# Session Rollup\n",
+      "utf8",
+    );
     await appendMemoryHostEvent(workspaceDir, {
       type: "memory.recall.recorded",
       timestamp: "2026-04-06T12:00:00.000Z",
@@ -73,6 +81,14 @@ describe("listMemoryCorePublicArtifacts", () => {
         workspaceDir,
         relativePath: "memory/dreaming/2026-04-06.md",
         absolutePath: path.join(workspaceDir, "memory", "dreaming", "2026-04-06.md"),
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "session-rollup",
+        workspaceDir,
+        relativePath: "memory/session-rollups/main/main.md",
+        absolutePath: path.join(workspaceDir, "memory", "session-rollups", "main", "main.md"),
         agentIds: ["main"],
         contentType: "markdown",
       },

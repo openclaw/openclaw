@@ -39,3 +39,9 @@ export type MemoryRemBackfillOptions = MemoryCommandOptions & {
   stageShortTerm?: boolean;
   rollbackShortTerm?: boolean;
 };
+
+export type MemoryRollupOptions = MemoryCommandOptions & {
+  apply?: boolean;
+  dryRun?: boolean;
+  stale?: boolean;
+};

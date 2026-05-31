@@ -10,6 +10,7 @@ import type {
   MemoryPromoteExplainOptions,
   MemoryRemBackfillOptions,
   MemoryRemHarnessOptions,
+  MemoryRollupOptions,
   MemorySearchCommandOptions,
 } from "./cli.types.js";
 import {
@@ -65,6 +66,11 @@ async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
   await runtime.runMemoryRemBackfill(opts);
 }
 
+async function runMemoryRollup(opts: MemoryRollupOptions) {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryRollup(opts);
+}
+
 export function registerMemoryCli(program: Command) {
   const memory = program
     .command("memory")
@@ -110,6 +116,9 @@ export function registerMemoryCli(program: Command) {
             "Also seed durable grounded candidates into the live short-term promotion store.",
           ],
           ["openclaw memory status --json", "Output machine-readable JSON (good for scripts)."],
+          ["openclaw memory rollup --dry-run", "Preview rollup files without writing."],
+          ["openclaw memory rollup --agent main", "Generate deterministic rollups for one agent."],
+          ["openclaw memory rollup --stale", "List orphaned or out-of-date rollups."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
     );
 
@@ -218,6 +227,18 @@ export function registerMemoryCli(program: Command) {
     .option("--json", "Print JSON")
     .action(async (opts: MemoryRemBackfillOptions) => {
       await runMemoryRemBackfill(opts);
+    });
+
+  memory
+    .command("rollup")
+    .description("Generate deterministic summary rollups from recent session transcripts")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .option("--apply", "Write rollup files", false)
+    .option("--dry-run", "Preview rollup actions without writing", false)
+    .option("--stale", "List stale or orphaned rollups", false)
+    .option("--json", "Print JSON")
+    .action(async (opts: MemoryRollupOptions) => {
+      await runMemoryRollup(opts);
     });
 
   memory.action(() => {

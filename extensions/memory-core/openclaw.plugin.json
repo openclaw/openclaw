@@ -31,6 +31,29 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "memoryRollups": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "outputDir": {
+            "type": "string"
+          },
+          "maxMessages": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "maxSummaryChars": {
+            "type": "integer",
+            "minimum": 200
+          },
+          "redactSecrets": {
+            "type": "boolean"
+          }
+        }
+      },
       "dreaming": {
         "type": "object",
         "additionalProperties": false,

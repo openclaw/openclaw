@@ -91,7 +91,7 @@ export async function readMemoryFile(params: {
   try {
     content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
   } catch (err) {
-    if (isFileMissingError(err)) {
+    if (isFileMissingError(err) || isTransientReadChangedError(err)) {
       return { text: "", path: relPath };
     }
     throw err;
@@ -105,6 +105,17 @@ export async function readMemoryFile(params: {
     maxChars: params.maxChars,
     suggestReadFallback: allowedWorkspace,
   });
+}
+
+function isTransientReadChangedError(err: unknown): boolean {
+  return Boolean(
+    err &&
+    typeof err === "object" &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "path-mismatch" &&
+    err instanceof Error &&
+    err.message.startsWith("File changed during read:"),
+  );
 }
 
 export async function readAgentMemoryFile(params: {

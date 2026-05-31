@@ -9,6 +9,7 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sessionRollups from "./session-rollups.js";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
@@ -62,6 +63,7 @@ let fixtureRoot = "";
 let workspaceFixtureRoot = "";
 let qmdFixtureRoot = "";
 let workspaceCaseId = 0;
+let stateCaseId = 0;
 let qmdCaseId = 0;
 
 beforeAll(async () => {
@@ -95,7 +97,12 @@ afterAll(async () => {
   if (!fixtureRoot) {
     return;
   }
-  await fs.rm(fixtureRoot, { recursive: true, force: true });
+  await fs.rm(fixtureRoot, {
+    recursive: true,
+    force: true,
+    maxRetries: 3,
+    retryDelay: 50,
+  });
 });
 
 describe("memory cli", () => {
@@ -230,6 +237,27 @@ describe("memory cli", () => {
     await run(workspaceDir);
   }
 
+  function withStateDir(prefix: string): {
+    stateDir: string;
+    sessionsDir: string;
+    restore: () => void;
+  } {
+    const stateDir = path.join(fixtureRoot, "state", `${prefix}-${stateCaseId++}`);
+    const previous = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    return {
+      stateDir,
+      sessionsDir: path.join(stateDir, "agents", "main", "sessions"),
+      restore: () => {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previous;
+        }
+      },
+    };
+  }
+
   async function writeDailyMemoryNote(
     workspaceDir: string,
     date: string,
@@ -237,6 +265,40 @@ describe("memory cli", () => {
   ): Promise<void> {
     const notePath = path.join(workspaceDir, "memory", `${date}.md`);
     await fs.writeFile(notePath, `${lines.join("\n")}\n`, "utf-8");
+  }
+
+  function buildTranscriptMessage(role: "user" | "assistant", text: string, ts: string) {
+    return JSON.stringify({
+      type: "message",
+      message: {
+        role,
+        content: text,
+      },
+      timestamp: ts,
+    });
+  }
+
+  function memoryCoreRollupConfig(
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              memoryRollups: {
+                enabled: true,
+                outputDir: "memory/session-rollups",
+                maxMessages: 80,
+                maxSummaryChars: 2000,
+                redactSecrets: true,
+                ...overrides,
+              },
+            },
+          },
+        },
+      },
+    };
   }
 
   async function expectCloseFailureAfterCommand(params: {
@@ -294,6 +356,320 @@ describe("memory cli", () => {
     expectLogged(log, "FTS: ready");
     expectLogged(log, "Embedding cache: enabled (123 entries)");
     expect(close).toHaveBeenCalled();
+  });
+
+  it("reports rollup coverage in status output when enabled", async () => {
+    const { sessionsDir, restore } = withStateDir("status-rollup-coverage");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "main.jsonl"),
+        [
+          buildTranscriptMessage(
+            "user",
+            "Please include rollup coverage in the memory status report.",
+            "2026-05-31T15:00:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+        const close = vi.fn(async () => {});
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close,
+        });
+
+        const log = spyRuntimeLogs(defaultRuntime);
+        await runMemoryCli(["status", "--agent", "main"]);
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Session rollups"));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Rollup coverage"));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Index coverage"));
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("adds enabled rollup output directory to memorySearch.extraPaths for manager creation", async () => {
+    const { sessionsDir, restore } = withStateDir("status-rollup-extra-path");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+
+      await withTempWorkspace(async (workspaceDir) => {
+        const close = vi.fn(async () => {});
+        getRuntimeConfig.mockReturnValue({
+          ...memoryCoreRollupConfig(),
+          agents: {
+            defaults: {
+              memorySearch: {
+                extraPaths: ["notes.md"],
+              },
+            },
+          },
+        });
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close,
+        });
+
+        await runMemoryCli(["status", "--json"]);
+
+        const managerCall = getMemorySearchManager.mock.calls.at(-1)?.[0] as
+          | { cfg?: { agents?: { defaults?: { memorySearch?: { extraPaths?: string[] } } } } }
+          | undefined;
+        expect(managerCall?.cfg?.agents?.defaults?.memorySearch?.extraPaths).toEqual([
+          "notes.md",
+          "memory/session-rollups",
+        ]);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not duplicate configured rollup extraPath when already present", async () => {
+    const { sessionsDir, restore } = withStateDir("status-rollup-extra-path-existing");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+
+      await withTempWorkspace(async (workspaceDir) => {
+        const close = vi.fn(async () => {});
+        getRuntimeConfig.mockReturnValue({
+          ...memoryCoreRollupConfig(),
+          agents: {
+            defaults: {
+              memorySearch: {
+                extraPaths: ["memory/session-rollups", "notes.md"],
+              },
+            },
+          },
+        });
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close,
+        });
+
+        await runMemoryCli(["status", "--json"]);
+
+        const managerCall = getMemorySearchManager.mock.calls.at(-1)?.[0] as
+          | { cfg?: { agents?: { defaults?: { memorySearch?: { extraPaths?: string[] } } } } }
+          | undefined;
+        expect(managerCall?.cfg?.agents?.defaults?.memorySearch?.extraPaths).toEqual([
+          "memory/session-rollups",
+          "notes.md",
+        ]);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("warns when rollup stale-or-pending ratio exceeds threshold", async () => {
+    const { sessionsDir, restore } = withStateDir("status-rollup-ratio-warning");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage("user", "One", "2026-05-31T15:00:00.000Z"),
+          buildTranscriptMessage("assistant", "Two", "2026-05-31T15:00:10.000Z"),
+          buildTranscriptMessage("user", "Three", "2026-05-31T15:00:20.000Z"),
+          buildTranscriptMessage("assistant", "Four", "2026-05-31T15:00:30.000Z"),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        getRuntimeConfig.mockReturnValue(
+          memoryCoreRollupConfig({
+            memoryRollups: {
+              enabled: true,
+              outputDir: "memory/session-rollups",
+              maxMessages: 1,
+              maxSummaryChars: 2000,
+              redactSecrets: true,
+            },
+          }),
+        );
+        const close = vi.fn(async () => {});
+        mockManager({
+          status: () =>
+            makeMemoryStatus({
+              workspaceDir,
+              sourceCounts: [
+                { source: "memory", files: 1, chunks: 1 },
+                { source: "sessions", files: 1, chunks: 4 },
+              ],
+            }),
+          sync: vi.fn(async () => {}),
+          close,
+        });
+
+        const log = spyRuntimeLogs(defaultRuntime);
+        await runMemoryCli(["status", "--agent", "main"]);
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Rollup health"));
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining("openclaw memory rollup --stale --agent main"),
+        );
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps status usable when rollup plan generation fails", async () => {
+    const { sessionsDir, restore } = withStateDir("status-rollup-failure");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "main.jsonl"),
+        [
+          buildTranscriptMessage(
+            "user",
+            "Need reliable memory even when rollups are broken.",
+            "2026-05-31T16:00:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        const close = vi.fn(async () => {});
+        const rollupError = new Error("rollup generation failed");
+        vi.spyOn(sessionRollups, "writeSessionRollups").mockRejectedValueOnce(rollupError);
+        getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close,
+        });
+
+        const log = spyRuntimeLogs(defaultRuntime);
+        await runMemoryCli(["status", "--agent", "main"]);
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Rollup status"));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("status generation failed"));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Provider"));
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("returns rollup status error in JSON when status fails to plan rollups", async () => {
+    const { sessionsDir, restore } = withStateDir("status-rollup-failure-json");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "main.jsonl"),
+        [
+          buildTranscriptMessage(
+            "user",
+            "Status JSON should capture the rollup failure for automation.",
+            "2026-05-31T16:15:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        const close = vi.fn(async () => {});
+        vi.spyOn(sessionRollups, "writeSessionRollups").mockRejectedValueOnce(
+          new Error("plan failed"),
+        );
+        getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close,
+        });
+
+        const writeJson = spyRuntimeJson(defaultRuntime);
+        await runMemoryCli(["status", "--agent", "main", "--json"]);
+
+        const payload = firstWrittenJsonArg<{
+          rollup: {
+            error?: string;
+            plan: {
+              discovered: number;
+            };
+          };
+        }>(writeJson);
+        const first = payload?.[0];
+        expect(first?.rollup?.error).toContain("plan failed");
+        expect(first?.rollup?.plan?.discovered).toBe(0);
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("returns memory index coverage metrics in status JSON", async () => {
+    const { sessionsDir, restore } = withStateDir("status-index-coverage-json");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage(
+            "user",
+            "Coverage test transcript for status JSON.",
+            "2026-05-31T18:00:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+        await fs.writeFile(
+          path.join(workspaceDir, "memory", "2026-05-31.md"),
+          "# Status coverage check",
+          "utf-8",
+        );
+
+        const close = vi.fn(async () => {});
+        mockManager({
+          status: () =>
+            makeMemoryStatus({
+              workspaceDir,
+              sourceCounts: [
+                { source: "memory", files: 1, chunks: 1 },
+                { source: "sessions", files: 1, chunks: 1 },
+              ],
+            }),
+          close,
+        });
+
+        const writeJson = spyRuntimeJson(defaultRuntime);
+        await runMemoryCli(["status", "--agent", "main", "--json"]);
+
+        const payload = firstWrittenJsonArg<{
+          indexCoverage: {
+            memoryFilesDiscovered: number | null;
+            memoryFilesIndexed: number | null;
+            sessionTranscriptsDiscovered: number | null;
+            sessionTranscriptsIndexed: number | null;
+          };
+        }>(writeJson);
+        expect(payload?.[0]?.indexCoverage?.memoryFilesDiscovered).toBe(1);
+        expect(payload?.[0]?.indexCoverage?.memoryFilesIndexed).toBe(1);
+        expect(payload?.[0]?.indexCoverage?.sessionTranscriptsDiscovered).toBe(1);
+        expect(payload?.[0]?.indexCoverage?.sessionTranscriptsIndexed).toBe(1);
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
   });
 
   it("keeps plain status from probing vector or embeddings", async () => {
@@ -387,6 +763,382 @@ describe("memory cli", () => {
     expect(helpText).toContain(
       "Preview REM reflections, candidate truths, and deep promotion output.",
     );
+  });
+
+  it("documents memory rollup examples", () => {
+    const helpText = getMemoryHelpText();
+
+    expect(helpText).toContain("openclaw memory rollup --dry-run");
+    expect(helpText).toContain("openclaw memory rollup --agent main");
+    expect(helpText).toContain("openclaw memory rollup --stale");
+  });
+
+  it("preview rollups without writing to disk by default", async () => {
+    const { sessionsDir, restore } = withStateDir("rollup-dry-run");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage(
+            "user",
+            "We decided to roll up session summaries deterministically.",
+            "2026-05-31T11:00:00.000Z",
+          ),
+          buildTranscriptMessage(
+            "assistant",
+            "Next step: keep high-value context only.",
+            "2026-05-31T11:00:12.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+        const close = vi.fn(async () => {});
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close,
+        });
+
+        const log = spyRuntimeLogs(defaultRuntime);
+        await runMemoryCli(["rollup", "--agent", "main"]);
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Session Rollup (main)"));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Applied"));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("wrote=0 unchanged=0 skipped=1"));
+        await expect(
+          fs.access(path.join(workspaceDir, "memory", "session-rollups", "main", "main.md")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("writes rollup files when --apply is passed", async () => {
+    const { sessionsDir, restore } = withStateDir("rollup-apply");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage(
+            "user",
+            "Let's persist deterministic chat summaries for reliable memory.",
+            "2026-05-31T12:00:00.000Z",
+          ),
+          buildTranscriptMessage(
+            "assistant",
+            "We'll validate coverage before every run.",
+            "2026-05-31T12:00:15.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+        const close = vi.fn(async () => {});
+        const sync = vi.fn(async () => {});
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          sync,
+          close,
+        });
+
+        const log = spyRuntimeLogs(defaultRuntime);
+        await runMemoryCli(["rollup", "--agent", "main", "--apply"]);
+
+        const rollupPath = path.join(workspaceDir, "memory", "session-rollups", "main", "main.md");
+        const content = await fs.readFile(rollupPath, "utf-8");
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Session Rollup (main)"));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("wrote=1 unchanged=0 skipped=0"));
+        expect(content).toContain("## Session Intent");
+        expect(content).toContain("## Key Decisions");
+        expect(content).toContain("## Open Follow-ups");
+        expect(sync).toHaveBeenCalledWith({ reason: "rollup-apply", force: true });
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("indexes rollup updates when --apply writes new files", async () => {
+    const { sessionsDir, restore } = withStateDir("rollup-apply-indexed");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage(
+            "user",
+            "Persist recall-ready rollup files and confirm immediate indexing.",
+            "2026-05-31T17:00:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+        const close = vi.fn(async () => {});
+        const sync = vi.fn(async () => {});
+        const log = spyRuntimeLogs(defaultRuntime);
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          sync,
+          close,
+        });
+
+        await runMemoryCli(["rollup", "--agent", "main", "--apply"]);
+
+        expect(sync).toHaveBeenCalledTimes(1);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Rollup index"));
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not auto-index when rollups are dry-run", async () => {
+    const { sessionsDir, restore } = withStateDir("rollup-apply-no-index");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage(
+            "user",
+            "Dry-run should not index because no files were written.",
+            "2026-05-31T17:10:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+        const close = vi.fn(async () => {});
+        const sync = vi.fn(async () => {});
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          sync,
+          close,
+        });
+
+        await runMemoryCli(["rollup", "--agent", "main"]);
+
+        expect(sync).not.toHaveBeenCalled();
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports rollup indexing failure", async () => {
+    const { sessionsDir, restore } = withStateDir("rollup-apply-index-fail");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage(
+            "user",
+            "This should still write the rollup if sync fails.",
+            "2026-05-31T17:20:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      await withTempWorkspace(async (workspaceDir) => {
+        getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+        const close = vi.fn(async () => {});
+        const sync = vi.fn(async () => {
+          throw new Error("index service unavailable");
+        });
+        const log = spyRuntimeLogs(defaultRuntime);
+        const error = spyRuntimeErrors(defaultRuntime);
+
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          sync,
+          close,
+        });
+
+        await runMemoryCli(["rollup", "--agent", "main", "--apply"]);
+
+        const rollupPath = path.join(workspaceDir, "memory", "session-rollups", "main", "main.md");
+        const content = await fs.readFile(rollupPath, "utf-8");
+        expect(content).toContain("## Session Intent");
+        expect(sync).toHaveBeenCalled();
+        expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory rollup index failed"));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Rollup index"));
+        expect(process.exitCode).toBe(1);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports stale and orphaned rollups with --stale", async () => {
+    const { sessionsDir, restore } = withStateDir("rollup-stale");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage(
+            "user",
+            "Need deterministic recovery logs from this chat for OpenClaw memory.",
+            "2026-05-31T13:00:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+
+      await withTempWorkspace(async (workspaceDir) => {
+        const close = vi.fn(async () => {});
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close,
+        });
+
+        await runMemoryCli(["rollup", "--agent", "main", "--apply"]);
+        await fs.rm(transcriptPath);
+
+        const secondLog = spyRuntimeLogs(defaultRuntime);
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close,
+        });
+        await runMemoryCli(["rollup", "--agent", "main", "--stale"]);
+
+        expect(secondLog).toHaveBeenCalledWith(expect.stringContaining("Orphans"));
+        expect(secondLog).toHaveBeenCalledWith(expect.stringContaining("orphan"));
+        expect(close).toHaveBeenCalledTimes(2);
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("returns structured rollup JSON output", async () => {
+    const { sessionsDir, restore } = withStateDir("rollup-json");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage(
+            "user",
+            "I am logging this chat so we can test structured status.",
+            "2026-05-31T14:00:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+
+      await withTempWorkspace(async (workspaceDir) => {
+        const close = vi.fn(async () => {});
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close,
+        });
+
+        const writeJson = spyRuntimeJson(defaultRuntime);
+        await runMemoryCli(["rollup", "--agent", "main", "--json"]);
+
+        const payload = firstWrittenJsonArg<{
+          agentId: string;
+          workspaceDir: string | null;
+          discovered: number;
+          generated: number;
+          pending: number;
+          stale: number;
+          orphaned: number;
+          actions: Array<{ sourceTranscript: string }>;
+          orphans: Array<{ sourceTranscript?: string }>;
+        }>(writeJson);
+        expect(Array.isArray(payload)).toBe(true);
+        expect(payload?.[0]?.agentId).toBe("main");
+        expect(payload?.[0]?.discovered).toBe(1);
+        expect(payload?.[0]?.pending).toBe(1);
+        expect(payload?.[0]?.actions).toHaveLength(1);
+        expect(payload?.[0]?.orphans).toHaveLength(0);
+        expect(close).toHaveBeenCalled();
+        expect(payload?.[0]?.workspaceDir).toBeTruthy();
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  it("returns rollup index error in JSON output on reindex failure", async () => {
+    const { sessionsDir, restore } = withStateDir("rollup-index-json-fail");
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "main.jsonl");
+      await fs.writeFile(
+        transcriptPath,
+        [
+          buildTranscriptMessage(
+            "user",
+            "JSON output should capture rollup indexing failure.",
+            "2026-05-31T17:30:00.000Z",
+          ),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      getRuntimeConfig.mockReturnValue(memoryCoreRollupConfig());
+
+      await withTempWorkspace(async (workspaceDir) => {
+        const close = vi.fn(async () => {});
+        const sync = vi.fn(async () => {
+          throw new Error("index unavailable");
+        });
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          sync,
+          close,
+        });
+
+        const writeJson = spyRuntimeJson(defaultRuntime);
+        const error = spyRuntimeErrors(defaultRuntime);
+        await runMemoryCli(["rollup", "--agent", "main", "--apply", "--json"]);
+
+        const payload = firstWrittenJsonArg<{
+          agentId: string;
+          indexError?: string;
+        }>(writeJson);
+        expect(payload?.[0]?.agentId).toBe("main");
+        expect(payload?.[0]?.indexError).toContain("index unavailable");
+        expect(error).toHaveBeenCalledWith(expect.stringContaining("Memory rollup index failed"));
+        expect(process.exitCode).toBe(1);
+        expect(close).toHaveBeenCalled();
+      });
+    } finally {
+      restore();
+    }
   });
 
   it("prints vector error when unavailable", async () => {

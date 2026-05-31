@@ -49,4 +49,46 @@ describe("memory-core manifest config schema", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("accepts session rollup configuration block", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.rollup-config",
+      value: {
+        memoryRollups: {
+          enabled: true,
+          outputDir: "memory/session-rollups",
+          maxMessages: 120,
+          maxSummaryChars: 2000,
+          redactSecrets: true,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("allows omitted memoryRollups config block", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.rollup-config-omitted",
+      value: {},
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects invalid memoryRollup maxSummaryChars values", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-core.manifest.rollup-config-invalid",
+      value: {
+        memoryRollups: {
+          maxSummaryChars: 150,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
 });

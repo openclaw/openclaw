@@ -35,6 +35,7 @@ import type {
   MemoryRemBackfillOptions,
   MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
+  MemoryRollupOptions,
 } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
@@ -48,6 +49,14 @@ import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
+import {
+  resolveMemoryRollupConfig,
+  sessionRollupsDefaults,
+  type SessionRollupAction,
+  type SessionRollupGenerationResult,
+  type SessionRollupPlan,
+  writeSessionRollups,
+} from "./session-rollups.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -67,6 +76,8 @@ type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpos
 
 type MemorySourceName = "memory" | "sessions";
 
+type MemorySourceNameWithRollups = "memory" | "sessions" | "session-rollups";
+
 type SourceScan = {
   source: MemorySourceName;
   totalFiles: number | null;
@@ -77,6 +88,23 @@ type MemorySourceScan = {
   sources: SourceScan[];
   totalFiles: number | null;
   issues: string[];
+};
+
+type MemoryRollupState = {
+  config: ReturnType<typeof resolveMemoryRollupConfig>;
+  plan: SessionRollupPlan;
+  error?: string;
+};
+
+function isMemorySourceName(value: unknown): value is MemorySourceName {
+  return value === "memory" || value === "sessions";
+}
+
+type MemoryIndexCoverage = {
+  memoryFilesDiscovered: number | null;
+  memoryFilesIndexed: number | null;
+  sessionTranscriptsDiscovered: number | null;
+  sessionTranscriptsIndexed: number | null;
 };
 
 type LoadedMemoryCommandConfig = {
@@ -284,6 +312,45 @@ function formatSourceLabel(source: string, workspaceDir: string, agentId: string
   return source;
 }
 
+function formatRollupStatusLine(result: SessionRollupPlan): string {
+  return `discovered=${result.discovered}, upToDate=${result.generated}, pending=${result.pending}, stale=${result.stale}, orphaned=${result.orphaned}, coverage=${result.evidenceCoveragePercent}%`;
+}
+
+function formatRollupEnabled(enabled: boolean): string {
+  return enabled ? "enabled" : "disabled";
+}
+
+function formatCoverageLabel(coverage: {
+  indexed: number | null;
+  discovered: number | null;
+}): string {
+  return `${coverage.indexed ?? "?"}/${coverage.discovered ?? "?"}`;
+}
+
+function formatIndexCoverageLine(coverage: MemoryIndexCoverage): string {
+  return [
+    `memory=${formatCoverageLabel({ indexed: coverage.memoryFilesIndexed, discovered: coverage.memoryFilesDiscovered })}`,
+    `sessions=${formatCoverageLabel({ indexed: coverage.sessionTranscriptsIndexed, discovered: coverage.sessionTranscriptsDiscovered })}`,
+  ].join(", ");
+}
+
+function resolveMemoryIndexCoverage(params: {
+  status: ReturnType<MemoryManager["status"]>;
+  scan?: MemorySourceScan;
+}): MemoryIndexCoverage {
+  const sourceCounts = params.status.sourceCounts ?? [];
+  const discover = (source: MemorySourceName) =>
+    params.scan?.sources?.find((entry) => entry.source === source)?.totalFiles ?? null;
+  const indexed = (source: MemorySourceName) =>
+    sourceCounts.find((entry) => entry.source === source)?.files ?? null;
+  return {
+    memoryFilesDiscovered: discover("memory"),
+    memoryFilesIndexed: indexed("memory"),
+    sessionTranscriptsDiscovered: discover("sessions"),
+    sessionTranscriptsIndexed: indexed("sessions"),
+  };
+}
+
 function resolveAgent(cfg: OpenClawConfig, agent?: string) {
   const trimmed = agent?.trim();
   if (trimmed) {
@@ -449,8 +516,9 @@ async function withMemoryManagerForAgent(params: {
   purpose?: MemoryManagerPurpose;
   run: (manager: MemoryManager) => Promise<void>;
 }): Promise<void> {
+  const runtimeCfg = ensureRollupExtraPathEnabled(params.cfg);
   const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
-    cfg: params.cfg,
+    cfg: runtimeCfg,
     agentId: params.agentId,
   };
   if (params.purpose) {
@@ -466,6 +534,53 @@ async function withMemoryManagerForAgent(params: {
     },
     run: params.run,
   });
+}
+
+function ensureRollupExtraPathEnabled(cfg: OpenClawConfig): OpenClawConfig {
+  const pluginConfig = resolveMemoryPluginConfig(cfg);
+  const rollupConfig = resolveMemoryRollupConfig(pluginConfig);
+  if (!rollupConfig.enabled) {
+    return cfg;
+  }
+
+  const rawOutputDir = rollupConfig.outputDir.trim();
+  if (!rawOutputDir) {
+    return cfg;
+  }
+
+  const existingPaths = asRecord(asRecord(cfg.agents?.defaults)?.memorySearch)?.extraPaths;
+  const configuredPaths = normalizeStringArray(existingPaths);
+  const normalized = configuredPaths.map((entry) => path.normalize(entry).replace(/\\/g, "/"));
+  const targetPath = path.normalize(rawOutputDir).replace(/\\/g, "/");
+
+  if (normalized.includes(targetPath)) {
+    return cfg;
+  }
+
+  const next: OpenClawConfig = structuredClone(cfg);
+  const previousDefaults = asRecord(next.agents?.defaults) ?? {};
+  const previousSearch = asRecord(previousDefaults.memorySearch) ?? {};
+  next.agents = {
+    ...next.agents,
+    defaults: {
+      ...previousDefaults,
+      memorySearch: {
+        ...previousSearch,
+        extraPaths: [...configuredPaths, rawOutputDir],
+      },
+    },
+  };
+
+  return next;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry): entry is string => entry.length > 0);
 }
 
 async function checkReadableFile(pathname: string): Promise<{ exists: boolean; issue?: string }> {
@@ -503,6 +618,41 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
       `sessions directory not accessible (${shortenHomePath(sessionsDir)}): ${code ?? "error"}`,
     );
     return { source: "sessions", totalFiles: null, issues };
+  }
+}
+
+async function safeRollupPlan(params: {
+  workspaceDir: string;
+  agentId: string;
+  config: ReturnType<typeof resolveMemoryRollupConfig>;
+}): Promise<MemoryRollupState> {
+  try {
+    const plan = await writeSessionRollups({
+      workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
+      config: params.config,
+      dryRun: true,
+    });
+    return {
+      config: params.config,
+      plan,
+    };
+  } catch (error) {
+    return {
+      config: params.config,
+      plan: {
+        config: params.config,
+        discovered: 0,
+        generated: 0,
+        pending: 0,
+        stale: 0,
+        orphaned: 0,
+        actions: [],
+        orphans: [],
+        evidenceCoveragePercent: 100,
+      },
+      error: formatErrorMessage(error),
+    };
   }
 }
 
@@ -625,7 +775,7 @@ async function summarizeQmdIndexArtifact(manager: MemoryManager): Promise<string
 async function scanMemorySources(params: {
   workspaceDir: string;
   agentId: string;
-  sources: MemorySourceName[];
+  sources: MemorySourceNameWithRollups[];
   extraPaths?: string[];
 }): Promise<MemorySourceScan> {
   const scans: SourceScan[] = [];
@@ -636,6 +786,10 @@ async function scanMemorySources(params: {
     }
     if (source === "sessions") {
       scans.push(await scanSessionFiles(params.agentId));
+    }
+    if (source === "session-rollups") {
+      // Session rollup coverage is surfaced from rollup plan metrics rather than file-level scans.
+      continue;
     }
   }
   const issues = scans.flatMap((scan) => scan.issues);
@@ -658,6 +812,8 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     embeddingProbe?: MemoryEmbeddingProbeResult;
     indexError?: string;
     scan?: MemorySourceScan;
+    indexCoverage?: MemoryIndexCoverage;
+    rollup?: MemoryRollupState;
     audit?: ShortTermAuditSummary;
     repair?: RepairShortTermPromotionArtifactsResult;
     dreamingAudit?: DreamingArtifactsAuditSummary;
@@ -735,18 +891,43 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           }
         }
         const status = manager.status();
-        const sources = (
-          status.sources?.length ? status.sources : ["memory"]
-        ) as MemorySourceName[];
+        const configuredSources = (status.sources ?? []).filter(isMemorySourceName);
+        const sources = new Set<MemorySourceNameWithRollups>([
+          "memory",
+          "sessions",
+          "session-rollups",
+          ...configuredSources,
+        ]);
         const workspaceDir = status.workspaceDir;
         const scan = workspaceDir
           ? await scanMemorySources({
               workspaceDir,
               agentId,
-              sources,
+              sources: [...sources],
               extraPaths: status.extraPaths,
             })
           : undefined;
+        const rollupConfig = resolveMemoryRollupConfig(resolveMemoryPluginConfig(cfg));
+        const rollup = workspaceDir
+          ? await safeRollupPlan({
+              workspaceDir,
+              agentId,
+              config: rollupConfig,
+            })
+          : {
+              config: rollupConfig,
+              plan: {
+                config: rollupConfig,
+                discovered: 0,
+                generated: 0,
+                pending: 0,
+                stale: 0,
+                orphaned: 0,
+                actions: [],
+                orphans: [],
+                evidenceCoveragePercent: 100,
+              },
+            };
         let audit: ShortTermAuditSummary | undefined;
         let repair: RepairShortTermPromotionArtifactsResult | undefined;
         let dreamingAudit: DreamingArtifactsAuditSummary | undefined;
@@ -781,6 +962,11 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           embeddingProbe,
           indexError,
           scan,
+          indexCoverage: resolveMemoryIndexCoverage({
+            status,
+            scan,
+          }),
+          rollup,
           audit,
           repair,
           dreamingAudit,
@@ -811,14 +997,18 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       embeddingProbe,
       indexError,
       scan,
+      indexCoverage,
       audit,
       repair,
       dreamingAudit,
       dreamingRepair,
+      rollup,
     } = result;
     const filesIndexed = status.files ?? 0;
     const chunksIndexed = status.chunks ?? 0;
     const totalFiles = scan?.totalFiles ?? null;
+    const workspaceDir = status.workspaceDir;
+    const effectiveIndexCoverage = indexCoverage ?? resolveMemoryIndexCoverage({ status, scan });
     const indexedLabel =
       totalFiles === null
         ? `${filesIndexed}/? files · ${chunksIndexed} chunks`
@@ -845,8 +1035,50 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(storePath)}`,
       `${label("Workspace")} ${info(workspacePath)}`,
+      `${label("Index coverage")} ${
+        workspaceDir
+          ? success(formatIndexCoverageLine(effectiveIndexCoverage))
+          : muted("no workspace")
+      }`,
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
+      `${label("Session rollups")} ${info(formatRollupEnabled(Boolean(rollup?.config.enabled)))}`,
+      `${label("Rollup coverage")} ${
+        !workspaceDir
+          ? muted("no workspace")
+          : rollup?.error
+            ? muted(rollup.error)
+            : success(formatRollupStatusLine(rollup.plan))
+      }`,
     ].filter(Boolean) as string[];
+    if (rollup?.error) {
+      lines.push(`${label("Rollup status")} ${warn(`status generation failed: ${rollup.error}`)}`);
+    }
+    if (workspaceDir) {
+      const uncoveredMemory =
+        effectiveIndexCoverage.memoryFilesDiscovered !== null &&
+        effectiveIndexCoverage.memoryFilesIndexed !== null &&
+        effectiveIndexCoverage.memoryFilesIndexed < effectiveIndexCoverage.memoryFilesDiscovered;
+      const uncoveredSessions =
+        effectiveIndexCoverage.sessionTranscriptsDiscovered !== null &&
+        effectiveIndexCoverage.sessionTranscriptsIndexed !== null &&
+        effectiveIndexCoverage.sessionTranscriptsIndexed <
+          effectiveIndexCoverage.sessionTranscriptsDiscovered;
+      if (uncoveredMemory || uncoveredSessions) {
+        lines.push(
+          `${label("Coverage health")} ${warn("index coverage below discovered file count")}`,
+        );
+      }
+      if (uncoveredMemory) {
+        lines.push(`${muted("Fix:")} ${muted(`openclaw memory index --agent ${agentId} --force`)}`);
+      }
+      if (uncoveredSessions) {
+        lines.push(
+          `${muted("Fix sessions:")} ${muted(
+            `openclaw memory status --deep --agent ${agentId} (verify session source config)`,
+          )}`,
+        );
+      }
+    }
     if (embeddingProbe) {
       const state = embeddingProbe.ok ? "ready" : "unavailable";
       const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
@@ -866,6 +1098,36 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
             ? `${entry.files}/? files · ${entry.chunks} chunks`
             : `${entry.files}/${total} files · ${entry.chunks} chunks`;
         lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts)}`);
+      }
+    }
+    if (rollup?.plan) {
+      if (!rollup.error && rollup.config.enabled && rollup.plan.discovered > 0) {
+        const staleRatio = rollup.plan.stale / rollup.plan.discovered;
+        const pendingRatio = rollup.plan.pending / rollup.plan.discovered;
+        const staleOrPendingRatio =
+          (rollup.plan.stale + rollup.plan.pending) / rollup.plan.discovered;
+        if (
+          staleRatio >= sessionRollupsDefaults.sourceStaleWarningRatio ||
+          pendingRatio >= sessionRollupsDefaults.sourceStaleWarningRatio ||
+          staleOrPendingRatio >= sessionRollupsDefaults.sourceStaleWarningRatio
+        ) {
+          lines.push(
+            `${label("Rollup health")} ${warn(
+              `stale=${(staleRatio * 100).toFixed(1)}%, pending=${(pendingRatio * 100).toFixed(1)}%, stale+pending=${(staleOrPendingRatio * 100).toFixed(1)}% > ${(sessionRollupsDefaults.sourceStaleWarningRatio * 100).toFixed(0)}%`,
+            )}`,
+          );
+          lines.push(
+            `${muted("Fix:")} ${muted(`openclaw memory rollup --stale --agent ${agentId}`)}`,
+          );
+          lines.push(
+            `${muted("Apply:")} ${muted(`openclaw memory rollup --apply --agent ${agentId}`)}`,
+          );
+        }
+      }
+      if (!rollup.config.enabled) {
+        lines.push(
+          `${label("Rollup health")} ${muted("not running — enable plugins.entries.memory-core.config.memoryRollups.enabled")}`,
+        );
       }
     }
     if (status.fallback) {
@@ -1019,6 +1281,218 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }
+    defaultRuntime.log(lines.join("\n"));
+    defaultRuntime.log("");
+  }
+}
+
+function formatRollupAction(action: SessionRollupAction, rich: boolean): string {
+  const statusColor = action.status === "upToDate" ? theme.success : theme.warn;
+  const status = colorize(rich, statusColor, action.status);
+  const source = colorize(rich, theme.accent, action.sourceTranscript);
+  const hash = colorize(rich, theme.muted, action.inputHash.slice(0, 8));
+  return `${status} ${source} ${hash} (${shortenHomePath(action.outputPath)})`;
+}
+
+function formatRollupOrphan(
+  pathValue: string,
+  sourceTranscript: string | undefined,
+  rich: boolean,
+): string {
+  const source = sourceTranscript
+    ? shortenHomePath(sourceTranscript)
+    : "<unknown source transcript>";
+  return `${colorize(rich, theme.warn, "orphan")} ${colorize(rich, theme.accent, source)} ${shortenHomePath(pathValue)}`;
+}
+
+export async function runMemoryRollup(opts: MemoryRollupOptions) {
+  setVerbose(Boolean(opts.verbose));
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rollup");
+  emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
+  const agentIds = resolveAgentIds(cfg, opts.agent);
+  const allResults: Array<{
+    agentId: string;
+    workspaceDir: string | null;
+    config: ReturnType<typeof resolveMemoryRollupConfig>;
+    plan: SessionRollupGenerationResult;
+    indexError?: string;
+  }> = [];
+
+  for (const agentId of agentIds) {
+    await withMemoryManagerForAgent({
+      cfg,
+      agentId,
+      purpose: "cli",
+      run: async (manager) => {
+        const status = manager.status();
+        const workspaceDir = status.workspaceDir?.trim() ?? null;
+        const config = resolveMemoryRollupConfig(resolveMemoryPluginConfig(cfg));
+
+        if (!workspaceDir) {
+          allResults.push({
+            agentId,
+            workspaceDir: null,
+            config,
+            plan: {
+              config,
+              discovered: 0,
+              generated: 0,
+              pending: 0,
+              stale: 0,
+              orphaned: 0,
+              actions: [],
+              orphans: [],
+              evidenceCoveragePercent: 100,
+              wrote: 0,
+              unchanged: 0,
+              skipped: config.enabled ? 0 : 0,
+            },
+          });
+          return;
+        }
+
+        const shouldApply = Boolean(opts.apply) && !Boolean(opts.stale);
+        const runDry = !shouldApply || Boolean(opts.dryRun);
+        const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
+
+        const plan = await writeSessionRollups({
+          workspaceDir,
+          agentId,
+          config,
+          dryRun: runDry,
+          apply: shouldApply,
+        });
+        let indexError: string | undefined;
+        if (shouldApply && plan.wrote > 0) {
+          if (!syncFn) {
+            indexError = "memory backend does not support manual reindex";
+          } else {
+            try {
+              await syncFn({
+                reason: "rollup-apply",
+                force: true,
+              });
+            } catch (err) {
+              indexError = formatErrorMessage(err);
+              defaultRuntime.error(`Memory rollup index failed (${agentId}): ${indexError}`);
+              process.exitCode = 1;
+            }
+          }
+        }
+
+        allResults.push({
+          agentId,
+          workspaceDir,
+          config,
+          plan,
+          indexError,
+        });
+      },
+    });
+  }
+
+  if (opts.json) {
+    defaultRuntime.writeJson(
+      allResults.map((result) => {
+        const staleActions = result.plan.actions.filter((action) => action.status !== "upToDate");
+        const resultActions = Boolean(opts.stale) ? staleActions : result.plan.actions;
+        const staleOrphans = result.plan.orphans;
+        return {
+          agentId: result.agentId,
+          workspaceDir: result.workspaceDir,
+          config: {
+            ...result.config,
+            enabled: result.config.enabled,
+          },
+          discovered: result.plan.discovered,
+          generated: result.plan.generated,
+          pending: result.plan.pending,
+          stale: result.plan.stale,
+          orphaned: result.plan.orphaned,
+          evidenceCoveragePercent: result.plan.evidenceCoveragePercent,
+          wrote: result.plan.wrote,
+          unchanged: result.plan.unchanged,
+          skipped: result.plan.skipped,
+          actions: resultActions,
+          orphans: staleOrphans,
+          indexError: result.indexError,
+        };
+      }),
+    );
+    return;
+  }
+
+  const rich = isRich();
+  const heading = (text: string) => colorize(rich, theme.heading, text);
+  const muted = (text: string) => colorize(rich, theme.muted, text);
+  const label = (text: string) => muted(`${text}:`);
+  const success = (text: string) => colorize(rich, theme.success, text);
+  const warn = (text: string) => colorize(rich, theme.warn, text);
+
+  for (const result of allResults) {
+    const { agentId, workspaceDir, config, plan } = result;
+    const lines: string[] = [];
+    lines.push(`${heading("Session Rollup")} ${muted(`(${agentId})`)}`);
+    if (!workspaceDir) {
+      lines.push(`${label("Workspace")} ${muted("missing")}`);
+      defaultRuntime.log(lines.join("\n"));
+      defaultRuntime.log("");
+      continue;
+    }
+
+    lines.push(`${label("Workspace")} ${muted(shortenHomePath(workspaceDir))}`);
+    lines.push(`${label("Enabled")} ${muted(config.enabled ? "yes" : "no")}`);
+    lines.push(
+      `${label("Output")} ${muted(`${config.outputDir} (maxMessages=${config.maxMessages}, maxSummaryChars=${config.maxSummaryChars})`)}`,
+    );
+    lines.push(`${label("Plan")} ${muted(formatRollupStatusLine(plan))}`);
+    lines.push(
+      `${label("Applied")}: wrote=${plan.wrote} unchanged=${plan.unchanged} skipped=${plan.skipped}`,
+    );
+
+    if (opts.stale) {
+      const staleActions = plan.actions.filter((action) => action.status !== "upToDate");
+      if (staleActions.length === 0 && plan.orphans.length === 0) {
+        lines.push(`${label("Rollups")} ${muted("No stale or orphaned rollups detected.")}`);
+      } else {
+        if (staleActions.length > 0) {
+          lines.push(label("Stale / missing"));
+          for (const action of staleActions) {
+            lines.push(`  ${formatRollupAction(action, rich)}`);
+          }
+        }
+        if (plan.orphans.length > 0) {
+          lines.push(label("Orphans"));
+          for (const orphan of plan.orphans) {
+            lines.push(`  ${formatRollupOrphan(orphan.outputPath, orphan.sourceTranscript, rich)}`);
+          }
+        }
+      }
+      lines.push(
+        `${label("Repair")} ${muted(`openclaw memory rollup --apply --agent ${agentId}`)} ${muted("to regenerate")}`,
+      );
+    } else if (!config.enabled) {
+      lines.push(
+        `${label("Hint")} ${muted("Enable with plugins.entries.memory-core.config.memoryRollups.enabled")}`,
+      );
+    } else {
+      if (plan.wrote === 0 && plan.pending > 0) {
+        lines.push(
+          `${label("Hint")} ${muted("Run with --apply to write rollups")} ${muted(`(dry-run shows ${plan.pending} pending)`)}`,
+        );
+      }
+      if (plan.generated > 0) {
+        lines.push(
+          `${label("Next")} ${muted(`Recent rollup file: ${shortenHomePath(plan.actions[0]?.outputPath ?? "")}`)}`,
+        );
+      }
+      if (plan.wrote > 0) {
+        lines.push(
+          `${label("Rollup index")} ${result.indexError ? warn("index failed") : success("updated")}`,
+        );
+      }
+    }
+
     defaultRuntime.log(lines.join("\n"));
     defaultRuntime.log("");
   }

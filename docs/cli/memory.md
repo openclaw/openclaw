@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/search/promote/promote-explain/rem-harness)"
+summary: "CLI reference for `openclaw memory` (status/index/search/promote/promote-explain/rem-harness/rollup)"
 read_when:
   - You want to index or search semantic memory
   - You're debugging memory availability or indexing
@@ -33,6 +33,10 @@ openclaw memory promote --apply
 openclaw memory promote --json --min-recall-count 0 --min-unique-queries 0
 openclaw memory promote-explain "router vlan"
 openclaw memory promote-explain "router vlan" --json
+openclaw memory rollup --dry-run
+openclaw memory rollup --apply
+openclaw memory rollup --stale
+openclaw memory rollup --agent main --json
 openclaw memory rem-harness
 openclaw memory rem-harness --json
 openclaw memory status --json
@@ -57,6 +61,12 @@ openclaw memory index --agent main --verbose
 - `--json`: print JSON output.
 
 If `memory status` shows `Dreaming status: blocked`, the managed dreaming cron is enabled but the heartbeat that drives it is not firing for the default agent. See [Dreaming never runs](/concepts/dreaming#dreaming-never-runs-status-shows-blocked) for the two common causes.
+
+`memory status` also reports these machine-verifiable metrics:
+
+- `Index coverage`: `memory` and `session-transcripts` as `indexed/discovered` file counts.
+- `Rollup coverage`: discovered/upToDate/pending/stale/orphaned rollup plan summary.
+- `Rollup health` and `Coverage health` warnings when stale coverage or index drift should be investigated.
 
 `memory index`:
 
@@ -110,6 +120,65 @@ openclaw memory promote-explain <selector> [--agent <id>] [--include-promoted] [
 - `--agent <id>`: scope to a single agent (default: the default agent).
 - `--include-promoted`: include already promoted candidates.
 - `--json`: print JSON output.
+
+`memory rollup`:
+
+Generate deterministic, compact summaries of session transcripts and persist them under `memory/session-rollups/<agentId>/...`.
+
+```bash
+openclaw memory rollup --dry-run
+openclaw memory rollup --apply
+openclaw memory rollup --stale
+openclaw memory rollup --agent main --json
+```
+
+- `--agent <id>`: scope to a single agent (default: the default agent).
+- `--apply`: write generated rollups to disk (default is dry-run preview only).
+- `--stale`: list stale or orphaned rollups for repair.
+- `--json`: print JSON output.
+
+Configuration (in `plugins.entries.memory-core.config.memoryRollups`):
+
+- `enabled`: whether deterministic rollups are active.
+- `outputDir`: destination directory for rollups (defaults to `memory/session-rollups`).
+- `maxMessages`: number of recent messages to summarize per transcript (default `80`).
+- `maxSummaryChars`: hard character limit for generated rollup markdown.
+- `redactSecrets`: remove likely sensitive values from generated summary text while preserving verification identifiers.
+
+Example:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "memory-core": {
+        "config": {
+          "memoryRollups": {
+            "enabled": true,
+            "outputDir": "memory/session-rollups",
+            "maxMessages": 80,
+            "maxSummaryChars": 1800,
+            "redactSecrets": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`memory status` also reports:
+
+- `Session rollups`: enabled/disabled.
+- `Rollup coverage`: discovered/generated/pending/stale/orphaned/evidence percentage.
+- `Rollup health` warning when stale ratio exceeds threshold.
+
+Architecture notes:
+
+- `memory-core` remains the authoritative active memory plugin and durable recall store.
+- Raw session transcripts stay in the session store; rollups are compact local recall artifacts generated from those transcripts.
+- Rollup generation and indexing do not depend on companion knowledge layers such as `memory-wiki`.
+- Companion layers should treat rollups as source artifacts and only promote reviewed, high-signal content into curated pages.
 
 `memory rem-harness`:
 

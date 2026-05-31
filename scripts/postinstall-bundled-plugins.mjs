@@ -96,6 +96,8 @@ const BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT = [
   "                    // `dispatch`.",
   "                    ...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
 ].join("\n");
+const BAILEYS_MEDIA_NATIVE_DISPATCHER_GUARD_RE =
+  /const\s+dispatcher\s*=\s*typeof\s+agent\?\.dispatch\s*===\s*['"]function['"]\s*\?\s*agent\s*:\s*undefined;[\s\S]*\.\.\.\(dispatcher\s*\?\s*\{\s*dispatcher\s*\}\s*:\s*\{\}\)/u;
 const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
@@ -639,9 +641,10 @@ export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
       encryptedStreamResolved = true;
     }
 
-    const dispatcherAlreadyPatched = patchedText.includes(
-      "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
-    );
+    const dispatcherAlreadyPatched =
+      patchedText.includes(
+        "...(typeof fetchAgent?.dispatch === 'function' ? { dispatcher: fetchAgent } : {}),",
+      ) || BAILEYS_MEDIA_NATIVE_DISPATCHER_GUARD_RE.test(patchedText);
     const dispatcherPatchable =
       patchedText.includes(BAILEYS_MEDIA_DISPATCHER_NEEDLE) &&
       patchedText.includes(BAILEYS_MEDIA_DISPATCHER_HEADER_NEEDLE);
