@@ -1028,6 +1028,12 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
     distFile: "provider-model-id-normalize.mjs",
   },
 ] as const;
+const ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS = new Set([
+  "acp-core",
+  "media-core",
+  "normalization-core",
+  "terminal-core",
+]);
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
   if (!fs.existsSync(candidate)) {
@@ -1238,12 +1244,12 @@ function resolveWorkspacePackageAliasMap(params: {
       const candidates =
         kind === "dist"
           ? [
-              ...(entry.packageName === "@openclaw/terminal-core"
+              ...(ROOT_PACKAGED_WORKSPACE_PACKAGE_DIRS.has(entry.packageDir)
                 ? [
                     path.join(
                       packageRoot,
                       "dist",
-                      "terminal-core",
+                      entry.packageDir,
                       entry.distFile.replace(/\.mjs$/u, ".js"),
                     ),
                   ]

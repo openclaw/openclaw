@@ -72,11 +72,11 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
       from: typeof record.from === "string" ? record.from : undefined,
       status: typeof record.status === "string" ? record.status : undefined,
     };
-  } catch (error) {
-    if (error instanceof Error && error.message === "Twilio SMS send returned malformed JSON.") {
-      throw error;
+  } catch (cause) {
+    if (cause instanceof Error && cause.message === "Twilio SMS send returned malformed JSON.") {
+      throw cause;
     }
-    throw new Error("Twilio SMS send returned malformed JSON.", { cause: error });
+    throw new Error("Twilio SMS send returned malformed JSON.", { cause });
   }
 }
 

@@ -1647,24 +1647,43 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "catalog.ts",
       distFile: "catalog.mjs",
     });
-    const mediaCore = writeWorkspacePackageEntry({
+    writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "media-core",
       srcFile: "read-response-with-limit.ts",
       distFile: "read-response-with-limit.mjs",
     });
-    const acpCore = writeWorkspacePackageEntry({
+    const mediaCoreRootDistFile = path.join(
+      fixture.root,
+      "dist",
+      "media-core",
+      "read-response-with-limit.js",
+    );
+    mkdirSafeDir(path.dirname(mediaCoreRootDistFile));
+    fs.writeFileSync(mediaCoreRootDistFile, "export {};\n", "utf-8");
+    writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "acp-core",
       srcFile: "normalize-text.ts",
       distFile: "normalize-text.mjs",
     });
-    const normalizationCore = writeWorkspacePackageEntry({
+    const acpCoreRootDistFile = path.join(fixture.root, "dist", "acp-core", "normalize-text.js");
+    mkdirSafeDir(path.dirname(acpCoreRootDistFile));
+    fs.writeFileSync(acpCoreRootDistFile, "export {};\n", "utf-8");
+    writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "normalization-core",
       srcFile: "record-coerce.ts",
       distFile: "record-coerce.mjs",
     });
+    const normalizationCoreRootDistFile = path.join(
+      fixture.root,
+      "dist",
+      "normalization-core",
+      "record-coerce.js",
+    );
+    mkdirSafeDir(path.dirname(normalizationCoreRootDistFile));
+    fs.writeFileSync(normalizationCoreRootDistFile, "export {};\n", "utf-8");
     const markdownCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "markdown-core",
@@ -1714,13 +1733,13 @@ describe("plugin sdk alias helpers", () => {
       fs.realpathSync(mediaGenerationCore.distFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/media-core/read-response-with-limit"] ?? "")).toBe(
-      fs.realpathSync(mediaCore.distFile),
+      fs.realpathSync(mediaCoreRootDistFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/acp-core/normalize-text"] ?? "")).toBe(
-      fs.realpathSync(acpCore.distFile),
+      fs.realpathSync(acpCoreRootDistFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/normalization-core/record-coerce"] ?? "")).toBe(
-      fs.realpathSync(normalizationCore.distFile),
+      fs.realpathSync(normalizationCoreRootDistFile),
     );
     expect(fs.realpathSync(aliases["@openclaw/terminal-core/links"] ?? "")).toBe(
       fs.realpathSync(terminalCoreRootDistFile),
