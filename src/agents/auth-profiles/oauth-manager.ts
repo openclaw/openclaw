@@ -334,9 +334,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       if (
         mainCred.provider === params.credential.provider &&
         hasUsableOAuthCredential(mainCred) &&
+        isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCred) &&
         mainExpires !== undefined &&
-        (localExpires === undefined || mainExpires > localExpires) &&
-        isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCred)
+        (localExpires === undefined || mainExpires > localExpires)
       ) {
         params.store.profiles[params.profileId] = { ...mainCred };
         log.info("adopted newer OAuth credentials from main agent", {

@@ -171,6 +171,7 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
     const pluginConfig = (entry as { config?: unknown }).config;
     return (
       pluginConfig !== null &&
+      pluginConfig !== undefined &&
       typeof pluginConfig === "object" &&
       !Array.isArray(pluginConfig) &&
       ("webSearch" in pluginConfig || (!fetchExplicitlyDisabled && "webFetch" in pluginConfig))
