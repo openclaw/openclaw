@@ -102,6 +102,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
+  type DeliveryContext,
 } from "../../utils/delivery-context.shared.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -619,6 +620,52 @@ type GatewayAgentTaskTerminalStatus = Extract<
   TaskStatus,
   "succeeded" | "failed" | "timed_out" | "cancelled"
 >;
+type GatewayAgentTaskTrackingMode = "cli" | "plugin_subagent" | "none";
+
+function resolveGatewayAgentTaskTrackingMode(params: {
+  client: GatewayRequestHandlerOptions["client"];
+  sessionKey?: string;
+  inputProvenance?: InputProvenance;
+}): GatewayAgentTaskTrackingMode {
+  if (!params.sessionKey?.trim() || params.inputProvenance?.kind === "inter_session") {
+    return "none";
+  }
+  return params.client?.internal?.agentRunTracking === "plugin_subagent"
+    ? "plugin_subagent"
+    : "cli";
+}
+
+async function registerPluginSubagentRunFromGateway(params: {
+  cfg: OpenClawConfig;
+  runId: string;
+  childSessionKey: string;
+  task: string;
+  requesterOrigin?: DeliveryContext;
+  pluginId?: string;
+}): Promise<void> {
+  const childSessionKey = params.childSessionKey.trim();
+  if (!childSessionKey) {
+    return;
+  }
+  const ownerSessionKey = resolveAgentMainSessionKey({
+    cfg: params.cfg,
+    agentId: resolveAgentIdFromSessionKey(childSessionKey),
+  });
+  const { registerSubagentRun } = await import("../../agents/subagent-registry.js");
+  registerSubagentRun({
+    runId: params.runId,
+    childSessionKey,
+    controllerSessionKey: ownerSessionKey,
+    requesterSessionKey: ownerSessionKey,
+    requesterOrigin: params.requesterOrigin,
+    requesterDisplayKey: "main",
+    task: params.task,
+    cleanup: "keep",
+    ...(params.pluginId ? { label: `plugin:${params.pluginId}` } : {}),
+    expectsCompletionMessage: false,
+    spawnMode: "run",
+  });
+}
 
 function resolveFailedTrackedAgentTaskStatus(error: unknown): GatewayAgentTaskTerminalStatus {
   return isAbortError(error) || isTimeoutError(error) ? "timed_out" : "failed";
@@ -830,10 +877,9 @@ function dispatchAgentRunFromGateway(params: {
   abortController: AbortController;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
 }) {
-  const inputProvenance = normalizeInputProvenance(params.ingressOpts.inputProvenance);
-  const shouldTrackTask =
-    params.ingressOpts.sessionKey?.trim() && inputProvenance?.kind !== "inter_session";
+  const shouldTrackTask = params.taskTrackingMode === "cli";
   if (shouldTrackTask) {
     try {
       createRunningTaskRun({
@@ -2161,6 +2207,39 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
 
+      const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+      const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
+        client,
+        sessionKey: resolvedSessionKey,
+        inputProvenance,
+      });
+      let dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent"> =
+        taskTrackingMode === "cli" ? "cli" : "none";
+      if (taskTrackingMode === "plugin_subagent" && resolvedSessionKey) {
+        try {
+          await registerPluginSubagentRunFromGateway({
+            cfg,
+            runId,
+            childSessionKey: resolvedSessionKey,
+            task: request.message.trim(),
+            requesterOrigin: normalizeDeliveryContext({
+              channel: resolvedChannel,
+              to: resolvedTo,
+              accountId: resolvedAccountId,
+              threadId: resolvedThreadId,
+            }),
+            pluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+          });
+        } catch (err) {
+          context.logGateway.warn(
+            `failed to register plugin subagent run ${runId}; falling back to cli task tracking: ${formatForLog(
+              err,
+            )}`,
+          );
+          dispatchTaskTrackingMode = "cli";
+        }
+      }
+
       const accepted = {
         runId,
         sessionKey: resolvedSessionKey,
@@ -2246,7 +2325,6 @@ export const agentHandlers: GatewayRequestHandlers = {
             message = annotateInterSessionPromptText(message, inputProvenance);
           }
 
-          const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
           const ingressAgentId =
             resolvedSessionKey === "global"
               ? activeSessionAgentId
@@ -2364,6 +2442,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             abortController: activeRunAbort.controller,
             respond,
             context,
+            taskTrackingMode: dispatchTaskTrackingMode,
           });
           dispatched = true;
         } catch (err) {
