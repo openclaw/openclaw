@@ -370,6 +370,12 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
+const managedStreamCleanupRegistry = new FinalizationRegistry<{ finalize: () => Promise<void> }>(
+  (held) => {
+    void held.finalize();
+  },
+);
+
 function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
@@ -386,12 +392,15 @@ function buildManagedResponse(
   const source = response.body;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let released = false;
+  const cleanupRegistrationToken = {};
   const finalize = async () => {
     if (released) {
       return;
     }
     released = true;
+    managedStreamCleanupRegistry.unregister(cleanupRegistrationToken);
     try {
+      await reader?.cancel().catch(() => undefined);
       await release().catch(() => undefined);
     } finally {
       finalizeLocalServiceLease();
@@ -424,6 +433,7 @@ function buildManagedResponse(
       }
     },
   });
+  managedStreamCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
   return new Response(wrappedBody, {
     status: response.status,
     statusText: response.statusText,
