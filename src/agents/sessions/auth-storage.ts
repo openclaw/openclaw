@@ -6,9 +6,10 @@
  * try to refresh tokens simultaneously.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
+import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import { findEnvKeys, getEnvApiKey } from "../../llm/env-api-keys.js";
 import {
   getOAuthApiKey,
@@ -20,7 +21,6 @@ import type {
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
-import { replaceFileAtomicSync } from "../../infra/replace-file.js";
 import { getAgentDir } from "../config.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
@@ -80,6 +80,19 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
     }
   }
 
+  private replaceAuthFileAtomic(content: string): void {
+    const dirMode = statSync(dirname(this.authPath)).mode & 0o7777;
+    replaceFileAtomicSync({
+      filePath: this.authPath,
+      content,
+      dirMode,
+      mode: 0o600,
+      tempPrefix: "auth.json",
+      syncTempFile: true,
+      syncParentDir: true,
+    });
+  }
+
   private acquireLockSyncWithRetry(path: string): () => void {
     const maxAttempts = 10;
     const delayMs = 20;
@@ -117,14 +130,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
       const { result, next } = fn(current);
       if (next !== undefined) {
-        replaceFileAtomicSync({
-          filePath: this.authPath,
-          content: next,
-          mode: 0o600,
-          tempPrefix: "auth.json",
-          syncTempFile: true,
-          syncParentDir: true,
-        });
+        this.replaceAuthFileAtomic(next);
       }
       return result;
     } finally {
@@ -168,14 +174,7 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
       const { result, next } = await fn(current);
       throwIfCompromised();
       if (next !== undefined) {
-        replaceFileAtomicSync({
-          filePath: this.authPath,
-          content: next,
-          mode: 0o600,
-          tempPrefix: "auth.json",
-          syncTempFile: true,
-          syncParentDir: true,
-        });
+        this.replaceAuthFileAtomic(next);
       }
       throwIfCompromised();
       return result;

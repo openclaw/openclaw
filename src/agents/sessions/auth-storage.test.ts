@@ -8,9 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // rebind an already-captured named import, so we mock node:fs and route every
 // writeFileSync (named + default) through a single controllable write-failure hook.
 const writeFailHook = vi.hoisted(() => ({
-  fn: undefined as
-    | ((file: unknown, data: unknown, options: unknown) => void)
-    | undefined,
+  fn: undefined as ((file: unknown, data: unknown, options: unknown) => void) | undefined,
   // The unwrapped writeFileSync, so the hook can mutate disk state
   // (e.g. truncate the destination) without re-entering itself.
   raw: undefined as ((...args: unknown[]) => unknown) | undefined,
@@ -55,9 +53,7 @@ describe("auth-storage survives an interrupted write during persist (atomic writ
     // Seed a valid credential that round-trips cleanly.
     const seed = AuthStorage.create(authPath);
     seed.set("anthropic", { type: "api_key", key: "sk-test-SEED-12345" });
-    expect(await AuthStorage.create(authPath).getApiKey("anthropic")).toBe(
-      "sk-test-SEED-12345",
-    );
+    expect(await AuthStorage.create(authPath).getApiKey("anthropic")).toBe("sk-test-SEED-12345");
 
     // Model a write that fails partway during the next persist (a full disk, an
     // over-quota volume, or a power loss before the flush). Only a *direct* write
@@ -103,5 +99,17 @@ describe("auth-storage survives an interrupted write during persist (atomic writ
     expect(await reopened.getApiKey("anthropic")).toBe("sk-test-SEED-12345");
     expect(fs.existsSync(authPath)).toBe(true);
     expect(fs.readFileSync(authPath, "utf-8").length).toBeGreaterThan(0);
+  });
+
+  it("preserves existing auth directory permissions while replacing the file", () => {
+    tmpDir = fs.mkdtempSync(join(tmpdir(), "auth-dir-mode-"));
+    fs.chmodSync(tmpDir, 0o755);
+    const authPath = join(tmpDir, "auth.json");
+
+    const storage = AuthStorage.create(authPath);
+    storage.set("anthropic", { type: "api_key", key: "sk-test-SEED-12345" });
+
+    expect(fs.statSync(tmpDir).mode & 0o777).toBe(0o755);
+    expect(fs.statSync(authPath).mode & 0o777).toBe(0o600);
   });
 });
