@@ -641,6 +641,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           streamingEnabled &&
           !finalTextExceedsStreamingLimit &&
           (info?.kind === "final" || useStaticCard);
+        const finalTextWouldUseStreamingCard =
+          info?.kind === "final" && hasText && streamingEnabled;
         const useCard = useStaticCard || useStreamingCard;
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
@@ -649,7 +651,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           hasText &&
           streamingClosedForReply &&
           !streamingCloseErroredForReply &&
-          useStreamingCard;
+          finalTextWouldUseStreamingCard;
         const shouldDeliverText =
           hasText &&
           !hasVoiceMedia &&
