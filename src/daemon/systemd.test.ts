@@ -1492,6 +1492,71 @@ describe("stageSystemdService", () => {
       expect(envFile).toContain("LLM_API_KEY=new-value");
     });
   });
+
+  it("removes a stale literal reference on re-stage when state-dir .env now skips that key (#88274)", async () => {
+    await withStageFixture(async ({ env, stateDir, envFilePath }) => {
+      // A prior install generated a literal reference for LLM_API_KEY (an unexpanded
+      // $VAR that dotenv stored verbatim) and an operator-managed provider secret.
+      await fs.writeFile(
+        envFilePath,
+        ["LLM_API_KEY=$SECRET_FROM_SHELL", "OPENROUTER_API_KEY=or-operator-key"].join("\n") + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      // The state-dir .env still declares LLM_API_KEY but now as an unresolved
+      // shell reference, so the parser skips it from the managed environment.
+      await fs.writeFile(path.join(stateDir, ".env"), "LLM_API_KEY=$SECRET_FROM_SHELL\n", "utf8");
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      // The stale literal reference for the skipped managed key is dropped...
+      expect(envFile).not.toContain("LLM_API_KEY");
+      expect(envFile).not.toContain("$SECRET_FROM_SHELL");
+      // ...while operator-only secrets (never in state-dir .env) are preserved.
+      expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+    });
+  });
+
+  it("keeps an operator secret that merely shares a name absent from state-dir .env (#88274)", async () => {
+    await withStageFixture(async ({ env, stateDir, envFilePath }) => {
+      // Operator-managed env file holds two secrets; neither is in state-dir .env.
+      await fs.writeFile(
+        envFilePath,
+        ["ANTHROPIC_API_KEY=sk-ant-operator-secret", "OPENROUTER_API_KEY=or-operator-key"].join(
+          "\n",
+        ) + "\n",
+        { encoding: "utf8", mode: 0o600 },
+      );
+
+      // State-dir .env only skips an unrelated key (LLM_API_KEY). Operator keys must
+      // not be treated as stale just because they are absent from the staged env.
+      await fs.writeFile(path.join(stateDir, ".env"), "LLM_API_KEY=${UNRESOLVED}\n", "utf8");
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const envFile = await fs.readFile(envFilePath, "utf8");
+      expect(envFile).toContain("ANTHROPIC_API_KEY=sk-ant-operator-secret");
+      expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
+      expect(envFile).not.toContain("LLM_API_KEY");
+    });
+  });
 });
 
 describe("systemd service install and uninstall", () => {

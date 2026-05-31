@@ -14,18 +14,48 @@ function isBlockedServiceEnvVar(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
 }
 
+function unwrapMatchingLiteralQuotes(value: string): string {
+  if (value.length < 2) {
+    return value;
+  }
+  const first = value[0];
+  const last = value.at(-1);
+  if ((first === `"` || first === `'`) && first === last) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
 function isUnresolvedShellReference(value: string): boolean {
+  const candidate = unwrapMatchingLiteralQuotes(value.trim());
   // Match only values whose entire content is a shell variable reference:
   //   $VAR_NAME          (simple reference — must start with a letter or underscore)
   //   ${VAR_NAME}        (brace-form reference)
   //   $(command)         (command substitution)
   // A real credential that merely contains a $ (e.g. "abc$2!", "$100") is NOT matched.
-  return /^\$[A-Za-z_]\w*$/.test(value) || /^\$\{[^}]+\}$/.test(value) || /^\$\(.*\)$/.test(value);
+  return (
+    /^\$[A-Za-z_]\w*$/.test(candidate) ||
+    /^\$\{[A-Za-z_]\w*\}$/.test(candidate) ||
+    /^\$\([^)]*\)$/.test(candidate)
+  );
 }
 
-function parseStateDirDotEnvContent(content: string): Record<string, string> {
+type ParsedStateDirDotEnv = {
+  /** Keys whose values are persisted to the managed service environment. */
+  entries: Record<string, string>;
+  /**
+   * Keys that were dropped because their entire value was an unresolved shell
+   * reference ($VAR, ${VAR}, or $(cmd)). These are still OpenClaw-managed keys:
+   * a previously generated env file may carry a stale literal reference for them
+   * that must be removed on re-stage rather than preserved as an operator secret.
+   */
+  skippedShellReferenceKeys: string[];
+};
+
+function parseStateDirDotEnvContent(content: string): ParsedStateDirDotEnv {
   const parsed = dotenv.parse(content);
   const entries: Record<string, string> = {};
+  const skippedShellReferenceKeys: string[] = [];
   for (const [rawKey, value] of Object.entries(parsed)) {
     if (!value?.trim()) {
       continue;
@@ -43,19 +73,30 @@ function parseStateDirDotEnvContent(content: string): Record<string, string> {
     // reference string rather than the intended credential value.
     // Values that merely contain $ (e.g. a password like "abc$2!") are kept.
     if (isUnresolvedShellReference(value)) {
+      skippedShellReferenceKeys.push(key);
       continue;
     }
     entries[key] = value;
   }
-  return entries;
+  return { entries, skippedShellReferenceKeys };
 }
 
 export function readStateDirDotEnvVarsFromStateDir(stateDir: string): Record<string, string> {
+  return readStateDirDotEnvFromStateDir(stateDir).entries;
+}
+
+/**
+ * Read and parse the state-dir `.env`, returning both the persisted entries and
+ * the keys that were skipped because they held unresolved shell references. The
+ * skipped keys are surfaced so generated service env files can remove stale
+ * literal references for keys OpenClaw previously managed.
+ */
+export function readStateDirDotEnvFromStateDir(stateDir: string): ParsedStateDirDotEnv {
   const dotEnvPath = path.join(stateDir, ".env");
   try {
     return parseStateDirDotEnvContent(fs.readFileSync(dotEnvPath, "utf8"));
   } catch {
-    return {};
+    return { entries: {}, skippedShellReferenceKeys: [] };
   }
 }
 

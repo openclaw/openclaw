@@ -25,6 +25,9 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
   it("skips values that are unresolved shell variable references", async () => {
     const content = [
       'SUPERMEMORY_OPENCLAW_API_KEY="${SUPERMEMORY_OPENCLAW_KEY}"',
+      "QUOTED_SUPERMEMORY_OPENCLAW_API_KEY='\"$SUPERMEMORY_OPENCLAW_KEY\"'",
+      "QUOTED_CURLY_KEY=\"'${ANOTHER_VAR}'\"",
+      'COMMAND_KEY="$(hostname)"',
       "OTHER_KEY=$SOME_SHELL_VAR",
       "CURLY_KEY=${ANOTHER_VAR}",
       "REAL_KEY=actual_value_here",
@@ -33,6 +36,9 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
     await withDotEnv(content, async (dir) => {
       const result = readStateDirDotEnvVarsFromStateDir(dir);
       expect(Object.keys(result)).not.toContain("SUPERMEMORY_OPENCLAW_API_KEY");
+      expect(Object.keys(result)).not.toContain("QUOTED_SUPERMEMORY_OPENCLAW_API_KEY");
+      expect(Object.keys(result)).not.toContain("QUOTED_CURLY_KEY");
+      expect(Object.keys(result)).not.toContain("COMMAND_KEY");
       expect(Object.keys(result)).not.toContain("OTHER_KEY");
       expect(Object.keys(result)).not.toContain("CURLY_KEY");
       expect(result["REAL_KEY"]).toBe("actual_value_here");
@@ -44,6 +50,8 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
       "PASSWORD=abc$2!xyz",
       "TOKEN=tok_$prod_v2",
       "PRICE=\\$100",
+      "QUOTED_PASSWORD='\"abc$2!xyz\"'",
+      "QUOTED_PRICE='\"$100\"'",
       "PURE_REF=$SOME_VAR",
     ].join("\n");
 
@@ -52,6 +60,8 @@ describe("readStateDirDotEnvVarsFromStateDir", () => {
       expect(result["PASSWORD"]).toBe("abc$2!xyz");
       expect(result["TOKEN"]).toBe("tok_$prod_v2");
       expect(result["PRICE"]).toBe("\\$100");
+      expect(result["QUOTED_PASSWORD"]).toBe("\"abc$2!xyz\"");
+      expect(result["QUOTED_PRICE"]).toBe("\"$100\"");
       expect(Object.keys(result)).not.toContain("PURE_REF");
     });
   });
