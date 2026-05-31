@@ -19,9 +19,12 @@ internal fun isLoopbackGatewayHost(
     host = host.dropLast(1)
   }
   val zoneIndex = host.indexOf('%')
+  // Scoped IPv6 literals are not stable origin identifiers; reject them for
+  // loopback trust instead of guessing which interface the zone names.
   if (zoneIndex >= 0) return false
   if (host.isEmpty()) return false
   if (host == "localhost") return true
+  // Android emulator maps host loopback through this bridge alias.
   if (allowEmulatorBridgeAlias && host == "10.0.2.2") return true
 
   parseIpv4Address(host)?.let { ipv4 ->
@@ -61,6 +64,8 @@ internal fun isLocalCleartextGatewayHost(
   }
   val zoneIndex = host.indexOf('%')
   if (zoneIndex >= 0) {
+    // Link-local cleartext policy is about the address range; strip the
+    // interface zone before InetAddress parsing rejects otherwise valid hosts.
     host = host.substring(0, zoneIndex)
   }
   if (host.isEmpty()) return false
