@@ -1158,6 +1158,7 @@ function convertResponsesMessages(
               delete replayableReasoningItem.id;
             }
             if (
+              shouldReplayResponsesItemIds &&
               model.provider === "github-copilot" &&
               !isSafeResponsesReplayItemId(replayableReasoningItem.id)
             ) {

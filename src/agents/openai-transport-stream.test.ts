@@ -3102,7 +3102,7 @@ describe("openai transport stream", () => {
     expect(functionCall?.id).toBeUndefined();
   });
 
-  it("drops oversized GitHub Copilot Responses reasoning replay items before send", () => {
+  it("keeps GitHub Copilot Responses reasoning replay when store-disabled ids are omitted", () => {
     const model = {
       id: "gpt-5.5",
       name: "GPT-5.5",
@@ -3153,6 +3153,73 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       { sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        id?: string;
+        summary?: unknown;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expectRecordFields(reasoningItem, {
+      type: "reasoning",
+      summary: [],
+    });
+    expect(reasoningItem?.id).toBeUndefined();
+  });
+
+  it("drops oversized GitHub Copilot Responses reasoning replay ids before send", () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const longReasoningId = `rs_${"x".repeat(380)}`;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "github-copilot",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: longReasoningId,
+                  summary: [],
+                }),
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { replayResponsesItemIds: true, sessionId: "session-123" },
     ) as {
       input?: Array<{
         type?: string;
