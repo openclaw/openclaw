@@ -1,11 +1,17 @@
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
-import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import { dispatchAndStartWorkboardCards, type WorkboardSubagentRuntime } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const WRITE_SCOPE = "operator.write";
+
+type WorkboardCommandApi = {
+  runtime: {
+    subagent: WorkboardSubagentRuntime;
+  };
+};
 
 function splitArgs(input: string | undefined): string[] {
   return (input ?? "").trim().split(/\s+/).filter(Boolean);
@@ -69,7 +75,7 @@ function requireWriteAccess(params: {
 }
 
 export async function handleWorkboardCommand(params: {
-  api: OpenClawPluginApi;
+  api: WorkboardCommandApi;
   store: WorkboardStore;
   args?: string;
   senderIsOwner?: boolean;

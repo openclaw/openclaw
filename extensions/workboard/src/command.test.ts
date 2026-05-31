@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi } from "../api.js";
 import { handleWorkboardCommand } from "./command.js";
+import type { WorkboardSubagentRuntime } from "./dispatcher.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
@@ -21,12 +21,14 @@ function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T>
   };
 }
 
-function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): OpenClawPluginApi {
+function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): {
+  runtime: { subagent: WorkboardSubagentRuntime };
+} {
   return {
     runtime: {
       subagent: { run },
     },
-  } as unknown as OpenClawPluginApi;
+  };
 }
 
 async function createAmbiguousPrefix(store: WorkboardStore): Promise<string> {

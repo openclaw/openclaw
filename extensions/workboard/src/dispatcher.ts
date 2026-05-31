@@ -7,7 +7,7 @@ const DEFAULT_DISPATCH_MAX_STARTS = 3;
 const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
 const DEFAULT_DISPATCH_MODEL = "default";
 
-type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
+export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
 
 export type WorkboardDispatchStartOptions = {
   maxStarts?: number;

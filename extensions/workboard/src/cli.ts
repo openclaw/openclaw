@@ -24,6 +24,10 @@ function writeLine(value: string): void {
   process.stdout.write(`${value}\n`);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function splitLabels(value: string | undefined): string[] | undefined {
   return value
     ?.split(",")
@@ -193,8 +197,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       if (options.json) {
         writeJson(result);
       } else {
-        const record =
-          result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+        const record = isRecord(result) ? result : {};
         const started = Array.isArray(record.started) ? record.started.length : 0;
         const failures = Array.isArray(record.startFailures) ? record.startFailures.length : 0;
         writeLine(`dispatch complete: started=${started} failures=${failures}`);
