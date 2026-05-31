@@ -198,7 +198,10 @@ function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): Feish
   if (merged.tools === undefined && topTools !== undefined) {
     return { ...merged, tools: topTools };
   }
-  if (topTools?.bitable === false || topTools?.base === false) {
+  if (
+    topTools?.bitable === false ||
+    (topTools?.bitable === undefined && topTools?.base === false)
+  ) {
     return {
       ...merged,
       tools: {

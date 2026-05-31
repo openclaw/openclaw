@@ -274,6 +274,21 @@ describe("feishu tool account routing", () => {
     ).toBe(0);
   });
 
+  test("explicit top-level bitable enable wins over disabled base alias in account merge", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        topTools: { bitable: true, base: false },
+        toolsA: { bitable: true },
+      }),
+    );
+    registerFeishuBitableTools(api);
+
+    const tool = resolveTool("feishu_bitable_get_meta", { agentAccountId: "a" });
+    await tool.execute("call", { url: "invalid-url" });
+
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+  });
+
   test("bitable tools are not registered when account bitable configs disable them", async () => {
     const { api, registered, resolveTool } = createToolFactoryHarness(
       createConfig({
