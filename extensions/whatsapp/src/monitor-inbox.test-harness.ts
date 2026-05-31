@@ -136,9 +136,11 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
 });
 
 vi.mock("./runtime.js", async () => {
-  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")
-  >("openclaw/plugin-sdk/plugin-state-test-runtime");
+  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
+    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
+      "openclaw/plugin-sdk/plugin-state-test-runtime",
+    ),
+  );
   return {
     getWhatsAppRuntime: () => ({
       state: {
