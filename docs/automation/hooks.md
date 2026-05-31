@@ -55,6 +55,7 @@ openclaw hooks info session-memory
 | `session:compact:after`  | After compaction completes                                 |
 | `session:patch`          | When session properties are modified                       |
 | `agent:bootstrap`        | Before workspace bootstrap files are injected              |
+| `agent:turn:end`         | After an ACP agent turn completes or fails                 |
 | `gateway:startup`        | After channels start and hooks are loaded                  |
 | `gateway:shutdown`       | When gateway shutdown begins                               |
 | `gateway:pre-restart`    | Before an expected gateway restart                         |
@@ -134,6 +135,8 @@ reply channel and ignore pushed messages.
 **Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`.
+
+**Agent events** (`agent:turn:end`): `context.sessionKey`, `context.success`, `context.durationMs`, and `context.errorCode` when the turn failed. For ACP turns, this is scheduled after the runtime emits the terminal turn event and the manager has awaited event delivery callbacks. When OpenClaw dispatch mirrors an ACP turn into the session transcript, that transcript write is flushed before the hook is scheduled, so memory hooks can use `context.sessionKey` to load the completed turn from persisted state. If the pre-hook completion step fails, such as ACP dispatch transcript persistence failing, `agent:turn:end` is not emitted for that turn. Hook handlers run through bounded fire-and-forget dispatch; they are not awaited before later ACP state transitions or runtime cleanup. The event does not embed transcript text.
 
 **Message events** (`message:transcribed`): `context.transcript`, `context.from`, `context.channelId`, `context.mediaPath`.
 
