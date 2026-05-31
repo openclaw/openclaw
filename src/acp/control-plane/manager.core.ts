@@ -11,7 +11,6 @@ import type {
   AcpRuntimeHandle,
   AcpRuntimeStatus,
 } from "@openclaw/acp-core/runtime/types";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -30,6 +29,13 @@ import {
 } from "./manager.runtime-controls.js";
 import { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { ensureManagerRuntimeHandle } from "./manager.runtime-handle-ensure.js";
+import {
+  runResetManagerSessionRuntimeOptions,
+  runSetManagerSessionConfigOption,
+  runSetManagerSessionRuntimeMode,
+  runUpdateManagerSessionRuntimeOptions,
+  type RuntimeOptionCommandServices,
+} from "./manager.runtime-options-commands.js";
 import { runManagerTurn } from "./manager.turn-runner.js";
 import {
   type AcpCloseSessionInput,
@@ -50,18 +56,14 @@ import {
 } from "./manager.types.js";
 import {
   canonicalizeAcpSessionKey,
-  createUnsupportedControlError,
   normalizeAcpErrorCode,
   normalizeActorKey,
   requireReadySessionMeta,
   resolveMissingMetaError,
 } from "./manager.utils.js";
 import {
-  inferRuntimeOptionPatchFromConfigOption,
-  mergeRuntimeOptions,
   normalizeRuntimeOptions,
   normalizeText,
-  resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
   validateRuntimeConfigOptionInput,
   validateRuntimeModeInput,
@@ -429,44 +431,12 @@ export class AcpSessionManager {
 
     await this.evictIdleRuntimeHandles(params.cfg);
     return await this.withSessionActor(sessionKey, async () => {
-      const resolution = this.resolveSession({
+      return await runSetManagerSessionRuntimeMode({
         cfg: params.cfg,
         sessionKey,
+        runtimeMode,
+        ...this.runtimeOptionCommandServices(),
       });
-      const resolvedMeta = requireReadySessionMeta(resolution);
-      const { runtime, handle, meta } = await this.ensureRuntimeHandle({
-        cfg: params.cfg,
-        sessionKey,
-        meta: resolvedMeta,
-      });
-      const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
-      if (!capabilities.controls.includes("session/set_mode") || !runtime.setMode) {
-        throw createUnsupportedControlError({
-          backend: handle.backend || meta.backend,
-          control: "session/set_mode",
-        });
-      }
-
-      await withAcpRuntimeErrorBoundary({
-        run: async () =>
-          await runtime.setMode!({
-            handle,
-            mode: runtimeMode,
-          }),
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "Could not update ACP runtime mode.",
-      });
-
-      const nextOptions = mergeRuntimeOptions({
-        current: resolveRuntimeOptionsFromMeta(meta),
-        patch: { runtimeMode },
-      });
-      await this.persistRuntimeOptions({
-        cfg: params.cfg,
-        sessionKey,
-        options: nextOptions,
-      });
-      return nextOptions;
     });
   }
 
@@ -486,69 +456,13 @@ export class AcpSessionManager {
 
     await this.evictIdleRuntimeHandles(params.cfg);
     return await this.withSessionActor(sessionKey, async () => {
-      const resolution = this.resolveSession({
+      return await runSetManagerSessionConfigOption({
         cfg: params.cfg,
         sessionKey,
+        key,
+        value,
+        ...this.runtimeOptionCommandServices(),
       });
-      const resolvedMeta = requireReadySessionMeta(resolution);
-      const { runtime, handle, meta } = await this.ensureRuntimeHandle({
-        cfg: params.cfg,
-        sessionKey,
-        meta: resolvedMeta,
-      });
-      const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);
-      const capabilities = await this.resolveRuntimeCapabilities({
-        runtime,
-        handle,
-        includeStatusConfigOptionKeys: true,
-      });
-      if (
-        !capabilities.controls.includes("session/set_config_option") ||
-        !runtime.setConfigOption
-      ) {
-        throw createUnsupportedControlError({
-          backend: handle.backend || meta.backend,
-          control: "session/set_config_option",
-        });
-      }
-
-      const advertisedKeys = new Set(
-        (capabilities.configOptionKeys ?? [])
-          .map((entry) => normalizeLowercaseStringOrEmpty(entry))
-          .filter(Boolean),
-      );
-      const wireKey = resolveRuntimeConfigOptionKey(key, capabilities.configOptionKeys);
-      if (
-        advertisedKeys.size > 0 &&
-        !advertisedKeys.has(normalizeLowercaseStringOrEmpty(wireKey))
-      ) {
-        throw new AcpRuntimeError(
-          "ACP_BACKEND_UNSUPPORTED_CONTROL",
-          `ACP backend "${handle.backend || meta.backend}" does not accept config key "${wireKey}".`,
-        );
-      }
-
-      await withAcpRuntimeErrorBoundary({
-        run: async () =>
-          await runtime.setConfigOption!({
-            handle,
-            key: wireKey,
-            value,
-          }),
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "Could not update ACP runtime config option.",
-      });
-
-      const nextOptions = mergeRuntimeOptions({
-        current: resolveRuntimeOptionsFromMeta(meta),
-        patch: inferredPatch,
-      });
-      await this.persistRuntimeOptions({
-        cfg: params.cfg,
-        sessionKey,
-        options: nextOptions,
-      });
-      return nextOptions;
     });
   }
 
@@ -565,21 +479,12 @@ export class AcpSessionManager {
 
     await this.evictIdleRuntimeHandles(params.cfg);
     return await this.withSessionActor(sessionKey, async () => {
-      const resolution = this.resolveSession({
+      return await runUpdateManagerSessionRuntimeOptions({
         cfg: params.cfg,
         sessionKey,
-      });
-      const resolvedMeta = requireReadySessionMeta(resolution);
-      const nextOptions = mergeRuntimeOptions({
-        current: resolveRuntimeOptionsFromMeta(resolvedMeta),
         patch: validatedPatch,
+        ...this.runtimeOptionCommandServices(),
       });
-      await this.persistRuntimeOptions({
-        cfg: params.cfg,
-        sessionKey,
-        options: nextOptions,
-      });
-      return nextOptions;
     });
   }
 
@@ -593,32 +498,11 @@ export class AcpSessionManager {
     }
     await this.evictIdleRuntimeHandles(params.cfg);
     return await this.withSessionActor(sessionKey, async () => {
-      const resolution = this.resolveSession({
+      return await runResetManagerSessionRuntimeOptions({
         cfg: params.cfg,
         sessionKey,
+        ...this.runtimeOptionCommandServices(),
       });
-      const resolvedMeta = requireReadySessionMeta(resolution);
-      const { runtime, handle } = await this.ensureRuntimeHandle({
-        cfg: params.cfg,
-        sessionKey,
-        meta: resolvedMeta,
-      });
-      await withAcpRuntimeErrorBoundary({
-        run: async () =>
-          await runtime.close({
-            handle,
-            reason: "reset-runtime-options",
-          }),
-        fallbackCode: "ACP_TURN_FAILED",
-        fallbackMessage: "Could not reset ACP runtime options.",
-      });
-      this.runtimeHandles.clear(sessionKey);
-      await this.persistRuntimeOptions({
-        cfg: params.cfg,
-        sessionKey,
-        options: {},
-      });
-      return {};
     });
   }
 
@@ -763,51 +647,14 @@ export class AcpSessionManager {
     });
   }
 
-  private async persistRuntimeOptions(params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-    options: AcpSessionRuntimeOptions;
-  }): Promise<void> {
-    const normalized = normalizeRuntimeOptions(params.options);
-    const hasOptions = Object.keys(normalized).length > 0;
-    await this.writeSessionMeta({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      mutate: (current, entry) => {
-        if (!entry) {
-          return null;
-        }
-        const base = current;
-        if (!base) {
-          return null;
-        }
-        return {
-          backend: base.backend,
-          agent: base.agent,
-          runtimeSessionName: base.runtimeSessionName,
-          ...(base.identity ? { identity: base.identity } : {}),
-          mode: base.mode,
-          runtimeOptions: hasOptions ? normalized : undefined,
-          cwd: normalized.cwd,
-          state: base.state,
-          lastActivityAt: Date.now(),
-          ...(base.lastError ? { lastError: base.lastError } : {}),
-        };
-      },
-      failOnError: true,
-    });
-
-    const cached = this.runtimeHandles.get(params.sessionKey);
-    if (!cached) {
-      return;
-    }
-    if ((cached.cwd ?? "") !== (normalized.cwd ?? "")) {
-      this.runtimeHandles.clear(params.sessionKey);
-      return;
-    }
-    // Persisting options does not guarantee this process pushed all controls to the runtime.
-    // Force the next turn to reconcile runtime controls from persisted metadata.
-    cached.appliedControlSignature = undefined;
+  private runtimeOptionCommandServices(): RuntimeOptionCommandServices {
+    return {
+      runtimeHandles: this.runtimeHandles,
+      resolveSession: this.resolveSession.bind(this),
+      ensureRuntimeHandle: this.ensureRuntimeHandle.bind(this),
+      resolveRuntimeCapabilities: this.resolveRuntimeCapabilities.bind(this),
+      writeSessionMeta: this.writeSessionMeta.bind(this),
+    };
   }
 
   private enforceConcurrentSessionLimit(params: { cfg: OpenClawConfig; sessionKey: string }): void {
