@@ -65,6 +65,25 @@ function setupSkillMdWithEnv(script: string, envVars: string[]): string {
   ].join("\n");
 }
 
+async function withEnv(vars: Record<string, string>, run: () => Promise<void>): Promise<void> {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(vars)) {
+    previous.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  try {
+    await run();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 afterEach(async () => {
   await tempDirs.cleanup();
 });
@@ -138,25 +157,53 @@ describe("runSkillSetupHook", () => {
       ].join("\n"),
     );
 
-    const prevToken = process.env.MY_TOKEN;
-    const prevKey = process.env.MY_KEY;
-    process.env.MY_TOKEN = "test-token-value";
-    process.env.MY_KEY = "test-key-value";
-    try {
+    await withEnv({ MY_TOKEN: "test-token-value", MY_KEY: "test-key-value" }, async () => {
       const result = await runSkillSetupHook({ targetDir: dir, mode: "install" });
       expect(result).toEqual({ ok: true });
-    } finally {
-      if (prevToken === undefined) {
-        delete process.env.MY_TOKEN;
-      } else {
-        process.env.MY_TOKEN = prevToken;
-      }
-      if (prevKey === undefined) {
-        delete process.env.MY_KEY;
-      } else {
-        process.env.MY_KEY = prevKey;
-      }
-    }
+    });
+  });
+
+  it("filters requires.env vars through the shared host exec sanitizer", async () => {
+    const dir = await tempDirs.make("openclaw-setup-filter-env-");
+    writeSkillMd(
+      dir,
+      setupSkillMdWithEnv("scripts/check-filtered-env.sh", [
+        "MY_TOKEN",
+        "BASH_ENV",
+        "GIT_CONFIG_GLOBAL",
+        "GITHUB_TOKEN",
+        "NPM_CONFIG_REGISTRY",
+        "OPENCLAW_GATEWAY_TOKEN",
+      ]),
+    );
+    writeScript(
+      dir,
+      "scripts/check-filtered-env.sh",
+      [
+        "#!/bin/sh",
+        'test "$MY_TOKEN" = "test-token-value" || exit 1',
+        'test -z "${BASH_ENV+x}" || exit 2',
+        'test -z "${GIT_CONFIG_GLOBAL+x}" || exit 3',
+        'test -z "${GITHUB_TOKEN+x}" || exit 4',
+        'test -z "${NPM_CONFIG_REGISTRY+x}" || exit 5',
+        'test -z "${OPENCLAW_GATEWAY_TOKEN+x}" || exit 6',
+      ].join("\n"),
+    );
+
+    await withEnv(
+      {
+        MY_TOKEN: "test-token-value",
+        BASH_ENV: "/tmp/unsafe-bash-env",
+        GIT_CONFIG_GLOBAL: "/tmp/unsafe-git-config",
+        GITHUB_TOKEN: "github-token",
+        NPM_CONFIG_REGISTRY: "https://registry.example.test",
+        OPENCLAW_GATEWAY_TOKEN: "gateway-token",
+      },
+      async () => {
+        const result = await runSkillSetupHook({ targetDir: dir, mode: "install" });
+        expect(result).toEqual({ ok: true });
+      },
+    );
   });
 
   it("fails when setup script exits with non-zero code", async () => {

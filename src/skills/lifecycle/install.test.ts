@@ -22,15 +22,25 @@ vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillDirs: () => [],
 }));
 
-async function writeInstallableSkill(workspaceDir: string, name: string): Promise<string> {
+async function writeInstallableSkill(
+  workspaceDir: string,
+  name: string,
+  options?: { setupScript?: string },
+): Promise<string> {
   const skillDir = path.join(workspaceDir, "skills", name);
+  const metadata = JSON.stringify({
+    openclaw: {
+      install: [{ id: "deps", kind: "node", package: "example-package" }],
+      ...(options?.setupScript ? { setup: { script: options.setupScript } } : {}),
+    },
+  });
   await fs.mkdir(skillDir, { recursive: true });
   await fs.writeFile(
     path.join(skillDir, "SKILL.md"),
     `---
 name: ${name}
 description: test skill
-metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-package"}]}}
+metadata: ${metadata}
 ---
 
 # ${name}
@@ -151,6 +161,59 @@ describe("installSkill install policy hooks", () => {
       expect(options.env).not.toHaveProperty("PATH");
       const stat = await fs.stat(npmPrefix);
       expect(stat.isDirectory()).toBe(true);
+    });
+  });
+
+  it("does not run skill setup hooks unless explicitly allowed", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      const skillDir = await writeInstallableSkill(workspaceDir, "setup-default-skill", {
+        setupScript: "scripts/setup.sh",
+      });
+      await fs.mkdir(path.join(skillDir, "scripts"), { recursive: true });
+      await fs.writeFile(path.join(skillDir, "scripts", "setup.sh"), "#!/bin/sh\necho setup\n");
+      await fs.chmod(path.join(skillDir, "scripts", "setup.sh"), 0o755);
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "setup-default-skill",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("runs skill setup hooks when install explicitly allows them", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      const skillDir = await writeInstallableSkill(workspaceDir, "setup-allowed-skill", {
+        setupScript: "scripts/setup.sh",
+      });
+      const setupScriptPath = path.join(skillDir, "scripts", "setup.sh");
+      await fs.mkdir(path.dirname(setupScriptPath), { recursive: true });
+      await fs.writeFile(setupScriptPath, "#!/bin/sh\necho setup\n");
+      await fs.chmod(setupScriptPath, 0o755);
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "setup-allowed-skill",
+        installId: "deps",
+        allowSetupHooks: true,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+      const setupCall = lastRunCommandCall();
+      expect(setupCall?.[0]).toEqual([setupScriptPath]);
+      const options = setupCall?.[1] as {
+        baseEnv?: Record<string, string>;
+        cwd?: string;
+        env?: Record<string, string>;
+      };
+      expect(options.cwd).toBe(skillDir);
+      expect(options.baseEnv).toEqual({});
+      expect(options.env?.OPENCLAW_HOOK_KIND).toBe("install");
+      expect(options.env?.SKILL_DIR).toBe(skillDir);
     });
   });
 

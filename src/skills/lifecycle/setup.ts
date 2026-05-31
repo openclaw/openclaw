@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { parseFrontmatter, resolveOpenClawMetadata } from "../loading/frontmatter.js";
 
@@ -8,6 +9,39 @@ const SKILL_MD_CANDIDATES = ["SKILL.md", "skill.md", "skills.md", "SKILL.MD"] as
 
 const DEFAULT_SETUP_TIMEOUT_MS = 60_000;
 const MAX_SETUP_TIMEOUT_MS = 300_000;
+
+function isReservedSetupEnvName(rawKey: string): boolean {
+  const key = rawKey.trim().toUpperCase();
+  return (
+    key === "SKILL_DIR" ||
+    key === "OPENCLAW_HOOK_KIND" ||
+    key.startsWith("OPENCLAW_") ||
+    key.startsWith("NPM_") ||
+    key.startsWith("GITHUB_")
+  );
+}
+
+function buildRequiredSetupEnv(params: {
+  hookEnv: Record<string, string>;
+  requiredEnv: readonly string[];
+}): Record<string, string> {
+  const requestedEnv: Record<string, string> = {};
+  for (const envNameRaw of params.requiredEnv) {
+    const envName = envNameRaw.trim();
+    if (!envName || params.hookEnv[envName] !== undefined || isReservedSetupEnvName(envName)) {
+      continue;
+    }
+    const value = process.env[envName];
+    if (value !== undefined) {
+      requestedEnv[envName] = value;
+    }
+  }
+  return sanitizeHostExecEnv({
+    baseEnv: {},
+    overrides: requestedEnv,
+    blockPathOverrides: true,
+  });
+}
 
 function findSkillMd(targetDir: string): string | null {
   for (const candidate of SKILL_MD_CANDIDATES) {
@@ -111,53 +145,19 @@ export async function runSkillSetupHook(params: SkillSetupParams): Promise<Skill
     SKILL_DIR: resolvedTargetDir,
     OPENCLAW_HOOK_KIND: params.mode,
   };
-
-  const BLOCKED_ENV = new Set([
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "SHELL",
-    "PWD",
-    "OLDPWD",
-    "NODE_OPTIONS",
-    "NODE_PATH",
-    "PYTHONPATH",
-    "LD_PRELOAD",
-    "LD_LIBRARY_PATH",
-    "DYLD_INSERT_LIBRARIES",
-    "DYLD_LIBRARY_PATH",
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_CONFIG_PATH",
-  ]);
-  const requiredEnv = metadata?.requires?.env ?? [];
-  for (const envName of requiredEnv) {
-    const trimmed = envName.trim();
-    if (!trimmed || hookEnv[trimmed] !== undefined) {
-      continue;
-    }
-    if (BLOCKED_ENV.has(trimmed)) {
-      continue;
-    }
-    if (
-      trimmed.startsWith("OPENCLAW_") ||
-      trimmed.startsWith("NPM_") ||
-      trimmed.startsWith("GITHUB_")
-    ) {
-      continue;
-    }
-    const value = process.env[trimmed];
-    if (value !== undefined) {
-      hookEnv[trimmed] = value;
-    }
-  }
-
-  const scriptEnv: Record<string, string> = {};
-  // Minimal execution environment: only PATH so shell and common tools resolve.
-  if (process.env.PATH !== undefined) {
-    scriptEnv.PATH = process.env.PATH;
-  }
-  Object.assign(scriptEnv, hookEnv);
+  const requiredSetupEnv = buildRequiredSetupEnv({
+    hookEnv,
+    requiredEnv: metadata?.requires?.env ?? [],
+  });
+  const scriptEnv = sanitizeHostExecEnv({
+    baseEnv: {},
+    overrides: {
+      ...(process.env.PATH === undefined ? {} : { PATH: process.env.PATH }),
+      ...requiredSetupEnv,
+      ...hookEnv,
+    },
+    blockPathOverrides: false,
+  });
 
   const argv = executable ? [scriptPath] : ["sh", scriptPath];
 

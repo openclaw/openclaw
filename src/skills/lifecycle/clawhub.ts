@@ -811,6 +811,7 @@ async function performClawHubSkillInstall(
               requestedSpecifier: `clawhub:${params.slug}@${version}`,
             },
             rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+            allowSetupHooks: true,
           }),
       });
       if (!install.ok) {
