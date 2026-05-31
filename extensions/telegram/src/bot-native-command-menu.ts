@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
 import type { LanguageCode } from "grammy/types";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
@@ -505,7 +506,7 @@ export function syncTelegramMenuCommands(params: {
     const currentHash = hashCommandList(commandsToRegister);
     const cachedHash = readCachedCommandHash(accountId, botIdentity);
     if (cachedHash === currentHash) {
-      runtime.log?.("telegram: command menu unchanged; skipping sync");
+      logVerbose("telegram: command menu unchanged; skipping sync");
       return;
     }
 

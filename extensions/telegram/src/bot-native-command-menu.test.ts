@@ -464,7 +464,7 @@ describe("bot-native-command-menu", () => {
 
     // setMyCommands should NOT have been called again for any scope.
     expect(setMyCommands).toHaveBeenCalledTimes(3);
-    expect(runtimeLog).toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
+    expect(runtimeLog).not.toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
   });
 
   it("does not reuse cached hash across different bot identities", async () => {
@@ -551,9 +551,8 @@ describe("bot-native-command-menu", () => {
       botIdentity: "bot-a",
     });
 
-    await vi.waitFor(() =>
-      expect(runtimeLog).toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync"),
-    );
+    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(3));
+    expect(runtimeLog).not.toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
 
     expect(deleteMyCommands).toHaveBeenCalledWith();
     expect(deleteMyCommands).toHaveBeenCalledWith({ scope: { type: "all_private_chats" } });
