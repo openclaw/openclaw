@@ -31,6 +31,7 @@ export {
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
 const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
 
+/** Channel target metadata used for cron announcements and failure notifications. */
 export type CronAnnounceTarget = {
   channel?: string;
   to?: string;
@@ -157,6 +158,8 @@ export async function sendFailureNotificationAnnounce(
 
   const abortController = new AbortController();
   const timeout = setTimeout(() => {
+    // Failure notifications are secondary; timeout prevents a stuck channel send
+    // from extending an already-failed cron run.
     abortController.abort();
   }, FAILURE_NOTIFICATION_TIMEOUT_MS);
 
