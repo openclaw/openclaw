@@ -31,6 +31,20 @@ You need:
 
 Use one Twilio number for both SMS and Voice Call if the number has both capabilities. Configure the SMS webhook and Voice webhook separately in Twilio; this page only covers the SMS webhook.
 
+## US A2P / 10DLC delivery
+
+For US destinations, SMS sent from a Twilio `+1` 10-digit long code is subject to US A2P 10DLC registration. This is separate from OpenClaw channel setup: webhook signature validation, pairing, and outbound credentials can all be correct while carriers still block or filter delivery.
+
+Before relying on a US 10DLC sender, confirm in Twilio that:
+
+- The Brand and Campaign are registered and approved.
+- The Twilio phone number is in the Sender Pool of the Messaging Service associated with the approved Campaign, or the `messagingServiceSid` you configure here is that approved service.
+- The Campaign describes the real OpenClaw message use case and includes matching sample messages.
+- The opt-in flow is public, verifiable, and uses optional SMS consent that is separate from required service terms; see the registration quickstart for current opt-in requirements.
+- Consent and contact list requirements meet Twilio's A2P policies.
+
+Use Twilio as the source of truth for current requirements: [A2P 10DLC overview](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc), [registration quickstart](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/quickstart), and [required business and campaign information](https://www.twilio.com/docs/messaging/compliance/a2p-10dlc/collect-business-info). This section is setup guidance, not legal advice.
+
 ## Quick Setup
 
 <Steps>
@@ -374,6 +388,12 @@ If the Twilio message log shows error `11200`, Twilio accepted the inbound SMS b
 ### Outbound sends fail
 
 Confirm `accountSid`, `authToken`, and either `fromNumber` or `messagingServiceSid` are resolved. If you use a trial Twilio account, the destination number may need to be verified in Twilio before outbound SMS will send.
+
+### Twilio accepts the send but the message is undelivered
+
+Check the final Twilio Message status and error code for the Message SID. Error [`30034`](https://www.twilio.com/docs/api/errors/30034) means the message was sent from a US 10DLC number that is not associated with an approved A2P 10DLC Campaign, or whose carrier-side number registration is still pending after Campaign approval. Complete Brand and Campaign registration, then make sure the sender number is attached to the Messaging Service for that approved Campaign.
+
+Campaign review failures such as [`30909`](https://www.twilio.com/docs/api/errors/30909) or [`30923`](https://www.twilio.com/docs/api/errors/30923) must be fixed in Twilio before OpenClaw can deliver through that sender. These usually point to missing or unverifiable opt-in flow, required/bundled SMS consent, missing policy links, or sample messages that do not match the declared use case.
 
 ### Messages arrive but the agent does not answer
 
